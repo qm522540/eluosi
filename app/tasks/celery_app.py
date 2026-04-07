@@ -20,6 +20,12 @@ celery_app.conf.update(
     task_track_started=True,
     task_acks_late=True,
     worker_prefetch_multiplier=1,
+    include=[
+        "app.tasks.ad_tasks",
+        "app.tasks.daily_stats",
+        "app.tasks.report_tasks",
+        "app.tasks.roi_alert",
+    ],
 )
 
 # 定时任务调度表
