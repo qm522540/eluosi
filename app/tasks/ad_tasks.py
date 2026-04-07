@@ -13,6 +13,8 @@ from app.models.shop import Shop
 from app.models.ad import AdCampaign, AdStat
 from app.models.task_log import TaskLog
 from app.services.platform.wb import WBClient
+from app.services.platform.ozon import OzonClient
+from app.services.platform.yandex import YandexClient
 from app.utils.logger import setup_logger
 
 logger = setup_logger("tasks.ad")
@@ -153,7 +155,7 @@ async def _fetch_single_wb_shop(db, shop: Shop) -> tuple:
 
         for camp_data in campaigns_data:
             campaigns_synced += _upsert_campaign(
-                db, shop.tenant_id, shop.id, camp_data
+                db, shop.tenant_id, shop.id, "wb", camp_data
             )
 
         db.commit()
@@ -199,7 +201,7 @@ async def _fetch_single_wb_shop(db, shop: Shop) -> tuple:
         await client.close()
 
 
-def _upsert_campaign(db, tenant_id: int, shop_id: int, data: dict) -> int:
+def _upsert_campaign(db, tenant_id: int, shop_id: int, platform: str, data: dict) -> int:
     """同步广告活动：存在则更新，不存在则新建"""
     platform_id = data.get("platform_campaign_id", "")
     if not platform_id:
@@ -220,9 +222,9 @@ def _upsert_campaign(db, tenant_id: int, shop_id: int, data: dict) -> int:
         campaign = AdCampaign(
             tenant_id=tenant_id,
             shop_id=shop_id,
-            platform="wb",
+            platform=platform,
             platform_campaign_id=platform_id,
-            name=data.get("name", f"WB活动-{platform_id}"),
+            name=data.get("name", f"{platform}活动-{platform_id}"),
             ad_type=data.get("ad_type", "search"),
             daily_budget=data.get("daily_budget"),
             total_budget=data.get("total_budget"),
@@ -255,6 +257,8 @@ def _upsert_stat(db, tenant_id: int, campaign_id: int, data: dict) -> int:
 
     existing = query.first()
 
+    platform = data.get("platform", "wb")
+
     if existing:
         # 更新已有记录
         existing.impressions = data.get("impressions", 0)
@@ -271,7 +275,7 @@ def _upsert_stat(db, tenant_id: int, campaign_id: int, data: dict) -> int:
         stat = AdStat(
             tenant_id=tenant_id,
             campaign_id=campaign_id,
-            platform="wb",
+            platform=platform,
             stat_date=stat_date,
             stat_hour=stat_hour,
             impressions=data.get("impressions", 0),
@@ -288,7 +292,7 @@ def _upsert_stat(db, tenant_id: int, campaign_id: int, data: dict) -> int:
         return 1
 
 
-# ==================== Ozon 广告采集（骨架） ====================
+# ==================== Ozon 广告采集 ====================
 
 @celery_app.task(
     name="app.tasks.ad_tasks.fetch_ozon_ad_stats",
@@ -297,24 +301,120 @@ def _upsert_stat(db, tenant_id: int, campaign_id: int, data: dict) -> int:
     default_retry_delay=300,
 )
 def fetch_ozon_ad_stats(self):
-    """每小时拉取Ozon广告数据 — 待Ozon客户端实现后补全"""
+    """每小时拉取所有Ozon店铺的广告数据"""
     db = SessionLocal()
     log_id = None
+
     try:
         log_id = _log_task_start(db, "fetch_ozon_ad_stats", self.request.id)
-        logger.info("Ozon广告采集任务触发（平台客户端待实现）")
-        _log_task_end(db, log_id, "success", {"message": "Ozon客户端待实现"})
-        return {"status": "skip", "reason": "ozon_client_not_implemented"}
+
+        shops = db.query(Shop).filter(
+            Shop.platform == "ozon",
+            Shop.status == "active",
+            Shop.api_key.isnot(None),
+            Shop.client_id.isnot(None),
+        ).all()
+
+        if not shops:
+            logger.info("没有找到active的Ozon店铺，跳过采集")
+            _log_task_end(db, log_id, "success", {"message": "无Ozon店铺"})
+            return {"status": "skip", "reason": "no_ozon_shops"}
+
+        total_campaigns = 0
+        total_stats = 0
+        errors = []
+
+        for shop in shops:
+            try:
+                c, s = _run_async(_fetch_single_ozon_shop(db, shop))
+                total_campaigns += c
+                total_stats += s
+                shop.last_sync_at = datetime.utcnow()
+                db.commit()
+            except Exception as e:
+                error_msg = f"shop_id={shop.id} Ozon采集失败: {str(e)}"
+                logger.error(error_msg)
+                errors.append(error_msg)
+                db.rollback()
+
+        result = {
+            "shops_processed": len(shops),
+            "campaigns_synced": total_campaigns,
+            "stats_inserted": total_stats,
+            "errors": errors,
+        }
+        status = "success" if not errors else "failed" if len(errors) == len(shops) else "success"
+        _log_task_end(db, log_id, status, result)
+
+        logger.info(f"Ozon广告数据采集完成: {result}")
+        return result
+
     except Exception as e:
-        logger.error(f"Ozon广告采集异常: {e}")
+        logger.error(f"Ozon广告采集任务异常: {e}")
         if log_id:
             _log_task_end(db, log_id, "failed", error=str(e))
+        db.rollback()
         raise self.retry(exc=e)
     finally:
         db.close()
 
 
-# ==================== Yandex 广告采集（骨架） ====================
+async def _fetch_single_ozon_shop(db, shop: Shop) -> tuple:
+    """采集单个Ozon店铺的广告数据"""
+    client = OzonClient(
+        shop_id=shop.id, api_key=shop.api_key, client_id=shop.client_id
+    )
+
+    try:
+        # 1. 同步广告活动
+        campaigns_data = await client.fetch_ad_campaigns()
+        campaigns_synced = 0
+        for camp_data in campaigns_data:
+            campaigns_synced += _upsert_campaign(
+                db, shop.tenant_id, shop.id, "ozon", camp_data
+            )
+        db.commit()
+
+        # 2. 拉取统计
+        today = date.today()
+        yesterday = today - timedelta(days=1)
+
+        active_campaigns = db.query(AdCampaign).filter(
+            AdCampaign.shop_id == shop.id,
+            AdCampaign.tenant_id == shop.tenant_id,
+            AdCampaign.platform == "ozon",
+            AdCampaign.status.in_(["active", "paused"]),
+        ).all()
+
+        stats_inserted = 0
+        for campaign in active_campaigns:
+            try:
+                stats_data = await client.fetch_ad_stats(
+                    campaign.platform_campaign_id,
+                    yesterday.isoformat(), today.isoformat()
+                )
+                for stat in stats_data:
+                    stats_inserted += _upsert_stat(
+                        db, shop.tenant_id, campaign.id, stat
+                    )
+                db.commit()
+            except Exception as e:
+                logger.warning(
+                    f"Ozon活动 {campaign.platform_campaign_id} 统计失败: {e}"
+                )
+                db.rollback()
+
+        logger.info(
+            f"Ozon shop_id={shop.id}: 同步{campaigns_synced}个活动, "
+            f"写入{stats_inserted}条统计"
+        )
+        return campaigns_synced, stats_inserted
+
+    finally:
+        await client.close()
+
+
+# ==================== Yandex 广告采集 ====================
 
 @celery_app.task(
     name="app.tasks.ad_tasks.fetch_yandex_ad_stats",
@@ -323,18 +423,115 @@ def fetch_ozon_ad_stats(self):
     default_retry_delay=300,
 )
 def fetch_yandex_ad_stats(self):
-    """每小时拉取Yandex广告数据 — 待Yandex客户端实现后补全"""
+    """每小时拉取所有Yandex店铺的广告数据"""
     db = SessionLocal()
     log_id = None
+
     try:
         log_id = _log_task_start(db, "fetch_yandex_ad_stats", self.request.id)
-        logger.info("Yandex广告采集任务触发（平台客户端待实现）")
-        _log_task_end(db, log_id, "success", {"message": "Yandex客户端待实现"})
-        return {"status": "skip", "reason": "yandex_client_not_implemented"}
+
+        shops = db.query(Shop).filter(
+            Shop.platform == "yandex",
+            Shop.status == "active",
+            Shop.oauth_token.isnot(None),
+        ).all()
+
+        if not shops:
+            logger.info("没有找到active的Yandex店铺，跳过采集")
+            _log_task_end(db, log_id, "success", {"message": "无Yandex店铺"})
+            return {"status": "skip", "reason": "no_yandex_shops"}
+
+        total_campaigns = 0
+        total_stats = 0
+        errors = []
+
+        for shop in shops:
+            try:
+                c, s = _run_async(_fetch_single_yandex_shop(db, shop))
+                total_campaigns += c
+                total_stats += s
+                shop.last_sync_at = datetime.utcnow()
+                db.commit()
+            except Exception as e:
+                error_msg = f"shop_id={shop.id} Yandex采集失败: {str(e)}"
+                logger.error(error_msg)
+                errors.append(error_msg)
+                db.rollback()
+
+        result = {
+            "shops_processed": len(shops),
+            "campaigns_synced": total_campaigns,
+            "stats_inserted": total_stats,
+            "errors": errors,
+        }
+        status = "success" if not errors else "failed" if len(errors) == len(shops) else "success"
+        _log_task_end(db, log_id, status, result)
+
+        logger.info(f"Yandex广告数据采集完成: {result}")
+        return result
+
     except Exception as e:
-        logger.error(f"Yandex广告采集异常: {e}")
+        logger.error(f"Yandex广告采集任务异常: {e}")
         if log_id:
             _log_task_end(db, log_id, "failed", error=str(e))
+        db.rollback()
         raise self.retry(exc=e)
     finally:
         db.close()
+
+
+async def _fetch_single_yandex_shop(db, shop: Shop) -> tuple:
+    """采集单个Yandex店铺的广告数据"""
+    client = YandexClient(
+        shop_id=shop.id,
+        api_key=shop.oauth_token,
+        campaign_id=shop.platform_seller_id or "",
+    )
+
+    try:
+        # 1. 同步广告活动
+        campaigns_data = await client.fetch_ad_campaigns()
+        campaigns_synced = 0
+        for camp_data in campaigns_data:
+            campaigns_synced += _upsert_campaign(
+                db, shop.tenant_id, shop.id, "yandex", camp_data
+            )
+        db.commit()
+
+        # 2. 拉取统计
+        today = date.today()
+        yesterday = today - timedelta(days=1)
+
+        active_campaigns = db.query(AdCampaign).filter(
+            AdCampaign.shop_id == shop.id,
+            AdCampaign.tenant_id == shop.tenant_id,
+            AdCampaign.platform == "yandex",
+            AdCampaign.status.in_(["active", "paused"]),
+        ).all()
+
+        stats_inserted = 0
+        for campaign in active_campaigns:
+            try:
+                stats_data = await client.fetch_ad_stats(
+                    campaign.platform_campaign_id,
+                    yesterday.isoformat(), today.isoformat()
+                )
+                for stat in stats_data:
+                    stats_inserted += _upsert_stat(
+                        db, shop.tenant_id, campaign.id, stat
+                    )
+                db.commit()
+            except Exception as e:
+                logger.warning(
+                    f"Yandex活动 {campaign.platform_campaign_id} 统计失败: {e}"
+                )
+                db.rollback()
+
+        logger.info(
+            f"Yandex shop_id={shop.id}: 同步{campaigns_synced}个活动, "
+            f"写入{stats_inserted}条统计"
+        )
+        return campaigns_synced, stats_inserted
+
+    finally:
+        await client.close()
