@@ -193,6 +193,54 @@ def refresh_token(db: Session, user_id: int, tenant_id: int, role: str) -> dict:
         return {"code": ErrorCode.UNKNOWN_ERROR, "msg": "刷新令牌异常"}
 
 
+def update_profile(db: Session, user_id: int, tenant_id: int, data: dict) -> dict:
+    """更新个人资料（用户名/邮箱）"""
+    try:
+        user = db.query(User).filter(
+            User.id == user_id,
+            User.tenant_id == tenant_id,
+            User.status == "active"
+        ).first()
+
+        if not user:
+            return {"code": ErrorCode.NOT_FOUND, "msg": "用户不存在"}
+
+        # 如果修改邮箱，检查唯一性
+        new_email = data.get("email")
+        if new_email and new_email != user.email:
+            existing = db.query(User).filter(
+                User.email == new_email,
+                User.id != user_id,
+            ).first()
+            if existing:
+                return {"code": ErrorCode.PARAM_ERROR, "msg": "该邮箱已被其他用户使用"}
+            user.email = new_email
+
+        new_username = data.get("username")
+        if new_username:
+            user.username = new_username
+
+        db.commit()
+        db.refresh(user)
+
+        logger.info(f"用户资料更新成功: user_id={user_id}")
+        return {
+            "code": ErrorCode.SUCCESS,
+            "data": {
+                "id": user.id,
+                "tenant_id": user.tenant_id,
+                "username": user.username,
+                "email": user.email,
+                "role": user.role,
+                "status": user.status,
+            },
+        }
+    except Exception as e:
+        db.rollback()
+        logger.error(f"更新资料异常: user_id={user_id}: {e}")
+        return {"code": ErrorCode.UNKNOWN_ERROR, "msg": "更新资料失败"}
+
+
 def change_password(db: Session, user_id: int, tenant_id: int,
                     old_password: str, new_password: str) -> dict:
     """修改密码"""

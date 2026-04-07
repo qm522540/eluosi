@@ -16,6 +16,10 @@ export function refreshToken() {
   return request.post('/auth/refresh')
 }
 
+export function updateProfile(data) {
+  return request.put('/auth/profile', data)
+}
+
 export function changePassword(data) {
   return request.put('/auth/change-password', data)
 }

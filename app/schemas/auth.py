@@ -1,5 +1,6 @@
 """认证模块 Pydantic 数据模型"""
 
+from typing import Optional
 from pydantic import BaseModel, EmailStr, Field
 
 
@@ -13,6 +14,11 @@ class RegisterRequest(BaseModel):
     email: str = Field(..., description="邮箱")
     password: str = Field(..., min_length=6, max_length=128, description="密码")
     tenant_name: str = Field(..., min_length=2, max_length=100, description="公司/品牌名称")
+
+
+class UpdateProfileRequest(BaseModel):
+    username: Optional[str] = Field(None, min_length=2, max_length=50, description="用户名")
+    email: Optional[str] = Field(None, description="邮箱")
 
 
 class ChangePasswordRequest(BaseModel):

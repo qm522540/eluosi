@@ -1,15 +1,45 @@
 import { useState, useEffect } from 'react'
-import { Card, Descriptions, Button, Modal, Form, Input, message, Tag, Space, Avatar, Divider } from 'antd'
-import { UserOutlined, MailOutlined, TeamOutlined, CrownOutlined, EditOutlined, LockOutlined } from '@ant-design/icons'
-import { getMe, changePassword } from '@/api/auth'
+import {
+  Card, Descriptions, Button, Modal, Form, Input, message, Tag, Space,
+  Avatar, Divider, Typography, Spin,
+} from 'antd'
+import {
+  UserOutlined, MailOutlined, TeamOutlined, CrownOutlined,
+  EditOutlined, LockOutlined, SaveOutlined, CloseOutlined,
+} from '@ant-design/icons'
+import { getMe, updateProfile, changePassword } from '@/api/auth'
 import { useAuthStore } from '@/stores/authStore'
+
+const { Text } = Typography
+
+const roleMap = {
+  owner: { label: '所有者', color: 'gold' },
+  admin: { label: '管理员', color: 'blue' },
+  operator: { label: '运营', color: 'green' },
+  viewer: { label: '只读', color: 'default' },
+}
+
+const planMap = {
+  free: { label: '免费版', color: 'default' },
+  basic: { label: '基础版', color: 'blue' },
+  pro: { label: '专业版', color: 'purple' },
+  enterprise: { label: '企业版', color: 'gold' },
+}
 
 const ProfileTab = () => {
   const [userInfo, setUserInfo] = useState(null)
   const [loading, setLoading] = useState(true)
+  const { user: storeUser, setAuth, token } = useAuthStore()
+
+  // 编辑状态
+  const [editingField, setEditingField] = useState(null)
+  const [editValue, setEditValue] = useState('')
+  const [saving, setSaving] = useState(false)
+
+  // 修改密码
   const [pwdModalVisible, setPwdModalVisible] = useState(false)
+  const [pwdLoading, setPwdLoading] = useState(false)
   const [pwdForm] = Form.useForm()
-  const storeUser = useAuthStore((s) => s.user)
 
   useEffect(() => {
     fetchUserInfo()
@@ -27,21 +57,52 @@ const ProfileTab = () => {
     }
   }
 
-  const roleMap = {
-    owner: { label: '所有者', color: 'gold' },
-    admin: { label: '管理员', color: 'blue' },
-    operator: { label: '运营', color: 'green' },
-    viewer: { label: '只读', color: 'default' },
+  const handleStartEdit = (field, currentValue) => {
+    setEditingField(field)
+    setEditValue(currentValue || '')
   }
 
-  const planMap = {
-    free: { label: '免费版', color: 'default' },
-    basic: { label: '基础版', color: 'blue' },
-    pro: { label: '专业版', color: 'purple' },
-    enterprise: { label: '企业版', color: 'gold' },
+  const handleCancelEdit = () => {
+    setEditingField(null)
+    setEditValue('')
   }
 
-  const [pwdLoading, setPwdLoading] = useState(false)
+  const handleSaveField = async () => {
+    const value = editValue.trim()
+    if (!value) {
+      message.warning('内容不能为空')
+      return
+    }
+
+    if (editingField === 'username' && value.length < 2) {
+      message.warning('用户名至少2个字符')
+      return
+    }
+
+    if (editingField === 'email') {
+      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+      if (!emailRegex.test(value)) {
+        message.warning('邮箱格式不正确')
+        return
+      }
+    }
+
+    setSaving(true)
+    try {
+      const res = await updateProfile({ [editingField]: value })
+      message.success('修改成功')
+      // 更新本地状态
+      setUserInfo((prev) => ({ ...prev, ...res.data }))
+      // 同步更新Zustand store
+      setAuth(token, res.data, userInfo?.tenant || null)
+      setEditingField(null)
+      setEditValue('')
+    } catch (err) {
+      message.error(err.message || '修改失败')
+    } finally {
+      setSaving(false)
+    }
+  }
 
   const handleChangePassword = async () => {
     try {
@@ -63,7 +124,7 @@ const ProfileTab = () => {
   }
 
   if (loading) {
-    return <Card loading={true} />
+    return <Card><Spin style={{ display: 'block', textAlign: 'center', padding: 40 }} /></Card>
   }
 
   const user = userInfo || storeUser || {}
@@ -71,60 +132,113 @@ const ProfileTab = () => {
   const role = roleMap[user.role] || { label: user.role, color: 'default' }
   const plan = planMap[tenant.plan] || { label: tenant.plan, color: 'default' }
 
+  const renderEditableField = (field, label, value, icon) => {
+    if (editingField === field) {
+      return (
+        <Space>
+          <Input
+            value={editValue}
+            onChange={(e) => setEditValue(e.target.value)}
+            onPressEnter={handleSaveField}
+            style={{ width: 220 }}
+            autoFocus
+            prefix={icon}
+          />
+          <Button
+            type="primary"
+            size="small"
+            icon={<SaveOutlined />}
+            loading={saving}
+            onClick={handleSaveField}
+          >
+            保存
+          </Button>
+          <Button size="small" icon={<CloseOutlined />} onClick={handleCancelEdit}>
+            取消
+          </Button>
+        </Space>
+      )
+    }
+
+    return (
+      <Space>
+        {icon}
+        <span>{value}</span>
+        <Button
+          type="link"
+          size="small"
+          icon={<EditOutlined />}
+          onClick={() => handleStartEdit(field, value)}
+        >
+          修改
+        </Button>
+      </Space>
+    )
+  }
+
   return (
     <div>
-      <Card>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 24, marginBottom: 24 }}>
-          <Avatar size={72} icon={<UserOutlined />} style={{ backgroundColor: '#7265e6' }} />
-          <div>
-            <div style={{ fontSize: 20, fontWeight: 600 }}>{user.username}</div>
-            <div style={{ color: '#666', marginTop: 4 }}>{user.email}</div>
-            <Space style={{ marginTop: 8 }}>
+      {/* 个人信息卡片 */}
+      <Card title="基本信息">
+        <div style={{ display: 'flex', alignItems: 'flex-start', gap: 32, marginBottom: 24 }}>
+          <Avatar size={80} icon={<UserOutlined />} style={{ backgroundColor: '#7265e6', flexShrink: 0 }} />
+          <div style={{ flex: 1 }}>
+            <Space style={{ marginBottom: 12 }}>
               <Tag icon={<CrownOutlined />} color={role.color}>{role.label}</Tag>
               <Tag color={user.status === 'active' ? 'success' : 'error'}>
-                {user.status === 'active' ? '正常' : '停用'}
+                {user.status === 'active' ? '账号正常' : '已停用'}
               </Tag>
             </Space>
+
+            <Descriptions column={1} size="small" bordered>
+              <Descriptions.Item label="用户名">
+                {renderEditableField('username', '用户名', user.username, <UserOutlined />)}
+              </Descriptions.Item>
+              <Descriptions.Item label="邮箱">
+                {renderEditableField('email', '邮箱', user.email, <MailOutlined />)}
+              </Descriptions.Item>
+              <Descriptions.Item label="用户ID">
+                <Text copyable>{user.id}</Text>
+              </Descriptions.Item>
+              <Descriptions.Item label="角色">
+                <Tag color={role.color}>{role.label}</Tag>
+              </Descriptions.Item>
+              <Descriptions.Item label="最后登录">
+                {user.last_login_at ? new Date(user.last_login_at).toLocaleString('zh-CN') : '未知'}
+              </Descriptions.Item>
+            </Descriptions>
           </div>
         </div>
+      </Card>
 
-        <Descriptions column={2} bordered size="small">
-          <Descriptions.Item label="用户ID">{user.id}</Descriptions.Item>
-          <Descriptions.Item label="邮箱">
-            <Space>
-              <MailOutlined />
-              {user.email}
-            </Space>
-          </Descriptions.Item>
-          <Descriptions.Item label="角色">
-            <Tag color={role.color}>{role.label}</Tag>
-          </Descriptions.Item>
-          <Descriptions.Item label="最后登录">
-            {user.last_login_at ? new Date(user.last_login_at).toLocaleString('zh-CN') : '未知'}
-          </Descriptions.Item>
-        </Descriptions>
-
-        <Divider />
-
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <span style={{ fontWeight: 500 }}>安全设置</span>
+      {/* 安全设置 */}
+      <Card title="安全设置" style={{ marginTop: 16 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 0' }}>
+          <div>
+            <div style={{ fontWeight: 500 }}>登录密码</div>
+            <Text type="secondary">定期修改密码可以保护账号安全</Text>
+          </div>
           <Button icon={<LockOutlined />} onClick={() => setPwdModalVisible(true)}>修改密码</Button>
         </div>
       </Card>
 
+      {/* 租户信息 */}
       {tenant.id && (
-        <Card title={<Space><TeamOutlined />租户信息</Space>} style={{ marginTop: 16 }}>
+        <Card title={<Space><TeamOutlined />企业/租户信息</Space>} style={{ marginTop: 16 }}>
           <Descriptions column={2} bordered size="small">
             <Descriptions.Item label="公司名称">{tenant.name}</Descriptions.Item>
-            <Descriptions.Item label="套餐">
+            <Descriptions.Item label="当前套餐">
               <Tag color={plan.color}>{plan.label}</Tag>
             </Descriptions.Item>
             <Descriptions.Item label="最大店铺数">{tenant.max_shops} 个</Descriptions.Item>
-            <Descriptions.Item label="租户ID">{tenant.id}</Descriptions.Item>
+            <Descriptions.Item label="租户ID">
+              <Text copyable>{tenant.id}</Text>
+            </Descriptions.Item>
           </Descriptions>
         </Card>
       )}
 
+      {/* 修改密码弹窗 */}
       <Modal
         title="修改密码"
         open={pwdModalVisible}

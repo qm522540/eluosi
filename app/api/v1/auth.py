@@ -4,11 +4,13 @@ from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
 from app.dependencies import get_db, get_current_user
-from app.schemas.auth import LoginRequest, RegisterRequest, ChangePasswordRequest
+from app.schemas.auth import LoginRequest, RegisterRequest, ChangePasswordRequest, UpdateProfileRequest
+from app.utils.errors import ErrorCode
 from app.services.auth.service import (
     authenticate_user,
     register_user,
     get_user_info,
+    update_profile,
     refresh_token,
     change_password,
 )
@@ -45,6 +47,22 @@ def me(
     if result["code"] != 0:
         return error(result["code"], result["msg"])
     return success(result["data"])
+
+
+@router.put("/profile")
+def update_user_profile(
+    req: UpdateProfileRequest,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """更新个人资料（用户名/邮箱）"""
+    data = req.model_dump(exclude_none=True)
+    if not data:
+        return error(ErrorCode.PARAM_ERROR, "没有需要更新的字段")
+    result = update_profile(db, current_user["user_id"], current_user["tenant_id"], data)
+    if result["code"] != 0:
+        return error(result["code"], result["msg"])
+    return success(result["data"], msg="资料更新成功")
 
 
 @router.put("/change-password")
