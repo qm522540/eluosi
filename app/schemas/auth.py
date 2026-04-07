@@ -15,6 +15,11 @@ class RegisterRequest(BaseModel):
     tenant_name: str = Field(..., min_length=2, max_length=100, description="公司/品牌名称")
 
 
+class ChangePasswordRequest(BaseModel):
+    old_password: str = Field(..., min_length=1, description="当前密码")
+    new_password: str = Field(..., min_length=6, max_length=128, description="新密码")
+
+
 class TokenResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"

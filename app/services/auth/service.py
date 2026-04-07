@@ -191,3 +191,30 @@ def refresh_token(db: Session, user_id: int, tenant_id: int, role: str) -> dict:
     except Exception as e:
         logger.error(f"刷新令牌异常: user_id={user_id}: {e}")
         return {"code": ErrorCode.UNKNOWN_ERROR, "msg": "刷新令牌异常"}
+
+
+def change_password(db: Session, user_id: int, tenant_id: int,
+                    old_password: str, new_password: str) -> dict:
+    """修改密码"""
+    try:
+        user = db.query(User).filter(
+            User.id == user_id,
+            User.tenant_id == tenant_id,
+            User.status == "active"
+        ).first()
+
+        if not user:
+            return {"code": ErrorCode.NOT_FOUND, "msg": "用户不存在"}
+
+        if not verify_password(old_password, user.password_hash):
+            return {"code": ErrorCode.AUTH_FAILED, "msg": "当前密码错误"}
+
+        user.password_hash = hash_password(new_password)
+        db.commit()
+
+        logger.info(f"用户修改密码成功: user_id={user_id}")
+        return {"code": ErrorCode.SUCCESS, "data": None}
+    except Exception as e:
+        db.rollback()
+        logger.error(f"修改密码异常: user_id={user_id}: {e}")
+        return {"code": ErrorCode.UNKNOWN_ERROR, "msg": "修改密码失败"}

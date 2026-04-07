@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { Card, Descriptions, Button, Modal, Form, Input, message, Tag, Space, Avatar, Divider } from 'antd'
 import { UserOutlined, MailOutlined, TeamOutlined, CrownOutlined, EditOutlined, LockOutlined } from '@ant-design/icons'
-import { getMe } from '@/api/auth'
+import { getMe, changePassword } from '@/api/auth'
 import { useAuthStore } from '@/stores/authStore'
 
 const ProfileTab = () => {
@@ -41,14 +41,24 @@ const ProfileTab = () => {
     enterprise: { label: '企业版', color: 'gold' },
   }
 
+  const [pwdLoading, setPwdLoading] = useState(false)
+
   const handleChangePassword = async () => {
     try {
-      await pwdForm.validateFields()
-      message.info('修改密码功能即将上线，请稍后')
+      const values = await pwdForm.validateFields()
+      setPwdLoading(true)
+      await changePassword({
+        old_password: values.old_password,
+        new_password: values.new_password,
+      })
+      message.success('密码修改成功')
       setPwdModalVisible(false)
       pwdForm.resetFields()
     } catch (err) {
       if (err.errorFields) return
+      message.error(err.message || '密码修改失败')
+    } finally {
+      setPwdLoading(false)
     }
   }
 
@@ -119,6 +129,7 @@ const ProfileTab = () => {
         title="修改密码"
         open={pwdModalVisible}
         onOk={handleChangePassword}
+        confirmLoading={pwdLoading}
         onCancel={() => { setPwdModalVisible(false); pwdForm.resetFields() }}
         width={400}
       >

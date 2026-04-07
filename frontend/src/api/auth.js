@@ -15,3 +15,7 @@ export function getMe() {
 export function refreshToken() {
   return request.post('/auth/refresh')
 }
+
+export function changePassword(data) {
+  return request.put('/auth/change-password', data)
+}
