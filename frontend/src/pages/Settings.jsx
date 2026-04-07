@@ -10,6 +10,9 @@ import {
 } from '@ant-design/icons'
 import { getShops, createShop, updateShop, deleteShop, testConnection } from '@/api/shops'
 import { PLATFORMS, SHOP_STATUS } from '@/utils/constants'
+import ProfileTab from '@/components/ProfileTab'
+import NotificationsTab from '@/components/NotificationsTab'
+import WechatWorkTab from '@/components/WechatWorkTab'
 
 const { Title } = Typography
 
@@ -357,29 +360,17 @@ const Settings = () => {
     {
       key: 'profile',
       label: '个人信息',
-      children: (
-        <Card>
-          <Typography.Text type="secondary">个人信息设置（开发中）</Typography.Text>
-        </Card>
-      ),
+      children: <ProfileTab />,
     },
     {
       key: 'notifications',
-      label: '通知设置',
-      children: (
-        <Card>
-          <Typography.Text type="secondary">通知推送配置（开发中）</Typography.Text>
-        </Card>
-      ),
+      label: '通知中心',
+      children: <NotificationsTab />,
     },
     {
       key: 'wechat',
       label: '企业微信',
-      children: (
-        <Card>
-          <Typography.Text type="secondary">企业微信对接配置（开发中）</Typography.Text>
-        </Card>
-      ),
+      children: <WechatWorkTab />,
     },
   ]
 
