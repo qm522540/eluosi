@@ -1,6 +1,6 @@
 from fastapi import APIRouter
 
-from app.api.v1 import system, auth, shops
+from app.api.v1 import system, auth, shops, products, ads, finance, notifications
 
 api_router = APIRouter()
 
@@ -13,10 +13,19 @@ api_router.include_router(auth.router, prefix="/auth", tags=["认证"])
 # 店铺管理
 api_router.include_router(shops.router, prefix="/shops", tags=["店铺"])
 
-# 后续模块在开发时逐个注册:
-# from app.api.v1 import products, ads, seo, inventory, finance
-# api_router.include_router(products.router, prefix="/products", tags=["商品"])
-# api_router.include_router(ads.router, prefix="/ads", tags=["广告"])
+# 商品管理
+api_router.include_router(products.router, prefix="/products", tags=["商品"])
+
+# 广告管理
+api_router.include_router(ads.router, prefix="/ads", tags=["广告"])
+
+# 财务管理
+api_router.include_router(finance.router, prefix="/finance", tags=["财务"])
+
+# 通知管理
+api_router.include_router(notifications.router, prefix="/notifications", tags=["通知"])
+
+# 后续模块:
+# from app.api.v1 import seo, inventory
 # api_router.include_router(seo.router, prefix="/seo", tags=["SEO"])
 # api_router.include_router(inventory.router, prefix="/inventory", tags=["库存"])
-# api_router.include_router(finance.router, prefix="/finance", tags=["财务"])
