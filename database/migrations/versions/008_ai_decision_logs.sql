@@ -1,0 +1,34 @@
+-- Migration: 008_ai_decision_logs.sql
+-- Author: 老林
+-- Date: 2026-04-07
+-- Description: Create ai_decision_logs table
+
+SET NAMES utf8mb4;
+
+-- -----------------------------------------------------------
+-- Table: ai_decision_logs
+-- -----------------------------------------------------------
+CREATE TABLE IF NOT EXISTS `ai_decision_logs` (
+    `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+    `tenant_id` BIGINT UNSIGNED NOT NULL,
+    `task_type` ENUM('ad_optimization','seo_generation','roi_analysis','inventory_forecast','report_generation') NOT NULL,
+    `ai_model` ENUM('deepseek','kimi','glm') NOT NULL,
+    `input_data` JSON NOT NULL,
+    `output_data` JSON NULL DEFAULT NULL,
+    `prompt_tokens` INT NULL DEFAULT NULL,
+    `completion_tokens` INT NULL DEFAULT NULL,
+    `cost_usd` DECIMAL(10,6) NULL DEFAULT NULL,
+    `duration_ms` INT NULL DEFAULT NULL,
+    `status` ENUM('pending','success','failed','timeout') NOT NULL DEFAULT 'pending',
+    `error_message` TEXT NULL DEFAULT NULL,
+    `triggered_by` ENUM('manual','scheduled','alert') NOT NULL DEFAULT 'scheduled',
+    `user_id` BIGINT UNSIGNED NULL DEFAULT NULL,
+    `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    PRIMARY KEY (`id`),
+    INDEX `idx_ai_logs_tenant_id` (`tenant_id`),
+    INDEX `idx_ai_logs_task_type` (`task_type`),
+    INDEX `idx_ai_logs_status` (`status`),
+    INDEX `idx_ai_logs_created_at` (`created_at`),
+    CONSTRAINT `fk_ai_logs_tenant_id` FOREIGN KEY (`tenant_id`) REFERENCES `tenants` (`id`) ON DELETE CASCADE ON UPDATE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

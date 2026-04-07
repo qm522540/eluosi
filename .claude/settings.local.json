@@ -1,0 +1,25 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(ssh:*)",
+      "Bash(where sshpass:*)",
+      "Bash(pip install:*)",
+      "Bash(pip --version)",
+      "Bash(ls /c/Python*/python.exe)",
+      "Read(//c/Users/wcq/AppData/Local/Programs/**)",
+      "Bash(cmd.exe /c \"where python\")",
+      "Bash(cmd.exe /c \"where py\")",
+      "Read(//c/Users/wcq/.ssh/**)",
+      "Bash(ssh-keygen:*)",
+      "Bash(where choco:*)",
+      "Bash(choco install:*)",
+      "Bash(where scoop:*)",
+      "Bash(scoop install:*)",
+      "Bash(git --version)",
+      "Bash(gh --version)",
+      "Bash(where gh:*)",
+      "Bash(touch app/__TRACKED_VAR__/__init__.py)",
+      "Bash(touch tests/__init__.py)"
+    ]
+  }
+}
