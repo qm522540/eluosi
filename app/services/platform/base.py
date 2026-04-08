@@ -59,5 +59,13 @@ class PlatformClientFactory:
     def get_client(cls, platform: str, shop_id: int, api_key: str, **kwargs) -> BasePlatformClient:
         client_class = cls._clients.get(platform)
         if not client_class:
+            # 懒加载：按平台名直接导入对应模块，触发注册
+            try:
+                import importlib
+                importlib.import_module(f"app.services.platform.{platform}")
+                client_class = cls._clients.get(platform)
+            except ImportError:
+                pass
+        if not client_class:
             raise ValueError(f"不支持的平台: {platform}")
         return client_class(shop_id=shop_id, api_key=api_key, **kwargs)
