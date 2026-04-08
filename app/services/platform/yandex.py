@@ -220,10 +220,21 @@ class YandexClient(BasePlatformClient):
         if daily_budget_raw and daily_budget_raw.get("Amount"):
             daily_budget = int(daily_budget_raw["Amount"]) / 1000000
 
+        campaign_id = str(raw.get("Id", ""))
+        ad_type = type_map.get(raw.get("Type", ""), "search")
+        ad_type_labels = {
+            "search": "搜索广告",
+            "catalog": "展示广告",
+            "recommendation": "智能广告",
+        }
+        name = raw.get("Name") or ""
+        if not name.strip():
+            name = f"{ad_type_labels.get(ad_type, '广告')}-{campaign_id}"
+
         return {
-            "platform_campaign_id": str(raw.get("Id", "")),
-            "name": raw.get("Name", ""),
-            "ad_type": type_map.get(raw.get("Type", ""), "search"),
+            "platform_campaign_id": campaign_id,
+            "name": name,
+            "ad_type": ad_type,
             "daily_budget": daily_budget,
             "total_budget": None,
             "status": state_map.get(raw.get("State", ""), "paused"),

@@ -211,10 +211,22 @@ class OzonClient(BasePlatformClient):
             "ACTION": "recommendation",
         }
 
+        campaign_id = str(raw.get("id", ""))
+        ad_type = type_map.get(raw.get("advObjectType", ""), "search")
+        ad_type_labels = {
+            "product_page": "商品推广",
+            "catalog": "品牌推广",
+            "search": "搜索推广",
+            "recommendation": "活动推广",
+        }
+        name = raw.get("title") or ""
+        if not name.strip():
+            name = f"{ad_type_labels.get(ad_type, '广告')}-{campaign_id}"
+
         return {
-            "platform_campaign_id": str(raw.get("id", "")),
-            "name": raw.get("title", ""),
-            "ad_type": type_map.get(raw.get("advObjectType", ""), "search"),
+            "platform_campaign_id": campaign_id,
+            "name": name,
+            "ad_type": ad_type,
             "daily_budget": raw.get("dailyBudget"),
             "total_budget": raw.get("budget"),
             "status": state_map.get(raw.get("state", ""), "paused"),

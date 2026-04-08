@@ -213,7 +213,12 @@ def _upsert_campaign(db, tenant_id: int, shop_id: int, platform: str, data: dict
     ).first()
 
     if existing:
-        existing.name = data.get("name", existing.name)
+        new_name = data.get("name", "")
+        # 如果已有名称为空或现在有更好的名称，更新它
+        if new_name and (not existing.name or not existing.name.strip()):
+            existing.name = new_name
+        elif new_name:
+            existing.name = new_name
         existing.ad_type = data.get("ad_type", existing.ad_type)
         existing.daily_budget = data.get("daily_budget", existing.daily_budget)
         existing.status = data.get("status", existing.status)

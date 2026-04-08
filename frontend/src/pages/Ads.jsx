@@ -807,11 +807,27 @@ const Ads = () => {
             </Col>
           </Row>
 
+          {/* 活动列表 */}
+          <Card title="活动列表" size="small" style={{ marginBottom: 24 }}>
+            <Table
+              columns={columns}
+              dataSource={campaigns}
+              rowKey="id"
+              loading={listLoading}
+              pagination={{
+                current: page,
+                total,
+                pageSize: 20,
+                showTotal: (t) => `共 ${t} 个活动`,
+                onChange: (p) => { setPage(p); fetchCampaigns(p) },
+              }}
+            />
+          </Card>
+
           {/* 趋势图表 */}
           <Card
             title="广告趋势"
             size="small"
-            style={{ marginBottom: 24 }}
             extra={
               <Space>
                 <Button icon={<DownloadOutlined />} size="small" loading={exporting} onClick={handleExport}>导出CSV</Button>
@@ -828,23 +844,6 @@ const Ads = () => {
             }
           >
             <ReactECharts option={getChartOption()} style={{ height: 300 }} showLoading={statsLoading} />
-          </Card>
-
-          {/* 活动列表 */}
-          <Card title="广告活动" size="small">
-            <Table
-              columns={columns}
-              dataSource={campaigns}
-              rowKey="id"
-              loading={listLoading}
-              pagination={{
-                current: page,
-                total,
-                pageSize: 20,
-                showTotal: (t) => `共 ${t} 个活动`,
-                onChange: (p) => { setPage(p); fetchCampaigns(p) },
-              }}
-            />
           </Card>
         </>
       )}

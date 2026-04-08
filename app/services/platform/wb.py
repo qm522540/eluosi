@@ -177,10 +177,23 @@ class WBClient(BasePlatformClient):
             11: "paused",
         }
 
+        advert_id = str(raw.get("advertId", ""))
+        ad_type = type_map.get(raw.get("type"), "search")
+        ad_type_labels = {
+            "catalog": "目录推广",
+            "product_page": "商品卡片",
+            "search": "搜索推广",
+            "recommendation": "推荐推广",
+        }
+        # WB的count接口不一定返回name，用类型+ID生成有意义的名称
+        name = raw.get("name") or ""
+        if not name.strip():
+            name = f"{ad_type_labels.get(ad_type, '广告')}-{advert_id}"
+
         return {
-            "platform_campaign_id": str(raw.get("advertId", "")),
-            "name": raw.get("name", ""),
-            "ad_type": type_map.get(raw.get("type"), "search"),
+            "platform_campaign_id": advert_id,
+            "name": name,
+            "ad_type": ad_type,
             "daily_budget": raw.get("dailyBudget"),
             "total_budget": None,
             "status": status_map.get(raw.get("status"), "paused"),
