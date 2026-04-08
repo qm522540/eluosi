@@ -1,6 +1,6 @@
 from fastapi import APIRouter
 
-from app.api.v1 import system, auth, shops, products, ads, finance, notifications
+from app.api.v1 import system, auth, shops, products, ads, finance, notifications, tasks
 
 api_router = APIRouter()
 
@@ -24,6 +24,9 @@ api_router.include_router(finance.router, prefix="/finance", tags=["财务"])
 
 # 通知管理
 api_router.include_router(notifications.router, prefix="/notifications", tags=["通知"])
+
+# 数据采集任务
+api_router.include_router(tasks.router, prefix="/tasks", tags=["任务"])
 
 # 后续模块:
 # from app.api.v1 import seo, inventory

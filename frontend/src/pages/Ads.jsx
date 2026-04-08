@@ -4,12 +4,12 @@ import {
   Statistic, Modal, Form, InputNumber, message, DatePicker, Tooltip, Badge,
 } from 'antd'
 import {
-  ReloadOutlined, EditOutlined, EyeOutlined,
+  ReloadOutlined, EditOutlined, EyeOutlined, SyncOutlined,
   FundOutlined, DollarOutlined, AimOutlined, RiseOutlined,
 } from '@ant-design/icons'
 import ReactECharts from 'echarts-for-react'
 import dayjs from 'dayjs'
-import { getCampaigns, getCampaign, updateCampaign, getAdStats, getAdSummary } from '@/api/ads'
+import { getCampaigns, getCampaign, updateCampaign, getAdStats, getAdSummary, syncAds } from '@/api/ads'
 import { getShops } from '@/api/shops'
 import { PLATFORMS, AD_STATUS, AD_TYPES } from '@/utils/constants'
 
@@ -38,6 +38,9 @@ const Ads = () => {
   const [editingCampaign, setEditingCampaign] = useState(null)
   const [editSubmitting, setEditSubmitting] = useState(false)
   const [editForm] = Form.useForm()
+
+  // 同步状态
+  const [syncing, setSyncing] = useState(false)
 
   // 详情弹窗
   const [detailVisible, setDetailVisible] = useState(false)
@@ -119,6 +122,24 @@ const Ads = () => {
   useEffect(() => {
     fetchStats()
   }, [fetchStats])
+
+  // 手动同步广告数据
+  const handleSync = async () => {
+    setSyncing(true)
+    try {
+      await syncAds()
+      message.success('同步任务已提交，数据将在1-2分钟内更新')
+      setTimeout(() => {
+        fetchCampaigns()
+        fetchSummary()
+        fetchStats()
+      }, 10000)
+    } catch (err) {
+      message.error(err.message || '同步失败')
+    } finally {
+      setSyncing(false)
+    }
+  }
 
   // 查看详情
   const handleDetail = async (id) => {
@@ -326,6 +347,9 @@ const Ads = () => {
             onChange={setFilterStatus}
             options={Object.entries(AD_STATUS).map(([k, v]) => ({ value: k, label: v.label }))}
           />
+          <Button icon={<SyncOutlined spin={syncing} />} loading={syncing} onClick={handleSync}>
+            同步数据
+          </Button>
           <Button icon={<ReloadOutlined />} onClick={() => { fetchCampaigns(); fetchSummary(); fetchStats() }}>
             刷新
           </Button>
