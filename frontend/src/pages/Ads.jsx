@@ -566,13 +566,20 @@ const Ads = () => {
 
   const columns = [
     {
+      title: '活动ID',
+      dataIndex: 'platform_campaign_id',
+      key: 'platform_campaign_id',
+      width: 140,
+      ellipsis: true,
+      render: (text, record) => (
+        <a onClick={() => handleDetail(record.id)}>{text || record.id}</a>
+      ),
+    },
+    {
       title: '活动名称',
       dataIndex: 'name',
       key: 'name',
       ellipsis: true,
-      render: (text, record) => (
-        <a onClick={() => handleDetail(record.id)}>{text || `Campaign #${record.id}`}</a>
-      ),
     },
     {
       title: '平台',
