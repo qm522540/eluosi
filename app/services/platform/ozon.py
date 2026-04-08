@@ -66,6 +66,7 @@ class OzonClient(BasePlatformClient):
             self._http_client = httpx.AsyncClient(
                 headers=self._get_seller_headers(),
                 timeout=httpx.Timeout(30.0, connect=10.0),
+                follow_redirects=True,
             )
         return self._http_client
 
@@ -74,6 +75,7 @@ class OzonClient(BasePlatformClient):
             self._perf_client = httpx.AsyncClient(
                 headers=self._get_perf_headers(),
                 timeout=httpx.Timeout(30.0, connect=10.0),
+                follow_redirects=True,
             )
         return self._perf_client
 

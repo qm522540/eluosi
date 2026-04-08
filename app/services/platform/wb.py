@@ -51,6 +51,7 @@ class WBClient(BasePlatformClient):
             self._http_client = httpx.AsyncClient(
                 headers=self._get_headers(),
                 timeout=httpx.Timeout(30.0, connect=10.0),
+                follow_redirects=True,
             )
         return self._http_client
 

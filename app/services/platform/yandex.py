@@ -68,6 +68,7 @@ class YandexClient(BasePlatformClient):
             self._http_client = httpx.AsyncClient(
                 headers=self._get_market_headers(),
                 timeout=httpx.Timeout(30.0, connect=10.0),
+                follow_redirects=True,
             )
         return self._http_client
 
@@ -76,6 +77,7 @@ class YandexClient(BasePlatformClient):
             self._direct_client = httpx.AsyncClient(
                 headers=self._get_direct_headers(),
                 timeout=httpx.Timeout(60.0, connect=10.0),
+                follow_redirects=True,
             )
         return self._direct_client
 
