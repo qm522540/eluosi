@@ -4,7 +4,7 @@ import csv
 import io
 from datetime import date
 from sqlalchemy.orm import Session
-from sqlalchemy import func
+from sqlalchemy import func, case
 
 from app.models.ad import AdCampaign, AdGroup, AdKeyword, AdStat
 from app.models.notification import Notification
@@ -26,7 +26,15 @@ def list_campaigns(db: Session, tenant_id: int, shop_id: int = None,
             query = query.filter(AdCampaign.status == status)
 
         total = query.count()
-        campaigns = query.order_by(AdCampaign.created_at.desc()).offset(
+        # active排最前，其余按创建时间倒序
+        status_order = case(
+            (AdCampaign.status == "active", 0),
+            (AdCampaign.status == "draft", 1),
+            (AdCampaign.status == "paused", 2),
+            (AdCampaign.status == "archived", 3),
+            else_=4,
+        )
+        campaigns = query.order_by(status_order, AdCampaign.created_at.desc()).offset(
             (page - 1) * page_size
         ).limit(page_size).all()
 
