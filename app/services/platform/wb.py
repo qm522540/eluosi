@@ -126,15 +126,12 @@ class WBClient(BasePlatformClient):
     async def fetch_ad_campaigns(self) -> list:
         """拉取所有广告活动
 
-        WB广告API流程：
-        1. GET /adv/v1/promotion/count 获取各状态活动数量
-        2. POST /adv/v1/promotion/adverts 按状态获取活动ID列表
-        3. POST /adv/v1/promotion/adverts/info 获取活动详情（批量，最多50个）
+        WB广告API: GET /adv/v1/promotion/count 返回各状态活动及基本信息，
+        直接从中解析活动数据。
         """
         campaigns = []
 
         try:
-            # Step 1: 获取活动数量统计
             count_url = f"{WB_ADVERT_API}/adv/v1/promotion/count"
             count_data = await self._request("GET", count_url)
 
@@ -142,38 +139,17 @@ class WBClient(BasePlatformClient):
                 logger.info(f"WB shop_id={self.shop_id} 暂无广告活动")
                 return []
 
-            # Step 2: 遍历各状态获取活动ID
-            all_campaign_ids = []
             for status_group in count_data.get("adverts", []):
-                status = status_group.get("status")
                 advert_list = status_group.get("advert_list", [])
-                if advert_list:
-                    for adv in advert_list:
-                        adv_id = adv.get("advertId")
-                        if adv_id:
-                            all_campaign_ids.append(adv_id)
-
-            if not all_campaign_ids:
-                return []
+                if not advert_list:
+                    continue
+                for adv in advert_list:
+                    if adv.get("advertId"):
+                        campaigns.append(self._parse_campaign(adv))
 
             logger.info(
-                f"WB shop_id={self.shop_id} 发现 {len(all_campaign_ids)} 个广告活动"
+                f"WB shop_id={self.shop_id} 发现 {len(campaigns)} 个广告活动"
             )
-
-            # Step 3: 批量获取活动详情（每批最多50个）
-            info_url = f"{WB_ADVERT_API}/adv/v1/promotion/adverts/info"
-            batch_size = 50
-            for i in range(0, len(all_campaign_ids), batch_size):
-                batch_ids = all_campaign_ids[i:i + batch_size]
-                info_data = await self._request(
-                    "POST", info_url,
-                    json=batch_ids
-                )
-                if isinstance(info_data, list):
-                    for item in info_data:
-                        campaigns.append(self._parse_campaign(item))
-                elif isinstance(info_data, dict) and info_data:
-                    campaigns.append(self._parse_campaign(info_data))
 
         except Exception as e:
             logger.error(f"WB 拉取广告活动失败，shop_id={self.shop_id}: {e}")

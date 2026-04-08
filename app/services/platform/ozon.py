@@ -151,32 +151,32 @@ class OzonClient(BasePlatformClient):
         """拉取广告活动列表
 
         Ozon Performance API:
-        POST /api/client/campaign → 获取广告活动列表
+        GET /api/client/campaign → 获取广告活动列表
         """
         campaigns = []
 
         try:
             url = f"{OZON_PERFORMANCE_API}/api/client/campaign"
-            payload = {
-                "advObjectType": "SKU",
-                "state": "CAMPAIGN_STATE_RUNNING",
-            }
-            result = await self._request("POST", url, use_perf=True, json=payload)
 
-            items = result.get("list", [])
+            # 获取运行中的活动
+            result = await self._request(
+                "GET", url, use_perf=True,
+                params={"state": "CAMPAIGN_STATE_RUNNING"},
+            )
+
+            items = result.get("list", []) if isinstance(result, dict) else []
+
+            # 也获取暂停的活动
+            result_paused = await self._request(
+                "GET", url, use_perf=True,
+                params={"state": "CAMPAIGN_STATE_STOPPED"},
+            )
+            paused_items = result_paused.get("list", []) if isinstance(result_paused, dict) else []
+            items.extend(paused_items)
+
             if not items:
                 logger.info(f"Ozon shop_id={self.shop_id} 暂无广告活动")
                 return []
-
-            # 也获取暂停的活动
-            payload_paused = {
-                "advObjectType": "SKU",
-                "state": "CAMPAIGN_STATE_STOPPED",
-            }
-            result_paused = await self._request(
-                "POST", url, use_perf=True, json=payload_paused
-            )
-            items.extend(result_paused.get("list", []))
 
             for item in items:
                 campaigns.append(self._parse_campaign(item))
