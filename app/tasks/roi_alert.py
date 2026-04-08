@@ -23,12 +23,12 @@ from app.utils.logger import setup_logger
 
 logger = setup_logger("tasks.roi_alert")
 
-# 告警阈值
-ACOS_WARNING = 30.0
-ACOS_CRITICAL = 50.0
-ROAS_WARNING = 2.0
-BUDGET_USAGE_THRESHOLD = 0.8
-ROAS_CRITICAL_WITH_BUDGET = 1.5
+# 告警阈值（默认值，可通过API动态修改）
+from app.services.ad.service import _alert_config
+
+
+def _get_threshold(key, default):
+    return _alert_config.get(key, default)
 
 
 @celery_app.task(
@@ -96,25 +96,31 @@ def check_roi_anomaly(self):
 
                 alerts = []
 
+                acos_critical = _get_threshold("acos_critical", 50.0)
+                acos_warning = _get_threshold("acos_warning", 30.0)
+                roas_warning = _get_threshold("roas_warning", 2.0)
+                budget_threshold = _get_threshold("budget_usage_threshold", 0.8)
+                roas_critical_budget = _get_threshold("roas_critical_with_budget", 1.5)
+
                 # 检查ACOS
-                if acos > ACOS_CRITICAL:
+                if acos > acos_critical:
                     alerts.append(
-                        f"[严重] ACOS={acos:.1f}% (阈值{ACOS_CRITICAL}%)"
+                        f"[严重] ACOS={acos:.1f}% (阈值{acos_critical}%)"
                     )
-                elif acos > ACOS_WARNING:
+                elif acos > acos_warning:
                     alerts.append(
-                        f"[警告] ACOS={acos:.1f}% (阈值{ACOS_WARNING}%)"
+                        f"[警告] ACOS={acos:.1f}% (阈值{acos_warning}%)"
                     )
 
                 # 检查ROAS
-                if roas < ROAS_WARNING:
-                    alerts.append(f"[警告] ROAS={roas:.2f} (阈值{ROAS_WARNING})")
+                if roas < roas_warning:
+                    alerts.append(f"[警告] ROAS={roas:.2f} (阈值{roas_warning})")
 
                 # 检查预算消耗
                 daily_budget = float(campaign.daily_budget) if campaign.daily_budget else 0
                 if daily_budget > 0:
                     budget_usage = total_spend / daily_budget
-                    if budget_usage > BUDGET_USAGE_THRESHOLD and roas < ROAS_CRITICAL_WITH_BUDGET:
+                    if budget_usage > budget_threshold and roas < roas_critical_budget:
                         alerts.append(
                             f"[严重] 预算已用{budget_usage:.0%}，ROAS仅{roas:.2f}"
                         )

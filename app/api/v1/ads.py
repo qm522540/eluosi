@@ -2,18 +2,33 @@
 
 from datetime import date, timedelta
 from fastapi import APIRouter, Depends, Query
+from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
+import io
 
 from app.dependencies import get_db, get_current_user, get_tenant_id
-from app.schemas.ad import AdCampaignUpdate
+from app.schemas.ad import (
+    AdCampaignCreate, AdCampaignUpdate,
+    AdGroupCreate, AdGroupUpdate,
+    AdKeywordCreate, AdKeywordUpdate, AdKeywordBatchCreate,
+    BidOptimizeRequest, AlertConfigUpdate,
+)
 from app.services.ad.service import (
-    list_campaigns, get_campaign, update_campaign,
+    list_campaigns, get_campaign, create_campaign, update_campaign, delete_campaign,
+    list_ad_groups, create_ad_group, update_ad_group, delete_ad_group,
+    list_keywords, create_keyword, batch_create_keywords, update_keyword, delete_keyword,
     get_ad_stats, get_ad_summary,
+    optimize_bids, apply_bid_suggestions,
+    export_stats_csv,
+    get_roi_alerts,
+    get_alert_config, update_alert_config,
 )
 from app.utils.response import success, error
 
 router = APIRouter()
 
+
+# ==================== 广告活动 ====================
 
 @router.get("/campaigns")
 def campaign_list(
@@ -46,6 +61,19 @@ def campaign_detail(
     return success(result["data"])
 
 
+@router.post("/campaigns")
+def campaign_create(
+    req: AdCampaignCreate,
+    db: Session = Depends(get_db),
+    tenant_id: int = Depends(get_tenant_id),
+):
+    """创建广告活动"""
+    result = create_campaign(db, tenant_id, req.model_dump())
+    if result["code"] != 0:
+        return error(result["code"], result["msg"])
+    return success(result["data"], msg="广告活动创建成功")
+
+
 @router.put("/campaigns/{campaign_id}")
 def campaign_update(
     campaign_id: int,
@@ -59,6 +87,144 @@ def campaign_update(
         return error(result["code"], result["msg"])
     return success(result["data"], msg="广告活动更新成功")
 
+
+@router.delete("/campaigns/{campaign_id}")
+def campaign_delete(
+    campaign_id: int,
+    db: Session = Depends(get_db),
+    tenant_id: int = Depends(get_tenant_id),
+):
+    """删除广告活动（含关联广告组/关键词/统计）"""
+    result = delete_campaign(db, campaign_id, tenant_id)
+    if result["code"] != 0:
+        return error(result["code"], result["msg"])
+    return success(msg="广告活动已删除")
+
+
+# ==================== 广告组 ====================
+
+@router.get("/groups")
+def ad_group_list(
+    campaign_id: int = Query(..., description="广告活动ID"),
+    db: Session = Depends(get_db),
+    tenant_id: int = Depends(get_tenant_id),
+):
+    """获取广告组列表"""
+    result = list_ad_groups(db, tenant_id, campaign_id)
+    if result["code"] != 0:
+        return error(result["code"], result["msg"])
+    return success(result["data"])
+
+
+@router.post("/groups")
+def ad_group_create(
+    req: AdGroupCreate,
+    db: Session = Depends(get_db),
+    tenant_id: int = Depends(get_tenant_id),
+):
+    """创建广告组"""
+    result = create_ad_group(db, tenant_id, req.model_dump())
+    if result["code"] != 0:
+        return error(result["code"], result["msg"])
+    return success(result["data"], msg="广告组创建成功")
+
+
+@router.put("/groups/{group_id}")
+def ad_group_update(
+    group_id: int,
+    req: AdGroupUpdate,
+    db: Session = Depends(get_db),
+    tenant_id: int = Depends(get_tenant_id),
+):
+    """更新广告组"""
+    result = update_ad_group(db, group_id, tenant_id, req.model_dump(exclude_none=True))
+    if result["code"] != 0:
+        return error(result["code"], result["msg"])
+    return success(result["data"], msg="广告组更新成功")
+
+
+@router.delete("/groups/{group_id}")
+def ad_group_delete(
+    group_id: int,
+    db: Session = Depends(get_db),
+    tenant_id: int = Depends(get_tenant_id),
+):
+    """删除广告组（含关联关键词）"""
+    result = delete_ad_group(db, group_id, tenant_id)
+    if result["code"] != 0:
+        return error(result["code"], result["msg"])
+    return success(msg="广告组已删除")
+
+
+# ==================== 关键词 ====================
+
+@router.get("/keywords")
+def keyword_list(
+    ad_group_id: int = Query(..., description="广告组ID"),
+    db: Session = Depends(get_db),
+    tenant_id: int = Depends(get_tenant_id),
+):
+    """获取关键词列表"""
+    result = list_keywords(db, tenant_id, ad_group_id)
+    if result["code"] != 0:
+        return error(result["code"], result["msg"])
+    return success(result["data"])
+
+
+@router.post("/keywords")
+def keyword_create(
+    req: AdKeywordCreate,
+    db: Session = Depends(get_db),
+    tenant_id: int = Depends(get_tenant_id),
+):
+    """创建关键词"""
+    result = create_keyword(db, tenant_id, req.model_dump())
+    if result["code"] != 0:
+        return error(result["code"], result["msg"])
+    return success(result["data"], msg="关键词创建成功")
+
+
+@router.post("/keywords/batch")
+def keyword_batch_create(
+    req: AdKeywordBatchCreate,
+    db: Session = Depends(get_db),
+    tenant_id: int = Depends(get_tenant_id),
+):
+    """批量创建关键词"""
+    result = batch_create_keywords(db, tenant_id, req.model_dump())
+    if result["code"] != 0:
+        return error(result["code"], result["msg"])
+    return success(result["data"], msg=f"成功创建{len(result['data'])}个关键词")
+
+
+@router.put("/keywords/{keyword_id}")
+def keyword_update(
+    keyword_id: int,
+    req: AdKeywordUpdate,
+    db: Session = Depends(get_db),
+    tenant_id: int = Depends(get_tenant_id),
+):
+    """更新关键词"""
+    result = update_keyword(db, keyword_id, tenant_id, req.model_dump(exclude_none=True))
+    if result["code"] != 0:
+        return error(result["code"], result["msg"])
+    return success(result["data"], msg="关键词更新成功")
+
+
+@router.delete("/keywords/{keyword_id}")
+def keyword_delete(
+    keyword_id: int,
+    db: Session = Depends(get_db),
+    tenant_id: int = Depends(get_tenant_id),
+):
+    """删除关键词"""
+    result = delete_keyword(db, keyword_id, tenant_id)
+    if result["code"] != 0:
+        return error(result["code"], result["msg"])
+    return success(msg="关键词已删除")
+
+
+# ==================== 统计 ====================
 
 @router.get("/stats")
 def ad_stats(
@@ -98,3 +264,100 @@ def ad_summary(
     if result["code"] != 0:
         return error(result["code"], result["msg"])
     return success(result["data"])
+
+
+# ==================== 出价优化 ====================
+
+@router.post("/optimize")
+def bid_optimize(
+    req: BidOptimizeRequest,
+    db: Session = Depends(get_db),
+    tenant_id: int = Depends(get_tenant_id),
+):
+    """获取出价优化建议"""
+    result = optimize_bids(db, tenant_id, req.model_dump())
+    if result["code"] != 0:
+        return error(result["code"], result["msg"])
+    return success(result["data"])
+
+
+@router.post("/optimize/apply")
+def bid_apply(
+    suggestions: list,
+    db: Session = Depends(get_db),
+    tenant_id: int = Depends(get_tenant_id),
+):
+    """应用出价优化建议"""
+    result = apply_bid_suggestions(db, tenant_id, suggestions)
+    if result["code"] != 0:
+        return error(result["code"], result["msg"])
+    return success(result["data"], msg="出价已更新")
+
+
+# ==================== 数据导出 ====================
+
+@router.get("/export")
+def stats_export(
+    start_date: date = Query(..., description="开始日期"),
+    end_date: date = Query(..., description="结束日期"),
+    shop_id: int = Query(None),
+    platform: str = Query(None),
+    db: Session = Depends(get_db),
+    tenant_id: int = Depends(get_tenant_id),
+):
+    """导出广告统计数据为CSV"""
+    csv_content = export_stats_csv(db, tenant_id, start_date, end_date,
+                                   shop_id=shop_id, platform=platform)
+    if not csv_content:
+        return error(50002, "导出数据为空")
+
+    # 添加 BOM 以支持 Excel 打开中文
+    bom = '\ufeff'
+    output = io.BytesIO((bom + csv_content).encode('utf-8'))
+
+    filename = f"ad_stats_{start_date}_{end_date}.csv"
+    return StreamingResponse(
+        output,
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+# ==================== ROI告警 ====================
+
+@router.get("/alerts")
+def alert_list(
+    is_read: int = Query(None, description="已读状态: 0=未读, 1=已读"),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    db: Session = Depends(get_db),
+    tenant_id: int = Depends(get_tenant_id),
+):
+    """获取ROI告警通知列表"""
+    result = get_roi_alerts(db, tenant_id, is_read=is_read, page=page, page_size=page_size)
+    if result["code"] != 0:
+        return error(result["code"], result["msg"])
+    return success(result["data"])
+
+
+# ==================== 告警阈值配置 ====================
+
+@router.get("/alert-config")
+def get_config(
+    tenant_id: int = Depends(get_tenant_id),
+):
+    """获取告警阈值配置"""
+    result = get_alert_config(tenant_id)
+    return success(result["data"])
+
+
+@router.put("/alert-config")
+def update_config(
+    req: AlertConfigUpdate,
+    tenant_id: int = Depends(get_tenant_id),
+):
+    """更新告警阈值配置"""
+    result = update_alert_config(tenant_id, req.model_dump(exclude_none=True))
+    if result["code"] != 0:
+        return error(result["code"], result["msg"])
+    return success(result["data"], msg="告警配置已更新")

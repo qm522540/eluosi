@@ -23,11 +23,86 @@ class AdCampaignInfo(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class AdCampaignCreate(BaseModel):
+    """创建广告活动"""
+    shop_id: int
+    platform: str = Field(..., pattern="^(wb|ozon|yandex)$")
+    name: str = Field(..., max_length=200)
+    ad_type: str = Field(..., pattern="^(search|catalog|product_page|recommendation)$")
+    daily_budget: Optional[float] = Field(None, ge=0)
+    total_budget: Optional[float] = Field(None, ge=0)
+    status: str = Field("draft", pattern="^(active|paused|draft)$")
+    start_date: Optional[date] = None
+    end_date: Optional[date] = None
+
+
 class AdCampaignUpdate(BaseModel):
     name: Optional[str] = Field(None, max_length=200)
     daily_budget: Optional[float] = Field(None, ge=0)
     total_budget: Optional[float] = Field(None, ge=0)
     status: Optional[str] = Field(None, pattern="^(active|paused)$")
+
+
+class AdGroupCreate(BaseModel):
+    """创建广告组"""
+    campaign_id: int
+    name: str = Field(..., max_length=200)
+    bid: Optional[float] = Field(None, ge=0)
+    listing_id: Optional[int] = None
+    status: str = Field("active", pattern="^(active|paused)$")
+
+
+class AdGroupUpdate(BaseModel):
+    """更新广告组"""
+    name: Optional[str] = Field(None, max_length=200)
+    bid: Optional[float] = Field(None, ge=0)
+    listing_id: Optional[int] = None
+    status: Optional[str] = Field(None, pattern="^(active|paused|archived)$")
+
+
+class AdKeywordCreate(BaseModel):
+    """创建关键词"""
+    ad_group_id: int
+    keyword: str = Field(..., max_length=200)
+    match_type: str = Field("broad", pattern="^(exact|phrase|broad)$")
+    bid: Optional[float] = Field(None, ge=0)
+    is_negative: int = Field(0, ge=0, le=1)
+    status: str = Field("active", pattern="^(active|paused)$")
+
+
+class AdKeywordUpdate(BaseModel):
+    """更新关键词"""
+    keyword: Optional[str] = Field(None, max_length=200)
+    match_type: Optional[str] = Field(None, pattern="^(exact|phrase|broad)$")
+    bid: Optional[float] = Field(None, ge=0)
+    is_negative: Optional[int] = Field(None, ge=0, le=1)
+    status: Optional[str] = Field(None, pattern="^(active|paused|deleted)$")
+
+
+class AdKeywordBatchCreate(BaseModel):
+    """批量创建关键词"""
+    ad_group_id: int
+    keywords: List[str] = Field(..., min_length=1, max_length=100)
+    match_type: str = Field("broad", pattern="^(exact|phrase|broad)$")
+    bid: Optional[float] = Field(None, ge=0)
+    is_negative: int = Field(0, ge=0, le=1)
+
+
+class BidOptimizeRequest(BaseModel):
+    """出价优化请求"""
+    campaign_id: int
+    target_roas: float = Field(2.0, gt=0, description="目标ROAS")
+    max_bid_increase: float = Field(30, ge=0, le=100, description="最大加价比例%")
+    max_bid_decrease: float = Field(30, ge=0, le=100, description="最大降价比例%")
+
+
+class AlertConfigUpdate(BaseModel):
+    """告警阈值配置"""
+    acos_warning: Optional[float] = Field(None, ge=0, le=100, description="ACOS警告阈值%")
+    acos_critical: Optional[float] = Field(None, ge=0, le=100, description="ACOS严重阈值%")
+    roas_warning: Optional[float] = Field(None, ge=0, description="ROAS警告阈值")
+    budget_usage_threshold: Optional[float] = Field(None, ge=0, le=1, description="预算使用率阈值")
+    roas_critical_with_budget: Optional[float] = Field(None, ge=0, description="预算超标时ROAS阈值")
 
 
 class AdStatQuery(BaseModel):
