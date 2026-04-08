@@ -1,10 +1,10 @@
 import { useState, useEffect, useCallback } from 'react'
 import {
   Typography, Card, Table, Button, Tag, Space, Select, Row, Col,
-  Statistic, Modal, Form, InputNumber, message, DatePicker, Tooltip, Badge,
+  Statistic, Modal, Form, InputNumber, message, DatePicker, Tooltip, Badge, Empty,
 } from 'antd'
 import {
-  ReloadOutlined, EditOutlined, EyeOutlined, SyncOutlined,
+  SearchOutlined, EditOutlined, EyeOutlined, SyncOutlined,
   FundOutlined, DollarOutlined, AimOutlined, RiseOutlined,
 } from '@ant-design/icons'
 import ReactECharts from 'echarts-for-react'
@@ -17,6 +17,9 @@ const { Title } = Typography
 const { RangePicker } = DatePicker
 
 const Ads = () => {
+  // 是否已查询过（控制默认空状态）
+  const [searched, setSearched] = useState(false)
+
   // 汇总数据
   const [summary, setSummary] = useState(null)
   const [summaryLoading, setSummaryLoading] = useState(false)
@@ -58,6 +61,9 @@ const Ads = () => {
       setShops(res.data.items || [])
     }).catch(() => {})
   }, [])
+
+  // 确定按钮是否可用
+  const canSearch = filterPlatform && filterShopId
 
   // 加载汇总
   const fetchSummary = useCallback(async () => {
@@ -113,15 +119,30 @@ const Ads = () => {
     }
   }, [dateRange, filterShopId, filterPlatform])
 
-  useEffect(() => {
-    fetchSummary()
-    fetchCampaigns(1)
+  // 点击"确定"按钮
+  const handleSearch = () => {
+    setSearched(true)
     setPage(1)
-  }, [filterPlatform, filterStatus, filterShopId])
-
-  useEffect(() => {
+    fetchCampaigns(1)
+    fetchSummary()
     fetchStats()
-  }, [fetchStats])
+  }
+
+  // 状态变化时，如果已经查询过，重新加载
+  useEffect(() => {
+    if (searched) {
+      setPage(1)
+      fetchCampaigns(1)
+      fetchSummary()
+    }
+  }, [filterStatus])
+
+  // 日期范围变化时重新加载统计
+  useEffect(() => {
+    if (searched) {
+      fetchStats()
+    }
+  }, [dateRange])
 
   // 手动同步广告数据
   const handleSync = async () => {
@@ -129,11 +150,13 @@ const Ads = () => {
     try {
       await syncAds()
       message.success('同步任务已提交，数据将在1-2分钟内更新')
-      setTimeout(() => {
-        fetchCampaigns()
-        fetchSummary()
-        fetchStats()
-      }, 10000)
+      if (searched) {
+        setTimeout(() => {
+          fetchCampaigns()
+          fetchSummary()
+          fetchStats()
+        }, 10000)
+      }
     } catch (err) {
       message.error(err.message || '同步失败')
     } finally {
@@ -259,7 +282,6 @@ const Ads = () => {
 
   // ECharts 配置：花费与点击趋势
   const getChartOption = () => {
-    // 按日期聚合（多平台合并同一天）
     const dateMap = {}
     statsData.forEach(item => {
       if (!dateMap[item.stat_date]) {
@@ -320,7 +342,7 @@ const Ads = () => {
         <Title level={4} style={{ margin: 0 }}>广告管理</Title>
         <Space>
           <Select
-            placeholder="全部平台"
+            placeholder="选择平台"
             allowClear
             style={{ width: 150 }}
             value={filterPlatform}
@@ -335,13 +357,14 @@ const Ads = () => {
             ]}
           />
           <Select
-            placeholder="全部店铺"
+            placeholder="选择店铺"
             allowClear
             style={{ width: 160 }}
             value={filterShopId}
             onChange={setFilterShopId}
+            disabled={!filterPlatform}
             options={shops
-              .filter(s => !filterPlatform || s.platform === filterPlatform)
+              .filter(s => s.platform === filterPlatform)
               .map(s => ({ value: s.id, label: s.name }))}
           />
           <Select
@@ -352,103 +375,116 @@ const Ads = () => {
             onChange={setFilterStatus}
             options={Object.entries(AD_STATUS).map(([k, v]) => ({ value: k, label: v.label }))}
           />
+          <Button
+            type="primary"
+            icon={<SearchOutlined />}
+            disabled={!canSearch}
+            onClick={handleSearch}
+          >
+            确定
+          </Button>
           <Button icon={<SyncOutlined spin={syncing} />} loading={syncing} onClick={handleSync}>
             同步数据
-          </Button>
-          <Button icon={<ReloadOutlined />} onClick={() => { fetchCampaigns(); fetchSummary(); fetchStats() }}>
-            刷新
           </Button>
         </Space>
       </div>
 
-      {/* 汇总卡片 */}
-      <Row gutter={16} style={{ marginBottom: 24 }}>
-        <Col span={6}>
-          <Card size="small" loading={summaryLoading}>
-            <Statistic
-              title="总展示"
-              value={summary?.total_impressions || 0}
-              prefix={<FundOutlined />}
-              valueStyle={{ color: '#597ef7' }}
-            />
-          </Card>
-        </Col>
-        <Col span={6}>
-          <Card size="small" loading={summaryLoading}>
-            <Statistic
-              title="总点击"
-              value={summary?.total_clicks || 0}
-              prefix={<AimOutlined />}
-              suffix={summary?.avg_ctr != null ? <span style={{ fontSize: 14, color: '#999' }}>CTR {summary.avg_ctr}%</span> : null}
-            />
-          </Card>
-        </Col>
-        <Col span={6}>
-          <Card size="small" loading={summaryLoading}>
-            <Statistic
-              title="总花费"
-              value={summary?.total_spend || 0}
-              prefix={<DollarOutlined />}
-              precision={2}
-              suffix="₽"
-              valueStyle={{ color: '#ff7875' }}
-            />
-          </Card>
-        </Col>
-        <Col span={6}>
-          <Card size="small" loading={summaryLoading}>
-            <Statistic
-              title="ROAS"
-              value={summary?.overall_roas || 0}
-              prefix={<RiseOutlined />}
-              precision={2}
-              suffix="x"
-              valueStyle={{ color: summary?.overall_roas >= 1 ? '#52c41a' : '#ff4d4f' }}
-            />
-          </Card>
-        </Col>
-      </Row>
+      {!searched ? (
+        <Card>
+          <Empty description="请选择平台和店铺后点击确定查询广告数据" />
+        </Card>
+      ) : (
+        <>
+          {/* 汇总卡片 */}
+          <Row gutter={16} style={{ marginBottom: 24 }}>
+            <Col span={6}>
+              <Card size="small" loading={summaryLoading}>
+                <Statistic
+                  title="总展示"
+                  value={summary?.total_impressions || 0}
+                  prefix={<FundOutlined />}
+                  valueStyle={{ color: '#597ef7' }}
+                />
+              </Card>
+            </Col>
+            <Col span={6}>
+              <Card size="small" loading={summaryLoading}>
+                <Statistic
+                  title="总点击"
+                  value={summary?.total_clicks || 0}
+                  prefix={<AimOutlined />}
+                  suffix={summary?.avg_ctr != null ? <span style={{ fontSize: 14, color: '#999' }}>CTR {summary.avg_ctr}%</span> : null}
+                />
+              </Card>
+            </Col>
+            <Col span={6}>
+              <Card size="small" loading={summaryLoading}>
+                <Statistic
+                  title="总花费"
+                  value={summary?.total_spend || 0}
+                  prefix={<DollarOutlined />}
+                  precision={2}
+                  suffix="₽"
+                  valueStyle={{ color: '#ff7875' }}
+                />
+              </Card>
+            </Col>
+            <Col span={6}>
+              <Card size="small" loading={summaryLoading}>
+                <Statistic
+                  title="ROAS"
+                  value={summary?.overall_roas || 0}
+                  prefix={<RiseOutlined />}
+                  precision={2}
+                  suffix="x"
+                  valueStyle={{ color: summary?.overall_roas >= 1 ? '#52c41a' : '#ff4d4f' }}
+                />
+              </Card>
+            </Col>
+          </Row>
 
-      {/* 趋势图表 */}
-      <Card
-        title="广告趋势"
-        size="small"
-        style={{ marginBottom: 24 }}
-        extra={
-          <RangePicker
-            value={dateRange}
-            onChange={setDateRange}
-            allowClear={false}
-            presets={[
-              { label: '近7天', value: [dayjs().subtract(6, 'day'), dayjs()] },
-              { label: '近30天', value: [dayjs().subtract(29, 'day'), dayjs()] },
-            ]}
-          />
-        }
-      >
-        <ReactECharts
-          option={getChartOption()}
-          style={{ height: 300 }}
-          showLoading={statsLoading}
-        />
-      </Card>
+          {/* 趋势图表 */}
+          <Card
+            title="广告趋势"
+            size="small"
+            style={{ marginBottom: 24 }}
+            extra={
+              <RangePicker
+                value={dateRange}
+                onChange={setDateRange}
+                allowClear={false}
+                presets={[
+                  { label: '近7天', value: [dayjs().subtract(6, 'day'), dayjs()] },
+                  { label: '近30天', value: [dayjs().subtract(29, 'day'), dayjs()] },
+                ]}
+              />
+            }
+          >
+            <ReactECharts
+              option={getChartOption()}
+              style={{ height: 300 }}
+              showLoading={statsLoading}
+            />
+          </Card>
 
-      {/* 活动列表 */}
-      <Card title="广告活动" size="small">
-        <Table
-          columns={columns}
-          dataSource={campaigns}
-          rowKey="id"
-          loading={listLoading}
-          pagination={{
-            current: page,
-            total,
-            pageSize: 20,
-            showTotal: (t) => `共 ${t} 个活动`,
-            onChange: (p) => { setPage(p); fetchCampaigns(p) },
-          }}
-        />
-      </Card>
+          {/* 活动列表 */}
+          <Card title="广告活动" size="small">
+            <Table
+              columns={columns}
+              dataSource={campaigns}
+              rowKey="id"
+              loading={listLoading}
+              pagination={{
+                current: page,
+                total,
+                pageSize: 20,
+                showTotal: (t) => `共 ${t} 个活动`,
+                onChange: (p) => { setPage(p); fetchCampaigns(p) },
+              }}
+            />
+          </Card>
+        </>
+      )}
 
       {/* 编辑弹窗 */}
       <Modal
