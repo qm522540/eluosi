@@ -140,11 +140,18 @@ class WBClient(BasePlatformClient):
                 return []
 
             for status_group in count_data.get("adverts", []):
+                group_status = status_group.get("status")
+                group_type = status_group.get("type")
                 advert_list = status_group.get("advert_list", [])
                 if not advert_list:
                     continue
                 for adv in advert_list:
                     if adv.get("advertId"):
+                        # 单个广告可能没有status/type，用外层分组的值补充
+                        if "status" not in adv and group_status is not None:
+                            adv["status"] = group_status
+                        if "type" not in adv and group_type is not None:
+                            adv["type"] = group_type
                         campaigns.append(self._parse_campaign(adv))
 
             logger.info(
