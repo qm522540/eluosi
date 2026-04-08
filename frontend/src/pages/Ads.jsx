@@ -128,15 +128,6 @@ const Ads = () => {
     fetchStats()
   }
 
-  // 状态变化时，如果已经查询过，重新加载
-  useEffect(() => {
-    if (searched) {
-      setPage(1)
-      fetchCampaigns(1)
-      fetchSummary()
-    }
-  }, [filterStatus])
-
   // 日期范围变化时重新加载统计
   useEffect(() => {
     if (searched) {
@@ -368,12 +359,13 @@ const Ads = () => {
               .map(s => ({ value: s.id, label: s.name }))}
           />
           <Select
-            placeholder="全部状态"
-            allowClear
             style={{ width: 120 }}
             value={filterStatus}
             onChange={setFilterStatus}
-            options={Object.entries(AD_STATUS).map(([k, v]) => ({ value: k, label: v.label }))}
+            options={[
+              { value: null, label: '全部状态' },
+              ...Object.entries(AD_STATUS).map(([k, v]) => ({ value: k, label: v.label })),
+            ]}
           />
           <Button
             type="primary"
