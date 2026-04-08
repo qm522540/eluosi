@@ -25,7 +25,7 @@ settings = get_settings()
 
 # Ozon API 端点
 OZON_SELLER_API = "https://api-seller.ozon.ru"
-OZON_PERFORMANCE_API = "https://performance.ozon.ru"
+OZON_PERFORMANCE_API = "https://api-performance.ozon.ru"
 
 MIN_REQUEST_INTERVAL = 60.0 / settings.OZON_RATE_LIMIT_PER_MINUTE
 

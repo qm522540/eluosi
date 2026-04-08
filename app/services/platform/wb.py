@@ -161,7 +161,7 @@ class WBClient(BasePlatformClient):
             )
 
             # Step 3: 批量获取活动详情（每批最多50个）
-            info_url = f"{WB_ADVERT_API}/adv/v1/promotion/adverts"
+            info_url = f"{WB_ADVERT_API}/adv/v1/promotion/adverts/info"
             batch_size = 50
             for i in range(0, len(all_campaign_ids), batch_size):
                 batch_ids = all_campaign_ids[i:i + batch_size]
