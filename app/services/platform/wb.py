@@ -126,12 +126,15 @@ class WBClient(BasePlatformClient):
     async def fetch_ad_campaigns(self) -> list:
         """拉取所有广告活动
 
-        WB广告API: GET /adv/v1/promotion/count 返回各状态活动及基本信息，
-        直接从中解析活动数据。
+        流程：
+        1. GET /adv/v1/promotion/count 获取活动ID列表和状态/类型
+        2. POST /adv/v1/promotion/adverts 批量获取活动详情（含真实名称）
+        3. 合并两步数据，生成完整活动信息
         """
         campaigns = []
 
         try:
+            # 第1步: 获取活动ID列表及状态信息
             count_url = f"{WB_ADVERT_API}/adv/v1/promotion/count"
             count_data = await self._request("GET", count_url)
 
@@ -139,6 +142,8 @@ class WBClient(BasePlatformClient):
                 logger.info(f"WB shop_id={self.shop_id} 暂无广告活动")
                 return []
 
+            # 收集所有活动ID及其状态/类型
+            advert_info = {}  # advertId -> {status, type}
             for status_group in count_data.get("adverts", []):
                 group_status = status_group.get("status")
                 group_type = status_group.get("type")
@@ -146,13 +151,49 @@ class WBClient(BasePlatformClient):
                 if not advert_list:
                     continue
                 for adv in advert_list:
-                    if adv.get("advertId"):
-                        # 单个广告可能没有status/type，用外层分组的值补充
-                        if "status" not in adv and group_status is not None:
-                            adv["status"] = group_status
-                        if "type" not in adv and group_type is not None:
-                            adv["type"] = group_type
-                        campaigns.append(self._parse_campaign(adv))
+                    advert_id = adv.get("advertId")
+                    if advert_id:
+                        advert_info[advert_id] = {
+                            "status": adv.get("status", group_status),
+                            "type": adv.get("type", group_type),
+                            "changeTime": adv.get("changeTime"),
+                        }
+
+            if not advert_info:
+                return []
+
+            # 第2步: 批量获取活动详情（每次最多50个）
+            all_ids = list(advert_info.keys())
+            details_map = {}  # advertId -> detail dict
+
+            for i in range(0, len(all_ids), 50):
+                batch_ids = all_ids[i:i + 50]
+                try:
+                    detail_url = f"{WB_ADVERT_API}/adv/v1/promotion/adverts"
+                    detail_data = await self._request(
+                        "POST", detail_url, json=batch_ids
+                    )
+                    if isinstance(detail_data, list):
+                        for item in detail_data:
+                            aid = item.get("advertId")
+                            if aid:
+                                details_map[aid] = item
+                except Exception as e:
+                    logger.warning(f"WB 批量获取活动详情失败: {e}，使用基本信息")
+
+            # 第3步: 合并数据
+            for advert_id, info in advert_info.items():
+                detail = details_map.get(advert_id, {})
+                merged = {
+                    "advertId": advert_id,
+                    "status": info["status"],
+                    "type": info["type"],
+                    "name": detail.get("name", ""),
+                    "dailyBudget": detail.get("dailyBudget"),
+                    "createTime": detail.get("createTime") or info.get("changeTime"),
+                    "endTime": detail.get("endTime"),
+                }
+                campaigns.append(self._parse_campaign(merged))
 
             logger.info(
                 f"WB shop_id={self.shop_id} 发现 {len(campaigns)} 个广告活动"
