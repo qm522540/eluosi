@@ -320,24 +320,29 @@ const Ads = () => {
         <Title level={4} style={{ margin: 0 }}>广告管理</Title>
         <Space>
           <Select
-            placeholder="全部店铺"
-            allowClear
-            style={{ width: 160 }}
-            value={filterShopId}
-            onChange={setFilterShopId}
-            options={shops.map(s => ({ value: s.id, label: s.name }))}
-          />
-          <Select
             placeholder="全部平台"
             allowClear
-            style={{ width: 140 }}
+            style={{ width: 150 }}
             value={filterPlatform}
-            onChange={setFilterPlatform}
+            onChange={(v) => {
+              setFilterPlatform(v)
+              setFilterShopId(null)
+            }}
             options={[
               { value: 'wb', label: 'Wildberries' },
               { value: 'ozon', label: 'Ozon' },
               { value: 'yandex', label: 'Yandex Market' },
             ]}
+          />
+          <Select
+            placeholder="全部店铺"
+            allowClear
+            style={{ width: 160 }}
+            value={filterShopId}
+            onChange={setFilterShopId}
+            options={shops
+              .filter(s => !filterPlatform || s.platform === filterPlatform)
+              .map(s => ({ value: s.id, label: s.name }))}
           />
           <Select
             placeholder="全部状态"
