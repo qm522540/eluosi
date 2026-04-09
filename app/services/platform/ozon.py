@@ -150,35 +150,79 @@ class OzonClient(BasePlatformClient):
     async def fetch_ad_campaigns(self) -> list:
         """拉取广告活动列表
 
-        Ozon Performance API:
-        GET /api/client/campaign → 获取广告活动列表
+        依次尝试多个Ozon广告API端点（新旧版本兼容）：
+        1. Seller API: POST /api/client/campaign/list (新版，推荐)
+        2. Seller API: GET /api/client/campaign (旧版Performance API格式)
+        3. Performance API: GET /api/client/campaign (独立域名)
         """
         campaigns = []
 
         try:
-            url = f"{OZON_PERFORMANCE_API}/api/client/campaign"
+            items = []
 
-            # 获取运行中的活动
-            result = await self._request(
-                "GET", url, use_perf=True,
-                params={"state": "CAMPAIGN_STATE_RUNNING"},
-            )
+            # 方式1: Seller API — POST /api/client/campaign/list（新版Ozon广告接口）
+            try:
+                url = f"{OZON_SELLER_API}/api/client/campaign/list"
+                for state in ["CAMPAIGN_STATE_RUNNING", "CAMPAIGN_STATE_STOPPED",
+                              "CAMPAIGN_STATE_PLANNED", "CAMPAIGN_STATE_MODERATION"]:
+                    result = await self._request(
+                        "POST", url, json={"states": [state]},
+                    )
+                    batch = result.get("list", result.get("campaigns", []))
+                    if isinstance(batch, list):
+                        items.extend(batch)
+                if items:
+                    logger.info(f"Ozon shop_id={self.shop_id} Seller API 获取到 {len(items)} 个活动")
+            except Exception as e:
+                logger.warning(f"Ozon Seller API campaign/list 失败: {e}，尝试备用接口")
 
-            items = result.get("list", []) if isinstance(result, dict) else []
+            # 方式2: Seller API — GET /api/client/campaign（部分账户用此端点）
+            if not items:
+                try:
+                    url = f"{OZON_SELLER_API}/api/client/campaign"
+                    for state in ["CAMPAIGN_STATE_RUNNING", "CAMPAIGN_STATE_STOPPED"]:
+                        result = await self._request(
+                            "GET", url, params={"state": state},
+                        )
+                        batch = result.get("list", result.get("campaigns", []))
+                        if isinstance(batch, list):
+                            items.extend(batch)
+                    if items:
+                        logger.info(f"Ozon shop_id={self.shop_id} Seller GET 获取到 {len(items)} 个活动")
+                except Exception as e:
+                    logger.warning(f"Ozon Seller API GET campaign 失败: {e}，尝试 Performance API")
 
-            # 也获取暂停的活动
-            result_paused = await self._request(
-                "GET", url, use_perf=True,
-                params={"state": "CAMPAIGN_STATE_STOPPED"},
-            )
-            paused_items = result_paused.get("list", []) if isinstance(result_paused, dict) else []
-            items.extend(paused_items)
+            # 方式3: Performance API 独立域名（旧版）
+            if not items:
+                try:
+                    url = f"{OZON_PERFORMANCE_API}/api/client/campaign"
+                    for state in ["CAMPAIGN_STATE_RUNNING", "CAMPAIGN_STATE_STOPPED"]:
+                        result = await self._request(
+                            "GET", url, use_perf=True,
+                            params={"state": state},
+                        )
+                        batch = result.get("list", result.get("campaigns", []))
+                        if isinstance(batch, list):
+                            items.extend(batch)
+                    if items:
+                        logger.info(f"Ozon shop_id={self.shop_id} Performance API 获取到 {len(items)} 个活动")
+                except Exception as e:
+                    logger.warning(f"Ozon Performance API campaign 也失败: {e}")
 
             if not items:
-                logger.info(f"Ozon shop_id={self.shop_id} 暂无广告活动")
+                logger.info(f"Ozon shop_id={self.shop_id} 所有接口均无广告活动数据")
                 return []
 
+            # 去重（按id）
+            seen_ids = set()
+            unique_items = []
             for item in items:
+                cid = item.get("id") or item.get("campaignId") or item.get("campaign_id")
+                if cid and cid not in seen_ids:
+                    seen_ids.add(cid)
+                    unique_items.append(item)
+
+            for item in unique_items:
                 campaigns.append(self._parse_campaign(item))
 
             logger.info(
@@ -192,7 +236,7 @@ class OzonClient(BasePlatformClient):
         return campaigns
 
     def _parse_campaign(self, raw: dict) -> dict:
-        """解析Ozon广告活动为标准格式"""
+        """解析Ozon广告活动为标准格式（兼容新旧响应格式）"""
         # Ozon状态映射
         state_map = {
             "CAMPAIGN_STATE_RUNNING": "active",
@@ -208,30 +252,45 @@ class OzonClient(BasePlatformClient):
             "BANNER": "catalog",
             "BRAND_SHELF": "catalog",
             "SEARCH_PROMO": "search",
+            "PRODUCT_PLACEMENT": "product_page",
             "ACTION": "recommendation",
         }
 
-        campaign_id = str(raw.get("id", ""))
-        ad_type = type_map.get(raw.get("advObjectType", ""), "search")
+        # 兼容不同字段名
+        campaign_id = str(
+            raw.get("id") or raw.get("campaignId") or raw.get("campaign_id") or ""
+        )
+        ad_type_raw = raw.get("advObjectType") or raw.get("type") or raw.get("productCampaignMode") or ""
+        ad_type = type_map.get(ad_type_raw, "search")
         ad_type_labels = {
             "product_page": "商品推广",
             "catalog": "品牌推广",
             "search": "搜索推广",
             "recommendation": "活动推广",
         }
-        name = raw.get("title") or ""
+        name = raw.get("title") or raw.get("name") or ""
         if not name.strip():
             name = f"{ad_type_labels.get(ad_type, '广告')}-{campaign_id}"
+
+        state_raw = raw.get("state") or raw.get("status") or ""
+
+        # 预算：兼容多种字段名
+        daily_budget = raw.get("dailyBudget") or raw.get("daily_budget")
+        total_budget = raw.get("budget") or raw.get("totalBudget") or raw.get("total_budget")
+
+        # 日期
+        start_date = raw.get("createdAt") or raw.get("created_at") or raw.get("startDate") or ""
+        end_date = raw.get("endDate") or raw.get("end_date") or ""
 
         return {
             "platform_campaign_id": campaign_id,
             "name": name,
             "ad_type": ad_type,
-            "daily_budget": raw.get("dailyBudget"),
-            "total_budget": raw.get("budget"),
-            "status": state_map.get(raw.get("state", ""), "paused"),
-            "start_date": raw.get("createdAt", "")[:10] if raw.get("createdAt") else None,
-            "end_date": raw.get("endDate", "")[:10] if raw.get("endDate") else None,
+            "daily_budget": daily_budget,
+            "total_budget": total_budget,
+            "status": state_map.get(state_raw, "paused"),
+            "start_date": start_date[:10] if start_date else None,
+            "end_date": end_date[:10] if end_date else None,
         }
 
     # ==================== 广告统计 ====================
@@ -241,29 +300,63 @@ class OzonClient(BasePlatformClient):
     ) -> list:
         """拉取广告活动统计数据
 
-        Ozon Performance API:
-        POST /api/client/statistics/daily → 每日统计
+        依次尝试多个统计端点：
+        1. Seller API: POST /api/client/statistics/daily
+        2. Seller API: POST /api/client/statistics
+        3. Performance API: POST /api/client/statistics/daily（旧版独立域名）
         """
         stats = []
 
+        # 统计接口的请求体格式
+        payloads = [
+            # 格式1: campaigns传字符串数组
+            {"campaigns": [str(campaign_id)], "dateFrom": date_from, "dateTo": date_to},
+            # 格式2: campaignId传单个ID + 日期区间
+            {"campaignId": str(campaign_id), "dateFrom": date_from, "dateTo": date_to},
+        ]
+
+        # 依次尝试多个端点
+        endpoints = [
+            (f"{OZON_SELLER_API}/api/client/statistics/daily", False),
+            (f"{OZON_SELLER_API}/api/client/statistics", False),
+            (f"{OZON_PERFORMANCE_API}/api/client/statistics/daily", True),
+            (f"{OZON_PERFORMANCE_API}/api/client/statistics", True),
+        ]
+
+        result = None
+        for url, use_perf in endpoints:
+            for payload in payloads:
+                try:
+                    result = await self._request(
+                        "POST", url, use_perf=use_perf, json=payload
+                    )
+                    if result and (result.get("rows") or result.get("data") or result.get("items")):
+                        logger.info(f"Ozon 统计接口命中: {url}")
+                        break
+                    result = None
+                except Exception:
+                    continue
+            if result:
+                break
+
+        if not result:
+            logger.warning(
+                f"Ozon 所有统计接口均不可用，shop_id={self.shop_id}，"
+                f"campaign_id={campaign_id}"
+            )
+            return []
+
         try:
-            url = f"{OZON_PERFORMANCE_API}/api/client/statistics/daily"
-            payload = {
-                "campaigns": [campaign_id],
-                "dateFrom": date_from,
-                "dateTo": date_to,
-            }
-            result = await self._request("POST", url, use_perf=True, json=payload)
-
-            rows = result.get("rows", [])
-            for row in rows:
-                stat = self._parse_daily_stat(campaign_id, row)
-                if stat:
-                    stats.append(stat)
-
+            # 兼容多种响应格式
+            rows = result.get("rows") or result.get("data") or result.get("items") or []
+            if isinstance(rows, list):
+                for row in rows:
+                    stat = self._parse_daily_stat(campaign_id, row)
+                    if stat:
+                        stats.append(stat)
         except Exception as e:
             logger.error(
-                f"Ozon 拉取广告统计失败，shop_id={self.shop_id}，"
+                f"Ozon 解析广告统计失败，shop_id={self.shop_id}，"
                 f"campaign_id={campaign_id}: {e}"
             )
             raise
@@ -271,16 +364,19 @@ class OzonClient(BasePlatformClient):
         return stats
 
     def _parse_daily_stat(self, campaign_id: str, row: dict) -> Optional[dict]:
-        """解析Ozon每日统计"""
-        date_str = row.get("date", "")
+        """解析Ozon每日统计（兼容多种响应字段名）"""
+        date_str = row.get("date") or row.get("statDate") or row.get("stat_date") or ""
         if not date_str:
             return None
 
-        impressions = int(row.get("views", 0))
-        clicks = int(row.get("clicks", 0))
-        spend = float(row.get("moneySpent", 0))
-        orders = int(row.get("orders", 0))
-        revenue = float(row.get("ordersMoney", 0))
+        impressions = int(row.get("views") or row.get("impressions") or row.get("shows") or 0)
+        clicks = int(row.get("clicks") or 0)
+        spend = float(row.get("moneySpent") or row.get("spend") or row.get("cost") or 0)
+        orders = int(row.get("orders") or row.get("conversions") or 0)
+        revenue = float(
+            row.get("ordersMoney") or row.get("revenue") or row.get("orderSum") or
+            row.get("orders_money") or 0
+        )
 
         ctr = (clicks / impressions * 100) if impressions > 0 else 0
         cpc = (spend / clicks) if clicks > 0 else 0
