@@ -506,6 +506,39 @@ def budget_overview(
     return success(result["data"])
 
 
+@router.get("/debug/wb-raw/{campaign_id}")
+async def debug_wb_raw(
+    campaign_id: str,
+    shop_id: int = Query(..., description="店铺ID"),
+    db: Session = Depends(get_db),
+    tenant_id: int = Depends(get_tenant_id),
+):
+    """调试：获取WB API返回的原始广告数据"""
+    from app.models.shop import Shop
+    from app.services.platform.wb import WBClient
+
+    shop = db.query(Shop).filter(Shop.id == shop_id, Shop.tenant_id == tenant_id).first()
+    if not shop:
+        return error(30001, "店铺不存在")
+
+    import asyncio
+    client = WBClient(shop_id=shop.id, api_key=shop.api_key)
+    try:
+        # 调用详情接口
+        detail_url = "https://advert-api.wildberries.ru/adv/v1/promotion/adverts"
+        detail_data = await client._request("POST", detail_url, json=[int(campaign_id)])
+
+        return success({
+            "campaign_id": campaign_id,
+            "raw_response": detail_data,
+            "type": type(detail_data).__name__,
+        })
+    except Exception as e:
+        return error(50002, f"WB API调用失败: {str(e)}")
+    finally:
+        await client.close()
+
+
 @router.get("/budget/suggestions")
 def budget_suggestions(
     shop_id: int = Query(None),
