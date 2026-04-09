@@ -799,7 +799,9 @@ const Ads = () => {
       title: '活动名称',
       dataIndex: 'name',
       key: 'name',
-      ellipsis: true,
+      width: 220,
+      ellipsis: { showTitle: false },
+      render: (text) => <Tooltip title={text} placement="topLeft">{text}</Tooltip>,
     },
     {
       title: '平台',
