@@ -366,9 +366,10 @@ const Ads = () => {
         conditions.max_daily_spend = values.max_daily_spend || 5000
         actions.action = 'pause'
       }
+      const ruleType = editingRule ? editingRule.rule_type : values.rule_type
       const payload = {
-        name: values.name,
-        rule_type: values.rule_type,
+        name: RULE_TYPES[ruleType]?.label || ruleType,
+        rule_type: ruleType,
         conditions,
         actions,
         platform: values.platform || filterPlatform || null,
@@ -1302,9 +1303,8 @@ const Ads = () => {
 
                   <Table size="small" dataSource={rules} rowKey="id" loading={rulesLoading} pagination={false}
                     columns={[
-                      { title: '规则名称', dataIndex: 'name', ellipsis: true },
                       {
-                        title: '类型', dataIndex: 'rule_type', width: 140,
+                        title: '规则类型', dataIndex: 'rule_type', width: 160,
                         render: v => <Tag color={RULE_TYPES[v]?.color}>{RULE_TYPES[v]?.label || v}</Tag>,
                       },
                       {
@@ -1969,7 +1969,7 @@ const Ads = () => {
 
       {/* ==================== 自动化规则 表单弹窗 ==================== */}
       <Modal
-        title={editingRule ? '编辑自动化规则' : '新建自动化规则'}
+        title={editingRule ? `编辑规则 — ${RULE_TYPES[editingRule.rule_type]?.label}` : '新建自动化规则'}
         open={ruleFormVisible}
         onOk={handleRuleSubmit}
         onCancel={() => setRuleFormVisible(false)}
@@ -1978,12 +1978,11 @@ const Ads = () => {
         width={600}
       >
         <Form form={ruleForm} layout="vertical" style={{ marginTop: 16 }}>
-          <Form.Item name="name" label="规则名称" rules={[{ required: true, message: '请输入规则名称' }]}>
-            <Input maxLength={200} placeholder="例如：低ROI自动暂停" />
-          </Form.Item>
-          <Form.Item name="rule_type" label="规则类型" rules={[{ required: true, message: '请选择规则类型' }]}>
-            <Select options={Object.entries(RULE_TYPES).map(([k, v]) => ({ value: k, label: v.label }))} />
-          </Form.Item>
+          {!editingRule && (
+            <Form.Item name="rule_type" label="规则类型" rules={[{ required: true, message: '请选择规则类型' }]}>
+              <Select options={Object.entries(RULE_TYPES).map(([k, v]) => ({ value: k, label: v.label }))} />
+            </Form.Item>
+          )}
           <Form.Item name="enabled" label="启用" valuePropName="checked" initialValue={true}>
             <Switch />
           </Form.Item>
