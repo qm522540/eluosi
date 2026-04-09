@@ -201,11 +201,16 @@ class OzonClient(BasePlatformClient):
         try:
             items = []
 
+            ALL_STATES = [
+                "CAMPAIGN_STATE_RUNNING", "CAMPAIGN_STATE_STOPPED",
+                "CAMPAIGN_STATE_INACTIVE", "CAMPAIGN_STATE_ARCHIVED",
+                "CAMPAIGN_STATE_PLANNED", "CAMPAIGN_STATE_MODERATION",
+            ]
+
             # 方式1: Seller API — POST /api/client/campaign/list（新版Ozon广告接口）
             try:
                 url = f"{OZON_SELLER_API}/api/client/campaign/list"
-                for state in ["CAMPAIGN_STATE_RUNNING", "CAMPAIGN_STATE_STOPPED",
-                              "CAMPAIGN_STATE_PLANNED", "CAMPAIGN_STATE_MODERATION"]:
+                for state in ALL_STATES:
                     result = await self._request(
                         "POST", url, json={"states": [state]},
                     )
@@ -221,7 +226,7 @@ class OzonClient(BasePlatformClient):
             if not items:
                 try:
                     url = f"{OZON_SELLER_API}/api/client/campaign"
-                    for state in ["CAMPAIGN_STATE_RUNNING", "CAMPAIGN_STATE_STOPPED"]:
+                    for state in ALL_STATES:
                         result = await self._request(
                             "GET", url, params={"state": state},
                         )
@@ -237,7 +242,7 @@ class OzonClient(BasePlatformClient):
             if not items:
                 try:
                     url = f"{OZON_PERFORMANCE_API}/api/client/campaign"
-                    for state in ["CAMPAIGN_STATE_RUNNING", "CAMPAIGN_STATE_STOPPED"]:
+                    for state in ALL_STATES:
                         result = await self._request(
                             "GET", url, use_perf=True,
                             params={"state": state},
