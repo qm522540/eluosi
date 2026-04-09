@@ -43,7 +43,7 @@ const RULE_TYPES = {
   pause_low_roi: { label: '低ROI自动暂停', color: 'red' },
   auto_bid: { label: '分时自动调价', color: 'blue' },
   budget_cap: { label: '预算封顶', color: 'orange' },
-  schedule: { label: '定时投放', color: 'green' },
+  inventory_link: { label: '库存联动', color: 'green' },
 }
 
 const Ads = () => {
@@ -340,6 +340,8 @@ const Ads = () => {
       off_peak_hours: c.off_peak_hours,
       off_peak_pct: c.off_peak_pct,
       max_daily_spend: c.max_daily_spend,
+      min_stock: c.min_stock,
+      resume_stock: c.resume_stock,
     })
     setRuleFormVisible(true)
   }
@@ -365,6 +367,10 @@ const Ads = () => {
       } else if (values.rule_type === 'budget_cap') {
         conditions.max_daily_spend = values.max_daily_spend || 5000
         actions.action = 'pause'
+      } else if (values.rule_type === 'inventory_link') {
+        conditions.min_stock = values.min_stock ?? 10
+        conditions.resume_stock = values.resume_stock ?? 50
+        actions.action = 'inventory_pause_resume'
       }
       const ruleType = editingRule ? editingRule.rule_type : values.rule_type
       const payload = {
@@ -1314,7 +1320,7 @@ const Ads = () => {
                           if (r.rule_type === 'pause_low_roi') return `ROAS < ${c.min_roas || 1}，花费 >= ₽${c.min_spend || 100}`
                           if (r.rule_type === 'auto_bid') return `高峰+${c.peak_pct||30}% | 次峰+${c.sub_peak_pct||20}% | 低谷${c.off_peak_pct||-50}%`
                           if (r.rule_type === 'budget_cap') return `日花费上限 ₽${c.max_daily_spend || 0}`
-                          if (r.rule_type === 'schedule') return `投放时段: ${(c.active_hours || []).join(',')}时`
+                          if (r.rule_type === 'inventory_link') return `库存 < ${c.min_stock || 10}件暂停 | >= ${c.resume_stock || 50}件恢复`
                           return '-'
                         },
                       },
@@ -2068,12 +2074,23 @@ const Ads = () => {
                   <InputNumber min={100} step={500} style={{ width: '100%' }} />
                 </Form.Item>
               )
-              if (rt === 'schedule') return (
-                <Form.Item name="active_hours" label="投放时段（选择小时）">
-                  <Select mode="multiple" placeholder="选择活跃小时"
-                    options={Array.from({ length: 24 }, (_, i) => ({ value: i, label: `${i}:00` }))}
-                  />
-                </Form.Item>
+              if (rt === 'inventory_link') return (
+                <div>
+                  <Alert message="库存低于阈值时自动暂停广告，库存恢复后自动开启" type="info" showIcon style={{ marginBottom: 16 }} />
+                  <Row gutter={16}>
+                    <Col span={12}>
+                      <Form.Item name="min_stock" label="最低库存阈值" initialValue={10}>
+                        <InputNumber min={0} step={5} style={{ width: '100%' }} addonAfter="件" />
+                      </Form.Item>
+                    </Col>
+                    <Col span={12}>
+                      <Form.Item name="resume_stock" label="恢复投放库存" initialValue={50}>
+                        <InputNumber min={0} step={10} style={{ width: '100%' }} addonAfter="件" />
+                      </Form.Item>
+                    </Col>
+                  </Row>
+                  <Text type="secondary">库存 &lt; 最低阈值 → 暂停广告 | 库存 &gt;= 恢复阈值 → 重新投放</Text>
+                </div>
               )
               return <Text type="secondary">请先选择规则类型</Text>
             }}

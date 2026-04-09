@@ -148,7 +148,7 @@ class AdSummary(BaseModel):
 class AutoRuleCreate(BaseModel):
     """创建自动化规则"""
     name: str = Field(..., max_length=200)
-    rule_type: str = Field(..., pattern="^(pause_low_roi|auto_bid|budget_cap|schedule)$")
+    rule_type: str = Field(..., pattern="^(pause_low_roi|auto_bid|budget_cap|schedule|inventory_link)$")
     conditions: Optional[dict] = None
     actions: Optional[dict] = None
     platform: Optional[str] = Field(None, pattern="^(wb|ozon|yandex)$")

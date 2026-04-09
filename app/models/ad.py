@@ -71,7 +71,7 @@ class AdAutomationRule(BaseMixin, Base):
     tenant_id: Mapped[int] = mapped_column(BigInteger, nullable=False, index=True)
     name: Mapped[str] = mapped_column(String(200), nullable=False)
     rule_type: Mapped[str] = mapped_column(
-        Enum("pause_low_roi", "auto_bid", "budget_cap", "schedule", name="rule_type"),
+        Enum("pause_low_roi", "auto_bid", "budget_cap", "schedule", "inventory_link", name="rule_type"),
         nullable=False,
     )
     # 规则条件与动作以JSON存储，灵活扩展

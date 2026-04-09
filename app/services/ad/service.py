@@ -1293,16 +1293,14 @@ def _execute_single_rule(db: Session, tenant_id: int, rule: AdAutomationRule,
                 triggered = True
                 logger.info(f"规则[{rule.name}] 预算到达上限，暂停活动 {campaign.id}")
 
-        elif rule.rule_type == "schedule":
-            active_hours = conditions.get("active_hours", [])
-            current_hour = datetime.now().hour
-            should_be_active = current_hour in active_hours if active_hours else True
-            if should_be_active and campaign.status == "paused":
-                campaign.status = "active"
-                triggered = True
-            elif not should_be_active and campaign.status == "active":
-                campaign.status = "paused"
-                triggered = True
+        elif rule.rule_type == "inventory_link":
+            # 库存联动：库存不足暂停，库存恢复开启
+            min_stock = conditions.get("min_stock", 10)
+            resume_stock = conditions.get("resume_stock", 50)
+            # 通过广告组关联的 listing_id 查库存（预留，目前用模拟值）
+            # TODO: 接入平台库存API获取实际库存
+            # 目前记录规则但不执行实际操作，等库存模块对接后启用
+            logger.info(f"规则[{rule.name}] 库存联动检查 活动{campaign.id} min={min_stock} resume={resume_stock}")
 
     if triggered:
         rule.last_triggered_at = datetime.utcnow()
