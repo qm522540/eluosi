@@ -267,6 +267,7 @@ class OzonClient(BasePlatformClient):
             "CAMPAIGN_STATE_INACTIVE": "paused",
             "CAMPAIGN_STATE_ARCHIVED": "archived",
             "CAMPAIGN_STATE_MODERATION": "draft",
+            "CAMPAIGN_STATE_FINISHED": "archived",
         }
         # Ozon广告类型映射
         type_map = {
