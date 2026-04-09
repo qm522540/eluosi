@@ -15,7 +15,7 @@ from app.utils.logger import logger
 def list_campaigns(db: Session, tenant_id: int, shop_id: int = None,
                    platform: str = None, status: str = None,
                    page: int = 1, page_size: int = 20) -> dict:
-    """获取广告活动列表"""
+    """获取广告活动列表（含近期统计：费用/展现/CTR）"""
     try:
         query = db.query(AdCampaign).filter(AdCampaign.tenant_id == tenant_id)
         if shop_id:
@@ -38,7 +38,51 @@ def list_campaigns(db: Session, tenant_id: int, shop_id: int = None,
             (page - 1) * page_size
         ).limit(page_size).all()
 
-        items = [_campaign_to_dict(c) for c in campaigns]
+        # 批量查询这些活动的累计统计数据
+        campaign_ids = [c.id for c in campaigns]
+        stats_map = {}
+        if campaign_ids:
+            stats_rows = db.query(
+                AdStat.campaign_id,
+                func.sum(AdStat.impressions).label("impressions"),
+                func.sum(AdStat.clicks).label("clicks"),
+                func.sum(AdStat.spend).label("spend"),
+                func.sum(AdStat.orders).label("orders"),
+                func.sum(AdStat.revenue).label("revenue"),
+            ).filter(
+                AdStat.campaign_id.in_(campaign_ids),
+            ).group_by(AdStat.campaign_id).all()
+
+            for row in stats_rows:
+                imp = int(row.impressions or 0)
+                clk = int(row.clicks or 0)
+                spend = float(row.spend or 0)
+                revenue = float(row.revenue or 0)
+                stats_map[row.campaign_id] = {
+                    "impressions": imp,
+                    "clicks": clk,
+                    "spend": round(spend, 2),
+                    "orders": int(row.orders or 0),
+                    "revenue": round(revenue, 2),
+                    "ctr": round(clk / imp * 100, 2) if imp > 0 else 0,
+                    "cpc": round(spend / clk, 2) if clk > 0 else 0,
+                    "roas": round(revenue / spend, 2) if spend > 0 else 0,
+                }
+
+        items = []
+        for c in campaigns:
+            item = _campaign_to_dict(c)
+            stats = stats_map.get(c.id, {})
+            item["impressions"] = stats.get("impressions", 0)
+            item["clicks"] = stats.get("clicks", 0)
+            item["spend"] = stats.get("spend", 0)
+            item["orders"] = stats.get("orders", 0)
+            item["revenue"] = stats.get("revenue", 0)
+            item["ctr"] = stats.get("ctr", 0)
+            item["cpc"] = stats.get("cpc", 0)
+            item["roas"] = stats.get("roas", 0)
+            items.append(item)
+
         return {
             "code": ErrorCode.SUCCESS,
             "data": {

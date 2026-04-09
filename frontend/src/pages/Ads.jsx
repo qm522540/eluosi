@@ -818,12 +818,36 @@ const Ads = () => {
       render: (t) => AD_TYPES[t]?.label || t,
     },
     {
-      title: '日预算',
+      title: '预算余额',
       dataIndex: 'daily_budget',
       key: 'daily_budget',
-      width: 110,
+      width: 100,
       align: 'right',
       render: (v) => v != null ? `₽${v.toLocaleString()}` : '-',
+    },
+    {
+      title: '费用',
+      dataIndex: 'spend',
+      key: 'spend',
+      width: 100,
+      align: 'right',
+      render: (v) => v ? `₽${v.toLocaleString()}` : '0',
+    },
+    {
+      title: '展现次数',
+      dataIndex: 'impressions',
+      key: 'impressions',
+      width: 100,
+      align: 'right',
+      render: (v) => (v || 0).toLocaleString(),
+    },
+    {
+      title: 'CTR',
+      dataIndex: 'ctr',
+      key: 'ctr',
+      width: 80,
+      align: 'right',
+      render: (v) => v ? `${v}%` : '0%',
     },
     {
       title: '状态',
@@ -834,13 +858,6 @@ const Ads = () => {
         const info = AD_STATUS[s]
         return info ? <Badge color={info.color} text={info.label} /> : s
       },
-    },
-    {
-      title: '开始日期',
-      dataIndex: 'start_date',
-      key: 'start_date',
-      width: 110,
-      render: (v) => v || '-',
     },
     {
       title: '操作',
