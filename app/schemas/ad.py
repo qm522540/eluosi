@@ -141,3 +141,28 @@ class AdSummary(BaseModel):
     avg_cpc: Optional[float] = None
     overall_acos: Optional[float] = None
     overall_roas: Optional[float] = None
+
+
+# ==================== 自动化规则 ====================
+
+class AutoRuleCreate(BaseModel):
+    """创建自动化规则"""
+    name: str = Field(..., max_length=200)
+    rule_type: str = Field(..., pattern="^(pause_low_roi|auto_bid|budget_cap|schedule)$")
+    conditions: Optional[dict] = None
+    actions: Optional[dict] = None
+    platform: Optional[str] = Field(None, pattern="^(wb|ozon|yandex)$")
+    campaign_id: Optional[int] = None
+    shop_id: Optional[int] = None
+    enabled: int = Field(1, ge=0, le=1)
+
+
+class AutoRuleUpdate(BaseModel):
+    """更新自动化规则"""
+    name: Optional[str] = Field(None, max_length=200)
+    conditions: Optional[dict] = None
+    actions: Optional[dict] = None
+    platform: Optional[str] = Field(None, pattern="^(wb|ozon|yandex)$")
+    campaign_id: Optional[int] = None
+    shop_id: Optional[int] = None
+    enabled: Optional[int] = Field(None, ge=0, le=1)

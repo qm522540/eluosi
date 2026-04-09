@@ -12,6 +12,7 @@ from app.schemas.ad import (
     AdGroupCreate, AdGroupUpdate,
     AdKeywordCreate, AdKeywordUpdate, AdKeywordBatchCreate,
     BidOptimizeRequest, AlertConfigUpdate,
+    AutoRuleCreate, AutoRuleUpdate,
 )
 from app.services.ad.service import (
     list_campaigns, get_campaign, create_campaign, update_campaign, delete_campaign,
@@ -22,6 +23,10 @@ from app.services.ad.service import (
     export_stats_csv,
     get_roi_alerts,
     get_alert_config, update_alert_config,
+    get_platform_comparison, get_campaign_ranking, get_product_roi,
+    list_automation_rules, create_automation_rule, update_automation_rule,
+    delete_automation_rule, execute_automation_rules,
+    get_budget_overview, get_budget_suggestions,
 )
 from app.utils.response import success, error
 
@@ -361,3 +366,155 @@ def update_config(
     if result["code"] != 0:
         return error(result["code"], result["msg"])
     return success(result["data"], msg="告警配置已更新")
+
+
+# ==================== 数据分析 ====================
+
+@router.get("/analysis/platform-comparison")
+def platform_comparison(
+    start_date: date = Query(..., description="开始日期"),
+    end_date: date = Query(..., description="结束日期"),
+    shop_id: int = Query(None),
+    db: Session = Depends(get_db),
+    tenant_id: int = Depends(get_tenant_id),
+):
+    """多平台对比分析"""
+    result = get_platform_comparison(db, tenant_id, start_date, end_date, shop_id=shop_id)
+    if result["code"] != 0:
+        return error(result["code"], result["msg"])
+    return success(result["data"])
+
+
+@router.get("/analysis/campaign-ranking")
+def campaign_ranking(
+    start_date: date = Query(..., description="开始日期"),
+    end_date: date = Query(..., description="结束日期"),
+    sort_by: str = Query("spend", description="排序字段: spend/revenue/clicks/orders"),
+    limit: int = Query(10, ge=1, le=50),
+    shop_id: int = Query(None),
+    platform: str = Query(None),
+    db: Session = Depends(get_db),
+    tenant_id: int = Depends(get_tenant_id),
+):
+    """广告活动TOP排名"""
+    result = get_campaign_ranking(db, tenant_id, start_date, end_date,
+                                  sort_by=sort_by, limit=limit,
+                                  shop_id=shop_id, platform=platform)
+    if result["code"] != 0:
+        return error(result["code"], result["msg"])
+    return success(result["data"])
+
+
+@router.get("/analysis/product-roi")
+def product_roi(
+    start_date: date = Query(..., description="开始日期"),
+    end_date: date = Query(..., description="结束日期"),
+    shop_id: int = Query(None),
+    platform: str = Query(None),
+    db: Session = Depends(get_db),
+    tenant_id: int = Depends(get_tenant_id),
+):
+    """商品级ROI分析"""
+    result = get_product_roi(db, tenant_id, start_date, end_date,
+                             shop_id=shop_id, platform=platform)
+    if result["code"] != 0:
+        return error(result["code"], result["msg"])
+    return success(result["data"])
+
+
+# ==================== 自动化规则 ====================
+
+@router.get("/rules")
+def rule_list(
+    rule_type: str = Query(None, description="规则类型"),
+    enabled: int = Query(None, description="启用状态: 0/1"),
+    db: Session = Depends(get_db),
+    tenant_id: int = Depends(get_tenant_id),
+):
+    """获取自动化规则列表"""
+    result = list_automation_rules(db, tenant_id, rule_type=rule_type, enabled=enabled)
+    if result["code"] != 0:
+        return error(result["code"], result["msg"])
+    return success(result["data"])
+
+
+@router.post("/rules")
+def rule_create(
+    req: AutoRuleCreate,
+    db: Session = Depends(get_db),
+    tenant_id: int = Depends(get_tenant_id),
+):
+    """创建自动化规则"""
+    result = create_automation_rule(db, tenant_id, req.model_dump())
+    if result["code"] != 0:
+        return error(result["code"], result["msg"])
+    return success(result["data"], msg="自动化规则创建成功")
+
+
+@router.put("/rules/{rule_id}")
+def rule_update(
+    rule_id: int,
+    req: AutoRuleUpdate,
+    db: Session = Depends(get_db),
+    tenant_id: int = Depends(get_tenant_id),
+):
+    """更新自动化规则"""
+    result = update_automation_rule(db, rule_id, tenant_id, req.model_dump(exclude_none=True))
+    if result["code"] != 0:
+        return error(result["code"], result["msg"])
+    return success(result["data"], msg="自动化规则更新成功")
+
+
+@router.delete("/rules/{rule_id}")
+def rule_delete(
+    rule_id: int,
+    db: Session = Depends(get_db),
+    tenant_id: int = Depends(get_tenant_id),
+):
+    """删除自动化规则"""
+    result = delete_automation_rule(db, rule_id, tenant_id)
+    if result["code"] != 0:
+        return error(result["code"], result["msg"])
+    return success(msg="自动化规则已删除")
+
+
+@router.post("/rules/execute")
+def rules_execute(
+    db: Session = Depends(get_db),
+    tenant_id: int = Depends(get_tenant_id),
+):
+    """手动执行所有启用的自动化规则"""
+    result = execute_automation_rules(db, tenant_id)
+    if result["code"] != 0:
+        return error(result["code"], result["msg"])
+    return success(result["data"], msg="规则执行完成")
+
+
+# ==================== 预算管理 ====================
+
+@router.get("/budget/overview")
+def budget_overview(
+    shop_id: int = Query(None),
+    platform: str = Query(None),
+    db: Session = Depends(get_db),
+    tenant_id: int = Depends(get_tenant_id),
+):
+    """预算消耗概览"""
+    result = get_budget_overview(db, tenant_id, shop_id=shop_id, platform=platform)
+    if result["code"] != 0:
+        return error(result["code"], result["msg"])
+    return success(result["data"])
+
+
+@router.get("/budget/suggestions")
+def budget_suggestions(
+    shop_id: int = Query(None),
+    platform: str = Query(None),
+    db: Session = Depends(get_db),
+    tenant_id: int = Depends(get_tenant_id),
+):
+    """预算分配优化建议"""
+    result = get_budget_suggestions(db, tenant_id, shop_id=shop_id, platform=platform)
+    if result["code"] != 0:
+        return error(result["code"], result["msg"])
+    return success(result["data"])

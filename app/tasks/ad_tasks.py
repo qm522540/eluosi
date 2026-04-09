@@ -485,6 +485,42 @@ def fetch_yandex_ad_stats(self):
         db.close()
 
 
+# ==================== 自动化规则执行 ====================
+
+@celery_app.task(
+    name="app.tasks.ad_tasks.run_automation_rules",
+    bind=True,
+    max_retries=1,
+    default_retry_delay=60,
+)
+def run_automation_rules(self):
+    """执行所有租户的广告自动化规则"""
+    db = SessionLocal()
+    try:
+        from app.models.ad import AdAutomationRule
+        from app.services.ad.service import execute_automation_rules
+
+        # 获取所有有启用规则的租户
+        tenant_ids = [row[0] for row in db.query(
+            AdAutomationRule.tenant_id
+        ).filter(
+            AdAutomationRule.enabled == 1
+        ).distinct().all()]
+
+        results = {}
+        for tid in tenant_ids:
+            result = execute_automation_rules(db, tid)
+            results[tid] = result.get("data", {})
+            logger.info(f"租户 {tid} 自动化规则执行完成: {result.get('data', {}).get('rules_checked', 0)} 条规则")
+
+        return {"tenants_processed": len(tenant_ids), "results": results}
+    except Exception as e:
+        logger.error(f"自动化规则执行任务异常: {e}")
+        raise self.retry(exc=e)
+    finally:
+        db.close()
+
+
 async def _fetch_single_yandex_shop(db, shop: Shop) -> tuple:
     """采集单个Yandex店铺的广告数据"""
     client = YandexClient(

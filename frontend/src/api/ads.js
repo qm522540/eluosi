@@ -114,3 +114,59 @@ export function getAlertConfig() {
 export function updateAlertConfig(data) {
   return request.put('/ads/alert-config', data)
 }
+
+// ==================== 数据分析 ====================
+
+/** 多平台对比分析 */
+export function getPlatformComparison(params) {
+  return request.get('/ads/analysis/platform-comparison', { params })
+}
+
+/** 广告活动TOP排名 */
+export function getCampaignRanking(params) {
+  return request.get('/ads/analysis/campaign-ranking', { params })
+}
+
+/** 商品级ROI分析 */
+export function getProductRoi(params) {
+  return request.get('/ads/analysis/product-roi', { params })
+}
+
+// ==================== 自动化规则 ====================
+
+/** 获取自动化规则列表 */
+export function getAutomationRules(params) {
+  return request.get('/ads/rules', { params })
+}
+
+/** 创建自动化规则 */
+export function createAutomationRule(data) {
+  return request.post('/ads/rules', data)
+}
+
+/** 更新自动化规则 */
+export function updateAutomationRule(id, data) {
+  return request.put(`/ads/rules/${id}`, data)
+}
+
+/** 删除自动化规则 */
+export function deleteAutomationRule(id) {
+  return request.delete(`/ads/rules/${id}`)
+}
+
+/** 手动执行规则 */
+export function executeRules() {
+  return request.post('/ads/rules/execute')
+}
+
+// ==================== 预算管理 ====================
+
+/** 预算消耗概览 */
+export function getBudgetOverview(params) {
+  return request.get('/ads/budget/overview', { params })
+}
+
+/** 预算分配优化建议 */
+export function getBudgetSuggestions(params) {
+  return request.get('/ads/budget/suggestions', { params })
+}

@@ -66,4 +66,9 @@ celery_app.conf.beat_schedule = {
         "task": "app.tasks.roi_alert.check_roi_anomaly",
         "schedule": crontab(minute="*/30"),
     },
+    # 自动化规则执行（每小时）
+    "ad-automation-rules": {
+        "task": "app.tasks.ad_tasks.run_automation_rules",
+        "schedule": crontab(minute=25),
+    },
 }

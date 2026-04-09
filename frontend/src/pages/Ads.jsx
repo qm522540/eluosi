@@ -2,12 +2,14 @@ import { useState, useEffect, useCallback } from 'react'
 import {
   Typography, Card, Table, Button, Tag, Space, Select, Row, Col,
   Statistic, Modal, Form, Input, InputNumber, message, DatePicker, Tooltip, Badge, Empty,
-  Popconfirm, Tabs, Alert, Drawer, Descriptions, List, Divider, Slider,
+  Popconfirm, Tabs, Alert, Drawer, Descriptions, List, Divider, Slider, Switch, Progress,
 } from 'antd'
 import {
   SearchOutlined, EditOutlined, EyeOutlined, SyncOutlined, PlusOutlined,
   FundOutlined, DollarOutlined, AimOutlined, RiseOutlined, DeleteOutlined,
   DownloadOutlined, BellOutlined, ThunderboltOutlined, SettingOutlined,
+  BarChartOutlined, RobotOutlined, WalletOutlined, PlayCircleOutlined,
+  PauseCircleOutlined, ArrowUpOutlined, ArrowDownOutlined, MinusOutlined,
 } from '@ant-design/icons'
 import ReactECharts from 'echarts-for-react'
 import dayjs from 'dayjs'
@@ -18,6 +20,9 @@ import {
   getAdStats, getAdSummary, syncAds,
   getOptimizeSuggestions, applyBidSuggestions,
   exportAdStats, getAlerts, getAlertConfig, updateAlertConfig,
+  getPlatformComparison, getCampaignRanking, getProductRoi,
+  getAutomationRules, createAutomationRule, updateAutomationRule, deleteAutomationRule, executeRules,
+  getBudgetOverview, getBudgetSuggestions,
 } from '@/api/ads'
 import { getShops } from '@/api/shops'
 import { PLATFORMS, AD_STATUS, AD_TYPES } from '@/utils/constants'
@@ -32,8 +37,16 @@ const MATCH_TYPES = {
   broad: '广泛匹配',
 }
 
+const RULE_TYPES = {
+  pause_low_roi: { label: '低ROI自动暂停', color: 'red' },
+  auto_bid: { label: '自动调价', color: 'blue' },
+  budget_cap: { label: '预算封顶', color: 'orange' },
+  schedule: { label: '定时投放', color: 'green' },
+}
+
 const Ads = () => {
   const [searched, setSearched] = useState(false)
+  const [mainTab, setMainTab] = useState('overview')
 
   // 汇总数据
   const [summary, setSummary] = useState(null)
@@ -118,6 +131,28 @@ const Ads = () => {
   // 导出
   const [exporting, setExporting] = useState(false)
 
+  // 分析数据
+  const [platformData, setPlatformData] = useState([])
+  const [rankingData, setRankingData] = useState([])
+  const [productRoiData, setProductRoiData] = useState([])
+  const [analysisLoading, setAnalysisLoading] = useState(false)
+  const [rankSort, setRankSort] = useState('spend')
+
+  // 自动化规则
+  const [rules, setRules] = useState([])
+  const [rulesLoading, setRulesLoading] = useState(false)
+  const [ruleFormVisible, setRuleFormVisible] = useState(false)
+  const [editingRule, setEditingRule] = useState(null)
+  const [ruleForm] = Form.useForm()
+  const [ruleSubmitting, setRuleSubmitting] = useState(false)
+  const [executing, setExecuting] = useState(false)
+
+  // 预算数据
+  const [budgetData, setBudgetData] = useState(null)
+  const [budgetLoading, setBudgetLoading] = useState(false)
+  const [suggestions, setSuggestions] = useState([])
+  const [suggestionsLoading, setSuggestionsLoading] = useState(false)
+
   // 加载店铺列表
   useEffect(() => {
     getShops({ page: 1, page_size: 100 }).then(res => {
@@ -191,6 +226,191 @@ const Ads = () => {
   useEffect(() => {
     if (searched) fetchStats()
   }, [dateRange])
+
+  // ==================== 分析数据加载 ====================
+
+  const fetchAnalysis = useCallback(async () => {
+    if (!dateRange || dateRange.length !== 2) return
+    setAnalysisLoading(true)
+    const params = {
+      start_date: dateRange[0].format('YYYY-MM-DD'),
+      end_date: dateRange[1].format('YYYY-MM-DD'),
+    }
+    if (filterShopId) params.shop_id = filterShopId
+    try {
+      const [pRes, rRes, prRes] = await Promise.all([
+        getPlatformComparison(params),
+        getCampaignRanking({ ...params, sort_by: rankSort, limit: 10, platform: filterPlatform }),
+        getProductRoi({ ...params, platform: filterPlatform }),
+      ])
+      setPlatformData(pRes.data || [])
+      setRankingData(rRes.data || [])
+      setProductRoiData(prRes.data || [])
+    } catch {
+      message.error('加载分析数据失败')
+    } finally {
+      setAnalysisLoading(false)
+    }
+  }, [dateRange, filterShopId, filterPlatform, rankSort])
+
+  useEffect(() => {
+    if (searched && mainTab === 'analysis') fetchAnalysis()
+  }, [mainTab, dateRange, rankSort])
+
+  // ==================== 自动化规则 ====================
+
+  const fetchRules = async () => {
+    setRulesLoading(true)
+    try {
+      const res = await getAutomationRules()
+      setRules(res.data || [])
+    } catch {
+      setRules([])
+    } finally {
+      setRulesLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    if (searched && mainTab === 'rules') fetchRules()
+  }, [mainTab])
+
+  const handleCreateRule = () => {
+    setEditingRule(null)
+    ruleForm.resetFields()
+    setRuleFormVisible(true)
+  }
+
+  const handleEditRule = (record) => {
+    setEditingRule(record)
+    ruleForm.setFieldsValue({
+      ...record,
+      min_roas: record.conditions?.min_roas,
+      min_spend: record.conditions?.min_spend,
+      target_roas: record.conditions?.target_roas,
+      max_change_pct: record.conditions?.max_change_pct,
+      max_daily_spend: record.conditions?.max_daily_spend,
+    })
+    setRuleFormVisible(true)
+  }
+
+  const handleRuleSubmit = async () => {
+    try {
+      const values = await ruleForm.validateFields()
+      setRuleSubmitting(true)
+      const conditions = {}
+      const actions = {}
+      if (values.rule_type === 'pause_low_roi') {
+        conditions.min_roas = values.min_roas || 1.0
+        conditions.min_spend = values.min_spend || 100
+        actions.action = 'pause'
+      } else if (values.rule_type === 'auto_bid') {
+        conditions.target_roas = values.target_roas || 2.0
+        conditions.max_change_pct = values.max_change_pct || 20
+        actions.action = 'adjust_bid'
+      } else if (values.rule_type === 'budget_cap') {
+        conditions.max_daily_spend = values.max_daily_spend || 5000
+        actions.action = 'pause'
+      }
+      const payload = {
+        name: values.name,
+        rule_type: values.rule_type,
+        conditions,
+        actions,
+        platform: values.platform || null,
+        campaign_id: values.campaign_id || null,
+        shop_id: values.shop_id || null,
+        enabled: values.enabled ? 1 : 0,
+      }
+      if (editingRule) {
+        await updateAutomationRule(editingRule.id, payload)
+        message.success('规则更新成功')
+      } else {
+        await createAutomationRule(payload)
+        message.success('规则创建成功')
+      }
+      setRuleFormVisible(false)
+      fetchRules()
+    } catch (err) {
+      if (err.errorFields) return
+      message.error(err.message || '操作失败')
+    } finally {
+      setRuleSubmitting(false)
+    }
+  }
+
+  const handleDeleteRule = async (id) => {
+    try {
+      await deleteAutomationRule(id)
+      message.success('规则已删除')
+      fetchRules()
+    } catch (err) {
+      message.error(err.message || '删除失败')
+    }
+  }
+
+  const handleToggleRule = async (record) => {
+    try {
+      await updateAutomationRule(record.id, { enabled: record.enabled ? 0 : 1 })
+      message.success(record.enabled ? '规则已禁用' : '规则已启用')
+      fetchRules()
+    } catch (err) {
+      message.error(err.message || '操作失败')
+    }
+  }
+
+  const handleExecuteRules = async () => {
+    setExecuting(true)
+    try {
+      const res = await executeRules()
+      message.success(`规则执行完成，检查了 ${res.data?.rules_checked || 0} 条规则`)
+      fetchRules()
+      if (searched) fetchCampaigns()
+    } catch (err) {
+      message.error(err.message || '执行失败')
+    } finally {
+      setExecuting(false)
+    }
+  }
+
+  // ==================== 预算管理 ====================
+
+  const fetchBudget = async () => {
+    setBudgetLoading(true)
+    try {
+      const params = {}
+      if (filterShopId) params.shop_id = filterShopId
+      if (filterPlatform) params.platform = filterPlatform
+      const res = await getBudgetOverview(params)
+      setBudgetData(res.data)
+    } catch {
+      setBudgetData(null)
+    } finally {
+      setBudgetLoading(false)
+    }
+  }
+
+  const fetchBudgetSuggestions = async () => {
+    setSuggestionsLoading(true)
+    try {
+      const params = {}
+      if (filterShopId) params.shop_id = filterShopId
+      if (filterPlatform) params.platform = filterPlatform
+      const res = await getBudgetSuggestions(params)
+      setSuggestions(res.data || [])
+    } catch {
+      setSuggestions([])
+    } finally {
+      setSuggestionsLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    if (searched && mainTab === 'budget') {
+      fetchBudget()
+      fetchBudgetSuggestions()
+    }
+  }, [mainTab])
 
   // ==================== 同步 ====================
 
@@ -281,7 +501,6 @@ const Ads = () => {
     try {
       const res = await getCampaign(id)
       setDetailData(res.data)
-      // 加载广告组
       fetchAdGroups(id)
     } catch {
       message.error('获取广告详情失败')
@@ -685,6 +904,27 @@ const Ads = () => {
     }
   }
 
+  // 平台对比图
+  const getPlatformChartOption = () => {
+    const labels = { wb: 'Wildberries', ozon: 'Ozon', yandex: 'Yandex' }
+    const platforms = platformData.map(p => labels[p.platform] || p.platform)
+    return {
+      tooltip: { trigger: 'axis' },
+      legend: { data: ['花费', '收入', 'ROAS'] },
+      grid: { left: 60, right: 60, top: 40, bottom: 30 },
+      xAxis: { type: 'category', data: platforms },
+      yAxis: [
+        { type: 'value', name: '金额 (₽)' },
+        { type: 'value', name: 'ROAS', position: 'right' },
+      ],
+      series: [
+        { name: '花费', type: 'bar', data: platformData.map(p => p.spend), itemStyle: { color: '#ff7875' }, barMaxWidth: 40 },
+        { name: '收入', type: 'bar', data: platformData.map(p => p.revenue), itemStyle: { color: '#95de64' }, barMaxWidth: 40 },
+        { name: 'ROAS', type: 'line', yAxisIndex: 1, data: platformData.map(p => p.roas), itemStyle: { color: '#faad14' } },
+      ],
+    }
+  }
+
   // ==================== 广告组表格列 ====================
 
   const groupColumns = [
@@ -814,44 +1054,323 @@ const Ads = () => {
             </Col>
           </Row>
 
-          {/* 活动列表 */}
-          <Card title="活动列表" size="small" style={{ marginBottom: 24 }}>
-            <Table
-              columns={columns}
-              dataSource={campaigns}
-              rowKey="id"
-              loading={listLoading}
-              pagination={{
-                current: page,
-                total,
-                pageSize: 20,
-                showTotal: (t) => `共 ${t} 个活动`,
-                onChange: (p) => { setPage(p); fetchCampaigns(p) },
-              }}
-            />
-          </Card>
+          {/* 主功能Tab */}
+          <Tabs activeKey={mainTab} onChange={setMainTab} items={[
+            {
+              key: 'overview',
+              label: <span><FundOutlined /> 概览</span>,
+              children: (
+                <>
+                  {/* 活动列表 */}
+                  <Card title="活动列表" size="small" style={{ marginBottom: 24 }}>
+                    <Table columns={columns} dataSource={campaigns} rowKey="id" loading={listLoading}
+                      pagination={{
+                        current: page, total, pageSize: 20,
+                        showTotal: (t) => `共 ${t} 个活动`,
+                        onChange: (p) => { setPage(p); fetchCampaigns(p) },
+                      }}
+                    />
+                  </Card>
 
-          {/* 趋势图表 */}
-          <Card
-            title="广告趋势"
-            size="small"
-            extra={
-              <Space>
-                <Button icon={<DownloadOutlined />} size="small" loading={exporting} onClick={handleExport}>导出CSV</Button>
-                <RangePicker
-                  value={dateRange}
-                  onChange={setDateRange}
-                  allowClear={false}
-                  presets={[
-                    { label: '近7天', value: [dayjs().subtract(6, 'day'), dayjs()] },
-                    { label: '近30天', value: [dayjs().subtract(29, 'day'), dayjs()] },
-                  ]}
-                />
-              </Space>
-            }
-          >
-            <ReactECharts option={getChartOption()} style={{ height: 300 }} showLoading={statsLoading} />
-          </Card>
+                  {/* 趋势图表 */}
+                  <Card title="广告趋势" size="small"
+                    extra={
+                      <Space>
+                        <Button icon={<DownloadOutlined />} size="small" loading={exporting} onClick={handleExport}>导出CSV</Button>
+                        <RangePicker value={dateRange} onChange={setDateRange} allowClear={false}
+                          presets={[
+                            { label: '近7天', value: [dayjs().subtract(6, 'day'), dayjs()] },
+                            { label: '近30天', value: [dayjs().subtract(29, 'day'), dayjs()] },
+                          ]}
+                        />
+                      </Space>
+                    }
+                  >
+                    <ReactECharts option={getChartOption()} style={{ height: 300 }} showLoading={statsLoading} />
+                  </Card>
+                </>
+              ),
+            },
+            {
+              key: 'analysis',
+              label: <span><BarChartOutlined /> 数据分析</span>,
+              children: (
+                <>
+                  <Row gutter={16} style={{ marginBottom: 16 }}>
+                    <Col span={24}>
+                      <RangePicker value={dateRange} onChange={setDateRange} allowClear={false}
+                        presets={[
+                          { label: '近7天', value: [dayjs().subtract(6, 'day'), dayjs()] },
+                          { label: '近30天', value: [dayjs().subtract(29, 'day'), dayjs()] },
+                          { label: '近90天', value: [dayjs().subtract(89, 'day'), dayjs()] },
+                        ]}
+                      />
+                    </Col>
+                  </Row>
+
+                  {/* 平台对比 */}
+                  <Card title="平台对比分析" size="small" style={{ marginBottom: 24 }} loading={analysisLoading}>
+                    {platformData.length > 0 ? (
+                      <>
+                        <ReactECharts option={getPlatformChartOption()} style={{ height: 280 }} />
+                        <Table size="small" dataSource={platformData} rowKey="platform" pagination={false} style={{ marginTop: 16 }}
+                          columns={[
+                            { title: '平台', dataIndex: 'platform', render: p => <Tag color={PLATFORMS[p]?.color}>{PLATFORMS[p]?.label || p}</Tag> },
+                            { title: '展示', dataIndex: 'impressions', render: v => v.toLocaleString() },
+                            { title: '点击', dataIndex: 'clicks', render: v => v.toLocaleString() },
+                            { title: 'CTR%', dataIndex: 'ctr', render: v => `${v}%` },
+                            { title: '花费', dataIndex: 'spend', render: v => `₽${v.toLocaleString()}` },
+                            { title: '收入', dataIndex: 'revenue', render: v => `₽${v.toLocaleString()}` },
+                            { title: 'ROAS', dataIndex: 'roas', render: v => <Text style={{ color: v >= 1 ? '#52c41a' : '#ff4d4f' }}>{v}x</Text> },
+                            { title: '转化率', dataIndex: 'conversion_rate', render: v => `${v}%` },
+                          ]}
+                        />
+                      </>
+                    ) : <Empty description="暂无多平台数据" />}
+                  </Card>
+
+                  {/* 活动排名 */}
+                  <Card title="活动TOP排名" size="small" style={{ marginBottom: 24 }}
+                    extra={
+                      <Select value={rankSort} onChange={setRankSort} size="small" style={{ width: 120 }}
+                        options={[
+                          { value: 'spend', label: '按花费排序' },
+                          { value: 'revenue', label: '按收入排序' },
+                          { value: 'clicks', label: '按点击排序' },
+                          { value: 'orders', label: '按订单排序' },
+                        ]}
+                      />
+                    }
+                  >
+                    <Table size="small" dataSource={rankingData} rowKey="campaign_id" pagination={false} loading={analysisLoading}
+                      columns={[
+                        { title: '排名', key: 'rank', width: 60, render: (_, __, i) => <Text strong>{i + 1}</Text> },
+                        { title: '活动名称', dataIndex: 'name', ellipsis: true },
+                        { title: '平台', dataIndex: 'platform', width: 110, render: p => <Tag color={PLATFORMS[p]?.color}>{PLATFORMS[p]?.label}</Tag> },
+                        { title: '花费', dataIndex: 'spend', width: 100, render: v => `₽${v.toLocaleString()}` },
+                        { title: '收入', dataIndex: 'revenue', width: 100, render: v => `₽${v.toLocaleString()}` },
+                        { title: '点击', dataIndex: 'clicks', width: 80 },
+                        { title: '订单', dataIndex: 'orders', width: 70 },
+                        { title: 'ROAS', dataIndex: 'roas', width: 80, render: v => <Text style={{ color: v >= 1 ? '#52c41a' : '#ff4d4f' }}>{v}x</Text> },
+                        { title: 'ACOS%', dataIndex: 'acos', width: 80, render: v => `${v}%` },
+                      ]}
+                    />
+                  </Card>
+
+                  {/* 商品ROI */}
+                  <Card title="商品级ROI分析" size="small">
+                    <Table size="small" dataSource={productRoiData} rowKey={(_, i) => i} loading={analysisLoading}
+                      pagination={{ pageSize: 10, size: 'small' }}
+                      columns={[
+                        { title: '商品/广告组', dataIndex: 'group_name', ellipsis: true },
+                        { title: '商品ID', dataIndex: 'listing_id', width: 100, render: v => v || '-' },
+                        { title: '平台', dataIndex: 'platform', width: 100, render: p => <Tag color={PLATFORMS[p]?.color}>{PLATFORMS[p]?.label}</Tag> },
+                        { title: '花费', dataIndex: 'spend', width: 100, render: v => `₽${v}` },
+                        { title: '收入', dataIndex: 'revenue', width: 100, render: v => `₽${v}` },
+                        { title: 'ROAS', dataIndex: 'roas', width: 80, render: v => <Text style={{ color: v >= 1 ? '#52c41a' : '#ff4d4f' }}>{v}x</Text> },
+                        { title: 'CPA', dataIndex: 'cpa', width: 80, render: v => v ? `₽${v}` : '-' },
+                        { title: '订单', dataIndex: 'orders', width: 70 },
+                      ]}
+                    />
+                  </Card>
+                </>
+              ),
+            },
+            {
+              key: 'rules',
+              label: <span><RobotOutlined /> 自动化规则</span>,
+              children: (
+                <>
+                  <div style={{ marginBottom: 16, display: 'flex', justifyContent: 'space-between' }}>
+                    <Text>配置自动化规则，系统将每小时自动检查并执行。</Text>
+                    <Space>
+                      <Button icon={<PlayCircleOutlined />} loading={executing} onClick={handleExecuteRules}>立即执行</Button>
+                      <Button type="primary" icon={<PlusOutlined />} onClick={handleCreateRule}>新建规则</Button>
+                    </Space>
+                  </div>
+
+                  <Table size="small" dataSource={rules} rowKey="id" loading={rulesLoading} pagination={false}
+                    columns={[
+                      { title: '规则名称', dataIndex: 'name', ellipsis: true },
+                      {
+                        title: '类型', dataIndex: 'rule_type', width: 140,
+                        render: v => <Tag color={RULE_TYPES[v]?.color}>{RULE_TYPES[v]?.label || v}</Tag>,
+                      },
+                      {
+                        title: '作用范围', key: 'scope', width: 160,
+                        render: (_, r) => {
+                          const parts = []
+                          if (r.platform) parts.push(PLATFORMS[r.platform]?.label || r.platform)
+                          if (r.campaign_id) parts.push(`活动#${r.campaign_id}`)
+                          if (r.shop_id) parts.push(`店铺#${r.shop_id}`)
+                          return parts.length ? parts.join(' / ') : '全部'
+                        },
+                      },
+                      {
+                        title: '条件', key: 'conditions', ellipsis: true,
+                        render: (_, r) => {
+                          const c = r.conditions || {}
+                          if (r.rule_type === 'pause_low_roi') return `ROAS < ${c.min_roas || 1}，花费 >= ₽${c.min_spend || 100}`
+                          if (r.rule_type === 'auto_bid') return `目标ROAS ${c.target_roas || 2}，最大调幅 ${c.max_change_pct || 20}%`
+                          if (r.rule_type === 'budget_cap') return `日花费上限 ₽${c.max_daily_spend || 0}`
+                          if (r.rule_type === 'schedule') return `投放时段: ${(c.active_hours || []).join(',')}时`
+                          return '-'
+                        },
+                      },
+                      {
+                        title: '状态', dataIndex: 'enabled', width: 80,
+                        render: (v, r) => <Switch size="small" checked={!!v} onChange={() => handleToggleRule(r)} />,
+                      },
+                      {
+                        title: '触发次数', dataIndex: 'trigger_count', width: 80, align: 'center',
+                      },
+                      {
+                        title: '最后触发', dataIndex: 'last_triggered_at', width: 160,
+                        render: v => v ? dayjs(v).format('MM-DD HH:mm') : '-',
+                      },
+                      {
+                        title: '操作', key: 'action', width: 120,
+                        render: (_, record) => (
+                          <Space size="small">
+                            <Button type="link" size="small" icon={<EditOutlined />} onClick={() => handleEditRule(record)} />
+                            <Popconfirm title="确定删除此规则？" onConfirm={() => handleDeleteRule(record.id)}>
+                              <Button type="link" size="small" danger icon={<DeleteOutlined />} />
+                            </Popconfirm>
+                          </Space>
+                        ),
+                      },
+                    ]}
+                  />
+                </>
+              ),
+            },
+            {
+              key: 'budget',
+              label: <span><WalletOutlined /> 预算管理</span>,
+              children: (
+                <>
+                  {/* 预算汇总 */}
+                  {budgetData?.summary && (
+                    <Row gutter={16} style={{ marginBottom: 24 }}>
+                      <Col span={5}>
+                        <Card size="small" loading={budgetLoading}>
+                          <Statistic title="总日预算" value={budgetData.summary.total_daily_budget} prefix="₽" precision={0} />
+                        </Card>
+                      </Col>
+                      <Col span={5}>
+                        <Card size="small" loading={budgetLoading}>
+                          <Statistic title="今日花费" value={budgetData.summary.total_today_spend} prefix="₽" precision={2}
+                            valueStyle={{ color: '#ff7875' }} />
+                        </Card>
+                      </Col>
+                      <Col span={5}>
+                        <Card size="small" loading={budgetLoading}>
+                          <Statistic title="本月花费" value={budgetData.summary.total_month_spend} prefix="₽" precision={2} />
+                        </Card>
+                      </Col>
+                      <Col span={5}>
+                        <Card size="small" loading={budgetLoading}>
+                          <Statistic title="预算使用率" value={budgetData.summary.budget_usage_pct} suffix="%"
+                            valueStyle={{ color: budgetData.summary.budget_usage_pct >= 80 ? '#ff4d4f' : '#52c41a' }} />
+                        </Card>
+                      </Col>
+                      <Col span={4}>
+                        <Card size="small" loading={budgetLoading}>
+                          <Statistic title="活跃活动" value={budgetData.summary.active_campaigns}
+                            suffix={`/ ${budgetData.summary.total_campaigns}`} />
+                        </Card>
+                      </Col>
+                    </Row>
+                  )}
+
+                  {/* 预算预警 */}
+                  {budgetData?.alerts?.length > 0 && (
+                    <Alert
+                      type="warning"
+                      showIcon
+                      style={{ marginBottom: 16 }}
+                      message={`${budgetData.alerts.length} 个活动预算使用率较高`}
+                      description={
+                        <ul style={{ margin: '8px 0', paddingLeft: 20 }}>
+                          {budgetData.alerts.map((a, i) => (
+                            <li key={i}>
+                              <Tag color={a.level === 'critical' ? 'red' : 'orange'}>{a.level === 'critical' ? '超标' : '预警'}</Tag>
+                              {a.name}: {a.message}（今日 ₽{a.today_spend} / 预算 ₽{a.daily_budget}）
+                            </li>
+                          ))}
+                        </ul>
+                      }
+                    />
+                  )}
+
+                  {/* 活动预算明细 */}
+                  <Card title="活动预算消耗明细" size="small" style={{ marginBottom: 24 }}>
+                    <Table size="small" dataSource={budgetData?.campaigns || []} rowKey="campaign_id" loading={budgetLoading}
+                      pagination={{ pageSize: 10, size: 'small' }}
+                      columns={[
+                        { title: '活动名称', dataIndex: 'name', ellipsis: true },
+                        { title: '平台', dataIndex: 'platform', width: 100, render: p => <Tag color={PLATFORMS[p]?.color}>{PLATFORMS[p]?.label}</Tag> },
+                        { title: '日预算', dataIndex: 'daily_budget', width: 100, render: v => v ? `₽${v}` : '不限' },
+                        { title: '今日花费', dataIndex: 'today_spend', width: 100, render: v => `₽${v}` },
+                        {
+                          title: '使用率', dataIndex: 'budget_usage_pct', width: 140,
+                          render: v => v > 0 ? (
+                            <Progress percent={Math.min(v, 100)} size="small"
+                              strokeColor={v >= 100 ? '#ff4d4f' : v >= 80 ? '#faad14' : '#52c41a'}
+                              format={() => `${v}%`}
+                            />
+                          ) : '-',
+                        },
+                        { title: '均日消耗', dataIndex: 'avg_daily_spend', width: 100, render: v => `₽${v}` },
+                        { title: '本月花费', dataIndex: 'month_spend', width: 100, render: v => `₽${v}` },
+                        {
+                          title: '剩余天数', dataIndex: 'days_remaining', width: 90,
+                          render: v => v != null ? (
+                            <Text style={{ color: v <= 3 ? '#ff4d4f' : v <= 7 ? '#faad14' : '#52c41a' }}>{v}天</Text>
+                          ) : '-',
+                        },
+                        {
+                          title: '状态', dataIndex: 'status', width: 80,
+                          render: s => <Badge color={AD_STATUS[s]?.color} text={AD_STATUS[s]?.label || s} />,
+                        },
+                      ]}
+                    />
+                  </Card>
+
+                  {/* 预算优化建议 */}
+                  <Card title="预算分配优化建议" size="small" loading={suggestionsLoading}>
+                    {suggestions.length > 0 ? (
+                      <Table size="small" dataSource={suggestions} rowKey="campaign_id" pagination={false}
+                        columns={[
+                          { title: '活动名称', dataIndex: 'name', ellipsis: true },
+                          { title: '平台', dataIndex: 'platform', width: 100, render: p => <Tag color={PLATFORMS[p]?.color}>{PLATFORMS[p]?.label}</Tag> },
+                          { title: '当前预算', dataIndex: 'current_daily_budget', width: 100, render: v => v ? `₽${v}` : '不限' },
+                          {
+                            title: '建议预算', dataIndex: 'suggested_budget', width: 100,
+                            render: (v, r) => (
+                              <Text style={{ color: r.action === 'increase' ? '#52c41a' : r.action === 'decrease' ? '#ff4d4f' : '#999' }}>
+                                ₽{v}
+                              </Text>
+                            ),
+                          },
+                          {
+                            title: '建议', dataIndex: 'action', width: 80,
+                            render: v => v === 'increase'
+                              ? <Tag color="green" icon={<ArrowUpOutlined />}>加预算</Tag>
+                              : v === 'decrease'
+                                ? <Tag color="red" icon={<ArrowDownOutlined />}>降预算</Tag>
+                                : <Tag icon={<MinusOutlined />}>维持</Tag>,
+                          },
+                          { title: '7日ROAS', dataIndex: 'roas_7d', width: 90, render: v => <Text style={{ color: v >= 1 ? '#52c41a' : '#ff4d4f' }}>{v}x</Text> },
+                          { title: '原因', dataIndex: 'reason', ellipsis: true },
+                        ]}
+                      />
+                    ) : <Empty description="暂无预算优化建议" />}
+                  </Card>
+                </>
+              ),
+            },
+          ]} />
         </>
       )}
 
@@ -987,7 +1506,6 @@ const Ads = () => {
                   </div>
                   <Table size="small" columns={groupColumns} dataSource={adGroups} rowKey="id" loading={groupsLoading} pagination={false} />
 
-                  {/* 关键词区域 */}
                   {selectedGroupId && (
                     <div style={{ marginTop: 24 }}>
                       <Divider />
@@ -1237,6 +1755,91 @@ const Ads = () => {
           </Form.Item>
           <Form.Item name="roas_critical_with_budget" label="预算超标时 ROAS 严重阈值">
             <InputNumber min={0} step={0.5} style={{ width: '100%' }} />
+          </Form.Item>
+        </Form>
+      </Modal>
+
+      {/* ==================== 自动化规则 表单弹窗 ==================== */}
+      <Modal
+        title={editingRule ? '编辑自动化规则' : '新建自动化规则'}
+        open={ruleFormVisible}
+        onOk={handleRuleSubmit}
+        onCancel={() => setRuleFormVisible(false)}
+        confirmLoading={ruleSubmitting}
+        destroyOnClose
+        width={600}
+      >
+        <Form form={ruleForm} layout="vertical" style={{ marginTop: 16 }}>
+          <Form.Item name="name" label="规则名称" rules={[{ required: true, message: '请输入规则名称' }]}>
+            <Input maxLength={200} placeholder="例如：低ROI自动暂停" />
+          </Form.Item>
+          <Form.Item name="rule_type" label="规则类型" rules={[{ required: true, message: '请选择规则类型' }]}>
+            <Select options={Object.entries(RULE_TYPES).map(([k, v]) => ({ value: k, label: v.label }))} />
+          </Form.Item>
+          <Row gutter={16}>
+            <Col span={12}>
+              <Form.Item name="platform" label="限定平台（可选）">
+                <Select allowClear placeholder="全部平台" options={[
+                  { value: 'wb', label: 'Wildberries' },
+                  { value: 'ozon', label: 'Ozon' },
+                  { value: 'yandex', label: 'Yandex' },
+                ]} />
+              </Form.Item>
+            </Col>
+            <Col span={12}>
+              <Form.Item name="enabled" label="启用" valuePropName="checked" initialValue={true}>
+                <Switch />
+              </Form.Item>
+            </Col>
+          </Row>
+
+          <Divider style={{ margin: '8px 0 16px' }}>规则条件</Divider>
+
+          <Form.Item noStyle shouldUpdate={(prev, cur) => prev.rule_type !== cur.rule_type}>
+            {({ getFieldValue }) => {
+              const rt = getFieldValue('rule_type')
+              if (rt === 'pause_low_roi') return (
+                <Row gutter={16}>
+                  <Col span={12}>
+                    <Form.Item name="min_roas" label="最低ROAS阈值" initialValue={1.0}>
+                      <InputNumber min={0} step={0.1} style={{ width: '100%' }} />
+                    </Form.Item>
+                  </Col>
+                  <Col span={12}>
+                    <Form.Item name="min_spend" label="最低花费(₽)才触发" initialValue={100}>
+                      <InputNumber min={0} step={50} style={{ width: '100%' }} />
+                    </Form.Item>
+                  </Col>
+                </Row>
+              )
+              if (rt === 'auto_bid') return (
+                <Row gutter={16}>
+                  <Col span={12}>
+                    <Form.Item name="target_roas" label="目标ROAS" initialValue={2.0}>
+                      <InputNumber min={0.1} step={0.1} style={{ width: '100%' }} />
+                    </Form.Item>
+                  </Col>
+                  <Col span={12}>
+                    <Form.Item name="max_change_pct" label="最大调整幅度(%)" initialValue={20}>
+                      <InputNumber min={1} max={50} style={{ width: '100%' }} />
+                    </Form.Item>
+                  </Col>
+                </Row>
+              )
+              if (rt === 'budget_cap') return (
+                <Form.Item name="max_daily_spend" label="日花费上限(₽)" initialValue={5000}>
+                  <InputNumber min={100} step={500} style={{ width: '100%' }} />
+                </Form.Item>
+              )
+              if (rt === 'schedule') return (
+                <Form.Item name="active_hours" label="投放时段（选择小时）">
+                  <Select mode="multiple" placeholder="选择活跃小时"
+                    options={Array.from({ length: 24 }, (_, i) => ({ value: i, label: `${i}:00` }))}
+                  />
+                </Form.Item>
+              )
+              return <Text type="secondary">请先选择规则类型</Text>
+            }}
           </Form.Item>
         </Form>
       </Modal>

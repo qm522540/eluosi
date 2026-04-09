@@ -2,11 +2,11 @@
 
 import csv
 import io
-from datetime import date
+from datetime import date, datetime, timedelta
 from sqlalchemy.orm import Session
-from sqlalchemy import func, case
+from sqlalchemy import func, case, desc
 
-from app.models.ad import AdCampaign, AdGroup, AdKeyword, AdStat
+from app.models.ad import AdCampaign, AdGroup, AdKeyword, AdStat, AdAutomationRule
 from app.models.notification import Notification
 from app.utils.errors import ErrorCode
 from app.utils.logger import logger
@@ -798,3 +798,648 @@ def update_alert_config(tenant_id: int, data: dict) -> dict:
     except Exception as e:
         logger.error(f"更新告警阈值配置失败: {e}")
         return {"code": ErrorCode.UNKNOWN_ERROR, "msg": "更新告警阈值配置失败"}
+
+
+# ==================== 数据分析增强 ====================
+
+def get_platform_comparison(db: Session, tenant_id: int, start_date: date,
+                            end_date: date, shop_id: int = None) -> dict:
+    """多平台对比分析"""
+    try:
+        query = db.query(
+            AdStat.platform,
+            func.sum(AdStat.impressions).label("impressions"),
+            func.sum(AdStat.clicks).label("clicks"),
+            func.sum(AdStat.spend).label("spend"),
+            func.sum(AdStat.orders).label("orders"),
+            func.sum(AdStat.revenue).label("revenue"),
+        ).filter(
+            AdStat.tenant_id == tenant_id,
+            AdStat.stat_date >= start_date,
+            AdStat.stat_date <= end_date,
+        )
+        if shop_id:
+            campaign_ids = db.query(AdCampaign.id).filter(
+                AdCampaign.shop_id == shop_id, AdCampaign.tenant_id == tenant_id
+            ).subquery()
+            query = query.filter(AdStat.campaign_id.in_(campaign_ids))
+
+        rows = query.group_by(AdStat.platform).all()
+
+        platforms = []
+        for row in rows:
+            imp = int(row.impressions or 0)
+            clk = int(row.clicks or 0)
+            spend = float(row.spend or 0)
+            orders = int(row.orders or 0)
+            revenue = float(row.revenue or 0)
+            platforms.append({
+                "platform": row.platform,
+                "impressions": imp,
+                "clicks": clk,
+                "spend": round(spend, 2),
+                "orders": orders,
+                "revenue": round(revenue, 2),
+                "ctr": round(clk / imp * 100, 2) if imp > 0 else 0,
+                "cpc": round(spend / clk, 2) if clk > 0 else 0,
+                "acos": round(spend / revenue * 100, 2) if revenue > 0 else 0,
+                "roas": round(revenue / spend, 2) if spend > 0 else 0,
+                "conversion_rate": round(orders / clk * 100, 2) if clk > 0 else 0,
+            })
+
+        return {"code": ErrorCode.SUCCESS, "data": platforms}
+    except Exception as e:
+        logger.error(f"平台对比分析失败: {e}")
+        return {"code": ErrorCode.UNKNOWN_ERROR, "msg": "平台对比分析失败"}
+
+
+def get_campaign_ranking(db: Session, tenant_id: int, start_date: date,
+                         end_date: date, sort_by: str = "spend",
+                         limit: int = 10, shop_id: int = None,
+                         platform: str = None) -> dict:
+    """广告活动TOP排名"""
+    try:
+        query = db.query(
+            AdStat.campaign_id,
+            AdCampaign.name,
+            AdCampaign.platform,
+            AdCampaign.status,
+            func.sum(AdStat.impressions).label("impressions"),
+            func.sum(AdStat.clicks).label("clicks"),
+            func.sum(AdStat.spend).label("spend"),
+            func.sum(AdStat.orders).label("orders"),
+            func.sum(AdStat.revenue).label("revenue"),
+        ).join(
+            AdCampaign, AdStat.campaign_id == AdCampaign.id
+        ).filter(
+            AdStat.tenant_id == tenant_id,
+            AdStat.stat_date >= start_date,
+            AdStat.stat_date <= end_date,
+        )
+        if shop_id:
+            query = query.filter(AdCampaign.shop_id == shop_id)
+        if platform:
+            query = query.filter(AdStat.platform == platform)
+
+        query = query.group_by(AdStat.campaign_id, AdCampaign.name,
+                               AdCampaign.platform, AdCampaign.status)
+
+        sort_col = {
+            "spend": func.sum(AdStat.spend),
+            "revenue": func.sum(AdStat.revenue),
+            "clicks": func.sum(AdStat.clicks),
+            "impressions": func.sum(AdStat.impressions),
+            "orders": func.sum(AdStat.orders),
+        }.get(sort_by, func.sum(AdStat.spend))
+
+        rows = query.order_by(desc(sort_col)).limit(limit).all()
+
+        items = []
+        for row in rows:
+            imp = int(row.impressions or 0)
+            clk = int(row.clicks or 0)
+            spend = float(row.spend or 0)
+            orders = int(row.orders or 0)
+            revenue = float(row.revenue or 0)
+            items.append({
+                "campaign_id": row.campaign_id,
+                "name": row.name,
+                "platform": row.platform,
+                "status": row.status,
+                "impressions": imp,
+                "clicks": clk,
+                "spend": round(spend, 2),
+                "orders": orders,
+                "revenue": round(revenue, 2),
+                "ctr": round(clk / imp * 100, 2) if imp > 0 else 0,
+                "acos": round(spend / revenue * 100, 2) if revenue > 0 else 0,
+                "roas": round(revenue / spend, 2) if spend > 0 else 0,
+            })
+
+        return {"code": ErrorCode.SUCCESS, "data": items}
+    except Exception as e:
+        logger.error(f"活动排名分析失败: {e}")
+        return {"code": ErrorCode.UNKNOWN_ERROR, "msg": "活动排名分析失败"}
+
+
+def get_product_roi(db: Session, tenant_id: int, start_date: date,
+                    end_date: date, shop_id: int = None,
+                    platform: str = None) -> dict:
+    """商品级ROI分析（通过广告组关联的listing_id）"""
+    try:
+        query = db.query(
+            AdGroup.listing_id,
+            AdGroup.name.label("group_name"),
+            AdCampaign.platform,
+            func.sum(AdStat.impressions).label("impressions"),
+            func.sum(AdStat.clicks).label("clicks"),
+            func.sum(AdStat.spend).label("spend"),
+            func.sum(AdStat.orders).label("orders"),
+            func.sum(AdStat.revenue).label("revenue"),
+        ).join(
+            AdCampaign, AdStat.campaign_id == AdCampaign.id
+        ).outerjoin(
+            AdGroup, (AdStat.ad_group_id == AdGroup.id)
+        ).filter(
+            AdStat.tenant_id == tenant_id,
+            AdStat.stat_date >= start_date,
+            AdStat.stat_date <= end_date,
+        )
+        if shop_id:
+            query = query.filter(AdCampaign.shop_id == shop_id)
+        if platform:
+            query = query.filter(AdStat.platform == platform)
+
+        rows = query.group_by(
+            AdGroup.listing_id, AdGroup.name, AdCampaign.platform
+        ).order_by(desc(func.sum(AdStat.spend))).limit(50).all()
+
+        items = []
+        for row in rows:
+            spend = float(row.spend or 0)
+            revenue = float(row.revenue or 0)
+            clk = int(row.clicks or 0)
+            orders = int(row.orders or 0)
+            items.append({
+                "listing_id": row.listing_id,
+                "group_name": row.group_name or f"商品-{row.listing_id}",
+                "platform": row.platform,
+                "impressions": int(row.impressions or 0),
+                "clicks": clk,
+                "spend": round(spend, 2),
+                "orders": orders,
+                "revenue": round(revenue, 2),
+                "roas": round(revenue / spend, 2) if spend > 0 else 0,
+                "acos": round(spend / revenue * 100, 2) if revenue > 0 else 0,
+                "cpa": round(spend / orders, 2) if orders > 0 else 0,
+            })
+
+        return {"code": ErrorCode.SUCCESS, "data": items}
+    except Exception as e:
+        logger.error(f"商品ROI分析失败: {e}")
+        return {"code": ErrorCode.UNKNOWN_ERROR, "msg": "商品ROI分析失败"}
+
+
+# ==================== 自动化规则引擎 ====================
+
+def list_automation_rules(db: Session, tenant_id: int, rule_type: str = None,
+                          enabled: int = None) -> dict:
+    """获取自动化规则列表"""
+    try:
+        query = db.query(AdAutomationRule).filter(
+            AdAutomationRule.tenant_id == tenant_id
+        )
+        if rule_type:
+            query = query.filter(AdAutomationRule.rule_type == rule_type)
+        if enabled is not None:
+            query = query.filter(AdAutomationRule.enabled == enabled)
+
+        rules = query.order_by(AdAutomationRule.created_at.desc()).all()
+        return {"code": ErrorCode.SUCCESS, "data": [_rule_to_dict(r) for r in rules]}
+    except Exception as e:
+        logger.error(f"获取自动化规则列表失败: {e}")
+        return {"code": ErrorCode.UNKNOWN_ERROR, "msg": "获取自动化规则列表失败"}
+
+
+def create_automation_rule(db: Session, tenant_id: int, data: dict) -> dict:
+    """创建自动化规则"""
+    try:
+        rule = AdAutomationRule(
+            tenant_id=tenant_id,
+            name=data["name"],
+            rule_type=data["rule_type"],
+            conditions=data.get("conditions"),
+            actions=data.get("actions"),
+            platform=data.get("platform"),
+            campaign_id=data.get("campaign_id"),
+            shop_id=data.get("shop_id"),
+            enabled=data.get("enabled", 1),
+        )
+        db.add(rule)
+        db.commit()
+        db.refresh(rule)
+        logger.info(f"自动化规则创建成功: id={rule.id}, name={rule.name}")
+        return {"code": ErrorCode.SUCCESS, "data": _rule_to_dict(rule)}
+    except Exception as e:
+        db.rollback()
+        logger.error(f"创建自动化规则失败: {e}")
+        return {"code": ErrorCode.UNKNOWN_ERROR, "msg": "创建自动化规则失败"}
+
+
+def update_automation_rule(db: Session, rule_id: int, tenant_id: int, data: dict) -> dict:
+    """更新自动化规则"""
+    try:
+        rule = db.query(AdAutomationRule).filter(
+            AdAutomationRule.id == rule_id, AdAutomationRule.tenant_id == tenant_id
+        ).first()
+        if not rule:
+            return {"code": ErrorCode.AD_RULE_NOT_FOUND, "msg": "自动化规则不存在"}
+
+        for key, value in data.items():
+            if value is not None:
+                setattr(rule, key, value)
+        db.commit()
+        db.refresh(rule)
+        return {"code": ErrorCode.SUCCESS, "data": _rule_to_dict(rule)}
+    except Exception as e:
+        db.rollback()
+        logger.error(f"更新自动化规则失败: {e}")
+        return {"code": ErrorCode.UNKNOWN_ERROR, "msg": "更新自动化规则失败"}
+
+
+def delete_automation_rule(db: Session, rule_id: int, tenant_id: int) -> dict:
+    """删除自动化规则"""
+    try:
+        rule = db.query(AdAutomationRule).filter(
+            AdAutomationRule.id == rule_id, AdAutomationRule.tenant_id == tenant_id
+        ).first()
+        if not rule:
+            return {"code": ErrorCode.AD_RULE_NOT_FOUND, "msg": "自动化规则不存在"}
+
+        db.delete(rule)
+        db.commit()
+        logger.info(f"自动化规则删除成功: rule_id={rule_id}")
+        return {"code": ErrorCode.SUCCESS, "data": None}
+    except Exception as e:
+        db.rollback()
+        logger.error(f"删除自动化规则失败: {e}")
+        return {"code": ErrorCode.UNKNOWN_ERROR, "msg": "删除自动化规则失败"}
+
+
+def execute_automation_rules(db: Session, tenant_id: int) -> dict:
+    """执行所有启用的自动化规则"""
+    try:
+        rules = db.query(AdAutomationRule).filter(
+            AdAutomationRule.tenant_id == tenant_id,
+            AdAutomationRule.enabled == 1,
+        ).all()
+
+        results = []
+        today = date.today()
+        week_ago = today - timedelta(days=7)
+
+        for rule in rules:
+            try:
+                triggered = _execute_single_rule(db, tenant_id, rule, week_ago, today)
+                results.append({
+                    "rule_id": rule.id,
+                    "name": rule.name,
+                    "triggered": triggered,
+                })
+            except Exception as e:
+                logger.warning(f"规则 {rule.id} 执行失败: {e}")
+                results.append({
+                    "rule_id": rule.id,
+                    "name": rule.name,
+                    "triggered": False,
+                    "error": str(e),
+                })
+
+        return {"code": ErrorCode.SUCCESS, "data": {
+            "rules_checked": len(rules),
+            "results": results,
+        }}
+    except Exception as e:
+        logger.error(f"执行自动化规则失败: {e}")
+        return {"code": ErrorCode.UNKNOWN_ERROR, "msg": "执行自动化规则失败"}
+
+
+def _execute_single_rule(db: Session, tenant_id: int, rule: AdAutomationRule,
+                         start_date: date, end_date: date) -> bool:
+    """执行单条规则，返回是否触发了动作"""
+    conditions = rule.conditions or {}
+    actions = rule.actions or {}
+
+    # 构建活动查询范围
+    query = db.query(AdCampaign).filter(
+        AdCampaign.tenant_id == tenant_id,
+        AdCampaign.status == "active",
+    )
+    if rule.platform:
+        query = query.filter(AdCampaign.platform == rule.platform)
+    if rule.campaign_id:
+        query = query.filter(AdCampaign.id == rule.campaign_id)
+    if rule.shop_id:
+        query = query.filter(AdCampaign.shop_id == rule.shop_id)
+
+    campaigns = query.all()
+    triggered = False
+
+    for campaign in campaigns:
+        # 获取近期统计
+        stats = db.query(
+            func.sum(AdStat.spend).label("spend"),
+            func.sum(AdStat.revenue).label("revenue"),
+            func.sum(AdStat.clicks).label("clicks"),
+            func.sum(AdStat.orders).label("orders"),
+        ).filter(
+            AdStat.campaign_id == campaign.id,
+            AdStat.stat_date >= start_date,
+            AdStat.stat_date <= end_date,
+        ).first()
+
+        spend = float(stats.spend or 0)
+        revenue = float(stats.revenue or 0)
+        roas = revenue / spend if spend > 0 else 0
+
+        if rule.rule_type == "pause_low_roi":
+            min_roas = conditions.get("min_roas", 1.0)
+            min_spend = conditions.get("min_spend", 100)
+            if spend >= min_spend and roas < min_roas:
+                campaign.status = "paused"
+                triggered = True
+                logger.info(f"规则[{rule.name}] 暂停活动 {campaign.id}，ROAS={roas:.2f}<{min_roas}")
+
+        elif rule.rule_type == "auto_bid":
+            target_roas = conditions.get("target_roas", 2.0)
+            max_change = conditions.get("max_change_pct", 20) / 100
+            groups = db.query(AdGroup).filter(
+                AdGroup.campaign_id == campaign.id,
+                AdGroup.tenant_id == tenant_id,
+                AdGroup.status == "active",
+            ).all()
+            for group in groups:
+                if not group.bid or float(group.bid) <= 0:
+                    continue
+                current_bid = float(group.bid)
+                ratio = roas / target_roas if target_roas > 0 else 1
+                if ratio > 1:
+                    adj = min((ratio - 1) * 0.3, max_change)
+                    group.bid = round(current_bid * (1 + adj), 2)
+                elif ratio < 1:
+                    adj = min((1 - ratio) * 0.3, max_change)
+                    group.bid = round(max(current_bid * (1 - adj), 0.01), 2)
+                triggered = True
+
+        elif rule.rule_type == "budget_cap":
+            daily_limit = conditions.get("max_daily_spend", 0)
+            # 检查今天的花费
+            today_spend_row = db.query(
+                func.sum(AdStat.spend).label("spend")
+            ).filter(
+                AdStat.campaign_id == campaign.id,
+                AdStat.stat_date == end_date,
+            ).first()
+            today_spend = float(today_spend_row.spend or 0) if today_spend_row else 0
+            if daily_limit > 0 and today_spend >= daily_limit:
+                campaign.status = "paused"
+                triggered = True
+                logger.info(f"规则[{rule.name}] 预算到达上限，暂停活动 {campaign.id}")
+
+        elif rule.rule_type == "schedule":
+            active_hours = conditions.get("active_hours", [])
+            current_hour = datetime.now().hour
+            should_be_active = current_hour in active_hours if active_hours else True
+            if should_be_active and campaign.status == "paused":
+                campaign.status = "active"
+                triggered = True
+            elif not should_be_active and campaign.status == "active":
+                campaign.status = "paused"
+                triggered = True
+
+    if triggered:
+        rule.last_triggered_at = datetime.utcnow()
+        rule.trigger_count += 1
+        db.commit()
+
+    return triggered
+
+
+def _rule_to_dict(r: AdAutomationRule) -> dict:
+    return {
+        "id": r.id,
+        "tenant_id": r.tenant_id,
+        "name": r.name,
+        "rule_type": r.rule_type,
+        "conditions": r.conditions,
+        "actions": r.actions,
+        "platform": r.platform,
+        "campaign_id": r.campaign_id,
+        "shop_id": r.shop_id,
+        "enabled": r.enabled,
+        "last_triggered_at": r.last_triggered_at.isoformat() if r.last_triggered_at else None,
+        "trigger_count": r.trigger_count,
+        "created_at": r.created_at.isoformat() if r.created_at else None,
+        "updated_at": r.updated_at.isoformat() if r.updated_at else None,
+    }
+
+
+# ==================== 预算管理 ====================
+
+def get_budget_overview(db: Session, tenant_id: int, shop_id: int = None,
+                        platform: str = None) -> dict:
+    """预算消耗概览"""
+    try:
+        today = date.today()
+        month_start = today.replace(day=1)
+
+        # 查询活跃活动
+        camp_query = db.query(AdCampaign).filter(
+            AdCampaign.tenant_id == tenant_id,
+            AdCampaign.status.in_(["active", "paused"]),
+        )
+        if shop_id:
+            camp_query = camp_query.filter(AdCampaign.shop_id == shop_id)
+        if platform:
+            camp_query = camp_query.filter(AdCampaign.platform == platform)
+        campaigns = camp_query.all()
+
+        if not campaigns:
+            return {"code": ErrorCode.SUCCESS, "data": {
+                "campaigns": [],
+                "summary": {"total_daily_budget": 0, "total_monthly_budget": 0,
+                             "today_spend": 0, "month_spend": 0, "budget_usage_pct": 0},
+            }}
+
+        campaign_ids = [c.id for c in campaigns]
+        campaign_map = {c.id: c for c in campaigns}
+
+        # 今日花费
+        today_stats = db.query(
+            AdStat.campaign_id,
+            func.sum(AdStat.spend).label("spend"),
+        ).filter(
+            AdStat.campaign_id.in_(campaign_ids),
+            AdStat.stat_date == today,
+        ).group_by(AdStat.campaign_id).all()
+        today_spend_map = {row.campaign_id: float(row.spend or 0) for row in today_stats}
+
+        # 本月花费
+        month_stats = db.query(
+            AdStat.campaign_id,
+            func.sum(AdStat.spend).label("spend"),
+        ).filter(
+            AdStat.campaign_id.in_(campaign_ids),
+            AdStat.stat_date >= month_start,
+            AdStat.stat_date <= today,
+        ).group_by(AdStat.campaign_id).all()
+        month_spend_map = {row.campaign_id: float(row.spend or 0) for row in month_stats}
+
+        # 近7天平均日消耗
+        week_ago = today - timedelta(days=7)
+        week_stats = db.query(
+            AdStat.campaign_id,
+            func.sum(AdStat.spend).label("spend"),
+        ).filter(
+            AdStat.campaign_id.in_(campaign_ids),
+            AdStat.stat_date >= week_ago,
+            AdStat.stat_date <= today,
+        ).group_by(AdStat.campaign_id).all()
+        week_spend_map = {row.campaign_id: float(row.spend or 0) for row in week_stats}
+
+        items = []
+        total_daily_budget = 0
+        total_today_spend = 0
+        total_month_spend = 0
+
+        for c in campaigns:
+            daily_budget = float(c.daily_budget) if c.daily_budget else 0
+            total_budget = float(c.total_budget) if c.total_budget else 0
+            today_sp = today_spend_map.get(c.id, 0)
+            month_sp = month_spend_map.get(c.id, 0)
+            week_sp = week_spend_map.get(c.id, 0)
+            avg_daily = round(week_sp / 7, 2) if week_sp > 0 else 0
+
+            budget_usage_pct = round(today_sp / daily_budget * 100, 1) if daily_budget > 0 else 0
+            days_remaining = None
+            if avg_daily > 0 and total_budget > 0:
+                remaining = total_budget - month_sp
+                days_remaining = max(0, int(remaining / avg_daily))
+
+            items.append({
+                "campaign_id": c.id,
+                "name": c.name,
+                "platform": c.platform,
+                "status": c.status,
+                "daily_budget": daily_budget,
+                "total_budget": total_budget,
+                "today_spend": round(today_sp, 2),
+                "month_spend": round(month_sp, 2),
+                "avg_daily_spend": avg_daily,
+                "budget_usage_pct": budget_usage_pct,
+                "days_remaining": days_remaining,
+            })
+
+            total_daily_budget += daily_budget
+            total_today_spend += today_sp
+            total_month_spend += month_sp
+
+        # 预警：超过80%日预算的活动
+        alerts = []
+        for item in items:
+            if item["daily_budget"] > 0 and item["budget_usage_pct"] >= 80:
+                level = "critical" if item["budget_usage_pct"] >= 100 else "warning"
+                alerts.append({
+                    "campaign_id": item["campaign_id"],
+                    "name": item["name"],
+                    "level": level,
+                    "message": f"日预算已使用{item['budget_usage_pct']}%",
+                    "today_spend": item["today_spend"],
+                    "daily_budget": item["daily_budget"],
+                })
+
+        total_budget_usage = round(total_today_spend / total_daily_budget * 100, 1) if total_daily_budget > 0 else 0
+
+        return {"code": ErrorCode.SUCCESS, "data": {
+            "campaigns": sorted(items, key=lambda x: x["today_spend"], reverse=True),
+            "alerts": alerts,
+            "summary": {
+                "total_daily_budget": round(total_daily_budget, 2),
+                "total_today_spend": round(total_today_spend, 2),
+                "total_month_spend": round(total_month_spend, 2),
+                "budget_usage_pct": total_budget_usage,
+                "active_campaigns": len([c for c in campaigns if c.status == "active"]),
+                "total_campaigns": len(campaigns),
+            },
+        }}
+    except Exception as e:
+        logger.error(f"获取预算概览失败: {e}")
+        return {"code": ErrorCode.UNKNOWN_ERROR, "msg": "获取预算概览失败"}
+
+
+def get_budget_suggestions(db: Session, tenant_id: int, shop_id: int = None,
+                           platform: str = None) -> dict:
+    """预算分配优化建议"""
+    try:
+        today = date.today()
+        week_ago = today - timedelta(days=7)
+
+        camp_query = db.query(AdCampaign).filter(
+            AdCampaign.tenant_id == tenant_id,
+            AdCampaign.status == "active",
+        )
+        if shop_id:
+            camp_query = camp_query.filter(AdCampaign.shop_id == shop_id)
+        if platform:
+            camp_query = camp_query.filter(AdCampaign.platform == platform)
+        campaigns = camp_query.all()
+
+        if not campaigns:
+            return {"code": ErrorCode.SUCCESS, "data": []}
+
+        campaign_ids = [c.id for c in campaigns]
+        campaign_map = {c.id: c for c in campaigns}
+
+        # 近7天统计
+        stats = db.query(
+            AdStat.campaign_id,
+            func.sum(AdStat.spend).label("spend"),
+            func.sum(AdStat.revenue).label("revenue"),
+            func.sum(AdStat.orders).label("orders"),
+        ).filter(
+            AdStat.campaign_id.in_(campaign_ids),
+            AdStat.stat_date >= week_ago,
+            AdStat.stat_date <= today,
+        ).group_by(AdStat.campaign_id).all()
+
+        suggestions = []
+        for row in stats:
+            c = campaign_map.get(row.campaign_id)
+            if not c:
+                continue
+            spend = float(row.spend or 0)
+            revenue = float(row.revenue or 0)
+            roas = revenue / spend if spend > 0 else 0
+            daily_budget = float(c.daily_budget) if c.daily_budget else 0
+            avg_daily = round(spend / 7, 2)
+
+            suggestion = {
+                "campaign_id": c.id,
+                "name": c.name,
+                "platform": c.platform,
+                "current_daily_budget": daily_budget,
+                "avg_daily_spend": avg_daily,
+                "roas_7d": round(roas, 2),
+                "revenue_7d": round(revenue, 2),
+                "spend_7d": round(spend, 2),
+            }
+
+            # 高ROAS活动建议加预算
+            if roas >= 3.0 and daily_budget > 0:
+                suggested = round(daily_budget * 1.3, 2)
+                suggestion["action"] = "increase"
+                suggestion["suggested_budget"] = suggested
+                suggestion["reason"] = f"ROAS {roas:.1f}x 表现优秀，建议增加30%预算获取更多流量"
+            # 低ROAS活动建议降预算
+            elif roas < 1.0 and spend > 200:
+                suggested = round(max(daily_budget * 0.5, 100), 2)
+                suggestion["action"] = "decrease"
+                suggestion["suggested_budget"] = suggested
+                suggestion["reason"] = f"ROAS {roas:.1f}x 亏损，建议降低预算或优化后再投"
+            # 预算使用率很低
+            elif daily_budget > 0 and avg_daily < daily_budget * 0.3:
+                suggestion["action"] = "decrease"
+                suggestion["suggested_budget"] = round(max(avg_daily * 1.5, 100), 2)
+                suggestion["reason"] = f"实际消耗仅为预算的{avg_daily/daily_budget*100:.0f}%，建议降低预算"
+            else:
+                suggestion["action"] = "keep"
+                suggestion["suggested_budget"] = daily_budget
+                suggestion["reason"] = "当前预算分配合理"
+
+            suggestions.append(suggestion)
+
+        suggestions.sort(key=lambda x: x["roas_7d"], reverse=True)
+        return {"code": ErrorCode.SUCCESS, "data": suggestions}
+    except Exception as e:
+        logger.error(f"获取预算建议失败: {e}")
+        return {"code": ErrorCode.UNKNOWN_ERROR, "msg": "获取预算建议失败"}

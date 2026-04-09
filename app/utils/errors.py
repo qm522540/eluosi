@@ -32,6 +32,8 @@ class ErrorCode:
     AD_OPTIMIZE_FAILED = 50003
     AD_GROUP_NOT_FOUND = 50004
     AD_KEYWORD_NOT_FOUND = 50005
+    AD_RULE_NOT_FOUND = 50006
+    AD_BUDGET_ERROR = 50007
 
     # SEO 6xxxx
     SEO_GENERATE_FAILED = 60001
@@ -65,6 +67,8 @@ ERROR_MESSAGES = {
     ErrorCode.AD_GROUP_NOT_FOUND: "广告组不存在",
     ErrorCode.AD_KEYWORD_NOT_FOUND: "关键词不存在",
     ErrorCode.AD_OPTIMIZE_FAILED: "出价优化失败",
+    ErrorCode.AD_RULE_NOT_FOUND: "自动化规则不存在",
+    ErrorCode.AD_BUDGET_ERROR: "预算操作失败",
     ErrorCode.AI_MODEL_ERROR: "AI模型调用失败",
     ErrorCode.AI_TIMEOUT: "AI模型响应超时",
 }
