@@ -1308,16 +1308,6 @@ const Ads = () => {
                         render: v => <Tag color={RULE_TYPES[v]?.color}>{RULE_TYPES[v]?.label || v}</Tag>,
                       },
                       {
-                        title: '作用范围', key: 'scope', width: 160,
-                        render: (_, r) => {
-                          const parts = []
-                          if (r.platform) parts.push(PLATFORMS[r.platform]?.label || r.platform)
-                          if (r.campaign_id) parts.push(`活动#${r.campaign_id}`)
-                          if (r.shop_id) parts.push(`店铺#${r.shop_id}`)
-                          return parts.length ? parts.join(' / ') : '全部'
-                        },
-                      },
-                      {
                         title: '条件', key: 'conditions', ellipsis: true,
                         render: (_, r) => {
                           const c = r.conditions || {}
@@ -1994,22 +1984,9 @@ const Ads = () => {
           <Form.Item name="rule_type" label="规则类型" rules={[{ required: true, message: '请选择规则类型' }]}>
             <Select options={Object.entries(RULE_TYPES).map(([k, v]) => ({ value: k, label: v.label }))} />
           </Form.Item>
-          <Row gutter={16}>
-            <Col span={12}>
-              <Form.Item name="platform" label="限定平台（可选）">
-                <Select allowClear placeholder="全部平台" options={[
-                  { value: 'wb', label: 'Wildberries' },
-                  { value: 'ozon', label: 'Ozon' },
-                  { value: 'yandex', label: 'Yandex' },
-                ]} />
-              </Form.Item>
-            </Col>
-            <Col span={12}>
-              <Form.Item name="enabled" label="启用" valuePropName="checked" initialValue={true}>
-                <Switch />
-              </Form.Item>
-            </Col>
-          </Row>
+          <Form.Item name="enabled" label="启用" valuePropName="checked" initialValue={true}>
+            <Switch />
+          </Form.Item>
 
           <Divider style={{ margin: '8px 0 16px' }}>规则条件</Divider>
 

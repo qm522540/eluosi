@@ -1051,8 +1051,20 @@ def list_automation_rules(db: Session, tenant_id: int, rule_type: str = None,
 
 
 def create_automation_rule(db: Session, tenant_id: int, data: dict) -> dict:
-    """创建自动化规则"""
+    """创建自动化规则（同一店铺同一规则类型只能一条）"""
     try:
+        # 检查是否已存在同类型规则
+        shop_id = data.get("shop_id")
+        rule_type = data.get("rule_type")
+        if shop_id and rule_type:
+            existing = db.query(AdAutomationRule).filter(
+                AdAutomationRule.tenant_id == tenant_id,
+                AdAutomationRule.shop_id == shop_id,
+                AdAutomationRule.rule_type == rule_type,
+            ).first()
+            if existing:
+                return {"code": ErrorCode.AD_RULE_NOT_FOUND, "msg": f"该店铺已存在此类型的规则，请直接编辑现有规则"}
+
         rule = AdAutomationRule(
             tenant_id=tenant_id,
             name=data["name"],
