@@ -371,9 +371,9 @@ const Ads = () => {
         rule_type: values.rule_type,
         conditions,
         actions,
-        platform: values.platform || null,
+        platform: values.platform || filterPlatform || null,
         campaign_id: values.campaign_id || null,
-        shop_id: values.shop_id || null,
+        shop_id: filterShopId || null,
         enabled: values.enabled ? 1 : 0,
       }
       if (editingRule) {
