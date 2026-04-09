@@ -60,9 +60,9 @@ class OzonClient(BasePlatformClient):
         }
 
     def _get_perf_headers(self) -> dict:
-        """广告API请求头（Performance API可能需要完整client_id）"""
+        """广告API请求头（Performance API也用纯数字Client-Id）"""
         return {
-            "Client-Id": self.client_id_full,
+            "Client-Id": self.client_id,
             "Api-Key": self.api_key,
             "Content-Type": "application/json",
         }
@@ -141,15 +141,21 @@ class OzonClient(BasePlatformClient):
     # ==================== 连接测试 ====================
 
     async def test_connection(self) -> bool:
-        """测试API连接 — 通过获取卖家信息验证"""
-        try:
-            url = f"{OZON_SELLER_API}/v1/seller/info"
-            await self._request("POST", url, json={})
-            logger.info(f"Ozon 连接测试成功，shop_id={self.shop_id}")
-            return True
-        except Exception as e:
-            logger.error(f"Ozon 连接测试失败，shop_id={self.shop_id}: {e}")
-            return False
+        """测试API连接 — 依次尝试多个端点验证"""
+        test_urls = [
+            ("POST", f"{OZON_SELLER_API}/v3/product/info/stocks", {"filter": {"visibility": "ALL"}, "limit": 1}),
+            ("POST", f"{OZON_SELLER_API}/v2/product/list", {"filter": {"visibility": "ALL"}, "limit": 1}),
+            ("POST", f"{OZON_SELLER_API}/v1/seller/info", {}),
+        ]
+        for method, url, payload in test_urls:
+            try:
+                await self._request(method, url, json=payload)
+                logger.info(f"Ozon 连接测试成功，shop_id={self.shop_id}，url={url}")
+                return True
+            except Exception:
+                continue
+        logger.error(f"Ozon 连接测试失败，shop_id={self.shop_id}")
+        return False
 
     # ==================== 广告活动 ====================
 
