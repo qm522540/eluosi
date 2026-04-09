@@ -1978,14 +1978,20 @@ const Ads = () => {
         width={600}
       >
         <Form form={ruleForm} layout="vertical" style={{ marginTop: 16 }}>
-          {!editingRule && (
-            <Form.Item name="rule_type" label="规则类型" rules={[{ required: true, message: '请选择规则类型' }]}>
-              <Select options={Object.entries(RULE_TYPES).map(([k, v]) => ({ value: k, label: v.label }))} />
-            </Form.Item>
-          )}
-          <Form.Item name="enabled" label="启用" valuePropName="checked" initialValue={true}>
-            <Switch />
-          </Form.Item>
+          <Row gutter={16}>
+            {!editingRule && (
+              <Col span={16}>
+                <Form.Item name="rule_type" label="规则类型" rules={[{ required: true, message: '请选择规则类型' }]}>
+                  <Select options={Object.entries(RULE_TYPES).map(([k, v]) => ({ value: k, label: v.label }))} />
+                </Form.Item>
+              </Col>
+            )}
+            <Col span={editingRule ? 24 : 8}>
+              <Form.Item name="enabled" label="启用" valuePropName="checked" initialValue={true}>
+                <Switch />
+              </Form.Item>
+            </Col>
+          </Row>
 
           <Divider style={{ margin: '8px 0 16px' }}>规则条件</Divider>
 
