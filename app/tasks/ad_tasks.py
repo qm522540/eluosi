@@ -385,7 +385,9 @@ def fetch_ozon_ad_stats(self):
 async def _fetch_single_ozon_shop(db, shop: Shop) -> tuple:
     """采集单个Ozon店铺的广告数据"""
     client = OzonClient(
-        shop_id=shop.id, api_key=shop.api_key, client_id=shop.client_id
+        shop_id=shop.id, api_key=shop.api_key, client_id=shop.client_id,
+        perf_client_id=getattr(shop, 'perf_client_id', None) or '',
+        perf_client_secret=getattr(shop, 'perf_client_secret', None) or '',
     )
 
     try:

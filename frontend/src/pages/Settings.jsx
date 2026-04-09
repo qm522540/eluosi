@@ -215,48 +215,93 @@ const Settings = () => {
 
     return (
       <>
-        {(platform === 'wb' || platform === 'ozon') && (
-          <Form.Item
-            name="api_key"
-            label="API Key"
-            rules={editingShop ? [] : [{ required: true, message: '请输入API Key' }]}
-          >
-            <Input.Password
-              placeholder={editingShop ? '不修改请留空' : '请输入API Key'}
-              iconRender={() => <EyeInvisibleOutlined />}
-            />
-          </Form.Item>
+        {/* ===== Wildberries ===== */}
+        {platform === 'wb' && (
+          <>
+            <Form.Item
+              name="api_key"
+              label="API Key"
+              rules={editingShop ? [] : [{ required: true, message: '请输入API Key' }]}
+              extra="获取路径：WB卖家后台 → 设置 → API密钥 → 生成新密钥"
+            >
+              <Input.Password
+                placeholder={editingShop ? '不修改请留空' : '请输入WB API Key'}
+                iconRender={() => <EyeInvisibleOutlined />}
+              />
+            </Form.Item>
+          </>
         )}
+
+        {/* ===== Ozon ===== */}
         {platform === 'ozon' && (
-          <Form.Item
-            name="client_id"
-            label="Client ID"
-            rules={editingShop ? [] : [{ required: true, message: '请输入Client ID' }]}
-          >
-            <Input placeholder={editingShop ? '不修改请留空' : '请输入Ozon Client ID'} />
-          </Form.Item>
+          <>
+            <div style={{ background: '#f6f8fa', padding: '12px 16px', borderRadius: 6, marginBottom: 16, fontSize: 13, color: '#555' }}>
+              Ozon 需要两套 API 凭证：<br/>
+              1. <b>卖家 API</b> — 用于商品、订单、库存数据<br/>
+              2. <b>广告 API (Performance)</b> — 用于广告活动、投放数据
+            </div>
+            <div style={{ borderLeft: '3px solid #005BFF', paddingLeft: 12, marginBottom: 16 }}>
+              <div style={{ fontWeight: 600, marginBottom: 8 }}>卖家 API 凭证</div>
+              <Form.Item
+                name="client_id"
+                label="Client ID"
+                rules={editingShop ? [] : [{ required: true, message: '请输入Client ID' }]}
+                extra="获取路径：seller.ozon.ru → 设置 → API密钥 → Client ID（纯数字）"
+              >
+                <Input placeholder={editingShop ? '不修改请留空' : '例如：2727539'} />
+              </Form.Item>
+              <Form.Item
+                name="api_key"
+                label="API Key"
+                rules={editingShop ? [] : [{ required: true, message: '请输入API Key' }]}
+                extra="获取路径：seller.ozon.ru → 设置 → API密钥 → 生成密钥"
+              >
+                <Input.Password
+                  placeholder={editingShop ? '不修改请留空' : '请输入Ozon卖家API Key'}
+                  iconRender={() => <EyeInvisibleOutlined />}
+                />
+              </Form.Item>
+            </div>
+            <div style={{ borderLeft: '3px solid #faad14', paddingLeft: 12, marginBottom: 8 }}>
+              <div style={{ fontWeight: 600, marginBottom: 8 }}>广告 API 凭证 (Performance)</div>
+              <Form.Item
+                name="perf_client_id"
+                label="广告 Client ID"
+                extra="获取路径：performance.ozon.ru → 设置 → API接入 → 创建应用 → Client ID"
+              >
+                <Input placeholder="例如：xxxxx@advertising.performance.ozon.ru" />
+              </Form.Item>
+              <Form.Item
+                name="perf_client_secret"
+                label="广告 Client Secret"
+                extra="获取路径：performance.ozon.ru → 设置 → API接入 → 创建应用 → Client Secret"
+              >
+                <Input.Password
+                  placeholder="选填，配置后才能同步广告数据"
+                  iconRender={() => <EyeInvisibleOutlined />}
+                />
+              </Form.Item>
+            </div>
+          </>
         )}
-        {(platform === 'wb' || platform === 'ozon') && (
-          <Form.Item name="api_secret" label="API Secret">
-            <Input.Password
-              placeholder="选填"
-              iconRender={() => <EyeInvisibleOutlined />}
-            />
-          </Form.Item>
-        )}
+
+        {/* ===== Yandex ===== */}
         {platform === 'yandex' && (
           <>
             <Form.Item
               name="oauth_token"
               label="OAuth Token"
               rules={editingShop ? [] : [{ required: true, message: '请输入OAuth Token' }]}
+              extra="获取路径：Yandex Market 合作伙伴后台 → 设置 → API → OAuth Token"
             >
               <Input.Password
                 placeholder={editingShop ? '不修改请留空' : '请输入Yandex OAuth Token'}
                 iconRender={() => <EyeInvisibleOutlined />}
               />
             </Form.Item>
-            <Form.Item name="oauth_refresh_token" label="Refresh Token">
+            <Form.Item name="oauth_refresh_token" label="Refresh Token"
+              extra="选填，用于自动刷新过期的Token"
+            >
               <Input.Password
                 placeholder="选填"
                 iconRender={() => <EyeInvisibleOutlined />}

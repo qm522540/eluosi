@@ -41,15 +41,16 @@ class OzonClient(BasePlatformClient):
     def __init__(self, shop_id: int, api_key: str, **kwargs):
         super().__init__(shop_id=shop_id, api_key=api_key, **kwargs)
         raw_client_id = kwargs.get("client_id", "")
-        # Ozon Seller API 需要纯数字 Client-Id
-        # Performance API 可能需要完整的 client_id（含@advertising...后缀）
-        self.client_id_full = raw_client_id
-        # 提取纯数字部分作为 Seller API 的 Client-Id
+        # Seller API 用纯数字 Client-Id
         self.client_id = raw_client_id.split("-")[0] if "-" in raw_client_id and "@" in raw_client_id else raw_client_id
+        # Performance API OAuth 凭证（独立于 Seller API）
+        self.perf_client_id = kwargs.get("perf_client_id", "")
+        self.perf_client_secret = kwargs.get("perf_client_secret", "")
+        self._perf_token: Optional[str] = None
         self._last_request_time = 0.0
         self._http_client: Optional[httpx.AsyncClient] = None
         self._perf_client: Optional[httpx.AsyncClient] = None
-        logger.info(f"Ozon client init: seller_client_id={self.client_id}, perf_client_id={self.client_id_full}")
+        logger.info(f"Ozon client init: seller_cid={self.client_id}, perf_cid={self.perf_client_id or 'N/A'}")
 
     def _get_seller_headers(self) -> dict:
         """卖家API请求头（纯数字Client-Id）"""
@@ -60,12 +61,37 @@ class OzonClient(BasePlatformClient):
         }
 
     def _get_perf_headers(self) -> dict:
-        """广告API请求头（Performance API也用纯数字Client-Id）"""
-        return {
-            "Client-Id": self.client_id,
-            "Api-Key": self.api_key,
-            "Content-Type": "application/json",
-        }
+        """广告API请求头（Performance API用OAuth Bearer Token）"""
+        headers = {"Content-Type": "application/json"}
+        if self._perf_token:
+            headers["Authorization"] = f"Bearer {self._perf_token}"
+        else:
+            # 降级：用 Seller API 凭证尝试
+            headers["Client-Id"] = self.client_id
+            headers["Api-Key"] = self.api_key
+        return headers
+
+    async def _ensure_perf_token(self):
+        """获取 Performance API OAuth token"""
+        if self._perf_token or not self.perf_client_id or not self.perf_client_secret:
+            return
+        try:
+            async with httpx.AsyncClient(timeout=15) as c:
+                r = await c.post(
+                    f"{OZON_PERFORMANCE_API}/api/client/token",
+                    json={
+                        "client_id": self.perf_client_id,
+                        "client_secret": self.perf_client_secret,
+                        "grant_type": "client_credentials",
+                    },
+                )
+                if r.status_code == 200:
+                    self._perf_token = r.json().get("access_token", "")
+                    logger.info(f"Ozon Performance API token获取成功，shop_id={self.shop_id}")
+                else:
+                    logger.warning(f"Ozon Performance API token获取失败: {r.status_code} {r.text[:200]}")
+        except Exception as e:
+            logger.warning(f"Ozon Performance API token获取异常: {e}")
 
     async def _get_seller_client(self) -> httpx.AsyncClient:
         if self._http_client is None or self._http_client.is_closed:
@@ -163,10 +189,13 @@ class OzonClient(BasePlatformClient):
         """拉取广告活动列表
 
         依次尝试多个Ozon广告API端点（新旧版本兼容）：
-        1. Seller API: POST /api/client/campaign/list (新版，推荐)
-        2. Seller API: GET /api/client/campaign (旧版Performance API格式)
-        3. Performance API: GET /api/client/campaign (独立域名)
+        1. Performance API (OAuth): GET /api/client/campaign (推荐)
+        2. Seller API: POST /api/client/campaign/list
+        3. Seller API: GET /api/client/campaign
         """
+        # 先获取 Performance API token
+        await self._ensure_perf_token()
+
         campaigns = []
 
         try:

@@ -11,9 +11,11 @@ class ShopCreate(BaseModel):
     platform_seller_id: Optional[str] = Field(None, description="平台卖家ID")
     api_key: Optional[str] = Field(None, description="API Key")
     api_secret: Optional[str] = Field(None, description="API Secret")
-    client_id: Optional[str] = Field(None, description="Client ID (Ozon)")
+    client_id: Optional[str] = Field(None, description="Client ID (Ozon卖家API)")
     oauth_token: Optional[str] = Field(None, description="OAuth Token (Yandex)")
     oauth_refresh_token: Optional[str] = Field(None, description="OAuth Refresh Token (Yandex)")
+    perf_client_id: Optional[str] = Field(None, description="Ozon广告API Client ID")
+    perf_client_secret: Optional[str] = Field(None, description="Ozon广告API Client Secret")
     currency: str = Field("RUB", description="货币")
     timezone: str = Field("Europe/Moscow", description="时区")
 
@@ -26,6 +28,8 @@ class ShopUpdate(BaseModel):
     client_id: Optional[str] = None
     oauth_token: Optional[str] = None
     oauth_refresh_token: Optional[str] = None
+    perf_client_id: Optional[str] = None
+    perf_client_secret: Optional[str] = None
     currency: Optional[str] = None
     timezone: Optional[str] = None
     status: Optional[str] = Field(None, pattern="^(active|inactive)$")
@@ -53,3 +57,5 @@ class ShopDetail(ShopInfo):
     has_api_secret: bool = False
     has_client_id: bool = False
     has_oauth_token: bool = False
+    has_perf_client_id: bool = False
+    has_perf_client_secret: bool = False

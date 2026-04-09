@@ -22,6 +22,9 @@ class Shop(BaseMixin, Base):
     oauth_token: Mapped[Optional[str]] = mapped_column(String(2000), nullable=True)
     oauth_refresh_token: Mapped[Optional[str]] = mapped_column(String(2000), nullable=True)
     oauth_expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    # Ozon Performance API（广告）独立凭证
+    perf_client_id: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    perf_client_secret: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
     currency: Mapped[str] = mapped_column(String(3), nullable=False, default="RUB")
     timezone: Mapped[str] = mapped_column(String(50), nullable=False, default="Europe/Moscow")
     status: Mapped[str] = mapped_column(
