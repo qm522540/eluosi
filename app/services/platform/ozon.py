@@ -40,13 +40,19 @@ class OzonClient(BasePlatformClient):
 
     def __init__(self, shop_id: int, api_key: str, **kwargs):
         super().__init__(shop_id=shop_id, api_key=api_key, **kwargs)
-        self.client_id = kwargs.get("client_id", "")
+        raw_client_id = kwargs.get("client_id", "")
+        # Ozon Seller API 需要纯数字 Client-Id
+        # Performance API 可能需要完整的 client_id（含@advertising...后缀）
+        self.client_id_full = raw_client_id
+        # 提取纯数字部分作为 Seller API 的 Client-Id
+        self.client_id = raw_client_id.split("-")[0] if "-" in raw_client_id and "@" in raw_client_id else raw_client_id
         self._last_request_time = 0.0
         self._http_client: Optional[httpx.AsyncClient] = None
         self._perf_client: Optional[httpx.AsyncClient] = None
+        logger.info(f"Ozon client init: seller_client_id={self.client_id}, perf_client_id={self.client_id_full}")
 
     def _get_seller_headers(self) -> dict:
-        """卖家API请求头"""
+        """卖家API请求头（纯数字Client-Id）"""
         return {
             "Client-Id": self.client_id,
             "Api-Key": self.api_key,
@@ -54,9 +60,9 @@ class OzonClient(BasePlatformClient):
         }
 
     def _get_perf_headers(self) -> dict:
-        """广告API请求头（Performance API使用同样的认证）"""
+        """广告API请求头（Performance API可能需要完整client_id）"""
         return {
-            "Client-Id": self.client_id,
+            "Client-Id": self.client_id_full,
             "Api-Key": self.api_key,
             "Content-Type": "application/json",
         }
