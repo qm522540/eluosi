@@ -153,10 +153,26 @@ async def _fetch_single_wb_shop(db, shop: Shop) -> tuple:
         campaigns_data = await client.fetch_ad_campaigns()
         campaigns_synced = 0
 
+        # 收集API返回的所有活动ID
+        api_campaign_ids = set()
         for camp_data in campaigns_data:
             campaigns_synced += _upsert_campaign(
                 db, shop.tenant_id, shop.id, "wb", camp_data
             )
+            api_campaign_ids.add(camp_data.get("platform_campaign_id", ""))
+
+        # 将不在API列表中的活动标记为archived（已被WB删除）
+        if api_campaign_ids:
+            stale = db.query(AdCampaign).filter(
+                AdCampaign.shop_id == shop.id,
+                AdCampaign.tenant_id == shop.tenant_id,
+                AdCampaign.platform == "wb",
+                AdCampaign.status.in_(["active", "paused", "draft"]),
+                ~AdCampaign.platform_campaign_id.in_(api_campaign_ids),
+            ).all()
+            for c in stale:
+                c.status = "archived"
+                logger.info(f"WB活动 {c.platform_campaign_id} 已不在API中，标记为archived")
 
         db.commit()
 
@@ -374,10 +390,21 @@ async def _fetch_single_ozon_shop(db, shop: Shop) -> tuple:
         # 1. 同步广告活动
         campaigns_data = await client.fetch_ad_campaigns()
         campaigns_synced = 0
+        api_ids = set()
         for camp_data in campaigns_data:
             campaigns_synced += _upsert_campaign(
                 db, shop.tenant_id, shop.id, "ozon", camp_data
             )
+            api_ids.add(camp_data.get("platform_campaign_id", ""))
+
+        # 清理已删除的活动
+        if api_ids:
+            for c in db.query(AdCampaign).filter(
+                AdCampaign.shop_id == shop.id, AdCampaign.tenant_id == shop.tenant_id,
+                AdCampaign.platform == "ozon", AdCampaign.status.in_(["active", "paused", "draft"]),
+                ~AdCampaign.platform_campaign_id.in_(api_ids),
+            ).all():
+                c.status = "archived"
         db.commit()
 
         # 2. 拉取统计
@@ -533,10 +560,21 @@ async def _fetch_single_yandex_shop(db, shop: Shop) -> tuple:
         # 1. 同步广告活动
         campaigns_data = await client.fetch_ad_campaigns()
         campaigns_synced = 0
+        api_ids = set()
         for camp_data in campaigns_data:
             campaigns_synced += _upsert_campaign(
                 db, shop.tenant_id, shop.id, "yandex", camp_data
             )
+            api_ids.add(camp_data.get("platform_campaign_id", ""))
+
+        # 清理已删除的活动
+        if api_ids:
+            for c in db.query(AdCampaign).filter(
+                AdCampaign.shop_id == shop.id, AdCampaign.tenant_id == shop.tenant_id,
+                AdCampaign.platform == "yandex", AdCampaign.status.in_(["active", "paused", "draft"]),
+                ~AdCampaign.platform_campaign_id.in_(api_ids),
+            ).all():
+                c.status = "archived"
         db.commit()
 
         # 2. 拉取统计
