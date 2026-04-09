@@ -50,7 +50,7 @@ class OzonClient(BasePlatformClient):
         self._last_request_time = 0.0
         self._http_client: Optional[httpx.AsyncClient] = None
         self._perf_client: Optional[httpx.AsyncClient] = None
-        logger.info(f"Ozon client init: seller_cid={self.client_id}, perf_cid={self.perf_client_id or 'N/A'}")
+        logger.info(f"Ozon client init: shop_id={self.shop_id}, has_perf={'yes' if self.perf_client_id else 'no'}")
 
     def _get_seller_headers(self) -> dict:
         """卖家API请求头（纯数字Client-Id）"""
@@ -65,10 +65,6 @@ class OzonClient(BasePlatformClient):
         headers = {"Content-Type": "application/json"}
         if self._perf_token:
             headers["Authorization"] = f"Bearer {self._perf_token}"
-        else:
-            # 降级：用 Seller API 凭证尝试
-            headers["Client-Id"] = self.client_id
-            headers["Api-Key"] = self.api_key
         return headers
 
     async def _ensure_perf_token(self):

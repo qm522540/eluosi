@@ -325,6 +325,12 @@ def _keyword_to_dict(k: AdKeyword) -> dict:
 def create_campaign(db: Session, tenant_id: int, data: dict) -> dict:
     """创建广告活动"""
     try:
+        # 校验shop归属当前租户
+        from app.models.shop import Shop
+        shop = db.query(Shop).filter(Shop.id == data["shop_id"], Shop.tenant_id == tenant_id).first()
+        if not shop:
+            return {"code": ErrorCode.SHOP_NOT_FOUND, "msg": "店铺不存在或无权限"}
+
         campaign = AdCampaign(
             tenant_id=tenant_id,
             shop_id=data["shop_id"],
@@ -1063,7 +1069,7 @@ def create_automation_rule(db: Session, tenant_id: int, data: dict) -> dict:
                 AdAutomationRule.rule_type == rule_type,
             ).first()
             if existing:
-                return {"code": ErrorCode.AD_RULE_NOT_FOUND, "msg": f"该店铺已存在此类型的规则，请直接编辑现有规则"}
+                return {"code": ErrorCode.PARAM_ERROR, "msg": f"该店铺已存在此类型的规则，请直接编辑现有规则"}
 
         rule = AdAutomationRule(
             tenant_id=tenant_id,
