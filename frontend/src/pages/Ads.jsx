@@ -1150,32 +1150,6 @@ const Ads = () => {
         </Card>
       ) : (
         <>
-          {/* 汇总卡片 */}
-          <Row gutter={16} style={{ marginBottom: 24 }}>
-            <Col span={6}>
-              <Card size="small" loading={summaryLoading}>
-                <Statistic title="总展示" value={summary?.total_impressions || 0} prefix={<FundOutlined />} valueStyle={{ color: '#597ef7' }} />
-              </Card>
-            </Col>
-            <Col span={6}>
-              <Card size="small" loading={summaryLoading}>
-                <Statistic title="总点击" value={summary?.total_clicks || 0} prefix={<AimOutlined />}
-                  suffix={summary?.avg_ctr != null ? <span style={{ fontSize: 14, color: '#999' }}>CTR {summary.avg_ctr}%</span> : null} />
-              </Card>
-            </Col>
-            <Col span={6}>
-              <Card size="small" loading={summaryLoading}>
-                <Statistic title="总花费" value={summary?.total_spend || 0} prefix={<DollarOutlined />} precision={2} suffix="₽" valueStyle={{ color: '#ff7875' }} />
-              </Card>
-            </Col>
-            <Col span={6}>
-              <Card size="small" loading={summaryLoading}>
-                <Statistic title="ROAS" value={summary?.overall_roas || 0} prefix={<RiseOutlined />} precision={2} suffix="x"
-                  valueStyle={{ color: summary?.overall_roas >= 1 ? '#52c41a' : '#ff4d4f' }} />
-              </Card>
-            </Col>
-          </Row>
-
           {/* 主功能Tab */}
           <Tabs activeKey={mainTab} onChange={setMainTab} items={[
             {
