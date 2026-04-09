@@ -184,13 +184,26 @@ class WBClient(BasePlatformClient):
             # 第3步: 合并数据
             for advert_id, info in advert_info.items():
                 detail = details_map.get(advert_id, {})
+
+                # 名称：优先 name，再试 campaignName，再试 params[0].name / autoParams.name
+                name = detail.get("name") or detail.get("campaignName") or ""
+                if not name:
+                    params = detail.get("params") or detail.get("autoParams")
+                    if isinstance(params, list) and params:
+                        name = params[0].get("name", "") if isinstance(params[0], dict) else ""
+                    elif isinstance(params, dict):
+                        name = params.get("name", "")
+
+                # 预算：优先 budget（余额），再试 dailyBudget
+                budget = detail.get("budget") or detail.get("dailyBudget")
+
                 merged = {
                     "advertId": advert_id,
                     "status": info["status"],
                     "type": info["type"],
-                    "name": detail.get("name", ""),
-                    "dailyBudget": detail.get("dailyBudget"),
-                    "createTime": detail.get("createTime") or info.get("changeTime"),
+                    "name": name,
+                    "dailyBudget": budget,
+                    "createTime": detail.get("createTime") or detail.get("startTime") or info.get("changeTime"),
                     "endTime": detail.get("endTime"),
                 }
                 campaigns.append(self._parse_campaign(merged))
@@ -207,14 +220,16 @@ class WBClient(BasePlatformClient):
 
     def _parse_campaign(self, raw: dict) -> dict:
         """解析WB广告活动数据为标准格式"""
-        # WB的type映射: 4=catalog, 5=product_page, 6=search, 7=recommendation, 8=search+catalog, 9=search+recommendation
+        # WB的type映射:
+        # 4=目录推广(CPM), 5=商品卡片, 6=搜索推广,
+        # 7=推荐推广, 8=自动广告(已废弃), 9=竞价广告/CPM(Auction)
         type_map = {
             4: "catalog",
             5: "product_page",
             6: "search",
             7: "recommendation",
-            8: "search",
-            9: "search",
+            8: "auction",
+            9: "auction",
         }
         # WB的status映射:
         # -1=删除中, 4=准备就绪, 7=投放中, 8=结算中(已废弃),
@@ -235,6 +250,7 @@ class WBClient(BasePlatformClient):
             "product_page": "商品卡片",
             "search": "搜索推广",
             "recommendation": "推荐推广",
+            "auction": "竞价广告(CPM)",
         }
         # WB的count接口不一定返回name，用类型+ID生成有意义的名称
         name = raw.get("name") or ""

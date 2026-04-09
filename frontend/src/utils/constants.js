@@ -25,6 +25,7 @@ export const AD_TYPES = {
   catalog: { label: '目录广告' },
   product_page: { label: '商品页广告' },
   recommendation: { label: '推荐广告' },
+  auction: { label: '竞价广告(CPM)' },
   banner: { label: '横幅广告' },
   video: { label: '视频广告' },
 }

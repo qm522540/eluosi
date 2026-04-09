@@ -28,7 +28,7 @@ class AdCampaignCreate(BaseModel):
     shop_id: int
     platform: str = Field(..., pattern="^(wb|ozon|yandex)$")
     name: str = Field(..., max_length=200)
-    ad_type: str = Field(..., pattern="^(search|catalog|product_page|recommendation)$")
+    ad_type: str = Field(..., pattern="^(search|catalog|product_page|recommendation|auction)$")
     daily_budget: Optional[float] = Field(None, ge=0)
     total_budget: Optional[float] = Field(None, ge=0)
     status: str = Field("draft", pattern="^(active|paused|draft)$")

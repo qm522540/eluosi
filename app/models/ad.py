@@ -18,7 +18,7 @@ class AdCampaign(BaseMixin, Base):
     platform_campaign_id: Mapped[str] = mapped_column(String(100), nullable=False)
     name: Mapped[str] = mapped_column(String(200), nullable=False)
     ad_type: Mapped[str] = mapped_column(
-        Enum("search", "catalog", "product_page", "recommendation", name="ad_type"),
+        Enum("search", "catalog", "product_page", "recommendation", "auction", name="ad_type"),
         nullable=False,
     )
     daily_budget: Mapped[Optional[float]] = mapped_column(DECIMAL(10, 2), nullable=True)
