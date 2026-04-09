@@ -237,6 +237,10 @@ const Ads = () => {
     fetchCampaigns(1)
     fetchSummary()
     fetchStats()
+    // 同时刷新当前Tab的数据
+    if (mainTab === 'rules') fetchRules()
+    if (mainTab === 'analysis') fetchAnalysis()
+    if (mainTab === 'budget') { fetchBudget(); fetchBudgetSuggestions() }
   }
 
   useEffect(() => {
