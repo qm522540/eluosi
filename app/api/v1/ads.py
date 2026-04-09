@@ -506,6 +506,132 @@ def budget_overview(
     return success(result["data"])
 
 
+@router.get("/campaign-products/{campaign_id}")
+async def campaign_products(
+    campaign_id: int,
+    db: Session = Depends(get_db),
+    tenant_id: int = Depends(get_tenant_id),
+):
+    """获取广告活动关联的商品列表及出价（Ozon）"""
+    from app.models.ad import AdCampaign
+    from app.models.shop import Shop
+
+    camp = db.query(AdCampaign).filter(
+        AdCampaign.id == campaign_id, AdCampaign.tenant_id == tenant_id
+    ).first()
+    if not camp:
+        return error(50001, "广告活动不存在")
+
+    shop = db.query(Shop).filter(Shop.id == camp.shop_id).first()
+    if not shop:
+        return error(30001, "店铺不存在")
+
+    if camp.platform == "ozon":
+        from app.services.platform.ozon import OzonClient
+        client = OzonClient(
+            shop_id=shop.id, api_key=shop.api_key, client_id=shop.client_id,
+            perf_client_id=shop.perf_client_id or '',
+            perf_client_secret=shop.perf_client_secret or '',
+        )
+        try:
+            products = await client.fetch_campaign_products(camp.platform_campaign_id)
+            return success(products)
+        finally:
+            await client.close()
+    elif camp.platform == "wb":
+        # WB 暂无可用的商品接口
+        return success([])
+    else:
+        return success([])
+
+
+@router.post("/campaign-products/{campaign_id}/update-bid")
+async def update_campaign_bid(
+    campaign_id: int,
+    req: dict,
+    db: Session = Depends(get_db),
+    tenant_id: int = Depends(get_tenant_id),
+):
+    """修改广告活动中商品的出价"""
+    from app.models.ad import AdCampaign
+    from app.models.shop import Shop
+
+    camp = db.query(AdCampaign).filter(
+        AdCampaign.id == campaign_id, AdCampaign.tenant_id == tenant_id
+    ).first()
+    if not camp:
+        return error(50001, "广告活动不存在")
+
+    shop = db.query(Shop).filter(Shop.id == camp.shop_id).first()
+    if not shop:
+        return error(30001, "店铺不存在")
+
+    sku = req.get("sku")
+    new_bid = req.get("bid")
+    if not sku or new_bid is None:
+        return error(10002, "缺少 sku 或 bid 参数")
+
+    if camp.platform == "ozon":
+        from app.services.platform.ozon import OzonClient
+        client = OzonClient(
+            shop_id=shop.id, api_key=shop.api_key, client_id=shop.client_id,
+            perf_client_id=shop.perf_client_id or '',
+            perf_client_secret=shop.perf_client_secret or '',
+        )
+        try:
+            ok = await client.update_campaign_bid(camp.platform_campaign_id, str(sku), str(new_bid))
+            if ok:
+                return success(msg="出价修改成功")
+            return error(50003, "出价修改失败")
+        finally:
+            await client.close()
+    else:
+        return error(10002, "该平台暂不支持出价修改")
+
+
+@router.get("/campaign-budget/{campaign_id}")
+async def campaign_budget(
+    campaign_id: int,
+    db: Session = Depends(get_db),
+    tenant_id: int = Depends(get_tenant_id),
+):
+    """获取广告活动预算余额（实时从平台API获取）"""
+    from app.models.ad import AdCampaign
+    from app.models.shop import Shop
+
+    camp = db.query(AdCampaign).filter(
+        AdCampaign.id == campaign_id, AdCampaign.tenant_id == tenant_id
+    ).first()
+    if not camp:
+        return error(50001, "广告活动不存在")
+
+    shop = db.query(Shop).filter(Shop.id == camp.shop_id).first()
+    if not shop:
+        return error(30001, "店铺不存在")
+
+    if camp.platform == "wb":
+        from app.services.platform.wb import WBClient
+        client = WBClient(shop_id=shop.id, api_key=shop.api_key)
+        try:
+            budget_data = await client._request(
+                "GET", "https://advert-api.wildberries.ru/adv/v1/budget",
+                params={"id": int(camp.platform_campaign_id)}
+            )
+            return success(budget_data)
+        except Exception as e:
+            return error(50002, f"获取预算失败: {str(e)}")
+        finally:
+            await client.close()
+    elif camp.platform == "ozon":
+        # Ozon 预算在活动信息中已包含
+        return success({
+            "total": float(camp.daily_budget) if camp.daily_budget is not None else 0,
+            "currency": "RUB",
+        })
+    else:
+        return success({"total": 0, "currency": "RUB"})
+
+
 @router.get("/debug/wb-raw/{campaign_id}")
 async def debug_wb_raw(
     campaign_id: str,

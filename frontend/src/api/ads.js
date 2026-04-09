@@ -170,3 +170,20 @@ export function getBudgetOverview(params) {
 export function getBudgetSuggestions(params) {
   return request.get('/ads/budget/suggestions', { params })
 }
+
+// ==================== 活动详情增强 ====================
+
+/** 获取活动关联商品及出价 */
+export function getCampaignProducts(campaignId) {
+  return request.get(`/ads/campaign-products/${campaignId}`)
+}
+
+/** 修改商品出价 */
+export function updateCampaignBid(campaignId, data) {
+  return request.post(`/ads/campaign-products/${campaignId}/update-bid`, data)
+}
+
+/** 获取活动预算余额（实时） */
+export function getCampaignBudget(campaignId) {
+  return request.get(`/ads/campaign-budget/${campaignId}`)
+}

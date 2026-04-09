@@ -421,6 +421,49 @@ class OzonClient(BasePlatformClient):
             "roas": round(roas, 4),
         }
 
+    # ==================== 广告活动商品 ====================
+
+    async def fetch_campaign_products(self, campaign_id: str) -> list:
+        """获取广告活动关联的商品列表及出价
+
+        Performance API:
+        GET /api/client/campaign/{id}/v2/products
+        """
+        await self._ensure_perf_token()
+        if not self._perf_token:
+            logger.warning(f"Ozon 无Performance API token，无法获取活动商品")
+            return []
+
+        try:
+            url = f"{OZON_PERFORMANCE_API}/api/client/campaign/{campaign_id}/v2/products"
+            result = await self._request("GET", url, use_perf=True)
+            products = result.get("products", [])
+            logger.info(f"Ozon 活动 {campaign_id} 获取到 {len(products)} 个商品")
+            return products
+        except Exception as e:
+            logger.error(f"Ozon 获取活动商品失败 campaign_id={campaign_id}: {e}")
+            return []
+
+    async def update_campaign_bid(self, campaign_id: str, sku: str, new_bid: str) -> bool:
+        """修改广告活动中商品的出价
+
+        Performance API:
+        POST /api/client/campaign/{id}/v2/products/update
+        """
+        await self._ensure_perf_token()
+        if not self._perf_token:
+            return False
+
+        try:
+            url = f"{OZON_PERFORMANCE_API}/api/client/campaign/{campaign_id}/v2/products/update"
+            payload = {"products": [{"sku": sku, "bid": str(new_bid)}]}
+            result = await self._request("POST", url, use_perf=True, json=payload)
+            logger.info(f"Ozon 出价修改成功 campaign={campaign_id} sku={sku} bid={new_bid}")
+            return True
+        except Exception as e:
+            logger.error(f"Ozon 出价修改失败: {e}")
+            return False
+
     # ==================== 商品 ====================
 
     async def fetch_products(self, page: int = 1, limit: int = 100) -> dict:

@@ -23,6 +23,7 @@ import {
   getPlatformComparison, getCampaignRanking, getProductRoi,
   getAutomationRules, createAutomationRule, updateAutomationRule, deleteAutomationRule, executeRules,
   getBudgetOverview, getBudgetSuggestions,
+  getCampaignProducts, updateCampaignBid, getCampaignBudget,
 } from '@/api/ads'
 import { getShops } from '@/api/shops'
 import { PLATFORMS, AD_STATUS, AD_TYPES } from '@/utils/constants'
@@ -130,6 +131,14 @@ const Ads = () => {
 
   // 导出
   const [exporting, setExporting] = useState(false)
+
+  // 活动详情增强：预算 + 商品
+  const [campaignBudget, setCampaignBudget] = useState(null)
+  const [campaignProducts, setCampaignProducts] = useState([])
+  const [productsLoading, setProductsLoading] = useState(false)
+  const [editingBid, setEditingBid] = useState(null)
+  const [newBidValue, setNewBidValue] = useState(null)
+  const [bidUpdating, setBidUpdating] = useState(false)
 
   // 分析数据
   const [platformData, setPlatformData] = useState([])
@@ -499,14 +508,49 @@ const Ads = () => {
     setDetailLoading(true)
     setDetailVisible(true)
     setDetailTab('info')
+    setCampaignBudget(null)
+    setCampaignProducts([])
+    setEditingBid(null)
     try {
       const res = await getCampaign(id)
       setDetailData(res.data)
       fetchAdGroups(id)
+      // 加载预算
+      getCampaignBudget(id).then(r => setCampaignBudget(r.data)).catch(() => {})
+      // 加载商品列表
+      fetchCampaignProducts(id)
     } catch {
       message.error('获取广告详情失败')
     } finally {
       setDetailLoading(false)
+    }
+  }
+
+  const fetchCampaignProducts = async (id) => {
+    setProductsLoading(true)
+    try {
+      const res = await getCampaignProducts(id)
+      setCampaignProducts(res.data || [])
+    } catch {
+      setCampaignProducts([])
+    } finally {
+      setProductsLoading(false)
+    }
+  }
+
+  const handleUpdateBid = async () => {
+    if (!editingBid || newBidValue === null || !detailData) return
+    setBidUpdating(true)
+    try {
+      await updateCampaignBid(detailData.id, { sku: editingBid.sku, bid: String(newBidValue) })
+      message.success('出价修改成功')
+      setEditingBid(null)
+      setNewBidValue(null)
+      fetchCampaignProducts(detailData.id)
+    } catch (err) {
+      message.error(err.message || '出价修改失败')
+    } finally {
+      setBidUpdating(false)
     }
   }
 
@@ -1501,21 +1545,84 @@ const Ads = () => {
               key: 'info',
               label: '基本信息',
               children: (
-                <Descriptions column={2} bordered size="small">
-                  <Descriptions.Item label="名称">{detailData.name}</Descriptions.Item>
-                  <Descriptions.Item label="平台">
-                    <Tag color={PLATFORMS[detailData.platform]?.color}>{PLATFORMS[detailData.platform]?.label}</Tag>
-                  </Descriptions.Item>
-                  <Descriptions.Item label="广告类型">{AD_TYPES[detailData.ad_type]?.label || detailData.ad_type}</Descriptions.Item>
-                  <Descriptions.Item label="状态">
-                    <Badge color={AD_STATUS[detailData.status]?.color} text={AD_STATUS[detailData.status]?.label || detailData.status} />
-                  </Descriptions.Item>
-                  <Descriptions.Item label="日预算">{detailData.daily_budget != null ? `₽${detailData.daily_budget}` : '不限'}</Descriptions.Item>
-                  <Descriptions.Item label="总预算">{detailData.total_budget != null ? `₽${detailData.total_budget}` : '不限'}</Descriptions.Item>
-                  <Descriptions.Item label="开始日期">{detailData.start_date || '-'}</Descriptions.Item>
-                  <Descriptions.Item label="结束日期">{detailData.end_date || '-'}</Descriptions.Item>
-                  <Descriptions.Item label="平台活动ID" span={2}>{detailData.platform_campaign_id || '-'}</Descriptions.Item>
-                </Descriptions>
+                <div>
+                  {/* 预算余额卡片 */}
+                  <Card size="small" style={{ marginBottom: 16, background: '#f6ffed', borderColor: '#b7eb8f' }}>
+                    <Row align="middle">
+                      <Col span={8}>
+                        <Text type="secondary">预算余额</Text>
+                        <div style={{ fontSize: 24, fontWeight: 600, color: '#52c41a' }}>
+                          {campaignBudget ? `${campaignBudget.total?.toLocaleString()} ₽` : detailData.daily_budget != null ? `${detailData.daily_budget?.toLocaleString()} ₽` : '-'}
+                        </div>
+                      </Col>
+                      <Col span={16}>
+                        <Descriptions column={2} size="small" style={{ marginBottom: 0 }}>
+                          <Descriptions.Item label="平台">
+                            <Tag color={PLATFORMS[detailData.platform]?.color}>{PLATFORMS[detailData.platform]?.label}</Tag>
+                          </Descriptions.Item>
+                          <Descriptions.Item label="状态">
+                            <Badge color={AD_STATUS[detailData.status]?.color} text={AD_STATUS[detailData.status]?.label || detailData.status} />
+                          </Descriptions.Item>
+                          <Descriptions.Item label="广告类型">{AD_TYPES[detailData.ad_type]?.label || detailData.ad_type}</Descriptions.Item>
+                          <Descriptions.Item label="活动ID">{detailData.platform_campaign_id || '-'}</Descriptions.Item>
+                        </Descriptions>
+                      </Col>
+                    </Row>
+                  </Card>
+
+                  <Descriptions column={2} bordered size="small">
+                    <Descriptions.Item label="名称">{detailData.name}</Descriptions.Item>
+                    <Descriptions.Item label="总预算">{detailData.total_budget != null ? `₽${detailData.total_budget}` : '不限'}</Descriptions.Item>
+                    <Descriptions.Item label="开始日期">{detailData.start_date || '-'}</Descriptions.Item>
+                    <Descriptions.Item label="结束日期">{detailData.end_date || '-'}</Descriptions.Item>
+                  </Descriptions>
+                </div>
+              ),
+            },
+            {
+              key: 'products',
+              label: `商品出价 (${campaignProducts.length})`,
+              children: (
+                <div>
+                  <div style={{ marginBottom: 12 }}>
+                    <Text type="secondary">
+                      {detailData.platform === 'ozon' ? '以下是该活动关联的商品及出价，点击出价可修改。' : 'WB暂不支持通过API获取商品列表。'}
+                    </Text>
+                  </div>
+                  {campaignProducts.length > 0 ? (
+                    <Table size="small" dataSource={campaignProducts} rowKey="sku" loading={productsLoading} pagination={false}
+                      columns={[
+                        { title: 'SKU', dataIndex: 'sku', key: 'sku', width: 130 },
+                        {
+                          title: '商品名称', dataIndex: 'title', key: 'title', ellipsis: { showTitle: false },
+                          render: text => <Tooltip title={text} placement="topLeft">{text}</Tooltip>,
+                        },
+                        {
+                          title: '出价', dataIndex: 'bid', key: 'bid', width: 150,
+                          render: (v, record) => {
+                            if (editingBid?.sku === record.sku) {
+                              return (
+                                <Space>
+                                  <InputNumber size="small" value={newBidValue} onChange={setNewBidValue}
+                                    min={0} style={{ width: 80 }} />
+                                  <Button size="small" type="primary" loading={bidUpdating} onClick={handleUpdateBid}>保存</Button>
+                                  <Button size="small" onClick={() => setEditingBid(null)}>取消</Button>
+                                </Space>
+                              )
+                            }
+                            return (
+                              <a onClick={() => { setEditingBid(record); setNewBidValue(Number(v) || 0) }}>
+                                {v ? `${Number(v).toLocaleString()}` : '0'}
+                              </a>
+                            )
+                          },
+                        },
+                      ]}
+                    />
+                  ) : (
+                    <Empty description={productsLoading ? '加载中...' : '暂无商品数据'} />
+                  )}
+                </div>
               ),
             },
             {
