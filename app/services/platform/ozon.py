@@ -87,6 +87,10 @@ class OzonClient(BasePlatformClient):
                 )
                 if r.status_code == 200:
                     self._perf_token = r.json().get("access_token", "")
+                    # 重建 perf 客户端以携带新 token
+                    if self._perf_client and not self._perf_client.is_closed:
+                        await self._perf_client.aclose()
+                    self._perf_client = None
                     logger.info(f"Ozon Performance API token获取成功，shop_id={self.shop_id}")
                 else:
                     logger.warning(f"Ozon Performance API token获取失败: {r.status_code} {r.text[:200]}")
@@ -201,59 +205,31 @@ class OzonClient(BasePlatformClient):
         try:
             items = []
 
-            ALL_STATES = [
-                "CAMPAIGN_STATE_RUNNING", "CAMPAIGN_STATE_STOPPED",
-                "CAMPAIGN_STATE_INACTIVE", "CAMPAIGN_STATE_ARCHIVED",
-                "CAMPAIGN_STATE_PLANNED", "CAMPAIGN_STATE_MODERATION",
-            ]
-
-            # 方式1: Seller API — POST /api/client/campaign/list（新版Ozon广告接口）
-            try:
-                url = f"{OZON_SELLER_API}/api/client/campaign/list"
-                for state in ALL_STATES:
-                    result = await self._request(
-                        "POST", url, json={"states": [state]},
-                    )
+            # 方式1（优先）: Performance API + OAuth token
+            if self._perf_token:
+                try:
+                    url = f"{OZON_PERFORMANCE_API}/api/client/campaign"
+                    result = await self._request("GET", url, use_perf=True)
                     batch = result.get("list", result.get("campaigns", []))
                     if isinstance(batch, list):
                         items.extend(batch)
-                if items:
-                    logger.info(f"Ozon shop_id={self.shop_id} Seller API 获取到 {len(items)} 个活动")
-            except Exception as e:
-                logger.warning(f"Ozon Seller API campaign/list 失败: {e}，尝试备用接口")
-
-            # 方式2: Seller API — GET /api/client/campaign（部分账户用此端点）
-            if not items:
-                try:
-                    url = f"{OZON_SELLER_API}/api/client/campaign"
-                    for state in ALL_STATES:
-                        result = await self._request(
-                            "GET", url, params={"state": state},
-                        )
-                        batch = result.get("list", result.get("campaigns", []))
-                        if isinstance(batch, list):
-                            items.extend(batch)
-                    if items:
-                        logger.info(f"Ozon shop_id={self.shop_id} Seller GET 获取到 {len(items)} 个活动")
-                except Exception as e:
-                    logger.warning(f"Ozon Seller API GET campaign 失败: {e}，尝试 Performance API")
-
-            # 方式3: Performance API 独立域名（旧版）
-            if not items:
-                try:
-                    url = f"{OZON_PERFORMANCE_API}/api/client/campaign"
-                    for state in ALL_STATES:
-                        result = await self._request(
-                            "GET", url, use_perf=True,
-                            params={"state": state},
-                        )
-                        batch = result.get("list", result.get("campaigns", []))
-                        if isinstance(batch, list):
-                            items.extend(batch)
                     if items:
                         logger.info(f"Ozon shop_id={self.shop_id} Performance API 获取到 {len(items)} 个活动")
                 except Exception as e:
-                    logger.warning(f"Ozon Performance API campaign 也失败: {e}")
+                    logger.warning(f"Ozon Performance API 失败: {e}，尝试 Seller API")
+
+            # 方式2: Seller API（降级）
+            if not items:
+                try:
+                    url = f"{OZON_SELLER_API}/api/client/campaign"
+                    result = await self._request("GET", url)
+                    batch = result.get("list", result.get("campaigns", []))
+                    if isinstance(batch, list):
+                        items.extend(batch)
+                    if items:
+                        logger.info(f"Ozon shop_id={self.shop_id} Seller API 获取到 {len(items)} 个活动")
+                except Exception as e:
+                    logger.warning(f"Ozon Seller API 也失败: {e}")
 
             if not items:
                 logger.info(f"Ozon shop_id={self.shop_id} 所有接口均无广告活动数据")
