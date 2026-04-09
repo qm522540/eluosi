@@ -24,6 +24,9 @@ def list_campaigns(db: Session, tenant_id: int, shop_id: int = None,
             query = query.filter(AdCampaign.platform == platform)
         if status:
             query = query.filter(AdCampaign.status == status)
+        else:
+            # 默认不显示已归档的活动
+            query = query.filter(AdCampaign.status != "archived")
 
         total = query.count()
         # active排最前，其余按创建时间倒序
