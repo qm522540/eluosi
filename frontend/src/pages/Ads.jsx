@@ -1596,8 +1596,19 @@ const Ads = () => {
                       columns={[
                         { title: 'SKU', dataIndex: 'sku', key: 'sku', width: 130 },
                         {
-                          title: '商品名称', dataIndex: 'title', key: 'title', ellipsis: { showTitle: false },
-                          render: text => <Tooltip title={text} placement="topLeft">{text}</Tooltip>,
+                          title: '商品', key: 'product', ellipsis: { showTitle: false },
+                          render: (_, record) => (
+                            <Space>
+                              {record.image ? (
+                                <img src={record.image} alt="" style={{ width: 40, height: 40, objectFit: 'cover', borderRadius: 4 }} />
+                              ) : (
+                                <div style={{ width: 40, height: 40, background: '#f0f0f0', borderRadius: 4, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#ccc', fontSize: 12 }}>无图</div>
+                              )}
+                              <Tooltip title={record.title} placement="topLeft">
+                                <Text ellipsis style={{ maxWidth: 350 }}>{record.title || '-'}</Text>
+                              </Tooltip>
+                            </Space>
+                          ),
                         },
                         {
                           title: '出价 (₽)', dataIndex: 'bid', key: 'bid', width: 180,

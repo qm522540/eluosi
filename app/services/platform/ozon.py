@@ -424,10 +424,10 @@ class OzonClient(BasePlatformClient):
     # ==================== 广告活动商品 ====================
 
     async def fetch_campaign_products(self, campaign_id: str) -> list:
-        """获取广告活动关联的商品列表及出价
+        """获取广告活动关联的商品列表及出价，并补充商品图片
 
-        Performance API:
-        GET /api/client/campaign/{id}/v2/products
+        1. Performance API: GET /api/client/campaign/{id}/v2/products → SKU、出价、名称
+        2. Seller API: POST /v2/product/info → 商品图片
         """
         await self._ensure_perf_token()
         if not self._perf_token:
@@ -439,6 +439,29 @@ class OzonClient(BasePlatformClient):
             result = await self._request("GET", url, use_perf=True)
             products = result.get("products", [])
             logger.info(f"Ozon 活动 {campaign_id} 获取到 {len(products)} 个商品")
+
+            # 通过 Seller API 补充商品图片
+            for product in products:
+                sku = product.get("sku")
+                if not sku:
+                    continue
+                try:
+                    info = await self._request(
+                        "POST", f"{OZON_SELLER_API}/v2/product/info",
+                        json={"sku": int(sku)}
+                    )
+                    result_info = info.get("result", {})
+                    images = result_info.get("images", result_info.get("primary_image", []))
+                    if isinstance(images, list) and images:
+                        product["image"] = images[0]
+                    elif isinstance(images, str) and images:
+                        product["image"] = images
+                    # 补充更多信息
+                    if not product.get("title") and result_info.get("name"):
+                        product["title"] = result_info["name"]
+                except Exception:
+                    pass  # 图片获取失败不影响主流程
+
             return products
         except Exception as e:
             logger.error(f"Ozon 获取活动商品失败 campaign_id={campaign_id}: {e}")
