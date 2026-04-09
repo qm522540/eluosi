@@ -128,8 +128,9 @@ class WBClient(BasePlatformClient):
 
         流程：
         1. GET /adv/v1/promotion/count 获取活动ID列表和状态/类型
-        2. POST /adv/v1/promotion/adverts 批量获取活动详情（含真实名称）
-        3. 合并两步数据，生成完整活动信息
+        2. GET /adv/v1/budget?id=X 逐个获取活动预算余额
+        注意：WB已移除详情接口(/adv/v1/promotion/adverts返回404)，
+        活动名称无法从API获取，需用户在系统内手动设置。
         """
         campaigns = []
 
@@ -162,49 +163,29 @@ class WBClient(BasePlatformClient):
             if not advert_info:
                 return []
 
-            # 第2步: 批量获取活动详情（每次最多50个）
-            all_ids = list(advert_info.keys())
-            details_map = {}  # advertId -> detail dict
-
-            for i in range(0, len(all_ids), 50):
-                batch_ids = all_ids[i:i + 50]
+            # 第2步: 逐个获取预算余额
+            budget_map = {}  # advertId -> budget total
+            for advert_id in advert_info:
                 try:
-                    detail_url = f"{WB_ADVERT_API}/adv/v1/promotion/adverts"
-                    detail_data = await self._request(
-                        "POST", detail_url, json=batch_ids
+                    budget_url = f"{WB_ADVERT_API}/adv/v1/budget"
+                    budget_data = await self._request(
+                        "GET", budget_url, params={"id": advert_id}
                     )
-                    if isinstance(detail_data, list):
-                        for item in detail_data:
-                            aid = item.get("advertId")
-                            if aid:
-                                details_map[aid] = item
-                except Exception as e:
-                    logger.warning(f"WB 批量获取活动详情失败: {e}，使用基本信息")
+                    if isinstance(budget_data, dict):
+                        budget_map[advert_id] = budget_data.get("total")
+                except Exception:
+                    pass  # 预算获取失败不影响主流程
 
-            # 第3步: 合并数据
+            # 第3步: 组装数据
             for advert_id, info in advert_info.items():
-                detail = details_map.get(advert_id, {})
-
-                # 名称：优先 name，再试 campaignName，再试 params[0].name / autoParams.name
-                name = detail.get("name") or detail.get("campaignName") or ""
-                if not name:
-                    params = detail.get("params") or detail.get("autoParams")
-                    if isinstance(params, list) and params:
-                        name = params[0].get("name", "") if isinstance(params[0], dict) else ""
-                    elif isinstance(params, dict):
-                        name = params.get("name", "")
-
-                # 预算：优先 budget（余额），再试 dailyBudget
-                budget = detail.get("budget") or detail.get("dailyBudget")
-
                 merged = {
                     "advertId": advert_id,
                     "status": info["status"],
                     "type": info["type"],
-                    "name": name,
-                    "dailyBudget": budget,
-                    "createTime": detail.get("createTime") or detail.get("startTime") or info.get("changeTime"),
-                    "endTime": detail.get("endTime"),
+                    "name": "",  # WB API不再提供名称，用户可在系统内手动编辑
+                    "dailyBudget": budget_map.get(advert_id),
+                    "createTime": info.get("changeTime"),
+                    "endTime": None,
                 }
                 campaigns.append(self._parse_campaign(merged))
 

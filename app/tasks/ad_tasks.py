@@ -214,13 +214,13 @@ def _upsert_campaign(db, tenant_id: int, shop_id: int, platform: str, data: dict
 
     if existing:
         new_name = data.get("name", "")
-        # 如果已有名称为空或现在有更好的名称，更新它
-        if new_name and (not existing.name or not existing.name.strip()):
-            existing.name = new_name
-        elif new_name:
+        # 只有API返回了真实名称时才更新，避免覆盖用户手动设置的名称
+        if new_name and new_name.strip():
             existing.name = new_name
         existing.ad_type = data.get("ad_type", existing.ad_type)
-        existing.daily_budget = data.get("daily_budget", existing.daily_budget)
+        # 更新预算（如果有新值）
+        if data.get("daily_budget") is not None:
+            existing.daily_budget = data.get("daily_budget")
         existing.status = data.get("status", existing.status)
         return 0  # 更新不计数
     else:

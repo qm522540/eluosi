@@ -457,6 +457,7 @@ const Ads = () => {
   const handleEdit = (record) => {
     setEditingCampaign(record)
     editForm.setFieldsValue({
+      name: record.name,
       daily_budget: record.daily_budget,
       total_budget: record.total_budget,
       status: record.status,
@@ -1466,6 +1467,9 @@ const Ads = () => {
         destroyOnClose
       >
         <Form form={editForm} layout="vertical" style={{ marginTop: 16 }}>
+          <Form.Item name="name" label="活动名称">
+            <Input maxLength={200} placeholder="输入活动名称" />
+          </Form.Item>
           <Form.Item name="daily_budget" label="日预算 (₽)">
             <InputNumber min={0} step={100} style={{ width: '100%' }} placeholder="不限" />
           </Form.Item>
