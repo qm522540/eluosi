@@ -1198,8 +1198,30 @@ def _execute_single_rule(db: Session, tenant_id: int, rule: AdAutomationRule,
                 logger.info(f"规则[{rule.name}] 暂停活动 {campaign.id}，ROAS={roas:.2f}<{min_roas}")
 
         elif rule.rule_type == "auto_bid":
-            target_roas = conditions.get("target_roas", 2.0)
-            max_change = conditions.get("max_change_pct", 20) / 100
+            # 分时调价模式：根据当前时段调整出价比例
+            peak_hours = conditions.get("peak_hours", [19, 20, 21])
+            peak_pct = conditions.get("peak_pct", 30)
+            sub_peak_hours = conditions.get("sub_peak_hours", [22])
+            sub_peak_pct = conditions.get("sub_peak_pct", 20)
+            off_peak_hours = conditions.get("off_peak_hours", [2, 3, 4, 5, 6])
+            off_peak_pct = conditions.get("off_peak_pct", -50)
+
+            # 确定当前时段的调价比例（莫斯科时间）
+            from pytz import timezone as pytz_tz
+            moscow_hour = datetime.now(pytz_tz("Europe/Moscow")).hour
+
+            if moscow_hour in peak_hours:
+                adjust_pct = peak_pct
+            elif moscow_hour in sub_peak_hours:
+                adjust_pct = sub_peak_pct
+            elif moscow_hour in off_peak_hours:
+                adjust_pct = off_peak_pct
+            else:
+                adjust_pct = 0  # 平峰：原价
+
+            # 获取或初始化原始出价记录
+            original_bids = (actions.get("original_bids") or {}).get(str(campaign.id), {})
+
             groups = db.query(AdGroup).filter(
                 AdGroup.campaign_id == campaign.id,
                 AdGroup.tenant_id == tenant_id,
@@ -1208,15 +1230,22 @@ def _execute_single_rule(db: Session, tenant_id: int, rule: AdAutomationRule,
             for group in groups:
                 if not group.bid or float(group.bid) <= 0:
                     continue
-                current_bid = float(group.bid)
-                ratio = roas / target_roas if target_roas > 0 else 1
-                if ratio > 1:
-                    adj = min((ratio - 1) * 0.3, max_change)
-                    group.bid = round(current_bid * (1 + adj), 2)
-                elif ratio < 1:
-                    adj = min((1 - ratio) * 0.3, max_change)
-                    group.bid = round(max(current_bid * (1 - adj), 0.01), 2)
-                triggered = True
+                gid = str(group.id)
+                # 首次运行：记录原始出价
+                if gid not in original_bids:
+                    original_bids[gid] = float(group.bid)
+                base_bid = original_bids[gid]
+                new_bid = round(base_bid * (1 + adjust_pct / 100), 2)
+                new_bid = max(new_bid, 0.01)
+                if abs(float(group.bid) - new_bid) > 0.001:
+                    group.bid = new_bid
+                    triggered = True
+
+            # 保存原始出价到 actions
+            if not actions.get("original_bids"):
+                actions["original_bids"] = {}
+            actions["original_bids"][str(campaign.id)] = original_bids
+            rule.actions = actions
 
         elif rule.rule_type == "budget_cap":
             daily_limit = conditions.get("max_daily_spend", 0)

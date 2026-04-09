@@ -40,7 +40,7 @@ const MATCH_TYPES = {
 
 const RULE_TYPES = {
   pause_low_roi: { label: '低ROI自动暂停', color: 'red' },
-  auto_bid: { label: '自动调价', color: 'blue' },
+  auto_bid: { label: '分时自动调价', color: 'blue' },
   budget_cap: { label: '预算封顶', color: 'orange' },
   schedule: { label: '定时投放', color: 'green' },
 }
@@ -292,13 +292,18 @@ const Ads = () => {
 
   const handleEditRule = (record) => {
     setEditingRule(record)
+    const c = record.conditions || {}
     ruleForm.setFieldsValue({
       ...record,
-      min_roas: record.conditions?.min_roas,
-      min_spend: record.conditions?.min_spend,
-      target_roas: record.conditions?.target_roas,
-      max_change_pct: record.conditions?.max_change_pct,
-      max_daily_spend: record.conditions?.max_daily_spend,
+      min_roas: c.min_roas,
+      min_spend: c.min_spend,
+      peak_hours: c.peak_hours,
+      peak_pct: c.peak_pct,
+      sub_peak_hours: c.sub_peak_hours,
+      sub_peak_pct: c.sub_peak_pct,
+      off_peak_hours: c.off_peak_hours,
+      off_peak_pct: c.off_peak_pct,
+      max_daily_spend: c.max_daily_spend,
     })
     setRuleFormVisible(true)
   }
@@ -314,9 +319,13 @@ const Ads = () => {
         conditions.min_spend = values.min_spend || 100
         actions.action = 'pause'
       } else if (values.rule_type === 'auto_bid') {
-        conditions.target_roas = values.target_roas || 2.0
-        conditions.max_change_pct = values.max_change_pct || 20
-        actions.action = 'adjust_bid'
+        conditions.peak_hours = values.peak_hours || [19, 20, 21]
+        conditions.peak_pct = values.peak_pct ?? 30
+        conditions.sub_peak_hours = values.sub_peak_hours || [22]
+        conditions.sub_peak_pct = values.sub_peak_pct ?? 20
+        conditions.off_peak_hours = values.off_peak_hours || [2, 3, 4, 5, 6]
+        conditions.off_peak_pct = values.off_peak_pct ?? -50
+        actions.action = 'time_bid'
       } else if (values.rule_type === 'budget_cap') {
         conditions.max_daily_spend = values.max_daily_spend || 5000
         actions.action = 'pause'
@@ -1277,7 +1286,7 @@ const Ads = () => {
                         render: (_, r) => {
                           const c = r.conditions || {}
                           if (r.rule_type === 'pause_low_roi') return `ROAS < ${c.min_roas || 1}，花费 >= ₽${c.min_spend || 100}`
-                          if (r.rule_type === 'auto_bid') return `目标ROAS ${c.target_roas || 2}，最大调幅 ${c.max_change_pct || 20}%`
+                          if (r.rule_type === 'auto_bid') return `高峰+${c.peak_pct||30}% | 次峰+${c.sub_peak_pct||20}% | 低谷${c.off_peak_pct||-50}%`
                           if (r.rule_type === 'budget_cap') return `日花费上限 ₽${c.max_daily_spend || 0}`
                           if (r.rule_type === 'schedule') return `投放时段: ${(c.active_hours || []).join(',')}时`
                           return '-'
@@ -1957,18 +1966,55 @@ const Ads = () => {
                 </Row>
               )
               if (rt === 'auto_bid') return (
-                <Row gutter={16}>
-                  <Col span={12}>
-                    <Form.Item name="target_roas" label="目标ROAS" initialValue={2.0}>
-                      <InputNumber min={0.1} step={0.1} style={{ width: '100%' }} />
-                    </Form.Item>
-                  </Col>
-                  <Col span={12}>
-                    <Form.Item name="max_change_pct" label="最大调整幅度(%)" initialValue={20}>
-                      <InputNumber min={1} max={50} style={{ width: '100%' }} />
-                    </Form.Item>
-                  </Col>
-                </Row>
+                <div>
+                  <Alert message="根据莫斯科时间自动调整出价，高峰加价抢流量，低谷降价省预算" type="info" showIcon style={{ marginBottom: 16 }} />
+                  <Card size="small" title="高峰时段" style={{ marginBottom: 12, borderLeft: '3px solid #ff4d4f' }}>
+                    <Row gutter={16}>
+                      <Col span={16}>
+                        <Form.Item name="peak_hours" label="时间范围" initialValue={[19,20,21]}>
+                          <Select mode="multiple" placeholder="选择小时"
+                            options={Array.from({ length: 24 }, (_, i) => ({ value: i, label: `${i}:00` }))} />
+                        </Form.Item>
+                      </Col>
+                      <Col span={8}>
+                        <Form.Item name="peak_pct" label="加价比例(%)" initialValue={30}>
+                          <InputNumber min={0} max={200} style={{ width: '100%' }} addonAfter="%" />
+                        </Form.Item>
+                      </Col>
+                    </Row>
+                  </Card>
+                  <Card size="small" title="次高峰时段" style={{ marginBottom: 12, borderLeft: '3px solid #faad14' }}>
+                    <Row gutter={16}>
+                      <Col span={16}>
+                        <Form.Item name="sub_peak_hours" label="时间范围" initialValue={[22]}>
+                          <Select mode="multiple" placeholder="选择小时"
+                            options={Array.from({ length: 24 }, (_, i) => ({ value: i, label: `${i}:00` }))} />
+                        </Form.Item>
+                      </Col>
+                      <Col span={8}>
+                        <Form.Item name="sub_peak_pct" label="加价比例(%)" initialValue={20}>
+                          <InputNumber min={0} max={200} style={{ width: '100%' }} addonAfter="%" />
+                        </Form.Item>
+                      </Col>
+                    </Row>
+                  </Card>
+                  <Card size="small" title="低谷时段" style={{ marginBottom: 12, borderLeft: '3px solid #1890ff' }}>
+                    <Row gutter={16}>
+                      <Col span={16}>
+                        <Form.Item name="off_peak_hours" label="时间范围" initialValue={[2,3,4,5,6]}>
+                          <Select mode="multiple" placeholder="选择小时"
+                            options={Array.from({ length: 24 }, (_, i) => ({ value: i, label: `${i}:00` }))} />
+                        </Form.Item>
+                      </Col>
+                      <Col span={8}>
+                        <Form.Item name="off_peak_pct" label="降价比例(%)" initialValue={-50}>
+                          <InputNumber min={-90} max={0} style={{ width: '100%' }} addonAfter="%" />
+                        </Form.Item>
+                      </Col>
+                    </Row>
+                  </Card>
+                  <Text type="secondary">其他未设置的时段将保持原始出价不变</Text>
+                </div>
               )
               if (rt === 'budget_cap') return (
                 <Form.Item name="max_daily_spend" label="日花费上限(₽)" initialValue={5000}>
