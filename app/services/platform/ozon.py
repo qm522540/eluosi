@@ -471,7 +471,7 @@ class OzonClient(BasePlatformClient):
         """修改广告活动中商品的出价
 
         Performance API:
-        POST /api/client/campaign/{id}/products  body: {"bids":[{"sku":"...","bid":"..."}]}
+        PUT /api/client/campaign/{id}/products  body: {"bids":[{"sku":"...","bid":"..."}]}
         """
         await self._ensure_perf_token()
         if not self._perf_token:
@@ -480,7 +480,7 @@ class OzonClient(BasePlatformClient):
         try:
             url = f"{OZON_PERFORMANCE_API}/api/client/campaign/{campaign_id}/products"
             payload = {"bids": [{"sku": str(sku), "bid": str(new_bid)}]}
-            result = await self._request("POST", url, use_perf=True, json=payload)
+            result = await self._request("PUT", url, use_perf=True, json=payload)
             logger.info(f"Ozon 出价修改成功 campaign={campaign_id} sku={sku} bid={new_bid}")
             return True
         except Exception as e:

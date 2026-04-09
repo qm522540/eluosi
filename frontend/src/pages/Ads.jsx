@@ -1611,10 +1611,24 @@ const Ads = () => {
                           ),
                         },
                         {
-                          title: '出价 (₽)', dataIndex: 'bid', key: 'bid', width: 120, align: 'right',
-                          render: (v) => {
+                          title: '出价 (₽)', dataIndex: 'bid', key: 'bid', width: 180,
+                          render: (v, record) => {
                             const displayBid = Math.round(Number(v || 0) / 1000000)
-                            return <Text strong>{displayBid} ₽</Text>
+                            if (editingBid?.sku === record.sku) {
+                              return (
+                                <Space>
+                                  <InputNumber size="small" value={newBidValue} onChange={setNewBidValue}
+                                    min={1} step={1} style={{ width: 80 }} addonAfter="₽" />
+                                  <Button size="small" type="primary" loading={bidUpdating} onClick={handleUpdateBid}>保存</Button>
+                                  <Button size="small" onClick={() => setEditingBid(null)}>取消</Button>
+                                </Space>
+                              )
+                            }
+                            return (
+                              <a onClick={() => { setEditingBid(record); setNewBidValue(displayBid) }}>
+                                {displayBid} ₽
+                              </a>
+                            )
                           },
                         },
                       ]}
