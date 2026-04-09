@@ -6,7 +6,7 @@ from datetime import date, datetime, timedelta
 from sqlalchemy.orm import Session
 from sqlalchemy import func, case, desc
 
-from app.models.ad import AdCampaign, AdGroup, AdKeyword, AdStat, AdAutomationRule
+from app.models.ad import AdCampaign, AdGroup, AdKeyword, AdStat, AdAutomationRule, AdBidLog
 from app.models.notification import Notification
 from app.utils.errors import ErrorCode
 from app.utils.logger import logger
@@ -1238,8 +1238,25 @@ def _execute_single_rule(db: Session, tenant_id: int, rule: AdAutomationRule,
                 new_bid = round(base_bid * (1 + adjust_pct / 100), 2)
                 new_bid = max(new_bid, 0.01)
                 if abs(float(group.bid) - new_bid) > 0.001:
+                    old_bid_val = float(group.bid)
                     group.bid = new_bid
                     triggered = True
+                    # 记录调价日志
+                    period_name = "高峰" if moscow_hour in peak_hours else "次高峰" if moscow_hour in sub_peak_hours else "低谷" if moscow_hour in off_peak_hours else "平峰"
+                    db.add(AdBidLog(
+                        tenant_id=tenant_id,
+                        campaign_id=campaign.id,
+                        platform=campaign.platform,
+                        campaign_name=campaign.name,
+                        group_id=group.id,
+                        group_name=group.name,
+                        old_bid=old_bid_val,
+                        new_bid=new_bid,
+                        change_pct=adjust_pct,
+                        reason=f"{period_name}时段({moscow_hour}:00) 调价{'+' if adjust_pct>0 else ''}{adjust_pct}%",
+                        rule_id=rule.id,
+                        rule_name=rule.name,
+                    ))
 
             # 保存原始出价到 actions
             if not actions.get("original_bids"):

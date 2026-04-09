@@ -24,6 +24,7 @@ import {
   getAutomationRules, createAutomationRule, updateAutomationRule, deleteAutomationRule, executeRules,
   getBudgetOverview, getBudgetSuggestions,
   getCampaignProducts, updateCampaignBid, getCampaignBudget,
+  getBidLogs,
 } from '@/api/ads'
 import { getShops } from '@/api/shops'
 import { PLATFORMS, AD_STATUS, AD_TYPES } from '@/utils/constants'
@@ -156,6 +157,12 @@ const Ads = () => {
   const [ruleSubmitting, setRuleSubmitting] = useState(false)
   const [executing, setExecuting] = useState(false)
 
+  // 调价日志
+  const [bidLogs, setBidLogs] = useState([])
+  const [bidLogsLoading, setBidLogsLoading] = useState(false)
+  const [bidLogsTotal, setBidLogsTotal] = useState(0)
+  const [bidLogsPage, setBidLogsPage] = useState(1)
+
   // 预算数据
   const [budgetData, setBudgetData] = useState(null)
   const [budgetLoading, setBudgetLoading] = useState(false)
@@ -280,8 +287,25 @@ const Ads = () => {
     }
   }
 
+  const fetchBidLogs = async (p = 1) => {
+    setBidLogsLoading(true)
+    setBidLogsPage(p)
+    try {
+      const res = await getBidLogs({ page: p, page_size: 10 })
+      setBidLogs(res.data.items || [])
+      setBidLogsTotal(res.data.total || 0)
+    } catch {
+      setBidLogs([])
+    } finally {
+      setBidLogsLoading(false)
+    }
+  }
+
   useEffect(() => {
-    if (searched && mainTab === 'rules') fetchRules()
+    if (searched && mainTab === 'rules') {
+      fetchRules()
+      fetchBidLogs(1)
+    }
   }, [mainTab])
 
   const handleCreateRule = () => {
@@ -1314,6 +1338,55 @@ const Ads = () => {
                           </Space>
                         ),
                       },
+                    ]}
+                  />
+
+                  {/* 调价日志 */}
+                  <Divider />
+                  <div style={{ marginBottom: 12 }}>
+                    <Text strong>调价日志</Text>
+                  </div>
+                  <Table size="small" dataSource={bidLogs} rowKey="id" loading={bidLogsLoading}
+                    pagination={{
+                      current: bidLogsPage, total: bidLogsTotal, pageSize: 10, size: 'small',
+                      onChange: (p) => fetchBidLogs(p),
+                    }}
+                    columns={[
+                      {
+                        title: '时间', dataIndex: 'created_at', width: 150,
+                        render: v => v ? dayjs(v).format('MM-DD HH:mm') : '-',
+                      },
+                      {
+                        title: '活动', dataIndex: 'campaign_name', ellipsis: true,
+                        render: (v, r) => <Tooltip title={`ID: ${r.campaign_id}`}>{v || r.campaign_id}</Tooltip>,
+                      },
+                      {
+                        title: '平台', dataIndex: 'platform', width: 100,
+                        render: p => <Tag color={PLATFORMS[p]?.color}>{PLATFORMS[p]?.label || p}</Tag>,
+                      },
+                      { title: '广告组', dataIndex: 'group_name', width: 120, ellipsis: true },
+                      {
+                        title: '原出价', dataIndex: 'old_bid', width: 80, align: 'right',
+                        render: v => `₽${v}`,
+                      },
+                      {
+                        title: '新出价', dataIndex: 'new_bid', width: 80, align: 'right',
+                        render: (v, r) => (
+                          <Text style={{ color: r.change_pct > 0 ? '#52c41a' : r.change_pct < 0 ? '#ff4d4f' : '#999' }}>
+                            ₽{v}
+                          </Text>
+                        ),
+                      },
+                      {
+                        title: '调幅', dataIndex: 'change_pct', width: 70, align: 'center',
+                        render: v => (
+                          <Tag color={v > 0 ? 'green' : v < 0 ? 'red' : 'default'}>
+                            {v > 0 ? '+' : ''}{v}%
+                          </Tag>
+                        ),
+                      },
+                      { title: '原因', dataIndex: 'reason', ellipsis: true },
+                      { title: '规则', dataIndex: 'rule_name', width: 100, ellipsis: true },
                     ]}
                   />
                 </>

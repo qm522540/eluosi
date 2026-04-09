@@ -187,3 +187,8 @@ export function updateCampaignBid(campaignId, data) {
 export function getCampaignBudget(campaignId) {
   return request.get(`/ads/campaign-budget/${campaignId}`)
 }
+
+/** 获取出价调整日志 */
+export function getBidLogs(params) {
+  return request.get('/ads/bid-logs', { params })
+}

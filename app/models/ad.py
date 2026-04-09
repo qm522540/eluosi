@@ -87,6 +87,24 @@ class AdAutomationRule(BaseMixin, Base):
     trigger_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
 
+class AdBidLog(BaseMixin, Base):
+    """出价调整日志"""
+    __tablename__ = "ad_bid_logs"
+
+    tenant_id: Mapped[int] = mapped_column(BigInteger, nullable=False, index=True)
+    campaign_id: Mapped[int] = mapped_column(BigInteger, nullable=False, index=True)
+    platform: Mapped[str] = mapped_column(String(20), nullable=False)
+    campaign_name: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
+    group_id: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
+    group_name: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
+    old_bid: Mapped[float] = mapped_column(DECIMAL(10, 2), nullable=False)
+    new_bid: Mapped[float] = mapped_column(DECIMAL(10, 2), nullable=False)
+    change_pct: Mapped[float] = mapped_column(DECIMAL(8, 2), nullable=False)
+    reason: Mapped[str] = mapped_column(String(200), nullable=False)
+    rule_id: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
+    rule_name: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
+
+
 class AdStat(BaseMixin, Base):
     __tablename__ = "ad_stats"
 

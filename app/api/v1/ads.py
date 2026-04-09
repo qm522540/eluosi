@@ -632,6 +632,43 @@ async def campaign_budget(
         return success({"total": 0, "currency": "RUB"})
 
 
+@router.get("/bid-logs")
+def bid_log_list(
+    campaign_id: int = Query(None, description="活动ID筛选"),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    db: Session = Depends(get_db),
+    tenant_id: int = Depends(get_tenant_id),
+):
+    """获取出价调整日志"""
+    from app.models.ad import AdBidLog
+    query = db.query(AdBidLog).filter(AdBidLog.tenant_id == tenant_id)
+    if campaign_id:
+        query = query.filter(AdBidLog.campaign_id == campaign_id)
+    total = query.count()
+    items = query.order_by(AdBidLog.created_at.desc()).offset(
+        (page - 1) * page_size
+    ).limit(page_size).all()
+    return success({
+        "items": [{
+            "id": log.id,
+            "campaign_id": log.campaign_id,
+            "campaign_name": log.campaign_name,
+            "platform": log.platform,
+            "group_name": log.group_name,
+            "old_bid": float(log.old_bid),
+            "new_bid": float(log.new_bid),
+            "change_pct": float(log.change_pct),
+            "reason": log.reason,
+            "rule_name": log.rule_name,
+            "created_at": log.created_at.isoformat() if log.created_at else None,
+        } for log in items],
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+    })
+
+
 @router.get("/debug/wb-raw/{campaign_id}")
 async def debug_wb_raw(
     campaign_id: str,
