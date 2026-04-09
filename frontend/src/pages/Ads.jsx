@@ -350,13 +350,14 @@ const Ads = () => {
     try {
       const values = await ruleForm.validateFields()
       setRuleSubmitting(true)
+      const ruleType = editingRule ? editingRule.rule_type : values.rule_type
       const conditions = {}
       const actions = {}
-      if (values.rule_type === 'pause_low_roi') {
+      if (ruleType === 'pause_low_roi') {
         conditions.min_roas = values.min_roas || 1.0
         conditions.min_spend = values.min_spend || 100
         actions.action = 'pause'
-      } else if (values.rule_type === 'auto_bid') {
+      } else if (ruleType === 'auto_bid') {
         conditions.peak_hours = values.peak_hours || [19, 20, 21]
         conditions.peak_pct = values.peak_pct ?? 30
         conditions.sub_peak_hours = values.sub_peak_hours || [22]
@@ -364,15 +365,14 @@ const Ads = () => {
         conditions.off_peak_hours = values.off_peak_hours || [2, 3, 4, 5, 6]
         conditions.off_peak_pct = values.off_peak_pct ?? -50
         actions.action = 'time_bid'
-      } else if (values.rule_type === 'budget_cap') {
+      } else if (ruleType === 'budget_cap') {
         conditions.max_daily_spend = values.max_daily_spend || 5000
         actions.action = 'pause'
-      } else if (values.rule_type === 'inventory_link') {
+      } else if (ruleType === 'inventory_link') {
         conditions.min_stock = values.min_stock ?? 10
         conditions.resume_stock = values.resume_stock ?? 50
         actions.action = 'inventory_pause_resume'
       }
-      const ruleType = editingRule ? editingRule.rule_type : values.rule_type
       const payload = {
         name: RULE_TYPES[ruleType]?.label || ruleType,
         rule_type: ruleType,
