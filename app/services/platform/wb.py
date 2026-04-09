@@ -216,12 +216,15 @@ class WBClient(BasePlatformClient):
             8: "search",
             9: "search",
         }
-        # WB的status映射: -1=删除中, 4=就绪, 7=活跃, 8=结算中, 9=已暂停, 11=已暂停（预算不足）
+        # WB的status映射:
+        # -1=删除中, 4=准备就绪, 7=投放中, 8=结算中(已废弃),
+        # 9=投放中(统一广告,新类型), 11=已暂停
         status_map = {
+            -1: "archived",
             4: "draft",
             7: "active",
             8: "active",
-            9: "paused",
+            9: "active",
             11: "paused",
         }
 
