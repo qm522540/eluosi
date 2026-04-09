@@ -1030,7 +1030,7 @@ def get_product_roi(db: Session, tenant_id: int, start_date: date,
 # ==================== 自动化规则引擎 ====================
 
 def list_automation_rules(db: Session, tenant_id: int, rule_type: str = None,
-                          enabled: int = None) -> dict:
+                          enabled: int = None, shop_id: int = None) -> dict:
     """获取自动化规则列表"""
     try:
         query = db.query(AdAutomationRule).filter(
@@ -1040,6 +1040,8 @@ def list_automation_rules(db: Session, tenant_id: int, rule_type: str = None,
             query = query.filter(AdAutomationRule.rule_type == rule_type)
         if enabled is not None:
             query = query.filter(AdAutomationRule.enabled == enabled)
+        if shop_id:
+            query = query.filter(AdAutomationRule.shop_id == shop_id)
 
         rules = query.order_by(AdAutomationRule.created_at.desc()).all()
         return {"code": ErrorCode.SUCCESS, "data": [_rule_to_dict(r) for r in rules]}

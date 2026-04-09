@@ -278,7 +278,9 @@ const Ads = () => {
   const fetchRules = async () => {
     setRulesLoading(true)
     try {
-      const res = await getAutomationRules()
+      const params = {}
+      if (filterShopId) params.shop_id = filterShopId
+      const res = await getAutomationRules(params)
       setRules(res.data || [])
     } catch {
       setRules([])
@@ -287,11 +289,16 @@ const Ads = () => {
     }
   }
 
-  const fetchBidLogs = async (p = 1) => {
+  const [bidLogVisible, setBidLogVisible] = useState(false)
+  const [bidLogRuleId, setBidLogRuleId] = useState(null)
+
+  const fetchBidLogs = async (ruleId, p = 1) => {
     setBidLogsLoading(true)
     setBidLogsPage(p)
     try {
-      const res = await getBidLogs({ page: p, page_size: 10 })
+      const params = { page: p, page_size: 10 }
+      if (ruleId) params.rule_id = ruleId
+      const res = await getBidLogs(params)
       setBidLogs(res.data.items || [])
       setBidLogsTotal(res.data.total || 0)
     } catch {
@@ -301,16 +308,21 @@ const Ads = () => {
     }
   }
 
+  const handleShowBidLogs = (ruleId) => {
+    setBidLogRuleId(ruleId)
+    setBidLogVisible(true)
+    fetchBidLogs(ruleId, 1)
+  }
+
   useEffect(() => {
-    if (searched && mainTab === 'rules') {
-      fetchRules()
-      fetchBidLogs(1)
-    }
+    if (searched && mainTab === 'rules') fetchRules()
   }, [mainTab])
 
   const handleCreateRule = () => {
     setEditingRule(null)
     ruleForm.resetFields()
+    if (filterShopId) ruleForm.setFieldValue('shop_id', filterShopId)
+    if (filterPlatform) ruleForm.setFieldValue('platform', filterPlatform)
     setRuleFormVisible(true)
   }
 
@@ -1328,9 +1340,12 @@ const Ads = () => {
                         render: v => v ? dayjs(v).format('MM-DD HH:mm') : '-',
                       },
                       {
-                        title: '操作', key: 'action', width: 120,
+                        title: '操作', key: 'action', width: 160,
                         render: (_, record) => (
                           <Space size="small">
+                            {record.rule_type === 'auto_bid' && (
+                              <Button type="link" size="small" onClick={() => handleShowBidLogs(record.id)}>日志</Button>
+                            )}
                             <Button type="link" size="small" icon={<EditOutlined />} onClick={() => handleEditRule(record)} />
                             <Popconfirm title="确定删除此规则？" onConfirm={() => handleDeleteRule(record.id)}>
                               <Button type="link" size="small" danger icon={<DeleteOutlined />} />
@@ -1338,55 +1353,6 @@ const Ads = () => {
                           </Space>
                         ),
                       },
-                    ]}
-                  />
-
-                  {/* 调价日志 */}
-                  <Divider />
-                  <div style={{ marginBottom: 12 }}>
-                    <Text strong>调价日志</Text>
-                  </div>
-                  <Table size="small" dataSource={bidLogs} rowKey="id" loading={bidLogsLoading}
-                    pagination={{
-                      current: bidLogsPage, total: bidLogsTotal, pageSize: 10, size: 'small',
-                      onChange: (p) => fetchBidLogs(p),
-                    }}
-                    columns={[
-                      {
-                        title: '时间', dataIndex: 'created_at', width: 150,
-                        render: v => v ? dayjs(v).format('MM-DD HH:mm') : '-',
-                      },
-                      {
-                        title: '活动', dataIndex: 'campaign_name', ellipsis: true,
-                        render: (v, r) => <Tooltip title={`ID: ${r.campaign_id}`}>{v || r.campaign_id}</Tooltip>,
-                      },
-                      {
-                        title: '平台', dataIndex: 'platform', width: 100,
-                        render: p => <Tag color={PLATFORMS[p]?.color}>{PLATFORMS[p]?.label || p}</Tag>,
-                      },
-                      { title: '广告组', dataIndex: 'group_name', width: 120, ellipsis: true },
-                      {
-                        title: '原出价', dataIndex: 'old_bid', width: 80, align: 'right',
-                        render: v => `₽${v}`,
-                      },
-                      {
-                        title: '新出价', dataIndex: 'new_bid', width: 80, align: 'right',
-                        render: (v, r) => (
-                          <Text style={{ color: r.change_pct > 0 ? '#52c41a' : r.change_pct < 0 ? '#ff4d4f' : '#999' }}>
-                            ₽{v}
-                          </Text>
-                        ),
-                      },
-                      {
-                        title: '调幅', dataIndex: 'change_pct', width: 70, align: 'center',
-                        render: v => (
-                          <Tag color={v > 0 ? 'green' : v < 0 ? 'red' : 'default'}>
-                            {v > 0 ? '+' : ''}{v}%
-                          </Tag>
-                        ),
-                      },
-                      { title: '原因', dataIndex: 'reason', ellipsis: true },
-                      { title: '规则', dataIndex: 'rule_name', width: 100, ellipsis: true },
                     ]}
                   />
                 </>
@@ -1983,6 +1949,32 @@ const Ads = () => {
             <InputNumber min={0} step={0.5} style={{ width: '100%' }} />
           </Form.Item>
         </Form>
+      </Modal>
+
+      {/* ==================== 调价日志弹窗 ==================== */}
+      <Modal
+        title="调价日志"
+        open={bidLogVisible}
+        onCancel={() => setBidLogVisible(false)}
+        footer={null}
+        width={800}
+      >
+        <Table size="small" dataSource={bidLogs} rowKey="id" loading={bidLogsLoading}
+          pagination={{
+            current: bidLogsPage, total: bidLogsTotal, pageSize: 10, size: 'small',
+            onChange: (p) => fetchBidLogs(bidLogRuleId, p),
+          }}
+          columns={[
+            { title: '时间', dataIndex: 'created_at', width: 130, render: v => v ? dayjs(v).format('MM-DD HH:mm') : '-' },
+            { title: '活动', dataIndex: 'campaign_name', ellipsis: true, render: (v, r) => <Tooltip title={`ID: ${r.campaign_id}`}>{v || r.campaign_id}</Tooltip> },
+            { title: '平台', dataIndex: 'platform', width: 100, render: p => <Tag color={PLATFORMS[p]?.color}>{PLATFORMS[p]?.label || p}</Tag> },
+            { title: '广告组', dataIndex: 'group_name', width: 110, ellipsis: true },
+            { title: '原出价', dataIndex: 'old_bid', width: 75, align: 'right', render: v => `₽${v}` },
+            { title: '新出价', dataIndex: 'new_bid', width: 75, align: 'right', render: (v, r) => <Text style={{ color: r.change_pct > 0 ? '#52c41a' : '#ff4d4f' }}>₽{v}</Text> },
+            { title: '调幅', dataIndex: 'change_pct', width: 65, align: 'center', render: v => <Tag color={v > 0 ? 'green' : 'red'}>{v > 0 ? '+' : ''}{v}%</Tag> },
+            { title: '原因', dataIndex: 'reason', ellipsis: true },
+          ]}
+        />
       </Modal>
 
       {/* ==================== 自动化规则 表单弹窗 ==================== */}

@@ -428,11 +428,12 @@ def product_roi(
 def rule_list(
     rule_type: str = Query(None, description="规则类型"),
     enabled: int = Query(None, description="启用状态: 0/1"),
+    shop_id: int = Query(None, description="店铺ID筛选"),
     db: Session = Depends(get_db),
     tenant_id: int = Depends(get_tenant_id),
 ):
     """获取自动化规则列表"""
-    result = list_automation_rules(db, tenant_id, rule_type=rule_type, enabled=enabled)
+    result = list_automation_rules(db, tenant_id, rule_type=rule_type, enabled=enabled, shop_id=shop_id)
     if result["code"] != 0:
         return error(result["code"], result["msg"])
     return success(result["data"])
@@ -635,6 +636,7 @@ async def campaign_budget(
 @router.get("/bid-logs")
 def bid_log_list(
     campaign_id: int = Query(None, description="活动ID筛选"),
+    rule_id: int = Query(None, description="规则ID筛选"),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     db: Session = Depends(get_db),
@@ -645,6 +647,8 @@ def bid_log_list(
     query = db.query(AdBidLog).filter(AdBidLog.tenant_id == tenant_id)
     if campaign_id:
         query = query.filter(AdBidLog.campaign_id == campaign_id)
+    if rule_id:
+        query = query.filter(AdBidLog.rule_id == rule_id)
     total = query.count()
     items = query.order_by(AdBidLog.created_at.desc()).offset(
         (page - 1) * page_size
