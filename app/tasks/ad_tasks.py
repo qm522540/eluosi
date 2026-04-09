@@ -229,6 +229,9 @@ def _upsert_campaign(db, tenant_id: int, shop_id: int, platform: str, data: dict
     ).first()
 
     if existing:
+        # 已归档/已删除的活动不再更新，防止被同步恢复
+        if existing.status == "archived":
+            return 0
         new_name = data.get("name", "")
         # 只有API返回了真实名称时才更新，避免覆盖用户手动设置的名称
         if new_name and new_name.strip():
