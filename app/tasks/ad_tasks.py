@@ -176,10 +176,9 @@ async def _fetch_single_wb_shop(db, shop: Shop) -> tuple:
 
         db.commit()
 
-        # 2. 拉取广告统计数据（最近2天，覆盖当前小时）
+        # 2. 拉取广告统计数据（最近30天）
         today = date.today()
-        yesterday = today - timedelta(days=1)
-        date_from = yesterday.isoformat()
+        date_from = (today - timedelta(days=30)).isoformat()
         date_to = today.isoformat()
 
         # 获取该店铺所有active的campaign

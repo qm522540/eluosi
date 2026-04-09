@@ -256,37 +256,49 @@ class WBClient(BasePlatformClient):
     ) -> list:
         """拉取指定广告活动的统计数据
 
-        依次尝试多个WB统计接口（v2/v1），兼容API版本变更。
+        依次尝试多个WB统计接口：
+        1. GET /adv/v3/fullstats (新版，用from/to查询参数)
+        2. POST /adv/v2/fullstats (旧版)
+        3. POST /adv/v1/fullstats (旧版)
         date_from/date_to 格式: "YYYY-MM-DD"
-
-        返回标准化的统计数据列表，每条对应一天的数据。
         """
         stats = []
-        payload = [{"id": int(campaign_id), "dates": [date_from, date_to]}]
-
-        # 按优先级尝试多个端点
-        endpoints = [
-            f"{WB_ADVERT_API}/adv/v2/fullstats",
-            f"{WB_ADVERT_API}/adv/v1/fullstats",
-        ]
-
         result = None
-        for url in endpoints:
-            try:
-                result = await self._request("POST", url, json=payload)
-                if result:
-                    break
-            except Exception:
-                continue
 
-        if not result:
+        # 方式1: GET /adv/v3/fullstats (新版接口)
+        try:
+            url = f"{WB_ADVERT_API}/adv/v3/fullstats"
+            result = await self._request(
+                "GET", url,
+                params={"id": int(campaign_id), "from": date_from, "to": date_to}
+            )
+            if result and result != {}:
+                logger.info(f"WB v3/fullstats 命中 campaign_id={campaign_id}")
+        except Exception:
+            result = None
+
+        # 方式2: POST /adv/v2/fullstats (旧版)
+        if not result or result == {}:
+            payload = [{"id": int(campaign_id), "dates": [date_from, date_to]}]
+            for ver in ["v2", "v1"]:
+                try:
+                    url = f"{WB_ADVERT_API}/adv/{ver}/fullstats"
+                    result = await self._request("POST", url, json=payload)
+                    if result:
+                        logger.info(f"WB {ver}/fullstats 命中 campaign_id={campaign_id}")
+                        break
+                except Exception:
+                    continue
+
+        if not result or result == {}:
             logger.warning(
-                f"WB 所有统计接口均不可用，shop_id={self.shop_id}，"
+                f"WB 所有统计接口均无数据，shop_id={self.shop_id}，"
                 f"campaign_id={campaign_id}"
             )
             return []
 
         try:
+            # v3返回格式可能不同，兼容处理
             if isinstance(result, list):
                 for campaign_stats in result:
                     days = campaign_stats.get("days", [])
@@ -294,6 +306,19 @@ class WBClient(BasePlatformClient):
                         stat = self._parse_daily_stat(campaign_id, day_data)
                         if stat:
                             stats.append(stat)
+            elif isinstance(result, dict):
+                # v3可能直接返回 {"days": [...]} 或 {"bopiStats": [...]}
+                days = result.get("days", [])
+                if days:
+                    for day_data in days:
+                        stat = self._parse_daily_stat(campaign_id, day_data)
+                        if stat:
+                            stats.append(stat)
+                # 也尝试解析顶层统计
+                elif result.get("views") or result.get("clicks"):
+                    stat = self._parse_daily_stat(campaign_id, result)
+                    if stat:
+                        stats.append(stat)
         except Exception as e:
             logger.error(
                 f"WB 解析广告统计失败，shop_id={self.shop_id}，"
