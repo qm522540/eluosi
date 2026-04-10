@@ -14,7 +14,7 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
 from app.dependencies import get_db, get_current_user, get_tenant_id
-from app.schemas.ai_pricing import PricingConfigUpdate, AnalyzeRequest, ToggleAutoRequest, CampaignPricingConfigUpdate
+from app.schemas.ai_pricing import PricingConfigUpdate, AnalyzeRequest, ToggleAutoRequest, CampaignPricingConfigUpdate, PromoCalendarCreate
 from app.models.ai_pricing import AiPricingConfig, AiPricingSuggestion
 from app.models.ad import AdCampaign
 from app.models.shop import Shop
@@ -121,27 +121,24 @@ def get_promo_calendars(
 
 @router.post("/promo-calendars")
 def create_promo_calendar(
-    data: dict,
+    req: PromoCalendarCreate,
     db: Session = Depends(get_db),
     tenant_id: int = Depends(get_tenant_id),
 ):
     """新增大促日期"""
     from app.models.promo_calendar import PromoCalendar
-    promo = PromoCalendar(
-        tenant_id=tenant_id,
-        promo_name=data.get("promo_name", ""),
-        promo_date=data.get("promo_date"),
-        pre_heat_days=data.get("pre_heat_days", 1),
-        recovery_days=data.get("recovery_days", 3),
-        pre_heat_multiplier=data.get("pre_heat_multiplier", 1.30),
-        peak_multiplier=data.get("peak_multiplier", 1.70),
-        recovery_day1_multiplier=data.get("recovery_day1_multiplier", 0.90),
-        recovery_day2_multiplier=data.get("recovery_day2_multiplier", 0.95),
-        recovery_day3_multiplier=data.get("recovery_day3_multiplier", 1.00),
-    )
-    db.add(promo)
-    db.commit()
-    return success({"id": promo.id}, msg="大促日期已添加")
+    try:
+        promo = PromoCalendar(
+            tenant_id=tenant_id,
+            **req.model_dump(),
+        )
+        db.add(promo)
+        db.commit()
+        return success({"id": promo.id}, msg="大促日期已添加")
+    except Exception as e:
+        db.rollback()
+        logger.error(f"创建大促日期失败: {e}")
+        return error(ErrorCode.PARAM_ERROR, f"创建失败: {str(e)[:100]}")
 
 
 @router.get("/promo-status")
@@ -171,6 +168,10 @@ def get_data_status(
     tenant_id: int = Depends(get_tenant_id),
 ):
     """查询店铺数据初始化状态（前端进入AI调价时调用）"""
+    # 先校验shop归属
+    shop = db.query(Shop).filter(Shop.id == shop_id, Shop.tenant_id == tenant_id).first()
+    if not shop:
+        return error(ErrorCode.SHOP_NOT_FOUND, "店铺不存在")
     from app.services.data.ozon_stats_collector import check_shop_init_status
     result = check_shop_init_status(db, shop_id)
     return success(result)
@@ -183,16 +184,25 @@ async def trigger_data_init(
     tenant_id: int = Depends(get_tenant_id),
 ):
     """触发店铺首次3个月数据拉取"""
+    # 先校验shop归属
+    shop = db.query(Shop).filter(Shop.id == shop_id, Shop.tenant_id == tenant_id).first()
+    if not shop:
+        return error(ErrorCode.SHOP_NOT_FOUND, "店铺不存在")
+
     from app.services.data.ozon_stats_collector import check_shop_init_status, init_shop_history
 
     status = check_shop_init_status(db, shop_id)
     if status.get("initialized"):
         return success(status, msg="数据已初始化，无需重复拉取")
 
-    result = await init_shop_history(db, shop_id, days=90)
-    if result.get("error"):
-        return error(ErrorCode.NOT_FOUND, result["error"])
-    return success(result, msg="数据初始化完成")
+    try:
+        result = await init_shop_history(db, shop_id, days=90)
+        if result.get("error"):
+            return error(ErrorCode.NOT_FOUND, result["error"])
+        return success(result, msg="数据初始化完成")
+    except Exception as e:
+        logger.error(f"数据初始化失败 shop_id={shop_id}: {e}")
+        return error(ErrorCode.UNKNOWN_ERROR, "数据初始化失败")
 
 
 # ==================== WB建议模式 ====================
@@ -224,22 +234,22 @@ def get_wb_suggestions(
     # 过期处理
     _expire_old_suggestions(db, tenant_id, shop_id)
 
-    query = db.query(AiPricingSuggestion).filter(
+    query = db.query(AiPricingSuggestion, AdCampaign).filter(
         AiPricingSuggestion.tenant_id == tenant_id,
         AiPricingSuggestion.shop_id == shop_id,
         AiPricingSuggestion.status == status,
     ).join(AdCampaign, AiPricingSuggestion.campaign_id == AdCampaign.id).filter(
         AdCampaign.platform == "wb",
+        AdCampaign.tenant_id == tenant_id,
     )
 
     total = query.count()
-    items = query.order_by(AiPricingSuggestion.created_at.desc()).offset(
+    rows = query.order_by(AiPricingSuggestion.created_at.desc()).offset(
         (page - 1) * page_size
     ).limit(page_size).all()
 
     result_items = []
-    for s in items:
-        campaign = db.query(AdCampaign).filter(AdCampaign.id == s.campaign_id).first()
+    for s, campaign in rows:
         d = _suggestion_to_dict(s)
         d["campaign_name"] = campaign.name if campaign else None
         d["platform_campaign_id"] = campaign.platform_campaign_id if campaign else None

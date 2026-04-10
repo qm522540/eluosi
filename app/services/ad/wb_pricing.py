@@ -191,7 +191,7 @@ ROAS走势：{roas_trend_text}
         AiPricingSuggestion.status == "pending",
     ).join(AdCampaign, AiPricingSuggestion.campaign_id == AdCampaign.id).filter(
         AdCampaign.platform == "wb",
-    ).update({"status": "expired"}, synchronize_session=False)
+    ).update({"status": "expired"}, synchronize_session="fetch")
     db.flush()
 
     saved = []

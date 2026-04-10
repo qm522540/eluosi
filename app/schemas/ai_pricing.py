@@ -33,3 +33,16 @@ class CampaignPricingConfigUpdate(BaseModel):
     custom_max_bid: Optional[float] = Field(None, gt=0)
     custom_daily_budget: Optional[float] = Field(None, gt=0)
     custom_target_roas: Optional[float] = Field(None, gt=0, le=99.99)
+
+
+class PromoCalendarCreate(BaseModel):
+    """新增大促日期"""
+    promo_name: str = Field(..., min_length=1, max_length=100)
+    promo_date: str = Field(..., pattern=r"^\d{4}-\d{2}-\d{2}$", description="YYYY-MM-DD")
+    pre_heat_days: int = Field(1, ge=0, le=30)
+    recovery_days: int = Field(3, ge=0, le=30)
+    pre_heat_multiplier: float = Field(1.30, ge=0.5, le=5.0)
+    peak_multiplier: float = Field(1.70, ge=0.5, le=5.0)
+    recovery_day1_multiplier: float = Field(0.90, ge=0.1, le=3.0)
+    recovery_day2_multiplier: float = Field(0.95, ge=0.1, le=3.0)
+    recovery_day3_multiplier: float = Field(1.00, ge=0.1, le=3.0)
