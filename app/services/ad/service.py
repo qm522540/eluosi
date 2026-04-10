@@ -1133,7 +1133,7 @@ def delete_automation_rule(db: Session, rule_id: int, tenant_id: int) -> dict:
         return {"code": ErrorCode.UNKNOWN_ERROR, "msg": "删除自动化规则失败"}
 
 
-def execute_automation_rules(db: Session, tenant_id: int) -> dict:
+async def execute_automation_rules(db: Session, tenant_id: int) -> dict:
     """执行所有启用的自动化规则"""
     try:
         rules = db.query(AdAutomationRule).filter(
@@ -1147,7 +1147,7 @@ def execute_automation_rules(db: Session, tenant_id: int) -> dict:
 
         for rule in rules:
             try:
-                triggered = _execute_single_rule(db, tenant_id, rule, week_ago, today)
+                triggered = await _execute_single_rule(db, tenant_id, rule, week_ago, today)
                 results.append({
                     "rule_id": rule.id,
                     "name": rule.name,
@@ -1171,8 +1171,8 @@ def execute_automation_rules(db: Session, tenant_id: int) -> dict:
         return {"code": ErrorCode.UNKNOWN_ERROR, "msg": "执行自动化规则失败"}
 
 
-def _execute_single_rule(db: Session, tenant_id: int, rule: AdAutomationRule,
-                         start_date: date, end_date: date) -> bool:
+async def _execute_single_rule(db: Session, tenant_id: int, rule: AdAutomationRule,
+                               start_date: date, end_date: date) -> bool:
     """执行单条规则，返回是否触发了动作"""
     conditions = rule.conditions or {}
     actions = rule.actions or {}
@@ -1218,71 +1218,11 @@ def _execute_single_rule(db: Session, tenant_id: int, rule: AdAutomationRule,
                 logger.info(f"规则[{rule.name}] 暂停活动 {campaign.id}，ROAS={roas:.2f}<{min_roas}")
 
         elif rule.rule_type == "auto_bid":
-            # 分时调价模式：根据当前时段调整出价比例
-            peak_hours = conditions.get("peak_hours", [19, 20, 21])
-            peak_pct = conditions.get("peak_pct", 30)
-            sub_peak_hours = conditions.get("sub_peak_hours", [22])
-            sub_peak_pct = conditions.get("sub_peak_pct", 20)
-            off_peak_hours = conditions.get("off_peak_hours", [2, 3, 4, 5, 6])
-            off_peak_pct = conditions.get("off_peak_pct", -50)
-
-            # 确定当前时段的调价比例（莫斯科时间）
-            from pytz import timezone as pytz_tz
-            moscow_hour = datetime.now(pytz_tz("Europe/Moscow")).hour
-
-            if moscow_hour in peak_hours:
-                adjust_pct = peak_pct
-            elif moscow_hour in sub_peak_hours:
-                adjust_pct = sub_peak_pct
-            elif moscow_hour in off_peak_hours:
-                adjust_pct = off_peak_pct
-            else:
-                adjust_pct = 0  # 平峰：原价
-
-            # 获取或初始化原始出价记录
-            original_bids = (actions.get("original_bids") or {}).get(str(campaign.id), {})
-
-            groups = db.query(AdGroup).filter(
-                AdGroup.campaign_id == campaign.id,
-                AdGroup.tenant_id == tenant_id,
-                AdGroup.status == "active",
-            ).all()
-            for group in groups:
-                if not group.bid or float(group.bid) <= 0:
-                    continue
-                gid = str(group.id)
-                # 首次运行：记录原始出价
-                if gid not in original_bids:
-                    original_bids[gid] = float(group.bid)
-                base_bid = original_bids[gid]
-                new_bid = round(base_bid * (1 + adjust_pct / 100), 2)
-                new_bid = max(new_bid, 0.01)
-                if abs(float(group.bid) - new_bid) > 0.001:
-                    old_bid_val = float(group.bid)
-                    group.bid = new_bid
-                    triggered = True
-                    # 记录调价日志
-                    period_name = "高峰" if moscow_hour in peak_hours else "次高峰" if moscow_hour in sub_peak_hours else "低谷" if moscow_hour in off_peak_hours else "平峰"
-                    db.add(AdBidLog(
-                        tenant_id=tenant_id,
-                        campaign_id=campaign.id,
-                        platform=campaign.platform,
-                        campaign_name=campaign.name,
-                        group_id=group.id,
-                        group_name=group.name,
-                        old_bid=old_bid_val,
-                        new_bid=new_bid,
-                        change_pct=adjust_pct,
-                        reason=f"{period_name}时段({moscow_hour}:00) 调价{'+' if adjust_pct>0 else ''}{adjust_pct}%",
-                        rule_id=rule.id,
-                        rule_name=rule.name,
-                    ))
-
-            # 保存原始出价到 actions
-            if not actions.get("original_bids"):
-                actions["original_bids"] = {}
-            actions["original_bids"][str(campaign.id)] = original_bids
-            rule.actions = actions
+            bid_triggered = await _execute_auto_bid(
+                db, tenant_id, campaign, rule, conditions, actions
+            )
+            if bid_triggered:
+                triggered = True
 
         elif rule.rule_type == "budget_cap":
             daily_limit = conditions.get("max_daily_spend", 0)
@@ -1303,15 +1243,164 @@ def _execute_single_rule(db: Session, tenant_id: int, rule: AdAutomationRule,
             # 库存联动：库存不足暂停，库存恢复开启
             min_stock = conditions.get("min_stock", 10)
             resume_stock = conditions.get("resume_stock", 50)
-            # 通过广告组关联的 listing_id 查库存（预留，目前用模拟值）
             # TODO: 接入平台库存API获取实际库存
-            # 目前记录规则但不执行实际操作，等库存模块对接后启用
             logger.info(f"规则[{rule.name}] 库存联动检查 活动{campaign.id} min={min_stock} resume={resume_stock}")
 
     if triggered:
         rule.last_triggered_at = datetime.utcnow()
         rule.trigger_count += 1
         db.commit()
+
+    return triggered
+
+
+async def _execute_auto_bid(db: Session, tenant_id: int, campaign: AdCampaign,
+                            rule: AdAutomationRule, conditions: dict, actions: dict) -> bool:
+    """分时调价：通过平台API直接调整商品出价"""
+    from pytz import timezone as pytz_tz
+
+    peak_hours = conditions.get("peak_hours", [19, 20, 21])
+    peak_pct = conditions.get("peak_pct", 30)
+    sub_peak_hours = conditions.get("sub_peak_hours", [22])
+    sub_peak_pct = conditions.get("sub_peak_pct", 20)
+    off_peak_hours = conditions.get("off_peak_hours", [2, 3, 4, 5, 6])
+    off_peak_pct = conditions.get("off_peak_pct", -50)
+
+    moscow_hour = datetime.now(pytz_tz("Europe/Moscow")).hour
+
+    if moscow_hour in peak_hours:
+        adjust_pct = peak_pct
+        period_name = "高峰"
+    elif moscow_hour in sub_peak_hours:
+        adjust_pct = sub_peak_pct
+        period_name = "次高峰"
+    elif moscow_hour in off_peak_hours:
+        adjust_pct = off_peak_pct
+        period_name = "低谷"
+    else:
+        adjust_pct = 0
+        period_name = "平峰"
+
+    triggered = False
+
+    if campaign.platform == "ozon" and campaign.platform_campaign_id:
+        # Ozon: 通过Performance API直接读取/修改商品出价
+        from app.models.shop import Shop
+        from app.services.platform.ozon import OzonClient
+
+        shop = db.query(Shop).filter(Shop.id == campaign.shop_id).first()
+        if not shop:
+            logger.warning(f"分时调价: 店铺 {campaign.shop_id} 不存在，跳过")
+            return False
+
+        client = OzonClient(
+            shop_id=shop.id, api_key=shop.api_key, client_id=shop.client_id,
+            perf_client_id=shop.perf_client_id or '',
+            perf_client_secret=shop.perf_client_secret or '',
+        )
+        try:
+            products = await client.fetch_campaign_products(campaign.platform_campaign_id)
+            if not products:
+                logger.info(f"分时调价: 活动 {campaign.id} 无商品，跳过")
+                return False
+
+            # 获取或初始化原始出价记录（按campaign_id存储）
+            original_bids = (actions.get("original_bids") or {}).get(str(campaign.id), {})
+
+            for product in products:
+                sku = str(product.get("sku", ""))
+                # Ozon出价单位：微单位字符串（除以1000000=卢布）
+                current_bid_raw = product.get("bid", "0")
+                current_bid = int(current_bid_raw) / 1_000_000 if current_bid_raw else 0
+                if current_bid <= 0:
+                    continue
+
+                # 首次运行：记录原始出价
+                if sku not in original_bids:
+                    original_bids[sku] = current_bid
+
+                base_bid = original_bids[sku]
+                new_bid = round(base_bid * (1 + adjust_pct / 100), 2)
+                new_bid = max(new_bid, 0.01)
+
+                if abs(current_bid - new_bid) < 0.01:
+                    continue
+
+                # 转回微单位调用API
+                new_bid_raw = str(int(new_bid * 1_000_000))
+                ok = await client.update_campaign_bid(
+                    campaign.platform_campaign_id, sku, new_bid_raw
+                )
+                if ok:
+                    triggered = True
+                    product_name = product.get("title", sku)
+                    db.add(AdBidLog(
+                        tenant_id=tenant_id,
+                        campaign_id=campaign.id,
+                        platform=campaign.platform,
+                        campaign_name=campaign.name,
+                        group_id=None,
+                        group_name=f"SKU:{sku} {product_name[:50]}",
+                        old_bid=current_bid,
+                        new_bid=new_bid,
+                        change_pct=adjust_pct,
+                        reason=f"{period_name}时段({moscow_hour}:00) 调价{'+' if adjust_pct > 0 else ''}{adjust_pct}%",
+                        rule_id=rule.id,
+                        rule_name=rule.name,
+                    ))
+                    logger.info(f"分时调价: 活动{campaign.id} SKU={sku} {current_bid}→{new_bid} ({period_name}{adjust_pct:+d}%)")
+                else:
+                    logger.warning(f"分时调价: 活动{campaign.id} SKU={sku} API调用失败")
+
+            # 保存原始出价
+            if not actions.get("original_bids"):
+                actions["original_bids"] = {}
+            actions["original_bids"][str(campaign.id)] = original_bids
+            rule.actions = actions
+            from sqlalchemy.orm.attributes import flag_modified
+            flag_modified(rule, "actions")
+        finally:
+            await client.close()
+    else:
+        # 非Ozon平台：沿用本地AdGroup调价逻辑
+        original_bids = (actions.get("original_bids") or {}).get(str(campaign.id), {})
+        groups = db.query(AdGroup).filter(
+            AdGroup.campaign_id == campaign.id,
+            AdGroup.tenant_id == tenant_id,
+            AdGroup.status == "active",
+        ).all()
+        for group in groups:
+            if not group.bid or float(group.bid) <= 0:
+                continue
+            gid = str(group.id)
+            if gid not in original_bids:
+                original_bids[gid] = float(group.bid)
+            base_bid = original_bids[gid]
+            new_bid = round(base_bid * (1 + adjust_pct / 100), 2)
+            new_bid = max(new_bid, 0.01)
+            if abs(float(group.bid) - new_bid) > 0.001:
+                old_bid_val = float(group.bid)
+                group.bid = new_bid
+                triggered = True
+                db.add(AdBidLog(
+                    tenant_id=tenant_id,
+                    campaign_id=campaign.id,
+                    platform=campaign.platform,
+                    campaign_name=campaign.name,
+                    group_id=group.id,
+                    group_name=group.name,
+                    old_bid=old_bid_val,
+                    new_bid=new_bid,
+                    change_pct=adjust_pct,
+                    reason=f"{period_name}时段({moscow_hour}:00) 调价{'+' if adjust_pct > 0 else ''}{adjust_pct}%",
+                    rule_id=rule.id,
+                    rule_name=rule.name,
+                ))
+
+        if not actions.get("original_bids"):
+            actions["original_bids"] = {}
+        actions["original_bids"][str(campaign.id)] = original_bids
+        rule.actions = actions
 
     return triggered
 

@@ -481,12 +481,12 @@ def rule_delete(
 
 
 @router.post("/rules/execute")
-def rules_execute(
+async def rules_execute(
     db: Session = Depends(get_db),
     tenant_id: int = Depends(get_tenant_id),
 ):
     """手动执行所有启用的自动化规则"""
-    result = execute_automation_rules(db, tenant_id)
+    result = await execute_automation_rules(db, tenant_id)
     if result["code"] != 0:
         return error(result["code"], result["msg"])
     return success(result["data"], msg="规则执行完成")

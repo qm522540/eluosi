@@ -540,7 +540,7 @@ def run_automation_rules(self):
 
         results = {}
         for tid in tenant_ids:
-            result = execute_automation_rules(db, tid)
+            result = _run_async(execute_automation_rules(db, tid))
             results[tid] = result.get("data", {})
             logger.info(f"租户 {tid} 自动化规则执行完成: {result.get('data', {}).get('rules_checked', 0)} 条规则")
 
