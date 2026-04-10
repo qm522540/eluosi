@@ -8,6 +8,11 @@ import {
   EditOutlined, PlusOutlined, DeleteOutlined, PlayCircleOutlined,
 } from '@ant-design/icons'
 import dayjs from 'dayjs'
+import utc from 'dayjs/plugin/utc'
+import timezone from 'dayjs/plugin/timezone'
+
+dayjs.extend(utc)
+dayjs.extend(timezone)
 import {
   getAutomationRules, createAutomationRule, updateAutomationRule, deleteAutomationRule,
   executeRules, restoreRuleBids, getBidLogs,
@@ -245,14 +250,26 @@ const AdsRules = ({ shopId, platform, searched }) => {
     }
   }
 
+  // 计算下次执行时间（莫斯科时间每小时的第25分钟）
+  const getNextExecTime = () => {
+    const now = dayjs().tz('Europe/Moscow')
+    let next = now.minute() < 25
+      ? now.minute(25).second(0)
+      : now.add(1, 'hour').minute(25).second(0)
+    return next
+  }
+
   if (!searched) {
     return <Card><Empty description="请选择平台和店铺后点击确定" /></Card>
   }
 
   return (
     <>
-      <div style={{ marginBottom: 16, display: 'flex', justifyContent: 'space-between' }}>
-        <Text>配置自动化规则，系统将每小时自动检查并执行。</Text>
+      <div style={{ marginBottom: 16, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <Text>
+          系统每小时自动执行（莫斯科时间每小时的 :25 分）。
+          下次执行：<Text strong>{getNextExecTime().format('HH:mm')}（莫斯科）</Text>
+        </Text>
         <Space>
           <Button icon={<PlayCircleOutlined />} loading={executing} onClick={handleExecuteRules}>立即执行</Button>
           <Button type="primary" icon={<PlusOutlined />} onClick={handleCreateRule}>新建规则</Button>
@@ -284,8 +301,14 @@ const AdsRules = ({ shopId, platform, searched }) => {
             title: '触发次数', dataIndex: 'trigger_count', width: 80, align: 'center',
           },
           {
-            title: '最后触发', dataIndex: 'last_triggered_at', width: 160,
+            title: '最后触发', dataIndex: 'last_triggered_at', width: 130,
             render: v => v ? dayjs(v).format('MM-DD HH:mm') : '-',
+          },
+          {
+            title: '下次执行', key: 'next_exec', width: 130,
+            render: (_, r) => r.enabled
+              ? <Text type="success">{getNextExecTime().format('HH:mm')} (莫斯科)</Text>
+              : <Text type="secondary">已停用</Text>,
           },
           {
             title: '操作', key: 'action', width: 160,
@@ -441,7 +464,7 @@ const AdsRules = ({ shopId, platform, searched }) => {
                       )
                     }}
                   </Form.Item>
-                  <Text type="secondary">其他未设置的时段将保持原始出价不变</Text>
+                  <Text type="secondary">其他未设置的时段将保持原始出价不变。系统每小时（莫斯科时间 :25 分）自动执行。</Text>
                 </div>
               )
               if (rt === 'budget_cap') return (
