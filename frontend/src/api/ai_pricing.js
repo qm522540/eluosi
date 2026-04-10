@@ -39,3 +39,18 @@ export function toggleAutoExecute(shopId, data) {
 export function getHistory(shopId, params) {
   return request.get(`/ai-pricing/history/${shopId}`, { params })
 }
+
+/** 获取当前大促状态 */
+export function getPromoStatus(tenantId) {
+  return request.get(`/ai-pricing/promo-status/${tenantId}`)
+}
+
+/** 获取大促日历列表 */
+export function getPromoCalendars(tenantId) {
+  return request.get(`/ai-pricing/promo-calendars/${tenantId}`)
+}
+
+/** 新增大促节点 */
+export function createPromoCalendar(data) {
+  return request.post('/ai-pricing/promo-calendars', data)
+}

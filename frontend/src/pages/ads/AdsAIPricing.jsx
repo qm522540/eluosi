@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import {
   Typography, Card, Table, Button, Tag, Space, Row, Col,
-  Modal, Form, InputNumber, message, Tooltip, Empty, Switch, Collapse, DatePicker, Avatar, Badge, Alert,
+  Modal, Form, Input, InputNumber, message, Tooltip, Empty, Switch, Collapse, DatePicker, Avatar, Badge, Alert,
 } from 'antd'
 import {
   EditOutlined, CheckOutlined, CloseOutlined, RobotOutlined,
@@ -15,6 +15,8 @@ import {
   toggleAIAutoExecute, getAIPricingHistory,
 } from '@/api/ads'
 import { triggerWBAnalysis, getWBSuggestions, rejectWBSuggestion } from '@/api/wb_pricing'
+import { getPromoStatus, getPromoCalendars, createPromoCalendar } from '@/api/ai_pricing'
+import { useAuthStore } from '@/stores/authStore'
 
 const { Text } = Typography
 const { RangePicker } = DatePicker
@@ -47,6 +49,203 @@ const templateTypeConfig = {
   conservative: { color: 'green', label: '保守' },
   aggressive: { color: 'red', label: '激进' },
   custom: { color: 'purple', label: '自定义' },
+}
+
+// ==================== 商品阶段配置 ====================
+
+const STAGE_CONFIG = {
+  cold_start: { color: 'blue', label: '冷启动', tip: '新品期，以曝光为主，不因ROAS低降价' },
+  testing: { color: 'orange', label: '测试期', tip: 'CTR ok但CR偏低，降价减耗等转化改善' },
+  growing: { color: 'green', label: '放量期', tip: 'CTR和CR均达标，ROAS驱动加大投入' },
+  declining: { color: 'red', label: '衰退预警', tip: 'ROAS持续下滑，收缩预算控制亏损' },
+  unknown: { color: 'default', label: '数据不足', tip: '历史数据不足，保守处理' },
+}
+
+const OPTIMIZE_LABEL = {
+  impression: '曝光量', ctr_cr: 'CTR/CR', roas: 'ROAS', profit: '利润', auto: '综合',
+}
+
+const PROMO_PHASE_MAP = {
+  pre_heat: { color: 'gold', label: '预热' },
+  peak: { color: 'red', label: '冲刺' },
+  recovery: { color: 'cyan', label: '恢复' },
+}
+
+// 商品阶段列（共享）
+const stageColumn = {
+  title: '商品阶段', dataIndex: 'product_stage', width: 110,
+  render: (stage) => {
+    const cfg = STAGE_CONFIG[stage] || STAGE_CONFIG.unknown
+    return <Tooltip title={cfg.tip}><Tag color={cfg.color} style={{ cursor: 'help' }}>{cfg.label}</Tag></Tooltip>
+  },
+}
+
+const optimizeColumn = {
+  title: '优化目标', dataIndex: 'stage_optimize_target', width: 90,
+  render: target => <span style={{ fontSize: 12, color: '#999' }}>{OPTIMIZE_LABEL[target] || target || '-'}</span>,
+}
+
+const promoColumn = {
+  title: '大促', dataIndex: 'promo_phase', width: 80,
+  render: (phase, record) => {
+    if (!phase) return '-'
+    const cfg = PROMO_PHASE_MAP[phase] || {}
+    return (
+      <Tooltip title={`出价系数×${record.promo_multiplier || '?'}`}>
+        <Tag color={cfg.color}>{cfg.label}</Tag>
+      </Tooltip>
+    )
+  },
+}
+
+// ==================== 大促状态提示条 ====================
+
+const PromoStatusBar = ({ tenantId }) => {
+  const [promoStatus, setPromoStatus] = useState(null)
+
+  useEffect(() => {
+    if (!tenantId) return
+    getPromoStatus(tenantId).then(res => {
+      if (res.data?.is_promo_period) setPromoStatus(res.data)
+    }).catch(() => {})
+  }, [tenantId])
+
+  if (!promoStatus) return null
+
+  const phaseConfig = {
+    pre_heat: { type: 'warning', icon: '🔥', label: '预热期' },
+    peak: { type: 'error', icon: '🚀', label: '大促冲刺' },
+    recovery: { type: 'info', icon: '📉', label: '恢复期' },
+  }
+  const cfg = phaseConfig[promoStatus.promo_phase] || {}
+
+  return (
+    <Alert
+      type={cfg.type}
+      showIcon={false}
+      style={{ marginBottom: 16 }}
+      message={
+        <Space>
+          <span style={{ fontSize: 16 }}>{cfg.icon}</span>
+          <strong>{promoStatus.promo_name} · {cfg.label}</strong>
+          <Tag color="orange">出价系数 ×{promoStatus.bid_multiplier}</Tag>
+          <span style={{ fontSize: 13, color: '#999' }}>{promoStatus.strategy_hint}</span>
+        </Space>
+      }
+    />
+  )
+}
+
+// ==================== 大促日历管理 ====================
+
+const PromoCalendarPanel = ({ tenantId }) => {
+  const [calendars, setCalendars] = useState([])
+  const [loading, setLoading] = useState(false)
+  const [modalOpen, setModalOpen] = useState(false)
+  const [submitting, setSubmitting] = useState(false)
+  const [form] = Form.useForm()
+
+  const fetchCalendars = useCallback(async () => {
+    if (!tenantId) return
+    setLoading(true)
+    try {
+      const res = await getPromoCalendars(tenantId)
+      setCalendars(res.data || [])
+    } catch {
+      setCalendars([])
+    } finally {
+      setLoading(false)
+    }
+  }, [tenantId])
+
+  useEffect(() => {
+    fetchCalendars()
+  }, [fetchCalendars])
+
+  const handleAdd = async () => {
+    try {
+      const values = await form.validateFields()
+      setSubmitting(true)
+      await createPromoCalendar({
+        tenant_id: tenantId,
+        ...values,
+        promo_date: values.promo_date.format('YYYY-MM-DD'),
+        pre_heat_days: 1,
+        recovery_days: 3,
+      })
+      message.success('大促节点已添加')
+      setModalOpen(false)
+      form.resetFields()
+      fetchCalendars()
+    } catch (err) {
+      if (err.errorFields) return
+      message.error(err.message || '添加失败')
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  const columns = [
+    { title: '大促名称', dataIndex: 'promo_name', width: 120 },
+    { title: '大促日期', dataIndex: 'promo_date', width: 120 },
+    { title: '预热系数', dataIndex: 'pre_heat_multiplier', width: 90, render: v => `×${v}` },
+    {
+      title: '冲刺系数', dataIndex: 'peak_multiplier', width: 90,
+      render: v => <span style={{ color: '#ff4d4f', fontWeight: 500 }}>×{v}</span>,
+    },
+    {
+      title: '恢复1/2/3天', width: 140,
+      render: (_, r) => `×${r.recovery_day1_multiplier || '-'} / ×${r.recovery_day2_multiplier || '-'} / ×${r.recovery_day3_multiplier || '-'}`,
+    },
+  ]
+
+  return (
+    <>
+      <Collapse style={{ marginTop: 24 }} items={[{
+        key: 'promo',
+        label: '📅 大促日历管理',
+        extra: (
+          <Button size="small" type="primary" onClick={e => { e.stopPropagation(); setModalOpen(true) }}>
+            添加大促
+          </Button>
+        ),
+        children: (
+          <Table dataSource={calendars} columns={columns} rowKey="id" pagination={false} size="small" loading={loading} />
+        ),
+      }]} />
+
+      <Modal
+        title="添加大促节点"
+        open={modalOpen}
+        onOk={handleAdd}
+        onCancel={() => setModalOpen(false)}
+        confirmLoading={submitting}
+        okText="确认添加"
+        destroyOnClose
+      >
+        <Form form={form} layout="vertical" style={{ marginTop: 16 }}>
+          <Form.Item name="promo_name" label="大促名称" rules={[{ required: true, message: '请输入大促名称' }]}>
+            <Input placeholder="如：妇女节、黑五" />
+          </Form.Item>
+          <Form.Item name="promo_date" label="大促日期" rules={[{ required: true, message: '请选择日期' }]}>
+            <DatePicker style={{ width: '100%' }} />
+          </Form.Item>
+          <Row gutter={16}>
+            <Col span={12}>
+              <Form.Item name="pre_heat_multiplier" label="预热期出价系数" initialValue={1.3}>
+                <InputNumber min={1.0} max={2.0} step={0.1} style={{ width: '100%' }} addonBefore="×" />
+              </Form.Item>
+            </Col>
+            <Col span={12}>
+              <Form.Item name="peak_multiplier" label="大促当天出价系数" initialValue={1.7}>
+                <InputNumber min={1.0} max={3.0} step={0.1} style={{ width: '100%' }} addonBefore="×" />
+              </Form.Item>
+            </Col>
+          </Row>
+        </Form>
+      </Modal>
+    </>
+  )
 }
 
 // ==================== Yandex占位 ====================
@@ -155,6 +354,9 @@ const WBAIPricing = ({ shopId }) => {
         return <span style={{ color: isUp ? '#52c41a' : '#ff4d4f' }}>{v}x {isUp ? '↑' : '↓'}</span>
       },
     },
+    stageColumn,
+    optimizeColumn,
+    promoColumn,
     {
       title: 'AI理由', dataIndex: 'reason', ellipsis: { showTitle: false },
       render: text => <Tooltip title={text}><span style={{ cursor: 'help' }}>{text}</span></Tooltip>,
@@ -520,6 +722,9 @@ const OzonAIPricing = ({ shopId }) => {
         </span>
       ),
     },
+    stageColumn,
+    optimizeColumn,
+    promoColumn,
     {
       title: 'AI理由', dataIndex: 'reason', ellipsis: { showTitle: false },
       render: v => <Tooltip title={v} placement="topLeft">{v}</Tooltip>,
@@ -817,6 +1022,8 @@ const OzonAIPricing = ({ shopId }) => {
 const AdsAIPricing = ({ shopId, platform, searched }) => {
   const [activePlatform, setActivePlatform] = useState(platform || 'ozon')
   const currentConfig = PLATFORM_CONFIG[activePlatform]
+  const tenant = useAuthStore(s => s.tenant)
+  const tenantId = tenant?.id
 
   useEffect(() => {
     if (platform) setActivePlatform(platform)
@@ -828,6 +1035,9 @@ const AdsAIPricing = ({ shopId, platform, searched }) => {
 
   return (
     <div>
+      {/* 大促状态提示条 */}
+      <PromoStatusBar tenantId={tenantId} />
+
       {/* 平台切换器 */}
       <div style={{
         display: 'flex', alignItems: 'center', gap: 12,
@@ -866,6 +1076,9 @@ const AdsAIPricing = ({ shopId, platform, searched }) => {
       {activePlatform === 'ozon' && <OzonAIPricing shopId={shopId} />}
       {activePlatform === 'wb' && <WBAIPricing shopId={shopId} />}
       {activePlatform === 'yandex' && <YandexComingSoon />}
+
+      {/* 大促日历管理 */}
+      <PromoCalendarPanel tenantId={tenantId} />
     </div>
   )
 }
