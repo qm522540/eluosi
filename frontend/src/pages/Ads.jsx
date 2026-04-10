@@ -243,11 +243,6 @@ const Ads = () => {
     if (mainTab === 'budget') { fetchBudget(); fetchBudgetSuggestions() }
   }
 
-  // 页面加载时自动查询
-  useEffect(() => {
-    handleSearch()
-  }, [])
-
   useEffect(() => {
     if (searched) fetchStats()
   }, [dateRange])
@@ -1181,18 +1176,14 @@ const Ads = () => {
         </Space>
       </div>
 
-      {!searched ? (
-        <Card>
-          <Empty description="请选择平台和店铺后点击确定查询广告数据" />
-        </Card>
-      ) : (
-        <>
-          {/* 主功能Tab */}
-          <Tabs activeKey={mainTab} onChange={setMainTab} items={[
+      {/* 主功能Tab */}
+      <Tabs activeKey={mainTab} onChange={setMainTab} items={[
             {
               key: 'overview',
               label: <span><FundOutlined /> 概览</span>,
-              children: (
+              children: !searched ? (
+                <Card><Empty description="请选择平台和店铺后点击确定" /></Card>
+              ) : (
                 <>
                   {/* 活动列表 */}
                   <Card title="活动列表" size="small" style={{ marginBottom: 24 }}>
@@ -1205,13 +1196,15 @@ const Ads = () => {
                     />
                   </Card>
 
-                </>
+</>
               ),
             },
             {
               key: 'analysis',
               label: <span><BarChartOutlined /> 数据分析</span>,
-              children: (
+              children: !searched ? (
+                <Card><Empty description="请选择平台和店铺后点击确定" /></Card>
+              ) : (
                 <>
                   <Row gutter={16} style={{ marginBottom: 16 }}>
                     <Col span={24}>
@@ -1296,7 +1289,9 @@ const Ads = () => {
             {
               key: 'rules',
               label: <span><RobotOutlined /> 自动化规则</span>,
-              children: (
+              children: !searched ? (
+                <Card><Empty description="请选择平台和店铺后点击确定" /></Card>
+              ) : (
                 <>
                   <div style={{ marginBottom: 16, display: 'flex', justifyContent: 'space-between' }}>
                     <Text>配置自动化规则，系统将每小时自动检查并执行。</Text>
@@ -1358,7 +1353,9 @@ const Ads = () => {
             {
               key: 'budget',
               label: <span><WalletOutlined /> 预算管理</span>,
-              children: (
+              children: !searched ? (
+                <Card><Empty description="请选择平台和店铺后点击确定" /></Card>
+              ) : (
                 <>
                   {/* 预算汇总 */}
                   {budgetData?.summary && (
@@ -1481,9 +1478,7 @@ const Ads = () => {
                 </>
               ),
             },
-          ]} />
-        </>
-      )}
+      ]} />
 
       {/* ==================== 创建活动弹窗 ==================== */}
       <Modal
