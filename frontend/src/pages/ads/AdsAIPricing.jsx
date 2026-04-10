@@ -646,7 +646,7 @@ const OzonAIPricing = ({ shopId }) => {
       title: '商品名称', dataIndex: 'product_name', width: 220, ellipsis: true,
       render: (v, r) => {
         const name = v || r.product_id || '-'
-        const ozonUrl = r.product_id ? `https://www.ozon.ru/product/${r.product_id}` : null
+        const ozonUrl = r.ozon_product_url || (r.product_id ? `https://www.ozon.ru/product/${r.product_id}` : null)
         const img = r.image_url ? (
           <Avatar src={r.image_url} size={36} shape="square" style={{ marginRight: 8, flexShrink: 0 }} />
         ) : null
@@ -657,6 +657,11 @@ const OzonAIPricing = ({ shopId }) => {
               {ozonUrl ? (
                 <a href={ozonUrl} target="_blank" rel="noopener noreferrer">{name}</a>
               ) : name}
+              {r.campaign_name && (
+                <div style={{ fontSize: 12, color: '#999', marginTop: 2 }}>
+                  活动：{r.campaign_name}
+                </div>
+              )}
             </div>
           </div>
         )
