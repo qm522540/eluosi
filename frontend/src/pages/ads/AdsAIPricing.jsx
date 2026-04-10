@@ -5,7 +5,7 @@ import {
 } from 'antd'
 import {
   EditOutlined, CheckOutlined, CloseOutlined, RobotOutlined,
-  ArrowUpOutlined, ArrowDownOutlined, HistoryOutlined,
+  ArrowUpOutlined, ArrowDownOutlined, HistoryOutlined, SettingOutlined,
 } from '@ant-design/icons'
 import dayjs from 'dayjs'
 import {
@@ -798,9 +798,17 @@ const OzonAIPricing = ({ shopId }) => {
 
   return (
     <div>
-      {/* 策略模板配置 */}
-      <Card title="策略模板配置" size="small" style={{ marginBottom: 16 }} loading={configsLoading}>
-        {configs.length > 0 ? (
+      {/* 策略模板配置（默认折叠） */}
+      <Collapse ghost style={{ marginBottom: 16 }} items={[{
+        key: 'template-config',
+        label: (
+          <Space>
+            <SettingOutlined />
+            <span style={{ fontWeight: 500 }}>策略模板配置</span>
+            <span style={{ fontSize: 12, color: '#999', fontWeight: 400 }}>（点击展开编辑）</span>
+          </Space>
+        ),
+        children: configsLoading ? <Card loading size="small" /> : configs.length > 0 ? (
           <Table size="small" dataSource={configs} rowKey="id" pagination={false}
             columns={[
               {
@@ -845,8 +853,8 @@ const OzonAIPricing = ({ shopId }) => {
               },
             ]}
           />
-        ) : <Empty description="暂无策略模板" />}
-      </Card>
+        ) : <Empty description="暂无策略模板" />,
+      }]} />
 
       {/* 模式开关 */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 16, padding: '16px 0' }}>
@@ -1020,14 +1028,9 @@ const OzonAIPricing = ({ shopId }) => {
 // ==================== 主入口：三平台统一页面 ====================
 
 const AdsAIPricing = ({ shopId, platform, searched }) => {
-  const [activePlatform, setActivePlatform] = useState(platform || 'ozon')
-  const currentConfig = PLATFORM_CONFIG[activePlatform]
   const tenant = useAuthStore(s => s.tenant)
   const tenantId = tenant?.id
-
-  useEffect(() => {
-    if (platform) setActivePlatform(platform)
-  }, [platform])
+  const platformInfo = PLATFORM_CONFIG[platform] || PLATFORM_CONFIG.ozon
 
   if (!searched) {
     return <Card><Empty description="请选择平台和店铺后点击确定" /></Card>
@@ -1035,47 +1038,34 @@ const AdsAIPricing = ({ shopId, platform, searched }) => {
 
   return (
     <div>
+      {/* 平台标识栏：只读展示 */}
+      <div style={{
+        display: 'flex', alignItems: 'center', gap: 10,
+        marginBottom: 16, padding: '8px 12px',
+        background: '#fafafa', borderRadius: 0,
+        borderLeft: `3px solid ${platformInfo.color}`,
+      }}>
+        <Tag style={{ background: platformInfo.color, color: '#fff', border: 'none', fontWeight: 500, fontSize: 13 }}>
+          {platformInfo.label}
+        </Tag>
+        <span style={{ fontSize: 13, color: '#999' }}>
+          {platformInfo.description}
+        </span>
+        {platformInfo.mode === 'suggest' && (
+          <Tag color="warning" style={{ marginLeft: 'auto' }}>建议模式</Tag>
+        )}
+        {platformInfo.mode === 'full' && (
+          <Tag color="success" style={{ marginLeft: 'auto' }}>全自动可用</Tag>
+        )}
+      </div>
+
       {/* 大促状态提示条 */}
       <PromoStatusBar tenantId={tenantId} />
 
-      {/* 平台切换器 */}
-      <div style={{
-        display: 'flex', alignItems: 'center', gap: 12,
-        marginBottom: 20, padding: '12px 16px',
-        background: '#fafafa', borderRadius: 8,
-      }}>
-        <span style={{ fontSize: 13, color: '#999' }}>当前平台</span>
-        {Object.entries(PLATFORM_CONFIG).map(([key, cfg]) => (
-          <Button
-            key={key}
-            type={activePlatform === key ? 'primary' : 'default'}
-            size="small"
-            style={{
-              borderColor: cfg.color,
-              color: activePlatform === key ? '#fff' : cfg.color,
-              background: activePlatform === key ? cfg.color : 'transparent',
-            }}
-            onClick={() => setActivePlatform(key)}
-          >
-            {cfg.label}
-          </Button>
-        ))}
-        <Tag color={
-          currentConfig.mode === 'full' ? 'success' :
-          currentConfig.mode === 'suggest' ? 'warning' : 'default'
-        }>
-          {currentConfig.mode === 'full' ? '全自动可用' :
-           currentConfig.mode === 'suggest' ? '建议模式' : '即将上线'}
-        </Tag>
-        <span style={{ fontSize: 12, color: '#999' }}>
-          {currentConfig.description}
-        </span>
-      </div>
-
-      {/* 根据平台渲染不同内容 */}
-      {activePlatform === 'ozon' && <OzonAIPricing shopId={shopId} />}
-      {activePlatform === 'wb' && <WBAIPricing shopId={shopId} />}
-      {activePlatform === 'yandex' && <YandexComingSoon />}
+      {/* 根据platform渲染对应内容 */}
+      {platform === 'ozon' && <OzonAIPricing shopId={shopId} />}
+      {platform === 'wb' && <WBAIPricing shopId={shopId} />}
+      {platform === 'yandex' && <YandexComingSoon />}
 
       {/* 大促日历管理 */}
       <PromoCalendarPanel tenantId={tenantId} />
