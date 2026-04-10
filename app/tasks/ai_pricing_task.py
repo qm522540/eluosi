@@ -33,19 +33,32 @@ settings = get_settings()
 LAST_RUN_KEY = "ai_pricing:last_run:{shop_id}"
 LAST_RUN_TTL = 10800  # 3小时过期
 
+# Redis连接池（模块级单例，复用连接）
+_redis_pool = redis_lib.ConnectionPool.from_url(settings.REDIS_URL, decode_responses=True)
+
+
+def _get_or_create_loop():
+    """获取或创建事件循环（Celery worker复用）"""
+    try:
+        loop = asyncio.get_event_loop()
+        if loop.is_closed():
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+    return loop
+
 
 def _run_async(coro):
-    """在同步Celery任务中执行异步代码"""
-    loop = asyncio.new_event_loop()
-    try:
-        return loop.run_until_complete(coro)
-    finally:
-        loop.close()
+    """在同步Celery任务中执行异步代码（复用事件循环）"""
+    loop = _get_or_create_loop()
+    return loop.run_until_complete(coro)
 
 
 def _get_redis():
-    """获取同步Redis客户端"""
-    return redis_lib.from_url(settings.REDIS_URL, decode_responses=True)
+    """获取Redis客户端（复用连接池）"""
+    return redis_lib.Redis(connection_pool=_redis_pool)
 
 
 def _log_task_start(db, task_name: str, celery_task_id: str, params: dict = None) -> int:
@@ -55,7 +68,7 @@ def _log_task_start(db, task_name: str, celery_task_id: str, params: dict = None
         celery_task_id=celery_task_id,
         params=params,
         status="running",
-        started_at=datetime.utcnow(),
+        started_at=datetime.now(timezone.utc),
     )
     db.add(task_log)
     db.commit()
@@ -70,7 +83,7 @@ def _log_task_end(db, log_id: int, status: str, result: dict = None, error: str 
         task_log.status = status
         task_log.result = result
         task_log.error_message = error[:2000] if error else None
-        task_log.finished_at = datetime.utcnow()
+        task_log.finished_at = datetime.now(timezone.utc)
         if task_log.started_at:
             delta = task_log.finished_at - task_log.started_at
             task_log.duration_ms = int(delta.total_seconds() * 1000)

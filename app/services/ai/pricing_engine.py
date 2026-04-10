@@ -8,9 +8,7 @@
 """
 
 import json
-import re
 import asyncio
-import httpx
 from datetime import datetime, date, timedelta
 from typing import Optional, List
 
@@ -36,7 +34,8 @@ OZON_BID_UNIT = 1_000_000
 
 def _get_moscow_hour() -> int:
     """获取当前莫斯科时间的小时"""
-    return (datetime.utcnow().hour + MOSCOW_UTC_OFFSET) % 24
+    from app.services.ai.time_strategy import get_current_moscow_hour
+    return get_current_moscow_hour()
 
 
 def _build_time_slot_rules(strategy) -> str:
@@ -231,11 +230,14 @@ def get_shop_benchmark(db: Session, tenant_id: int, shop_id: int) -> dict:
 
 # ==================== 安全护栏 ====================
 
-def validate_suggestion(suggested_bid: float, current_bid: float, config: AiPricingConfig) -> int:
+def validate_suggestion(suggested_bid: float, current_bid: float, config: AiPricingConfig, time_strategy=None) -> int:
     """安全护栏校验，返回校验后的整数出价"""
     min_bid = float(config.min_bid)
     max_bid = float(config.max_bid)
     max_adjust_pct = float(config.max_adjust_pct)
+    # 时段策略有独立的单次最大调幅限制，取两者较小值
+    if time_strategy and hasattr(time_strategy, 'max_single_change_pct'):
+        max_adjust_pct = min(max_adjust_pct, time_strategy.max_single_change_pct)
 
     # 1. 最低出价检查
     suggested_bid = max(suggested_bid, min_bid)
@@ -334,32 +336,29 @@ async def run_pricing_analysis(
         logger.warning(f"shop_id={shop.id} 未获取到商品出价数据")
         return {"analyzed_count": len(campaigns), "suggestion_count": 0, "suggestions": [], "summary": "未获取到商品出价"}
 
-    # 4.5 异步获取商品图片
-    all_skus = list(set(pb["sku"] for pb in products_bids.values()))
-    image_map = await _fetch_product_images(all_skus)
+    # 4.5 商品图片（Ozon Seller API当前不可用，暂置空，恢复后补充）
+    image_map = {}
 
-    # 5. 收集历史数据（同步查询，用线程池并发避免阻塞）
+    # 5. 收集历史数据（顺序查询，Session非线程安全不可并发）
     campaign_ids_list = [c.id for c in campaigns]
 
-    from concurrent.futures import ThreadPoolExecutor
-    loop = asyncio.get_event_loop()
-    with ThreadPoolExecutor(max_workers=3) as pool:
-        history_future = loop.run_in_executor(pool, get_campaign_history_stats, db, campaign_ids_list)
-        bid_future = loop.run_in_executor(pool, get_bid_history, db, campaign_ids_list)
-        benchmark_future = loop.run_in_executor(pool, get_shop_benchmark, db, tenant_id, shop.id)
+    try:
+        history_stats = get_campaign_history_stats(db, campaign_ids_list)
+    except Exception as e:
+        logger.warning(f"历史数据查询失败: {e}")
+        history_stats = {"avg_roas": 0, "data_days": 0, "roas_trend": []}
 
-        results = await asyncio.gather(history_future, bid_future, benchmark_future, return_exceptions=True)
+    try:
+        bid_history = get_bid_history(db, campaign_ids_list)
+    except Exception as e:
+        logger.warning(f"出价历史查询失败: {e}")
+        bid_history = {"recent_bids": [], "avg_bid_30d": 0, "bid_change_count": 0}
 
-    history_stats = results[0] if not isinstance(results[0], Exception) else {"avg_roas": 0, "data_days": 0, "roas_trend": []}
-    bid_history = results[1] if not isinstance(results[1], Exception) else {"recent_bids": [], "avg_bid_30d": 0, "bid_change_count": 0}
-    shop_benchmark = results[2] if not isinstance(results[2], Exception) else {"shop_avg_roas_today": 0, "shop_avg_roas_7d": 0}
-
-    if isinstance(results[0], Exception):
-        logger.warning(f"历史数据查询失败: {results[0]}")
-    if isinstance(results[1], Exception):
-        logger.warning(f"出价历史查询失败: {results[1]}")
-    if isinstance(results[2], Exception):
-        logger.warning(f"店铺基准查询失败: {results[2]}")
+    try:
+        shop_benchmark = get_shop_benchmark(db, tenant_id, shop.id)
+    except Exception as e:
+        logger.warning(f"店铺基准查询失败: {e}")
+        shop_benchmark = {"shop_avg_roas_today": 0, "shop_avg_roas_7d": 0}
 
     logger.info(
         f"AI调价数据收集完成 shop_id={shop.id}: "
@@ -472,10 +471,11 @@ ROAS走势（近7天从旧到新）：{roas_trend_text}
 
 【输出格式】
 只输出JSON，不要任何解释：
-{{{{
+""" + """
+{
   "summary": "本次分析总结（说明主要判断依据，提及是否参考了历史数据）",
   "suggestions": [
-    {{{{
+    {
       "product_id": "商品ID",
       "product_name": "商品名",
       "current_bid": 45,
@@ -485,9 +485,9 @@ ROAS走势（近7天从旧到新）：{roas_trend_text}
       "current_roas": 1.2,
       "expected_roas": 1.8,
       "decision_basis": "today_only|history_weighted|budget_control"
-    }}}}
+    }
   ]
-}}}}
+}
 
 注意：ROAS正常且无需调整的商品不要出现在suggestions里。"""
 
@@ -529,7 +529,7 @@ ROAS走势（近7天从旧到新）：{roas_trend_text}
         raw_suggested = float(raw.get("suggested_bid", current_bid))
 
         # 护栏校验
-        safe_bid = validate_suggestion(raw_suggested, current_bid, config)
+        safe_bid = validate_suggestion(raw_suggested, current_bid, config, time_strategy)
 
         # 跳过无变化的建议
         if safe_bid == int(current_bid):
@@ -644,47 +644,6 @@ def _parse_ai_response(content: str) -> Optional[dict]:
 
     logger.error(f"无法解析DeepSeek响应为JSON: {content[:200]}")
     return None
-
-
-# ==================== 图片获取 ====================
-
-async def _fetch_product_images(skus: list) -> dict:
-    """从Ozon公开页面批量获取商品图片URL
-
-    尝试从 ozon.ru/product/{sku}/ 页面提取og:image
-    失败则返回空，不影响主流程
-    """
-    result = {}
-    if not skus:
-        return result
-
-    async with httpx.AsyncClient(
-        timeout=8,
-        headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"},
-        follow_redirects=True,
-    ) as client:
-        tasks = [_fetch_one_image(client, sku) for sku in skus[:10]]  # 最多10个
-        responses = await asyncio.gather(*tasks, return_exceptions=True)
-        for sku, resp in zip(skus[:10], responses):
-            if isinstance(resp, str) and resp:
-                result[str(sku)] = resp
-
-    logger.info(f"获取商品图片: {len(skus)}个SKU, 成功{len(result)}个")
-    return result
-
-
-async def _fetch_one_image(client: httpx.AsyncClient, sku: str) -> str:
-    """从Ozon商品页面提取og:image"""
-    try:
-        url = f"https://www.ozon.ru/product/{sku}/"
-        r = await client.get(url)
-        if r.status_code == 200:
-            match = re.search(r'og:image["\s]+content="([^"]+)"', r.text)
-            if match:
-                return match.group(1)
-    except Exception:
-        pass
-    return ""
 
 
 # ==================== 辅助函数 ====================

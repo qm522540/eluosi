@@ -30,9 +30,13 @@ COOLDOWN_KEY = "ai_pricing:cooldown:{campaign_id}"
 COOLDOWN_MINUTES = 20
 COOLDOWN_TTL = 1500  # 25分钟Redis过期
 
+# Redis连接池（模块级单例）
+_redis_pool = redis_lib.ConnectionPool.from_url(settings.REDIS_URL, decode_responses=True)
+
 
 def _get_redis():
-    return redis_lib.from_url(settings.REDIS_URL, decode_responses=True)
+    """获取Redis客户端（复用连接池）"""
+    return redis_lib.Redis(connection_pool=_redis_pool)
 
 
 # ==================== 执行建议 ====================

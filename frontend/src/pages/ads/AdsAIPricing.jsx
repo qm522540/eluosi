@@ -5,7 +5,7 @@ import {
 } from 'antd'
 import {
   EditOutlined, CheckOutlined, CloseOutlined, RobotOutlined,
-  ArrowUpOutlined, ArrowDownOutlined, HistoryOutlined, ShoppingOutlined,
+  ArrowUpOutlined, ArrowDownOutlined, HistoryOutlined,
 } from '@ant-design/icons'
 import dayjs from 'dayjs'
 import {
