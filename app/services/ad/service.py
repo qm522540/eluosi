@@ -1320,10 +1320,11 @@ async def _execute_auto_bid(db: Session, tenant_id: int, campaign: AdCampaign,
                     original_bids[sku] = current_bid
 
                 base_bid = original_bids[sku]
-                new_bid = round(base_bid * (1 + adjust_pct / 100), 2)
-                new_bid = max(new_bid, 0.01)
+                new_bid_exact = base_bid * (1 + adjust_pct / 100)
+                # Ozon出价只接受整数卢布，不足1卢布向上取整
+                new_bid = max(round(new_bid_exact), 1)
 
-                if abs(current_bid - new_bid) < 0.01:
+                if new_bid == round(current_bid):
                     continue
 
                 # 转回微单位调用API
