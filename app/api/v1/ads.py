@@ -815,7 +815,7 @@ async def _sync_ozon_campaigns(db, shop) -> tuple:
             "name": c.get("name", ""),
             "ad_type": c.get("ad_type", "search"),
             "status": mapped_status,
-            "budget": float(c.get("daily_budget") or 0),
+            "budget": min(float(c.get("daily_budget") or 0), 99999999.99),
         })
 
         if result.rowcount > 0:
@@ -894,7 +894,7 @@ async def _sync_wb_campaigns(db, shop) -> tuple:
             "name": c.get("name", ""),
             "ad_type": c.get("ad_type", "search"),
             "status": mapped_status,
-            "budget": float(c.get("daily_budget") or 0),
+            "budget": min(float(c.get("daily_budget") or 0), 99999999.99),
         })
 
         if result.rowcount > 0:
