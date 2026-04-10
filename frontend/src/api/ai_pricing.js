@@ -54,3 +54,8 @@ export function getPromoCalendars(tenantId) {
 export function createPromoCalendar(data) {
   return request.post('/ai-pricing/promo-calendars', data)
 }
+
+/** 检查店铺数据初始化状态 */
+export function getDataStatus(shopId) {
+  return request.get(`/ai-pricing/data-status/${shopId}`)
+}

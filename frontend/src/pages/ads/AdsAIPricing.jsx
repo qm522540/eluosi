@@ -1,7 +1,7 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import {
   Typography, Card, Table, Button, Tag, Space, Row, Col,
-  Modal, Form, Input, InputNumber, message, Tooltip, Empty, Switch, Collapse, DatePicker, Avatar, Badge, Alert,
+  Modal, Form, Input, InputNumber, message, Tooltip, Empty, Switch, Collapse, DatePicker, Avatar, Badge, Alert, Spin,
 } from 'antd'
 import {
   EditOutlined, CheckOutlined, CloseOutlined, RobotOutlined,
@@ -15,7 +15,7 @@ import {
   toggleAIAutoExecute, getAIPricingHistory,
 } from '@/api/ads'
 import { triggerWBAnalysis, getWBSuggestions, rejectWBSuggestion } from '@/api/wb_pricing'
-import { getPromoStatus, getPromoCalendars, createPromoCalendar } from '@/api/ai_pricing'
+import { getPromoStatus, getPromoCalendars, createPromoCalendar, getDataStatus } from '@/api/ai_pricing'
 import { useAuthStore } from '@/stores/authStore'
 
 const { Text } = Typography
@@ -1037,8 +1037,68 @@ const AdsAIPricing = ({ shopId, platform, searched }) => {
   const tenantId = tenant?.id
   const platformInfo = PLATFORM_CONFIG[platform] || PLATFORM_CONFIG.ozon
 
+  const [dataStatus, setDataStatus] = useState(null)
+  const [checking, setChecking] = useState(true)
+  const pollTimer = useRef(null)
+
+  useEffect(() => {
+    if (searched && shopId) {
+      checkDataStatus()
+    }
+    return () => {
+      if (pollTimer.current) clearInterval(pollTimer.current)
+    }
+  }, [shopId, searched])
+
+  const checkDataStatus = async () => {
+    setChecking(true)
+    try {
+      const res = await getDataStatus(shopId)
+      setDataStatus(res.data)
+      if (!res.data.initialized) {
+        pollTimer.current = setInterval(async () => {
+          try {
+            const r = await getDataStatus(shopId)
+            if (r.data.initialized) {
+              setDataStatus(r.data)
+              clearInterval(pollTimer.current)
+            }
+          } catch {}
+        }, 30000)
+      }
+    } catch {
+      setDataStatus({ initialized: true })
+    } finally {
+      setChecking(false)
+    }
+  }
+
   if (!searched) {
     return <Card><Empty description="请选择平台和店铺后点击确定" /></Card>
+  }
+
+  if (checking) {
+    return (
+      <div style={{ textAlign: 'center', padding: '60px 0' }}>
+        <Spin tip="检查数据状态..." />
+      </div>
+    )
+  }
+
+  if (dataStatus && !dataStatus.initialized) {
+    return (
+      <div style={{ textAlign: 'center', padding: '60px 0' }}>
+        <Spin size="large" />
+        <div style={{ marginTop: 24, fontSize: 16, fontWeight: 500 }}>
+          正在拉取历史广告数据
+        </div>
+        <div style={{ marginTop: 8, color: '#999', fontSize: 14 }}>
+          首次进入需要拉取近3个月数据，约需1-3分钟
+          <br />
+          页面将自动刷新，请稍候...
+        </div>
+      </div>
+    )
   }
 
   return (
