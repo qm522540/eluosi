@@ -16,6 +16,7 @@ from sqlalchemy.orm import Session
 from app.dependencies import get_db, get_current_user, get_tenant_id
 from app.schemas.ai_pricing import PricingConfigUpdate, AnalyzeRequest, ToggleAutoRequest, CampaignPricingConfigUpdate
 from app.models.ai_pricing import AiPricingConfig, AiPricingSuggestion
+from app.models.ad import AdCampaign
 from app.models.shop import Shop
 from app.services.ad.ai_pricing import (
     approve_suggestion as do_approve,
@@ -88,6 +89,88 @@ def update_campaign_pricing_config(
         "custom_daily_budget": float(campaign.custom_daily_budget) if campaign.custom_daily_budget else None,
         "custom_target_roas": float(campaign.custom_target_roas) if campaign.custom_target_roas else None,
     }, msg="配置已更新")
+
+
+# ==================== WB建议模式 ====================
+
+@router.post("/wb/analyze/{shop_id}")
+async def wb_manual_analyze(
+    shop_id: int,
+    db: Session = Depends(get_db),
+    tenant_id: int = Depends(get_tenant_id),
+):
+    """手动触发WB店铺AI分析（建议模式）"""
+    from app.services.ad.wb_pricing import run_wb_ai_analysis
+    result = await run_wb_ai_analysis(db, tenant_id, shop_id)
+    if result.get("code", 0) != 0:
+        return error(result["code"], result["msg"])
+    return success(result["data"])
+
+
+@router.get("/wb/suggestions/{shop_id}")
+def get_wb_suggestions(
+    shop_id: int,
+    status: str = Query("pending"),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(50, ge=1, le=100),
+    db: Session = Depends(get_db),
+    tenant_id: int = Depends(get_tenant_id),
+):
+    """获取WB待确认建议列表（含WB后台直链）"""
+    # 过期处理
+    _expire_old_suggestions(db, tenant_id, shop_id)
+
+    query = db.query(AiPricingSuggestion).filter(
+        AiPricingSuggestion.tenant_id == tenant_id,
+        AiPricingSuggestion.shop_id == shop_id,
+        AiPricingSuggestion.status == status,
+    ).join(AdCampaign, AiPricingSuggestion.campaign_id == AdCampaign.id).filter(
+        AdCampaign.platform == "wb",
+    )
+
+    total = query.count()
+    items = query.order_by(AiPricingSuggestion.created_at.desc()).offset(
+        (page - 1) * page_size
+    ).limit(page_size).all()
+
+    result_items = []
+    for s in items:
+        campaign = db.query(AdCampaign).filter(AdCampaign.id == s.campaign_id).first()
+        d = _suggestion_to_dict(s)
+        d["campaign_name"] = campaign.name if campaign else None
+        d["platform_campaign_id"] = campaign.platform_campaign_id if campaign else None
+        d["wb_backend_url"] = (
+            f"https://cmp.wildberries.ru/campaigns/list/active/edit/{campaign.platform_campaign_id}"
+            if campaign else None
+        )
+        result_items.append(d)
+
+    return success({
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+        "items": result_items,
+    })
+
+
+@router.post("/wb/suggestions/{suggestion_id}/reject")
+def wb_suggestion_reject(
+    suggestion_id: int,
+    db: Session = Depends(get_db),
+    tenant_id: int = Depends(get_tenant_id),
+):
+    """拒绝WB建议"""
+    suggestion = db.query(AiPricingSuggestion).filter(
+        AiPricingSuggestion.id == suggestion_id,
+        AiPricingSuggestion.tenant_id == tenant_id,
+    ).first()
+    if not suggestion:
+        return error(ErrorCode.NOT_FOUND, "建议记录不存在")
+    if suggestion.status != "pending":
+        return error(ErrorCode.PARAM_ERROR, f"当前状态为{suggestion.status}，仅pending可拒绝")
+    suggestion.status = "rejected"
+    db.commit()
+    return success({"id": suggestion.id, "status": "rejected"}, msg="建议已忽略")
 
 
 # ==================== 配置管理 ====================

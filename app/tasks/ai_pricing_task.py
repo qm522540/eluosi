@@ -209,14 +209,63 @@ def check_and_run_ai_pricing(self):
                     "error": str(e)[:200],
                 })
 
+        # ==================== WB店铺（建议模式）====================
+        # WB低谷期跳过（深夜无需生成建议）
+        wb_suggestions = 0
+        if strategy.bid_adjust_direction != "down":
+            from app.services.ad.wb_pricing import run_wb_ai_analysis
+
+            wb_shops = db.query(Shop).filter(
+                Shop.status == "active",
+                Shop.platform == "wb",
+            ).all()
+
+            for wb_shop in wb_shops:
+                wb_key = LAST_RUN_KEY.format(shop_id=wb_shop.id)
+                wb_last = r.get(wb_key)
+                if not should_run_now(wb_last, strategy):
+                    continue
+                try:
+                    wb_result = _run_async(
+                        run_wb_ai_analysis(
+                            db, wb_shop.tenant_id, wb_shop.id,
+                            time_strategy=strategy,
+                            moscow_hour=moscow_hour,
+                        )
+                    )
+                    wb_data = wb_result.get("data", {})
+                    wb_count = wb_data.get("suggestion_count", 0)
+                    wb_suggestions += wb_count
+                    shop_results.append({
+                        "shop_id": wb_shop.id,
+                        "shop_name": wb_shop.name,
+                        "platform": "wb",
+                        "suggestions": wb_count,
+                        "mode": "suggest_only",
+                        "time_slot": strategy.name,
+                    })
+                    r.setex(wb_key, LAST_RUN_TTL, datetime.now(timezone.utc).isoformat())
+                    logger.info(f"WB店铺 {wb_shop.name}(id={wb_shop.id}) 分析完成: {wb_count}条建议")
+                except Exception as e:
+                    logger.error(f"WB店铺 {wb_shop.name}(id={wb_shop.id}) 分析失败: {e}")
+                    shop_results.append({
+                        "shop_id": wb_shop.id,
+                        "shop_name": wb_shop.name,
+                        "platform": "wb",
+                        "error": str(e)[:200],
+                    })
+        else:
+            logger.info("低谷期跳过WB分析")
+
         final_result = {
             "time_slot": strategy.name,
             "moscow_hour": moscow_hour,
             "direction": strategy.bid_adjust_direction,
             "shops_checked": len(shops),
             "shops_executed": len(shops_to_run),
-            "total_suggestions": total_suggestions,
+            "total_suggestions": total_suggestions + wb_suggestions,
             "total_auto_executed": total_executed,
+            "wb_suggestions": wb_suggestions,
             "details": shop_results,
         }
         _log_task_end(db, log_id, "success", result=final_result)

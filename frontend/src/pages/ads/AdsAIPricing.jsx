@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import {
   Typography, Card, Table, Button, Tag, Space, Row, Col,
-  Modal, Form, InputNumber, message, Tooltip, Empty, Switch, Collapse, DatePicker, Avatar, Badge,
+  Modal, Form, InputNumber, message, Tooltip, Empty, Switch, Collapse, DatePicker, Avatar, Badge, Alert,
 } from 'antd'
 import {
   EditOutlined, CheckOutlined, CloseOutlined, RobotOutlined,
@@ -14,9 +14,33 @@ import {
   approveAIPricingSuggestion, rejectAIPricingSuggestion,
   toggleAIAutoExecute, getAIPricingHistory,
 } from '@/api/ads'
+import { triggerWBAnalysis, getWBSuggestions, rejectWBSuggestion } from '@/api/wb_pricing'
 
 const { Text } = Typography
 const { RangePicker } = DatePicker
+
+// ==================== 平台配置 ====================
+
+const PLATFORM_CONFIG = {
+  ozon: {
+    label: 'Ozon',
+    color: '#005BFF',
+    mode: 'full',
+    description: '商品级别出价·支持自动执行',
+  },
+  wb: {
+    label: 'Wildberries',
+    color: '#CB11AB',
+    mode: 'suggest',
+    description: '活动级别出价·需手动到WB后台执行',
+  },
+  yandex: {
+    label: 'Yandex Market',
+    color: '#FFCC00',
+    mode: 'coming',
+    description: '即将上线',
+  },
+}
 
 const templateTypeConfig = {
   default: { color: 'blue', label: '标准' },
@@ -25,39 +49,217 @@ const templateTypeConfig = {
   custom: { color: 'purple', label: '自定义' },
 }
 
-const AdsAIPricing = ({ shopId, searched }) => {
-  // 模板配置
+// ==================== Yandex占位 ====================
+
+const YandexComingSoon = () => (
+  <div style={{ textAlign: 'center', padding: '60px 0', color: '#999' }}>
+    <div style={{ fontSize: 48, marginBottom: 16 }}>🚀</div>
+    <div style={{ fontSize: 18, fontWeight: 500, marginBottom: 8 }}>
+      Yandex Market AI调价即将上线
+    </div>
+    <div style={{ fontSize: 14 }}>
+      目前正在开发中，敬请期待
+    </div>
+  </div>
+)
+
+// ==================== WB建议模式 ====================
+
+const WBAIPricing = ({ shopId }) => {
+  const [suggestions, setSuggestions] = useState([])
+  const [loading, setLoading] = useState(false)
+  const [analyzing, setAnalyzing] = useState(false)
+
+  const fetchSuggestions = useCallback(async () => {
+    if (!shopId) return
+    setLoading(true)
+    try {
+      const res = await getWBSuggestions(shopId, { status: 'pending' })
+      setSuggestions(res.data?.items || res.data || [])
+    } catch {
+      setSuggestions([])
+    } finally {
+      setLoading(false)
+    }
+  }, [shopId])
+
+  useEffect(() => {
+    fetchSuggestions()
+  }, [fetchSuggestions])
+
+  const handleAnalyze = async () => {
+    setAnalyzing(true)
+    try {
+      const res = await triggerWBAnalysis(shopId)
+      const data = res.data || {}
+      message.success(`分析完成：分析了 ${data.analyzed_count || 0} 个活动，生成 ${data.suggestion_count || 0} 条建议`)
+      fetchSuggestions()
+    } catch (err) {
+      message.error(err.message || '分析失败')
+    } finally {
+      setAnalyzing(false)
+    }
+  }
+
+  const handleReject = async (id) => {
+    try {
+      await rejectWBSuggestion(id)
+      message.success('已忽略')
+      fetchSuggestions()
+    } catch (err) {
+      message.error(err.message || '操作失败')
+    }
+  }
+
+  const columns = [
+    {
+      title: '广告活动', dataIndex: 'campaign_name', width: 200,
+      render: (name, record) => (
+        <div>
+          <div style={{ fontWeight: 500 }}>{name || '-'}</div>
+          <div style={{ fontSize: 12, color: '#999' }}>
+            ID: {record.platform_campaign_id || record.campaign_id || '-'}
+          </div>
+        </div>
+      ),
+    },
+    {
+      title: '当前CPM', dataIndex: 'current_bid', width: 100, align: 'right',
+      render: v => `₽${Math.round(v)}`,
+    },
+    {
+      title: '建议CPM', dataIndex: 'suggested_bid', width: 120, align: 'right',
+      render: (v, record) => {
+        const isUp = record.adjust_pct > 0
+        return (
+          <Space>
+            <span style={{ fontWeight: 600, color: isUp ? '#52c41a' : '#ff4d4f', fontSize: 15 }}>
+              ₽{Math.round(v)}
+            </span>
+            <Tag color={isUp ? 'success' : 'error'} style={{ margin: 0 }}>
+              {isUp ? '↑' : '↓'}{Math.abs(record.adjust_pct).toFixed(1)}%
+            </Tag>
+          </Space>
+        )
+      },
+    },
+    {
+      title: '当前ROAS', dataIndex: 'current_roas', width: 100, align: 'right',
+      render: v => v ? `${v}x` : '-',
+    },
+    {
+      title: '预期ROAS', dataIndex: 'expected_roas', width: 100, align: 'right',
+      render: (v, record) => {
+        if (!v) return '-'
+        const isUp = v > (record.current_roas || 0)
+        return <span style={{ color: isUp ? '#52c41a' : '#ff4d4f' }}>{v}x {isUp ? '↑' : '↓'}</span>
+      },
+    },
+    {
+      title: 'AI理由', dataIndex: 'reason', ellipsis: { showTitle: false },
+      render: text => <Tooltip title={text}><span style={{ cursor: 'help' }}>{text}</span></Tooltip>,
+    },
+    {
+      title: '数据', dataIndex: 'data_days', width: 80,
+      render: days => (
+        <Tooltip title={`基于${days || 0}天历史数据`}>
+          <Badge
+            status={(days || 0) >= 7 ? 'success' : (days || 0) >= 3 ? 'warning' : 'error'}
+            text={`${days || 0}天`}
+          />
+        </Tooltip>
+      ),
+    },
+    {
+      title: '操作', key: 'action', width: 200,
+      render: (_, record) => (
+        <Space>
+          <Button
+            type="primary" size="small"
+            style={{ background: '#CB11AB', borderColor: '#CB11AB' }}
+            onClick={() => {
+              const url = record.wb_backend_url || `https://cmp.wildberries.ru/campaigns/list/active/edit/${record.platform_campaign_id || record.campaign_id}`
+              window.open(url, '_blank')
+            }}
+          >
+            去WB改价
+          </Button>
+          <Button size="small" danger onClick={() => handleReject(record.id)}>
+            忽略
+          </Button>
+        </Space>
+      ),
+    },
+  ]
+
+  return (
+    <div>
+      <Alert
+        type="warning"
+        showIcon
+        style={{ marginBottom: 16 }}
+        message="WB平台说明"
+        description="Wildberries广告API暂不支持自动修改出价。AI将生成活动级别的调价建议，点击「去WB改价」直接跳转到WB卖家后台对应活动页面手动执行。企业微信也会同步推送建议。"
+      />
+
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+        <div style={{ fontSize: 15, fontWeight: 500 }}>
+          待执行建议
+          {suggestions.length > 0 && <Badge count={suggestions.length} style={{ marginLeft: 8 }} />}
+        </div>
+        <Button type="primary" loading={analyzing} icon={<RobotOutlined />} onClick={handleAnalyze}>
+          立即分析
+        </Button>
+      </div>
+
+      {suggestions.length === 0 ? (
+        <Empty description="暂无调价建议，点击「立即分析」生成" style={{ padding: '40px 0' }} />
+      ) : (
+        <Table
+          dataSource={suggestions}
+          columns={columns}
+          rowKey="id"
+          loading={loading}
+          pagination={false}
+          scroll={{ x: 900 }}
+          rowClassName={(record) => {
+            const days = record.data_days || 0
+            return days < 3 ? 'row-low-data' : ''
+          }}
+        />
+      )}
+
+      <style>{`.row-low-data { background: #fffbe6 !important; }`}</style>
+    </div>
+  )
+}
+
+// ==================== Ozon全自动模式 ====================
+
+const OzonAIPricing = ({ shopId }) => {
   const [configs, setConfigs] = useState([])
   const [configsLoading, setConfigsLoading] = useState(false)
   const [editingConfig, setEditingConfig] = useState(null)
   const [configForm] = Form.useForm()
   const [configSubmitting, setConfigSubmitting] = useState(false)
 
-  // 模式开关
   const [autoExecute, setAutoExecute] = useState(false)
-
-  // AI分析
   const [analyzing, setAnalyzing] = useState(false)
 
-  // 建议列表
   const [suggestions, setSuggestions] = useState([])
   const [suggestionsLoading, setSuggestionsLoading] = useState(false)
   const [suggestionsTotal, setSuggestionsTotal] = useState(0)
   const [suggestionsPage, setSuggestionsPage] = useState(1)
 
-  // 批量操作
   const [selectedRowKeys, setSelectedRowKeys] = useState([])
   const [batchApproving, setBatchApproving] = useState(false)
   const [batchRejecting, setBatchRejecting] = useState(false)
 
-  // 历史记录
   const [history, setHistory] = useState([])
   const [historyLoading, setHistoryLoading] = useState(false)
   const [historyTotal, setHistoryTotal] = useState(0)
   const [historyPage, setHistoryPage] = useState(1)
   const [historyDateRange, setHistoryDateRange] = useState(null)
-
-  // ==================== 数据加载 ====================
 
   const fetchConfigs = useCallback(async () => {
     if (!shopId) return
@@ -66,9 +268,7 @@ const AdsAIPricing = ({ shopId, searched }) => {
       const res = await getAIPricingConfigs(shopId)
       const data = res.data || []
       setConfigs(data)
-      if (data.length > 0) {
-        setAutoExecute(!!data[0].auto_execute)
-      }
+      if (data.length > 0) setAutoExecute(!!data[0].auto_execute)
     } catch {
       setConfigs([])
     } finally {
@@ -112,18 +312,14 @@ const AdsAIPricing = ({ shopId, searched }) => {
   }, [shopId, historyDateRange])
 
   useEffect(() => {
-    if (searched && shopId) {
-      fetchConfigs()
-      fetchSuggestions()
-      fetchHistory()
-    }
-  }, [searched, shopId, fetchConfigs, fetchSuggestions, fetchHistory])
+    fetchConfigs()
+    fetchSuggestions()
+    fetchHistory()
+  }, [fetchConfigs, fetchSuggestions, fetchHistory])
 
   useEffect(() => {
-    if (searched && shopId) fetchHistory(1)
-  }, [historyDateRange, searched, shopId, fetchHistory])
-
-  // ==================== 配置编辑 ====================
+    fetchHistory(1)
+  }, [historyDateRange])
 
   const handleEditConfig = (record) => {
     setEditingConfig(record)
@@ -154,8 +350,6 @@ const AdsAIPricing = ({ shopId, searched }) => {
     }
   }
 
-  // ==================== 模式切换 ====================
-
   const handleToggleAuto = async (checked) => {
     try {
       await toggleAIAutoExecute(shopId, { auto_execute: checked })
@@ -166,8 +360,6 @@ const AdsAIPricing = ({ shopId, searched }) => {
       message.error(err.message || '切换失败')
     }
   }
-
-  // ==================== AI分析 ====================
 
   const handleManualAnalyze = async () => {
     setAnalyzing(true)
@@ -182,8 +374,6 @@ const AdsAIPricing = ({ shopId, searched }) => {
       setAnalyzing(false)
     }
   }
-
-  // ==================== 建议操作 ====================
 
   const handleApprove = async (id) => {
     try {
@@ -248,8 +438,6 @@ const AdsAIPricing = ({ shopId, searched }) => {
       setBatchRejecting(false)
     }
   }
-
-  // ==================== 建议表格列 ====================
 
   const suggestionColumns = [
     {
@@ -351,8 +539,6 @@ const AdsAIPricing = ({ shopId, searched }) => {
     },
   ]
 
-  // ==================== 历史表格列 ====================
-
   const historyColumns = [
     {
       title: '时间', dataIndex: 'created_at', width: 130,
@@ -405,15 +591,9 @@ const AdsAIPricing = ({ shopId, searched }) => {
     },
   ]
 
-  // ==================== 渲染 ====================
-
-  if (!searched) {
-    return <Card><Empty description="请选择平台和店铺后点击确定" /></Card>
-  }
-
   return (
     <div>
-      {/* 区域1：策略模板配置 */}
+      {/* 策略模板配置 */}
       <Card title="策略模板配置" size="small" style={{ marginBottom: 16 }} loading={configsLoading}>
         {configs.length > 0 ? (
           <Table size="small" dataSource={configs} rowKey="id" pagination={false}
@@ -463,7 +643,7 @@ const AdsAIPricing = ({ shopId, searched }) => {
         ) : <Empty description="暂无策略模板" />}
       </Card>
 
-      {/* 区域2：模式开关 */}
+      {/* 模式开关 */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 16, padding: '16px 0' }}>
         <span style={{ fontWeight: 500 }}>AI自动执行</span>
         <Switch
@@ -482,7 +662,7 @@ const AdsAIPricing = ({ shopId, searched }) => {
         </Button>
       </div>
 
-      {/* 区域3：待确认建议列表 */}
+      {/* 待确认建议列表 */}
       {!autoExecute && (
         <Card
           title={`待确认建议 (${suggestionsTotal})`}
@@ -510,10 +690,7 @@ const AdsAIPricing = ({ shopId, searched }) => {
             dataSource={suggestions}
             rowKey="id"
             loading={suggestionsLoading}
-            rowSelection={{
-              selectedRowKeys,
-              onChange: setSelectedRowKeys,
-            }}
+            rowSelection={{ selectedRowKeys, onChange: setSelectedRowKeys }}
             pagination={{
               current: suggestionsPage,
               total: suggestionsTotal,
@@ -528,7 +705,7 @@ const AdsAIPricing = ({ shopId, searched }) => {
         </Card>
       )}
 
-      {/* 区域4：调价历史记录 */}
+      {/* 调价历史记录 */}
       <Collapse
         items={[{
           key: 'history',
@@ -566,7 +743,7 @@ const AdsAIPricing = ({ shopId, searched }) => {
         }]}
       />
 
-      {/* ==================== 模板编辑弹窗 ==================== */}
+      {/* 模板编辑弹窗 */}
       <Modal
         title={`编辑模板 — ${editingConfig?.template_name || ''}`}
         open={!!editingConfig}
@@ -631,6 +808,64 @@ const AdsAIPricing = ({ shopId, searched }) => {
           </Form.Item>
         </Form>
       </Modal>
+    </div>
+  )
+}
+
+// ==================== 主入口：三平台统一页面 ====================
+
+const AdsAIPricing = ({ shopId, platform, searched }) => {
+  const [activePlatform, setActivePlatform] = useState(platform || 'ozon')
+  const currentConfig = PLATFORM_CONFIG[activePlatform]
+
+  useEffect(() => {
+    if (platform) setActivePlatform(platform)
+  }, [platform])
+
+  if (!searched) {
+    return <Card><Empty description="请选择平台和店铺后点击确定" /></Card>
+  }
+
+  return (
+    <div>
+      {/* 平台切换器 */}
+      <div style={{
+        display: 'flex', alignItems: 'center', gap: 12,
+        marginBottom: 20, padding: '12px 16px',
+        background: '#fafafa', borderRadius: 8,
+      }}>
+        <span style={{ fontSize: 13, color: '#999' }}>当前平台</span>
+        {Object.entries(PLATFORM_CONFIG).map(([key, cfg]) => (
+          <Button
+            key={key}
+            type={activePlatform === key ? 'primary' : 'default'}
+            size="small"
+            style={{
+              borderColor: cfg.color,
+              color: activePlatform === key ? '#fff' : cfg.color,
+              background: activePlatform === key ? cfg.color : 'transparent',
+            }}
+            onClick={() => setActivePlatform(key)}
+          >
+            {cfg.label}
+          </Button>
+        ))}
+        <Tag color={
+          currentConfig.mode === 'full' ? 'success' :
+          currentConfig.mode === 'suggest' ? 'warning' : 'default'
+        }>
+          {currentConfig.mode === 'full' ? '全自动可用' :
+           currentConfig.mode === 'suggest' ? '建议模式' : '即将上线'}
+        </Tag>
+        <span style={{ fontSize: 12, color: '#999' }}>
+          {currentConfig.description}
+        </span>
+      </div>
+
+      {/* 根据平台渲染不同内容 */}
+      {activePlatform === 'ozon' && <OzonAIPricing shopId={shopId} />}
+      {activePlatform === 'wb' && <WBAIPricing shopId={shopId} />}
+      {activePlatform === 'yandex' && <YandexComingSoon />}
     </div>
   )
 }
