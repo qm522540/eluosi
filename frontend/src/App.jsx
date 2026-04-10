@@ -1,7 +1,7 @@
 import { Routes, Route, Navigate } from 'react-router-dom'
 import Login from '@/pages/Login'
 import Dashboard from '@/pages/Dashboard'
-import Ads from '@/pages/Ads'
+import Ads from '@/pages/ads'
 import Products from '@/pages/Products'
 import Seo from '@/pages/Seo'
 import Reports from '@/pages/Reports'

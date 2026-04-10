@@ -1,18 +1,31 @@
-"""AI智能调价路由"""
+"""AI智能调价路由
 
-from datetime import date
+8个接口：
+- 配置管理: GET configs, PUT config
+- AI分析: POST analyze
+- 建议管理: GET suggestions, POST approve, POST reject
+- 模式切换: POST toggle-auto
+- 历史记录: GET history
+"""
+
+import asyncio
+from datetime import datetime
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
 from app.dependencies import get_db, get_current_user, get_tenant_id
 from app.schemas.ai_pricing import PricingConfigUpdate, AnalyzeRequest, ToggleAutoRequest
-from app.services.ai_pricing.service import (
-    get_configs, update_config,
-    analyze_shop,
-    get_suggestions, approve_suggestion, reject_suggestion,
-    toggle_auto_execute, get_history,
+from app.models.ai_pricing import AiPricingConfig, AiPricingSuggestion
+from app.models.shop import Shop
+from app.services.ad.ai_pricing import (
+    approve_suggestion as do_approve,
+    run_ai_analysis,
 )
 from app.utils.response import success, error
+from app.utils.errors import ErrorCode
+from app.utils.logger import setup_logger
+
+logger = setup_logger("api.ai_pricing")
 
 router = APIRouter()
 
@@ -26,10 +39,16 @@ def config_list(
     tenant_id: int = Depends(get_tenant_id),
 ):
     """获取店铺调价配置"""
-    result = get_configs(db, tenant_id, shop_id)
-    if result["code"] != 0:
-        return error(result["code"], result["msg"])
-    return success(result["data"])
+    shop = db.query(Shop).filter(Shop.id == shop_id, Shop.tenant_id == tenant_id).first()
+    if not shop:
+        return error(ErrorCode.SHOP_NOT_FOUND, "店铺不存在")
+
+    configs = db.query(AiPricingConfig).filter(
+        AiPricingConfig.tenant_id == tenant_id,
+        AiPricingConfig.shop_id == shop_id,
+    ).order_by(AiPricingConfig.id).all()
+
+    return success([_config_to_dict(c) for c in configs])
 
 
 @router.put("/configs/{config_id}")
@@ -40,27 +59,61 @@ def config_update(
     tenant_id: int = Depends(get_tenant_id),
 ):
     """更新调价配置"""
-    result = update_config(db, tenant_id, config_id, req.model_dump(exclude_none=True))
-    if result["code"] != 0:
-        return error(result["code"], result["msg"])
-    return success(result["data"], msg="配置更新成功")
+    config = db.query(AiPricingConfig).filter(
+        AiPricingConfig.id == config_id,
+        AiPricingConfig.tenant_id == tenant_id,
+    ).first()
+    if not config:
+        return error(ErrorCode.NOT_FOUND, "配置不存在")
+
+    data = req.model_dump(exclude_none=True)
+
+    # 交叉校验
+    target_roas = data.get("target_roas", float(config.target_roas))
+    min_roas = data.get("min_roas", float(config.min_roas))
+    if min_roas >= target_roas:
+        return error(ErrorCode.PARAM_ERROR, "min_roas必须小于target_roas")
+
+    min_bid = data.get("min_bid", float(config.min_bid))
+    max_bid = data.get("max_bid", float(config.max_bid))
+    if min_bid >= max_bid:
+        return error(ErrorCode.PARAM_ERROR, "min_bid必须小于max_bid")
+
+    # 转换bool→int
+    if "auto_execute" in data and data["auto_execute"] is not None:
+        data["auto_execute"] = 1 if data["auto_execute"] else 0
+    if "is_active" in data and data["is_active"] is not None:
+        data["is_active"] = 1 if data["is_active"] else 0
+
+    for key, value in data.items():
+        if value is not None and hasattr(config, key):
+            setattr(config, key, value)
+    db.commit()
+    db.refresh(config)
+
+    return success(_config_to_dict(config), msg="配置更新成功")
 
 
 # ==================== AI分析 ====================
 
 @router.post("/analyze/{shop_id}")
-def analyze(
+async def analyze(
     shop_id: int,
     req: AnalyzeRequest = None,
     db: Session = Depends(get_db),
     tenant_id: int = Depends(get_tenant_id),
 ):
-    """手动触发AI分析"""
+    """手动触发AI分析（调DeepSeek）"""
     category_name = req.category_name if req else None
     campaign_ids = req.campaign_ids if req else None
-    result = analyze_shop(db, tenant_id, shop_id,
-                          category_name=category_name, campaign_ids=campaign_ids)
-    if result["code"] != 0:
+
+    result = await run_ai_analysis(
+        db, tenant_id, shop_id,
+        category_name=category_name,
+        campaign_ids=campaign_ids,
+    )
+
+    if result.get("code", 0) != 0:
         return error(result["code"], result["msg"])
     return success(result["data"])
 
@@ -70,28 +123,45 @@ def analyze(
 @router.get("/suggestions/{shop_id}")
 def suggestion_list(
     shop_id: int,
-    status: str = Query("pending", description="状态筛选: pending/approved/rejected/executed/expired"),
+    status: str = Query("pending", description="状态: pending/approved/rejected/executed/expired"),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     db: Session = Depends(get_db),
     tenant_id: int = Depends(get_tenant_id),
 ):
-    """获取待确认建议列表"""
-    result = get_suggestions(db, tenant_id, shop_id, status=status, page=page, page_size=page_size)
-    if result["code"] != 0:
-        return error(result["code"], result["msg"])
-    return success(result["data"])
+    """获取建议列表"""
+    # 先将过期建议标记
+    _expire_old_suggestions(db, tenant_id, shop_id)
+
+    query = db.query(AiPricingSuggestion).filter(
+        AiPricingSuggestion.tenant_id == tenant_id,
+        AiPricingSuggestion.shop_id == shop_id,
+    )
+    if status:
+        query = query.filter(AiPricingSuggestion.status == status)
+
+    total = query.count()
+    items = query.order_by(AiPricingSuggestion.created_at.desc()).offset(
+        (page - 1) * page_size
+    ).limit(page_size).all()
+
+    return success({
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+        "items": [_suggestion_to_dict(s) for s in items],
+    })
 
 
 @router.post("/suggestions/{suggestion_id}/approve")
-def suggestion_approve(
+async def suggestion_approve(
     suggestion_id: int,
     db: Session = Depends(get_db),
     tenant_id: int = Depends(get_tenant_id),
 ):
-    """确认执行建议"""
-    result = approve_suggestion(db, tenant_id, suggestion_id)
-    if result["code"] != 0:
+    """确认执行建议（调Ozon API修改出价）"""
+    result = await do_approve(db, tenant_id, suggestion_id)
+    if result.get("code", 0) != 0:
         return error(result["code"], result["msg"])
     return success(result["data"], msg="建议已执行")
 
@@ -103,10 +173,20 @@ def suggestion_reject(
     tenant_id: int = Depends(get_tenant_id),
 ):
     """拒绝建议"""
-    result = reject_suggestion(db, tenant_id, suggestion_id)
-    if result["code"] != 0:
-        return error(result["code"], result["msg"])
-    return success(result["data"], msg="建议已拒绝")
+    suggestion = db.query(AiPricingSuggestion).filter(
+        AiPricingSuggestion.id == suggestion_id,
+        AiPricingSuggestion.tenant_id == tenant_id,
+    ).first()
+    if not suggestion:
+        return error(ErrorCode.NOT_FOUND, "建议记录不存在")
+
+    if suggestion.status != "pending":
+        return error(ErrorCode.PARAM_ERROR, f"当前状态为{suggestion.status}，仅pending可拒绝")
+
+    suggestion.status = "rejected"
+    db.commit()
+
+    return success({"id": suggestion.id, "status": "rejected"}, msg="建议已拒绝")
 
 
 # ==================== 模式切换 ====================
@@ -119,12 +199,28 @@ def toggle_auto(
     tenant_id: int = Depends(get_tenant_id),
 ):
     """切换自动/建议模式"""
-    result = toggle_auto_execute(db, tenant_id, shop_id,
-                                  auto_execute=req.auto_execute,
-                                  category_name=req.category_name)
-    if result["code"] != 0:
-        return error(result["code"], result["msg"])
-    return success(result["data"])
+    query = db.query(AiPricingConfig).filter(
+        AiPricingConfig.tenant_id == tenant_id,
+        AiPricingConfig.shop_id == shop_id,
+    )
+    if req.category_name:
+        query = query.filter(AiPricingConfig.category_name == req.category_name)
+
+    configs = query.all()
+    if not configs:
+        return error(ErrorCode.NOT_FOUND, "未找到调价配置")
+
+    value = 1 if req.auto_execute else 0
+    for config in configs:
+        config.auto_execute = value
+    db.commit()
+
+    mode_text = "自动执行" if req.auto_execute else "手动确认"
+    return success({
+        "shop_id": shop_id,
+        "updated_count": len(configs),
+        "auto_execute": req.auto_execute,
+    }, msg=f"已切换为{mode_text}模式")
 
 
 # ==================== 历史记录 ====================
@@ -132,7 +228,7 @@ def toggle_auto(
 @router.get("/history/{shop_id}")
 def history_list(
     shop_id: int,
-    status: str = Query(None, description="状态筛选: executed/rejected/expired"),
+    status: str = Query(None, description="状态: executed/rejected/expired"),
     start_date: str = Query(None, description="起始日期 YYYY-MM-DD"),
     end_date: str = Query(None, description="结束日期 YYYY-MM-DD"),
     page: int = Query(1, ge=1),
@@ -141,9 +237,82 @@ def history_list(
     tenant_id: int = Depends(get_tenant_id),
 ):
     """调价历史记录"""
-    result = get_history(db, tenant_id, shop_id,
-                         status=status, start_date=start_date, end_date=end_date,
-                         page=page, page_size=page_size)
-    if result["code"] != 0:
-        return error(result["code"], result["msg"])
-    return success(result["data"])
+    query = db.query(AiPricingSuggestion).filter(
+        AiPricingSuggestion.tenant_id == tenant_id,
+        AiPricingSuggestion.shop_id == shop_id,
+        AiPricingSuggestion.status != "pending",
+    )
+    if status:
+        query = query.filter(AiPricingSuggestion.status == status)
+    if start_date:
+        query = query.filter(AiPricingSuggestion.created_at >= start_date)
+    if end_date:
+        query = query.filter(AiPricingSuggestion.created_at <= end_date + " 23:59:59")
+
+    total = query.count()
+    items = query.order_by(AiPricingSuggestion.created_at.desc()).offset(
+        (page - 1) * page_size
+    ).limit(page_size).all()
+
+    return success({
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+        "items": [_suggestion_to_dict(s) for s in items],
+    })
+
+
+# ==================== 内部工具函数 ====================
+
+def _expire_old_suggestions(db: Session, tenant_id: int, shop_id: int):
+    """将过期的pending建议标记为expired"""
+    now = datetime.now()
+    db.query(AiPricingSuggestion).filter(
+        AiPricingSuggestion.tenant_id == tenant_id,
+        AiPricingSuggestion.shop_id == shop_id,
+        AiPricingSuggestion.status == "pending",
+        AiPricingSuggestion.expires_at < now,
+    ).update({"status": "expired"})
+    db.commit()
+
+
+def _config_to_dict(config: AiPricingConfig) -> dict:
+    return {
+        "id": config.id,
+        "shop_id": config.shop_id,
+        "category_name": config.category_name,
+        "target_roas": float(config.target_roas),
+        "min_roas": float(config.min_roas),
+        "gross_margin": float(config.gross_margin),
+        "daily_budget_limit": float(config.daily_budget_limit),
+        "max_bid": float(config.max_bid),
+        "min_bid": float(config.min_bid),
+        "max_adjust_pct": float(config.max_adjust_pct),
+        "auto_execute": bool(config.auto_execute),
+        "is_active": bool(config.is_active),
+        "created_at": config.created_at.isoformat() if config.created_at else None,
+        "updated_at": config.updated_at.isoformat() if config.updated_at else None,
+    }
+
+
+def _suggestion_to_dict(s: AiPricingSuggestion) -> dict:
+    return {
+        "id": s.id,
+        "campaign_id": s.campaign_id,
+        "product_id": s.product_id,
+        "product_name": s.product_name,
+        "current_bid": float(s.current_bid),
+        "suggested_bid": float(s.suggested_bid),
+        "adjust_pct": float(s.adjust_pct),
+        "reason": s.reason,
+        "current_roas": float(s.current_roas) if s.current_roas else None,
+        "expected_roas": float(s.expected_roas) if s.expected_roas else None,
+        "current_spend": float(s.current_spend) if s.current_spend else None,
+        "daily_budget": float(s.daily_budget) if s.daily_budget else None,
+        "ai_model": s.ai_model,
+        "status": s.status,
+        "auto_executed": bool(s.auto_executed),
+        "executed_at": s.executed_at.isoformat() if s.executed_at else None,
+        "created_at": s.created_at.isoformat() if s.created_at else None,
+        "expires_at": s.expires_at.isoformat() if s.expires_at else None,
+    }

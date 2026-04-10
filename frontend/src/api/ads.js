@@ -197,3 +197,45 @@ export function getCampaignBudget(campaignId) {
 export function getBidLogs(params) {
   return request.get('/ads/bid-logs', { params })
 }
+
+// ==================== AI智能调价 ====================
+
+/** 获取店铺调价配置列表 */
+export function getAIPricingConfigs(shopId) {
+  return request.get(`/ai-pricing/configs/${shopId}`)
+}
+
+/** 更新调价配置 */
+export function updateAIPricingConfig(configId, data) {
+  return request.put(`/ai-pricing/configs/${configId}`, data)
+}
+
+/** 手动触发AI分析 */
+export function triggerAIAnalysis(shopId, data = {}) {
+  return request.post(`/ai-pricing/analyze/${shopId}`, data)
+}
+
+/** 获取AI调价建议列表 */
+export function getAIPricingSuggestions(shopId, params) {
+  return request.get(`/ai-pricing/suggestions/${shopId}`, { params })
+}
+
+/** 确认执行AI调价建议 */
+export function approveAIPricingSuggestion(suggestionId) {
+  return request.post(`/ai-pricing/suggestions/${suggestionId}/approve`)
+}
+
+/** 拒绝AI调价建议 */
+export function rejectAIPricingSuggestion(suggestionId) {
+  return request.post(`/ai-pricing/suggestions/${suggestionId}/reject`)
+}
+
+/** 切换AI调价自动/建议模式 */
+export function toggleAIAutoExecute(shopId, data) {
+  return request.post(`/ai-pricing/toggle-auto/${shopId}`, data)
+}
+
+/** 获取AI调价历史记录 */
+export function getAIPricingHistory(shopId, params) {
+  return request.get(`/ai-pricing/history/${shopId}`, { params })
+}

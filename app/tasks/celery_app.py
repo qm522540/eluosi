@@ -25,6 +25,7 @@ celery_app.conf.update(
         "app.tasks.daily_stats",
         "app.tasks.report_tasks",
         "app.tasks.roi_alert",
+        "app.tasks.ai_pricing_task",
     ],
 )
 
@@ -70,5 +71,10 @@ celery_app.conf.beat_schedule = {
     "ad-automation-rules": {
         "task": "app.tasks.ad_tasks.run_automation_rules",
         "schedule": crontab(minute=25),
+    },
+    # AI智能调价分析（每小时55分）
+    "ai-pricing-hourly": {
+        "task": "app.tasks.ai_pricing_task.run_ai_pricing_analysis",
+        "schedule": crontab(minute=55),
     },
 }
