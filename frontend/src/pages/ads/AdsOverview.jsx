@@ -2,11 +2,11 @@ import { useState, useEffect, useCallback } from 'react'
 import {
   Typography, Card, Table, Button, Tag, Space, Select, Row, Col,
   Statistic, Modal, Form, Input, InputNumber, message, DatePicker, Tooltip, Badge, Empty,
-  Popconfirm, Tabs, Alert, Drawer, Descriptions, List, Divider,
+  Popconfirm, Tabs, Alert, Drawer, Descriptions, List, Divider, Progress, Checkbox, Popover,
 } from 'antd'
 import {
   SearchOutlined, EditOutlined, EyeOutlined, SyncOutlined, PlusOutlined,
-  DeleteOutlined, ThunderboltOutlined,
+  DeleteOutlined, SettingOutlined,
 } from '@ant-design/icons'
 import ReactECharts from 'echarts-for-react'
 import dayjs from 'dayjs'
@@ -15,9 +15,9 @@ import {
   getAdGroups, createAdGroup, updateAdGroup, deleteAdGroup,
   getKeywords, createKeyword, batchCreateKeywords, updateKeyword, deleteKeyword,
   getAdStats, getAdSummary, syncAds,
-  getOptimizeSuggestions, applyBidSuggestions,
   exportAdStats, getAlerts, getAlertConfig, updateAlertConfig,
   getCampaignProducts, updateCampaignBid, getCampaignBudget,
+  getShopSummary,
 } from '@/api/ads'
 import { PLATFORMS, AD_STATUS, AD_TYPES } from '@/utils/constants'
 
@@ -30,6 +30,86 @@ const MATCH_TYPES = {
   phrase: '短语匹配',
   broad: '广泛匹配',
 }
+
+// ==================== 列选择器 ====================
+
+const ColumnSelector = ({ platform, allColumns, visibleColumns, defaultColumns, onChange }) => {
+  const groups = {}
+  Object.entries(allColumns).forEach(([key, col]) => {
+    if (col.fixed) return
+    if (col.platforms && !col.platforms.includes(platform)) return
+    const group = col.group || '其他'
+    if (!groups[group]) groups[group] = []
+    groups[group].push({ key, ...col })
+  })
+
+  const content = (
+    <div style={{ width: 280 }}>
+      {Object.entries(groups).map(([group, cols]) => (
+        <div key={group} style={{ marginBottom: 12 }}>
+          <div style={{ fontSize: 12, color: '#999', marginBottom: 6, fontWeight: 500 }}>{group}</div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 4 }}>
+            {cols.map(col => (
+              <Checkbox
+                key={col.key}
+                checked={visibleColumns.includes(col.key)}
+                onChange={e => {
+                  if (e.target.checked) onChange([...visibleColumns, col.key])
+                  else onChange(visibleColumns.filter(k => k !== col.key))
+                }}
+              >
+                <span style={{ fontSize: 13 }}>{col.title}</span>
+              </Checkbox>
+            ))}
+          </div>
+        </div>
+      ))}
+      <div style={{ borderTop: '1px solid #f0f0f0', paddingTop: 8, marginTop: 4 }}>
+        <Button size="small" type="link" onClick={() => onChange(defaultColumns[platform] || [])}>恢复默认</Button>
+      </div>
+    </div>
+  )
+
+  return (
+    <Popover content={content} title="自定义显示列" trigger="click" placement="bottomRight">
+      <Button size="small" icon={<SettingOutlined />}>自定义列</Button>
+    </Popover>
+  )
+}
+
+// ==================== 汇总卡片 ====================
+
+const TodaySummaryCards = ({ shopId }) => {
+  const [summary, setSummary] = useState(null)
+
+  useEffect(() => {
+    if (!shopId) return
+    getShopSummary(shopId).then(res => setSummary(res.data)).catch(() => {})
+  }, [shopId])
+
+  if (!summary) return null
+
+  const cards = [
+    { label: '今日总花费', value: `₽${(summary.today_spend || 0).toLocaleString()}`, sub: `昨日 ₽${(summary.yesterday_spend || 0).toLocaleString()}` },
+    { label: '店铺整体ROAS', value: `${summary.today_roas || '-'}x`, sub: `7天均值 ${summary.avg_roas_7d || '-'}x`, color: (summary.today_roas || 0) >= 3 ? '#52c41a' : (summary.today_roas || 0) >= 1.8 ? '#faad14' : '#ff4d4f' },
+    { label: '今日总订单', value: summary.today_orders || '-', sub: `7天均值 ${summary.avg_orders_7d || '-'}单/天` },
+    { label: '投放中活动', value: `${summary.active_count || 0}个`, sub: `共${summary.total_count || 0}个活动` },
+  ]
+
+  return (
+    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginBottom: 16 }}>
+      {cards.map((card, i) => (
+        <div key={i} style={{ background: '#fafafa', borderRadius: 8, padding: '12px 16px' }}>
+          <div style={{ fontSize: 13, color: '#999', marginBottom: 4 }}>{card.label}</div>
+          <div style={{ fontSize: 22, fontWeight: 500, color: card.color || '#333' }}>{card.value}</div>
+          <div style={{ fontSize: 12, color: '#999', marginTop: 4 }}>{card.sub}</div>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+// ==================== 主组件 ====================
 
 const AdsOverview = ({ shopId, platform, shops, searched }) => {
   // 汇总数据
@@ -93,13 +173,6 @@ const AdsOverview = ({ shopId, platform, shops, searched }) => {
   const [alertsLoading, setAlertsLoading] = useState(false)
   const [alertsTotal, setAlertsTotal] = useState(0)
   const [alertsPage, setAlertsPage] = useState(1)
-
-  // 出价优化
-  const [optimizeVisible, setOptimizeVisible] = useState(false)
-  const [optimizeLoading, setOptimizeLoading] = useState(false)
-  const [optimizeSuggestions, setOptimizeSuggestions] = useState(null)
-  const [optimizeForm] = Form.useForm()
-  const [applyingBids, setApplyingBids] = useState(false)
 
   // 告警配置
   const [configVisible, setConfigVisible] = useState(false)
@@ -469,44 +542,6 @@ const AdsOverview = ({ shopId, platform, shops, searched }) => {
     }
   }
 
-  // ==================== 出价优化 ====================
-
-  const handleOptimize = (campaignId) => {
-    optimizeForm.resetFields()
-    optimizeForm.setFieldValue('campaign_id', campaignId)
-    setOptimizeSuggestions(null)
-    setOptimizeVisible(true)
-  }
-
-  const handleGetSuggestions = async () => {
-    try {
-      const values = await optimizeForm.validateFields()
-      setOptimizeLoading(true)
-      const res = await getOptimizeSuggestions(values)
-      setOptimizeSuggestions(res.data)
-    } catch (err) {
-      if (err.errorFields) return
-      message.error(err.message || '获取优化建议失败')
-    } finally {
-      setOptimizeLoading(false)
-    }
-  }
-
-  const handleApplyBids = async () => {
-    if (!optimizeSuggestions?.suggestions?.length) return
-    setApplyingBids(true)
-    try {
-      await applyBidSuggestions(optimizeSuggestions.suggestions)
-      message.success('出价已批量更新')
-      setOptimizeVisible(false)
-      if (detailData) fetchAdGroups(detailData.id)
-    } catch (err) {
-      message.error(err.message || '应用出价失败')
-    } finally {
-      setApplyingBids(false)
-    }
-  }
-
   // ==================== 数据导出 ====================
 
   const handleExport = async () => {
@@ -588,92 +623,98 @@ const AdsOverview = ({ shopId, platform, shops, searched }) => {
     }
   }
 
-  // ==================== 表格列 ====================
+  // ==================== 可配置列系统 ====================
 
-  const columns = [
-    {
-      title: '活动ID',
-      dataIndex: 'platform_campaign_id',
-      key: 'platform_campaign_id',
-      width: 140,
-      ellipsis: true,
-      render: (text, record) => (
-        <a onClick={() => handleDetail(record.id)}>{text || record.id}</a>
+  const ALL_COLUMNS = {
+    campaign_name: {
+      title: '活动名称', dataIndex: 'name', fixed: true, width: 220,
+      render: (name, record) => (
+        <div>
+          <a onClick={() => handleDetail(record.id)} style={{ fontWeight: 500 }}>{name || '-'}</a>
+          <div style={{ fontSize: 12, color: '#999', marginTop: 2 }}>ID: {record.platform_campaign_id || record.id}</div>
+        </div>
       ),
     },
-    {
-      title: '活动名称',
-      dataIndex: 'name',
-      key: 'name',
-      width: 220,
-      ellipsis: { showTitle: false },
-      render: (text) => <Tooltip title={text} placement="topLeft">{text}</Tooltip>,
-    },
-    {
-      title: '平台',
-      dataIndex: 'platform',
-      key: 'platform',
-      width: 130,
-      render: (p) => {
-        const info = PLATFORMS[p]
-        return info ? <Tag color={info.color}>{info.label}</Tag> : p
+    status: {
+      title: '状态', dataIndex: 'status', fixed: true, width: 90,
+      render: s => {
+        const cfg = { active: { color: '#52c41a', text: '投放中' }, paused: { color: '#faad14', text: '已暂停' }, stopped: { color: '#ff4d4f', text: '已停止' }, archived: { color: '#d9d9d9', text: '已归档' } }[s] || { color: '#d9d9d9', text: s }
+        return <Space size={4}><span style={{ width: 6, height: 6, borderRadius: '50%', background: cfg.color, display: 'inline-block' }} /><span style={{ fontSize: 13 }}>{cfg.text}</span></Space>
       },
     },
-    {
-      title: '广告类型',
-      dataIndex: 'ad_type',
-      key: 'ad_type',
-      width: 110,
-      render: (t) => AD_TYPES[t]?.label || t,
+    today_spend: { title: '今日花费', dataIndex: 'today_spend', group: '今日数据', width: 100, align: 'right', render: v => v ? `₽${v.toLocaleString()}` : '-' },
+    today_roas: {
+      title: '今日ROAS', dataIndex: 'today_roas', group: '今日数据', width: 100, align: 'right',
+      render: (v, r) => { if (!v) return '-'; const t = r.target_roas || 3.0; const c = v >= t ? '#52c41a' : v >= t * 0.7 ? '#faad14' : '#ff4d4f'; return <span style={{ color: c, fontWeight: 500 }}>{v}x</span> },
     },
-    {
-      title: '预算余额',
-      dataIndex: 'daily_budget',
-      key: 'daily_budget',
-      width: 100,
-      align: 'right',
-      render: (v) => v != null ? `₽${v.toLocaleString()}` : '-',
+    today_orders: { title: '今日订单', dataIndex: 'today_orders', group: '今日数据', width: 90, align: 'right', render: v => v || '-' },
+    today_ctr: { title: '今日CTR', dataIndex: 'today_ctr', group: '今日数据', width: 90, align: 'right', render: v => v ? `${v}%` : '-' },
+    spend_7d: { title: '7天花费', dataIndex: 'spend_7d', group: '7天数据', width: 100, align: 'right', render: v => v ? `₽${v.toLocaleString()}` : '-' },
+    avg_roas_7d: {
+      title: '7天均ROAS', dataIndex: 'avg_roas_7d', group: '7天数据', width: 110, align: 'right',
+      render: (v, r) => { if (!v) return '-'; const t = r.target_roas || 3.0; const c = v >= t ? '#52c41a' : v >= t * 0.7 ? '#faad14' : '#ff4d4f'; return <span style={{ color: c, fontWeight: 500 }}>{v}x</span> },
     },
-    {
-      title: 'CTR',
-      dataIndex: 'ctr',
-      key: 'ctr',
-      width: 80,
-      align: 'right',
-      render: (v) => v ? `${v}%` : '0%',
-    },
-    {
-      title: '状态',
-      dataIndex: 'status',
-      key: 'status',
-      width: 100,
-      render: (s) => {
-        const info = AD_STATUS[s]
-        return info ? <Badge color={info.color} text={info.label} /> : s
+    roas_trend: {
+      title: 'ROAS趋势', dataIndex: 'roas_trend', group: '7天数据', width: 120,
+      render: trend => {
+        if (!trend || trend.length === 0) return '-'
+        const max = Math.max(...trend)
+        return (
+          <div style={{ display: 'flex', gap: 2, alignItems: 'flex-end', height: 24 }}>
+            {trend.slice(-7).map((v, i) => {
+              const h = max > 0 ? Math.max((v / max) * 20, 2) : 2
+              const c = v >= 3 ? '#52c41a' : v >= 1.8 ? '#faad14' : '#ff4d4f'
+              return <Tooltip key={i} title={`${v}x`}><div style={{ width: 10, height: h, background: c, borderRadius: 2, cursor: 'help' }} /></Tooltip>
+            })}
+          </div>
+        )
       },
     },
+    orders_7d: { title: '7天订单', dataIndex: 'orders_7d', group: '7天数据', width: 90, align: 'right', render: v => v || '-' },
+    daily_budget: { title: '日预算', dataIndex: 'daily_budget', group: '预算', width: 90, align: 'right', render: v => v ? `₽${v}` : '不限' },
+    budget_used_pct: {
+      title: '预算进度', dataIndex: 'budget_used_pct', group: '预算', width: 130,
+      render: pct => { if (!pct) return '-'; const c = pct >= 100 ? '#ff4d4f' : pct >= 80 ? '#faad14' : '#52c41a'; return <Progress percent={Math.min(pct, 100)} size="small" strokeColor={c} format={() => `${pct}%`} /> },
+    },
+    budget_days_left: { title: '剩余天数', dataIndex: 'budget_days_left', group: '预算', width: 90, render: v => v != null ? `${v}天` : '-' },
+    ozon_bid_type: { title: '出价类型', dataIndex: 'ozon_bid_type', group: 'Ozon', platforms: ['ozon'], width: 100, render: v => v || '-' },
+    wb_campaign_type: { title: '活动类型', dataIndex: 'wb_campaign_type', group: 'WB', platforms: ['wb'], width: 100, render: v => v || '-' },
+  }
+
+  const PLATFORM_DEFAULT_COLS = {
+    ozon: ['campaign_name', 'status', 'today_spend', 'today_roas', 'today_orders', 'avg_roas_7d', 'roas_trend', 'budget_used_pct', 'daily_budget'],
+    wb: ['campaign_name', 'status', 'today_spend', 'today_roas', 'today_orders', 'avg_roas_7d', 'spend_7d', 'budget_used_pct'],
+    yandex: ['campaign_name', 'status', 'today_spend', 'today_roas', 'today_orders', 'avg_roas_7d'],
+  }
+
+  const storageKey = `ads_columns_${platform}`
+  const [visibleColumns, setVisibleColumns] = useState(() => {
+    try { const s = localStorage.getItem(storageKey); return s ? JSON.parse(s) : PLATFORM_DEFAULT_COLS[platform] || PLATFORM_DEFAULT_COLS.ozon } catch { return PLATFORM_DEFAULT_COLS[platform] || PLATFORM_DEFAULT_COLS.ozon }
+  })
+
+  useEffect(() => {
+    setVisibleColumns(PLATFORM_DEFAULT_COLS[platform] || PLATFORM_DEFAULT_COLS.ozon)
+  }, [platform])
+
+  const handleColumnChange = (cols) => {
+    setVisibleColumns(cols)
+    localStorage.setItem(storageKey, JSON.stringify(cols))
+  }
+
+  // 构建表格列
+  const tableColumns = [
+    ...['campaign_name', 'status'].map(k => ({ key: k, ...ALL_COLUMNS[k] })),
+    ...visibleColumns
+      .filter(k => !['campaign_name', 'status'].includes(k) && ALL_COLUMNS[k])
+      .filter(k => { const col = ALL_COLUMNS[k]; return !col.platforms || col.platforms.includes(platform) })
+      .map(k => ({ key: k, ...ALL_COLUMNS[k] })),
     {
-      title: '操作',
-      key: 'action',
-      width: 220,
+      title: <ColumnSelector platform={platform} allColumns={ALL_COLUMNS} visibleColumns={visibleColumns} defaultColumns={PLATFORM_DEFAULT_COLS} onChange={handleColumnChange} />,
+      key: 'actions', fixed: 'right', width: 120,
       render: (_, record) => (
-        <Space size="small">
-          <Tooltip title="查看详情">
-            <Button type="link" size="small" icon={<EyeOutlined />} onClick={() => handleDetail(record.id)}>
-              详情
-            </Button>
-          </Tooltip>
-          <Tooltip title="调整预算/状态">
-            <Button type="link" size="small" icon={<EditOutlined />} onClick={() => handleEdit(record)}>
-              编辑
-            </Button>
-          </Tooltip>
-          <Tooltip title="出价优化">
-            <Button type="link" size="small" icon={<ThunderboltOutlined />} onClick={() => handleOptimize(record.id)} />
-          </Tooltip>
-          <Popconfirm title="确定删除此广告活动？关联的广告组、关键词和统计数据将一并删除。" onConfirm={() => handleDelete(record.id)} okText="确定" cancelText="取消">
-            <Button type="link" size="small" danger icon={<DeleteOutlined />} />
-          </Popconfirm>
+        <Space size={4}>
+          <Button type="link" size="small" icon={<EyeOutlined />} onClick={() => handleDetail(record.id)}>详情</Button>
+          <Button type="link" size="small" icon={<EditOutlined />} onClick={() => handleEdit(record)}>编辑</Button>
         </Space>
       ),
     },
@@ -771,16 +812,23 @@ const AdsOverview = ({ shopId, platform, shops, searched }) => {
 
   return (
     <>
+      {/* 顶部汇总卡片 */}
+      <TodaySummaryCards shopId={shopId} />
+
       {/* 活动列表 */}
       <Card title="活动列表" size="small" style={{ marginBottom: 24 }}>
-        <Table columns={columns} dataSource={campaigns} rowKey="id" loading={listLoading}
+        <Table columns={tableColumns} dataSource={campaigns} rowKey="id" loading={listLoading}
+          scroll={{ x: 'max-content' }}
           pagination={{
             current: page, total, pageSize: 20,
             showTotal: (t) => `共 ${t} 个活动`,
             onChange: (p) => { setPage(p); fetchCampaigns(p) },
           }}
+          rowClassName={record => record.status !== 'active' ? 'row-paused' : ''}
         />
       </Card>
+
+      <style>{`.row-paused td { opacity: 0.6; }`}</style>
 
       {/* ==================== 创建活动弹窗 ==================== */}
       <Modal
@@ -1111,70 +1159,6 @@ const AdsOverview = ({ shopId, platform, shops, searched }) => {
             ]} />
           </Form.Item>
         </Form>
-      </Modal>
-
-      {/* ==================== 出价优化弹窗 ==================== */}
-      <Modal
-        title="出价优化"
-        open={optimizeVisible}
-        onCancel={() => setOptimizeVisible(false)}
-        width={700}
-        footer={optimizeSuggestions?.suggestions?.length > 0 ? [
-          <Button key="cancel" onClick={() => setOptimizeVisible(false)}>取消</Button>,
-          <Button key="apply" type="primary" loading={applyingBids} onClick={handleApplyBids}>应用全部建议</Button>,
-        ] : null}
-      >
-        <Form form={optimizeForm} layout="inline" style={{ marginBottom: 16 }}>
-          <Form.Item name="campaign_id" hidden><Input /></Form.Item>
-          <Form.Item name="target_roas" label="目标ROAS" initialValue={2.0}>
-            <InputNumber min={0.1} step={0.1} style={{ width: 100 }} />
-          </Form.Item>
-          <Form.Item name="max_bid_increase" label="最大加价%" initialValue={30}>
-            <InputNumber min={0} max={100} style={{ width: 80 }} />
-          </Form.Item>
-          <Form.Item name="max_bid_decrease" label="最大降价%" initialValue={30}>
-            <InputNumber min={0} max={100} style={{ width: 80 }} />
-          </Form.Item>
-          <Form.Item>
-            <Button type="primary" loading={optimizeLoading} onClick={handleGetSuggestions}>获取建议</Button>
-          </Form.Item>
-        </Form>
-
-        {optimizeSuggestions && (
-          <>
-            <Alert
-              message={`活动: ${optimizeSuggestions.campaign_name} | 目标ROAS: ${optimizeSuggestions.target_roas}`}
-              type="info"
-              showIcon
-              style={{ marginBottom: 16 }}
-            />
-            {optimizeSuggestions.suggestions.length === 0 ? (
-              <Empty description="没有需要调整的广告组（可能无近期数据或无出价）" />
-            ) : (
-              <Table
-                size="small"
-                dataSource={optimizeSuggestions.suggestions}
-                rowKey="group_id"
-                pagination={false}
-                columns={[
-                  { title: '广告组', dataIndex: 'group_name', key: 'group_name', ellipsis: true },
-                  { title: '当前出价', dataIndex: 'current_bid', key: 'current_bid', width: 90, render: v => `₽${v}` },
-                  {
-                    title: '建议出价', dataIndex: 'suggested_bid', key: 'suggested_bid', width: 90,
-                    render: (v, r) => <Text style={{ color: r.action === 'increase' ? '#52c41a' : '#ff4d4f' }}>₽{v}</Text>,
-                  },
-                  {
-                    title: '调整', dataIndex: 'change_percent', key: 'change_percent', width: 80,
-                    render: (v, r) => <Tag color={r.action === 'increase' ? 'green' : 'red'}>{r.action === 'increase' ? '+' : '-'}{v}%</Tag>,
-                  },
-                  { title: '实际ROAS', dataIndex: 'actual_roas', key: 'actual_roas', width: 90 },
-                  { title: '7日花费', dataIndex: 'spend_7d', key: 'spend_7d', width: 90, render: v => `₽${v}` },
-                  { title: '7日收入', dataIndex: 'revenue_7d', key: 'revenue_7d', width: 90, render: v => `₽${v}` },
-                ]}
-              />
-            )}
-          </>
-        )}
       </Modal>
 
       {/* ==================== ROI告警弹窗 ==================== */}

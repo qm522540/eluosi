@@ -80,6 +80,11 @@ export function getAdSummary(params) {
   return request.get('/ads/summary', { params })
 }
 
+/** 店铺今日汇总（概览卡片） */
+export function getShopSummary(shopId) {
+  return request.get(`/ads/shop-summary/${shopId}`)
+}
+
 /** 手动触发广告数据同步 */
 export function syncAds() {
   return request.post('/tasks/sync-ads')
