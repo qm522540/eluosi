@@ -253,15 +253,15 @@ const AdsAIPricing = ({ shopId, searched }) => {
         const ozonUrl = r.product_id ? `https://www.ozon.ru/product/${r.product_id}` : null
         const img = r.image_url ? (
           <Avatar src={r.image_url} size={36} shape="square" style={{ marginRight: 8, flexShrink: 0 }} />
-        ) : (
-          <Avatar icon={<ShoppingOutlined />} size={36} shape="square" style={{ marginRight: 8, flexShrink: 0, background: '#f0f0f0', color: '#999' }} />
-        )
+        ) : null
         return (
           <div style={{ display: 'flex', alignItems: 'center' }}>
             {img}
             <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
               {ozonUrl ? (
-                <a href={ozonUrl} target="_blank" rel="noopener noreferrer" title="在Ozon查看商品">{name}</a>
+                <Tooltip title="点击在Ozon查看商品图片和详情">
+                  <a href={ozonUrl} target="_blank" rel="noopener noreferrer">🔗 {name}</a>
+                </Tooltip>
               ) : name}
             </div>
           </div>
@@ -344,13 +344,11 @@ const AdsAIPricing = ({ shopId, searched }) => {
         const ozonUrl = r.product_id ? `https://www.ozon.ru/product/${r.product_id}` : null
         const img = r.image_url ? (
           <Avatar src={r.image_url} size={28} shape="square" style={{ marginRight: 6, flexShrink: 0 }} />
-        ) : (
-          <Avatar icon={<ShoppingOutlined />} size={28} shape="square" style={{ marginRight: 6, flexShrink: 0, background: '#f0f0f0', color: '#999' }} />
-        )
+        ) : null
         return (
           <div style={{ display: 'flex', alignItems: 'center' }}>
             {img}
-            {ozonUrl ? <a href={ozonUrl} target="_blank" rel="noopener noreferrer">{name}</a> : name}
+            {ozonUrl ? <a href={ozonUrl} target="_blank" rel="noopener noreferrer">🔗 {name}</a> : name}
           </div>
         )
       },

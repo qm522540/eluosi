@@ -52,51 +52,157 @@ def _build_ozon_client(shop: Shop) -> OzonClient:
 
 # ==================== Prompt模板 ====================
 
-PRICING_SYSTEM_PROMPT = "你是俄罗斯电商Ozon平台的广告出价优化专家。请基于数据给出精准的调价建议。"
+PRICING_SYSTEM_PROMPT = "你是俄罗斯电商Ozon平台的广告出价优化专家。请基于完整的历史数据和实时数据给出精准的调价建议。"
 
-PRICING_USER_PROMPT = """请基于以下数据，对每个商品给出调价建议。
 
-【店铺配置】
-品类：{category_name}
-目标ROAS：{target_roas}
-最低可接受ROAS：{min_roas}
-毛利率：{gross_margin}
-日预算：{daily_budget_limit}卢布
-当前莫斯科时间：{moscow_hour}点
+# ==================== 历史数据查询 ====================
 
-【今日广告数据】
-总花费：{total_spend}卢布 / 日预算：{daily_budget}卢布（已用{budget_pct}%）
-整体ROAS：{overall_roas}
+def get_campaign_history_stats(db: Session, campaign_ids: List[int]) -> dict:
+    """查询多个广告活动近7天历史数据汇总"""
+    seven_days_ago = date.today() - timedelta(days=7)
 
-【各商品明细】
-{products_data}
-（格式：商品ID | 商品名 | 当前出价 | 今日点击 | 今日订单 | 今日花费 | 今日收入 | ROAS）
+    try:
+        stats = db.query(AdStat).filter(
+            AdStat.campaign_id.in_(campaign_ids),
+            AdStat.stat_date >= seven_days_ago,
+            AdStat.stat_date < date.today(),  # 不含今天，今天数据单独统计
+        ).all()
 
-【调价规则约束】
-- 最低出价：3卢布（Ozon平台限制）
-- 最高出价：{max_bid}卢布
-- 单次最大调幅：{max_adjust_pct}%
-- 出价必须取整数（卢布）
+        if not stats:
+            return {
+                "avg_roas": 0, "avg_daily_spend": 0, "avg_ctr": 0,
+                "avg_cr": 0, "roas_trend": [], "total_orders_7d": 0,
+                "total_spend_7d": 0, "best_roas_day": 0,
+                "worst_roas_day": 0, "data_days": 0,
+            }
 
-【输出格式】
-必须输出纯JSON，格式如下：
-{{
-  "summary": "本次分析总结（一句话）",
-  "suggestions": [
-    {{
-      "product_id": "商品ID",
-      "product_name": "商品名",
-      "current_bid": 45,
-      "suggested_bid": 38,
-      "adjust_pct": -15.6,
-      "reason": "当前ROAS 1.2低于目标2.5，且日预算已消耗78%，建议降价减少无效消耗",
-      "current_roas": 1.2,
-      "expected_roas": 1.8
-    }}
-  ]
-}}
+        # 按天汇总
+        daily = {}
+        for s in stats:
+            d = str(s.stat_date)
+            if d not in daily:
+                daily[d] = {"spend": 0, "revenue": 0, "clicks": 0, "orders": 0, "impressions": 0}
+            daily[d]["spend"] += float(s.spend)
+            daily[d]["revenue"] += float(s.revenue)
+            daily[d]["clicks"] += int(s.clicks)
+            daily[d]["orders"] += int(s.orders)
+            daily[d]["impressions"] += int(s.impressions)
 
-注意：如果某商品数据正常无需调整，不要包含在suggestions里。"""
+        roas_list = []
+        ctr_list = []
+        cr_list = []
+        for d in sorted(daily.keys()):
+            v = daily[d]
+            roas_list.append(round(v["revenue"] / v["spend"], 2) if v["spend"] > 0 else 0)
+            ctr_list.append(round(v["clicks"] / v["impressions"] * 100, 2) if v["impressions"] > 0 else 0)
+            cr_list.append(round(v["orders"] / v["clicks"] * 100, 2) if v["clicks"] > 0 else 0)
+
+        total_spend = sum(v["spend"] for v in daily.values())
+        total_orders = sum(v["orders"] for v in daily.values())
+        n = len(daily)
+
+        return {
+            "avg_roas": round(sum(roas_list) / n, 2) if n > 0 else 0,
+            "avg_daily_spend": round(total_spend / n, 2) if n > 0 else 0,
+            "avg_ctr": round(sum(ctr_list) / n, 2) if n > 0 else 0,
+            "avg_cr": round(sum(cr_list) / n, 2) if n > 0 else 0,
+            "roas_trend": roas_list,
+            "total_orders_7d": total_orders,
+            "total_spend_7d": round(total_spend, 2),
+            "best_roas_day": round(max(roas_list), 2) if roas_list else 0,
+            "worst_roas_day": round(min(roas_list), 2) if roas_list else 0,
+            "data_days": n,
+        }
+    except Exception as e:
+        logger.error(f"查询历史数据失败: {e}")
+        return {"avg_roas": 0, "data_days": 0, "roas_trend": []}
+
+
+def get_bid_history(db: Session, campaign_ids: List[int]) -> dict:
+    """从ad_bid_logs表查询历史调价记录"""
+    from app.models.ad import AdBidLog
+
+    thirty_days_ago = datetime.now() - timedelta(days=30)
+
+    try:
+        logs = db.query(AdBidLog).filter(
+            AdBidLog.campaign_id.in_(campaign_ids),
+            AdBidLog.created_at >= thirty_days_ago,
+        ).order_by(AdBidLog.created_at.desc()).limit(20).all()
+
+        if not logs:
+            return {
+                "recent_bids": [], "avg_bid_30d": 0,
+                "bid_change_count": 0, "last_adjust_time": None,
+                "last_adjust_direction": "none",
+            }
+
+        all_bids = [float(l.new_bid) for l in logs]
+        last = logs[0]
+        direction = "up" if float(last.new_bid) > float(last.old_bid) else (
+            "down" if float(last.new_bid) < float(last.old_bid) else "none"
+        )
+
+        return {
+            "recent_bids": [round(b) for b in all_bids[:5]],
+            "avg_bid_30d": round(sum(all_bids) / len(all_bids), 2),
+            "bid_change_count": len(logs),
+            "last_adjust_time": last.created_at.strftime("%Y-%m-%d %H:%M"),
+            "last_adjust_direction": direction,
+        }
+    except Exception as e:
+        logger.error(f"查询出价历史失败: {e}")
+        return {"recent_bids": [], "avg_bid_30d": 0, "bid_change_count": 0}
+
+
+def get_shop_benchmark(db: Session, tenant_id: int, shop_id: int) -> dict:
+    """查询店铺整体ROAS基准（今日+7天）"""
+    today_date = date.today()
+    seven_days_ago = today_date - timedelta(days=7)
+
+    try:
+        # 今日数据
+        today_stats = db.query(AdStat).filter(
+            AdStat.tenant_id == tenant_id,
+            AdStat.stat_date == today_date,
+        ).join(AdCampaign, AdStat.campaign_id == AdCampaign.id).filter(
+            AdCampaign.shop_id == shop_id,
+        ).all()
+
+        today_spend = sum(float(s.spend) for s in today_stats)
+        today_revenue = sum(float(s.revenue) for s in today_stats)
+        campaign_roas = {}
+        for s in today_stats:
+            cid = s.campaign_id
+            if cid not in campaign_roas:
+                campaign_roas[cid] = {"spend": 0, "revenue": 0}
+            campaign_roas[cid]["spend"] += float(s.spend)
+            campaign_roas[cid]["revenue"] += float(s.revenue)
+
+        active_count = len([c for c in campaign_roas.values() if c["spend"] > 0])
+        roas_values = [c["revenue"] / c["spend"] for c in campaign_roas.values() if c["spend"] > 0]
+
+        # 7天数据
+        week_stats = db.query(AdStat).filter(
+            AdStat.tenant_id == tenant_id,
+            AdStat.stat_date >= seven_days_ago,
+            AdStat.stat_date <= today_date,
+        ).join(AdCampaign, AdStat.campaign_id == AdCampaign.id).filter(
+            AdCampaign.shop_id == shop_id,
+        ).all()
+
+        week_spend = sum(float(s.spend) for s in week_stats)
+        week_revenue = sum(float(s.revenue) for s in week_stats)
+
+        return {
+            "shop_avg_roas_today": round(today_revenue / today_spend, 2) if today_spend > 0 else 0,
+            "shop_avg_roas_7d": round(week_revenue / week_spend, 2) if week_spend > 0 else 0,
+            "top_performer_roas": round(max(roas_values), 2) if roas_values else 0,
+            "active_campaigns": active_count,
+        }
+    except Exception as e:
+        logger.error(f"查询店铺基准失败 shop_id={shop_id}: {e}")
+        return {"shop_avg_roas_today": 0, "shop_avg_roas_7d": 0, "top_performer_roas": 0, "active_campaigns": 0}
 
 
 # ==================== 安全护栏 ====================
