@@ -1176,9 +1176,7 @@ const Ads = () => {
             ]}
           />
           <Button type="primary" icon={<SearchOutlined />} disabled={!canSearch} onClick={handleSearch}>确定</Button>
-          <Button icon={<PlusOutlined />} onClick={handleCreateCampaign}>新建活动</Button>
           <Button icon={<SyncOutlined spin={syncing} />} loading={syncing} onClick={handleSync}>同步</Button>
-          <Button icon={<BellOutlined />} onClick={handleShowAlerts}>告警</Button>
           <Button icon={<SettingOutlined />} onClick={handleShowConfig}>配置</Button>
         </Space>
       </div>
