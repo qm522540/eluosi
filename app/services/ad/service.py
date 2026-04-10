@@ -1147,11 +1147,11 @@ async def execute_automation_rules(db: Session, tenant_id: int) -> dict:
 
         for rule in rules:
             try:
-                triggered = await _execute_single_rule(db, tenant_id, rule, week_ago, today)
+                result_info = await _execute_single_rule(db, tenant_id, rule, week_ago, today)
                 results.append({
                     "rule_id": rule.id,
                     "name": rule.name,
-                    "triggered": triggered,
+                    **result_info,
                 })
             except Exception as e:
                 logger.warning(f"规则 {rule.id} 执行失败: {e}")
@@ -1172,10 +1172,11 @@ async def execute_automation_rules(db: Session, tenant_id: int) -> dict:
 
 
 async def _execute_single_rule(db: Session, tenant_id: int, rule: AdAutomationRule,
-                               start_date: date, end_date: date) -> bool:
-    """执行单条规则，返回是否触发了动作"""
+                               start_date: date, end_date: date) -> dict:
+    """执行单条规则，返回执行详情"""
     conditions = rule.conditions or {}
     actions = rule.actions or {}
+    debug_info = {}
 
     # 构建活动查询范围
     query = db.query(AdCampaign).filter(
@@ -1190,6 +1191,7 @@ async def _execute_single_rule(db: Session, tenant_id: int, rule: AdAutomationRu
         query = query.filter(AdCampaign.shop_id == rule.shop_id)
 
     campaigns = query.all()
+    debug_info["campaigns_found"] = len(campaigns)
     triggered = False
 
     for campaign in campaigns:
@@ -1218,15 +1220,15 @@ async def _execute_single_rule(db: Session, tenant_id: int, rule: AdAutomationRu
                 logger.info(f"规则[{rule.name}] 暂停活动 {campaign.id}，ROAS={roas:.2f}<{min_roas}")
 
         elif rule.rule_type == "auto_bid":
-            bid_triggered = await _execute_auto_bid(
+            bid_result = await _execute_auto_bid(
                 db, tenant_id, campaign, rule, conditions, actions
             )
-            if bid_triggered:
+            debug_info.update(bid_result.get("debug", {}))
+            if bid_result["triggered"]:
                 triggered = True
 
         elif rule.rule_type == "budget_cap":
             daily_limit = conditions.get("max_daily_spend", 0)
-            # 检查今天的花费
             today_spend_row = db.query(
                 func.sum(AdStat.spend).label("spend")
             ).filter(
@@ -1240,10 +1242,8 @@ async def _execute_single_rule(db: Session, tenant_id: int, rule: AdAutomationRu
                 logger.info(f"规则[{rule.name}] 预算到达上限，暂停活动 {campaign.id}")
 
         elif rule.rule_type == "inventory_link":
-            # 库存联动：库存不足暂停，库存恢复开启
             min_stock = conditions.get("min_stock", 10)
             resume_stock = conditions.get("resume_stock", 50)
-            # TODO: 接入平台库存API获取实际库存
             logger.info(f"规则[{rule.name}] 库存联动检查 活动{campaign.id} min={min_stock} resume={resume_stock}")
 
     if triggered:
@@ -1251,12 +1251,12 @@ async def _execute_single_rule(db: Session, tenant_id: int, rule: AdAutomationRu
         rule.trigger_count += 1
         db.commit()
 
-    return triggered
+    return {"triggered": triggered, "detail": debug_info}
 
 
 async def _execute_auto_bid(db: Session, tenant_id: int, campaign: AdCampaign,
-                            rule: AdAutomationRule, conditions: dict, actions: dict) -> bool:
-    """分时调价：通过平台API直接调整商品出价"""
+                            rule: AdAutomationRule, conditions: dict, actions: dict) -> dict:
+    """分时调价：通过平台API直接调整商品出价，返回 {triggered, debug}"""
     from pytz import timezone as pytz_tz
 
     peak_hours = conditions.get("peak_hours", [19, 20, 21])
@@ -1281,6 +1281,14 @@ async def _execute_auto_bid(db: Session, tenant_id: int, campaign: AdCampaign,
         adjust_pct = 0
         period_name = "平峰"
 
+    debug = {
+        "moscow_hour": moscow_hour,
+        "period": period_name,
+        "adjust_pct": adjust_pct,
+        "platform": campaign.platform,
+        "campaign_id": campaign.id,
+        "platform_campaign_id": campaign.platform_campaign_id,
+    }
     triggered = False
 
     if campaign.platform == "ozon" and campaign.platform_campaign_id:
@@ -1291,7 +1299,8 @@ async def _execute_auto_bid(db: Session, tenant_id: int, campaign: AdCampaign,
         shop = db.query(Shop).filter(Shop.id == campaign.shop_id).first()
         if not shop:
             logger.warning(f"分时调价: 店铺 {campaign.shop_id} 不存在，跳过")
-            return False
+            debug["error"] = "shop_not_found"
+            return {"triggered": False, "debug": debug}
 
         client = OzonClient(
             shop_id=shop.id, api_key=shop.api_key, client_id=shop.client_id,
@@ -1300,19 +1309,26 @@ async def _execute_auto_bid(db: Session, tenant_id: int, campaign: AdCampaign,
         )
         try:
             products = await client.fetch_campaign_products(campaign.platform_campaign_id)
+            debug["products_count"] = len(products)
             if not products:
                 logger.info(f"分时调价: 活动 {campaign.id} 无商品，跳过")
-                return False
+                return {"triggered": False, "debug": debug}
 
             # 获取或初始化原始出价记录（按campaign_id存储）
             original_bids = (actions.get("original_bids") or {}).get(str(campaign.id), {})
+            product_details = []
 
             for product in products:
                 sku = str(product.get("sku", ""))
                 # Ozon出价单位：微单位字符串（除以1000000=卢布）
                 current_bid_raw = product.get("bid", "0")
                 current_bid = int(current_bid_raw) / 1_000_000 if current_bid_raw else 0
+
+                p_info = {"sku": sku, "current_bid_raw": current_bid_raw, "current_bid": current_bid}
+
                 if current_bid <= 0:
+                    p_info["skip"] = "bid<=0"
+                    product_details.append(p_info)
                     continue
 
                 # 首次运行：记录原始出价
@@ -1324,14 +1340,22 @@ async def _execute_auto_bid(db: Session, tenant_id: int, campaign: AdCampaign,
                 # Ozon出价只接受整数卢布，不足1卢布向上取整
                 new_bid = max(round(new_bid_exact), 1)
 
+                p_info.update({"base_bid": base_bid, "new_bid_exact": new_bid_exact, "new_bid": new_bid})
+
                 if new_bid == round(current_bid):
+                    p_info["skip"] = "no_change"
+                    product_details.append(p_info)
                     continue
 
                 # 转回微单位调用API
                 new_bid_raw = str(int(new_bid * 1_000_000))
+                p_info["new_bid_raw"] = new_bid_raw
                 ok = await client.update_campaign_bid(
                     campaign.platform_campaign_id, sku, new_bid_raw
                 )
+                p_info["api_ok"] = ok
+                product_details.append(p_info)
+
                 if ok:
                     triggered = True
                     product_name = product.get("title", sku)
@@ -1352,6 +1376,8 @@ async def _execute_auto_bid(db: Session, tenant_id: int, campaign: AdCampaign,
                     logger.info(f"分时调价: 活动{campaign.id} SKU={sku} {current_bid}→{new_bid} ({period_name}{adjust_pct:+d}%)")
                 else:
                     logger.warning(f"分时调价: 活动{campaign.id} SKU={sku} API调用失败")
+
+            debug["products"] = product_details
 
             # 保存原始出价
             if not actions.get("original_bids"):
@@ -1403,7 +1429,7 @@ async def _execute_auto_bid(db: Session, tenant_id: int, campaign: AdCampaign,
         actions["original_bids"][str(campaign.id)] = original_bids
         rule.actions = actions
 
-    return triggered
+    return {"triggered": triggered, "debug": debug}
 
 
 def _rule_to_dict(r: AdAutomationRule) -> dict:
