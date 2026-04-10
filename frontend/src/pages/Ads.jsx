@@ -1370,7 +1370,11 @@ const Ads = () => {
                             {record.rule_type === 'auto_bid' && (
                               <Button type="link" size="small" onClick={() => handleShowBidLogs(record.id)}>日志</Button>
                             )}
-                            <Button type="link" size="small" icon={<EditOutlined />} onClick={() => handleEditRule(record)} />
+                            <Tooltip title={record.rule_type === 'auto_bid' && record.enabled ? '请先关闭规则再编辑' : ''}>
+                              <Button type="link" size="small" icon={<EditOutlined />}
+                                disabled={record.rule_type === 'auto_bid' && !!record.enabled}
+                                onClick={() => handleEditRule(record)} />
+                            </Tooltip>
                             <Button type="link" size="small" danger icon={<DeleteOutlined />} onClick={() => handleDeleteRule(record.id)} />
                           </Space>
                         ),
