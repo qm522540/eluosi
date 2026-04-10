@@ -1350,10 +1350,12 @@ async def _execute_auto_bid(db: Session, tenant_id: int, campaign: AdCampaign,
                 # 转回微单位调用API
                 new_bid_raw = str(int(new_bid * 1_000_000))
                 p_info["new_bid_raw"] = new_bid_raw
-                ok = await client.update_campaign_bid(
+                api_result = await client.update_campaign_bid(
                     campaign.platform_campaign_id, sku, new_bid_raw
                 )
+                ok = api_result["ok"]
                 p_info["api_ok"] = ok
+                p_info["api_error"] = api_result.get("error")
                 product_details.append(p_info)
 
                 if ok:

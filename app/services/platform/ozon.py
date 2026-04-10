@@ -442,25 +442,27 @@ class OzonClient(BasePlatformClient):
             logger.error(f"Ozon 获取活动商品失败 campaign_id={campaign_id}: {e}")
             return []
 
-    async def update_campaign_bid(self, campaign_id: str, sku: str, new_bid: str) -> bool:
+    async def update_campaign_bid(self, campaign_id: str, sku: str, new_bid: str) -> dict:
         """修改广告活动中商品的出价
 
         Performance API:
         PUT /api/client/campaign/{id}/products  body: {"bids":[{"sku":"...","bid":"..."}]}
+
+        返回 {"ok": bool, "error": str|None}
         """
         await self._ensure_perf_token()
         if not self._perf_token:
-            return False
+            return {"ok": False, "error": "no_perf_token"}
 
         try:
             url = f"{OZON_PERFORMANCE_API}/api/client/campaign/{campaign_id}/products"
             payload = {"bids": [{"sku": str(sku), "bid": str(new_bid)}]}
             result = await self._request("PUT", url, use_perf=True, json=payload)
-            logger.info(f"Ozon 出价修改成功 campaign={campaign_id} sku={sku} bid={new_bid}")
-            return True
+            logger.info(f"Ozon 出价修改成功 campaign={campaign_id} sku={sku} bid={new_bid} result={result}")
+            return {"ok": True, "error": None}
         except Exception as e:
             logger.error(f"Ozon 出价修改失败: {e}")
-            return False
+            return {"ok": False, "error": str(e)}
 
     # ==================== 商品 ====================
 

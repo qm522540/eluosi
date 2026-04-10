@@ -584,10 +584,10 @@ async def update_campaign_bid(
             perf_client_secret=shop.perf_client_secret or '',
         )
         try:
-            ok = await client.update_campaign_bid(camp.platform_campaign_id, str(sku), str(new_bid))
-            if ok:
+            api_result = await client.update_campaign_bid(camp.platform_campaign_id, str(sku), str(new_bid))
+            if api_result["ok"]:
                 return success(msg="出价修改成功")
-            return error(50003, "出价修改失败")
+            return error(50003, f"出价修改失败: {api_result.get('error', '未知错误')}")
         finally:
             await client.close()
     else:
