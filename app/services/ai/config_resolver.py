@@ -26,10 +26,10 @@ def get_effective_config(db: Session, tenant_id: int, campaign: AdCampaign) -> d
         ).first()
 
     if not config:
-        config = _get_default_config(db, tenant_id)
+        config = _get_default_config(db, tenant_id, campaign.shop_id)
 
     if not config:
-        logger.warning("找不到配置模板，使用硬编码默认值")
+        logger.warning(f"找不到配置模板 tenant_id={tenant_id} shop_id={campaign.shop_id}，使用硬编码默认值")
         return _hardcoded_defaults()
 
     # 2. 单活动覆盖参数（优先级最高）
@@ -56,13 +56,18 @@ def get_effective_config(db: Session, tenant_id: int, campaign: AdCampaign) -> d
     return result
 
 
-def _get_default_config(db: Session, tenant_id: int):
-    """获取默认标准模板"""
-    return db.query(AiPricingConfig).filter(
+def _get_default_config(db: Session, tenant_id: int, shop_id: int = None):
+    """获取默认标准模板（优先匹配shop_id）"""
+    query = db.query(AiPricingConfig).filter(
         AiPricingConfig.tenant_id == tenant_id,
         AiPricingConfig.template_type == "default",
         AiPricingConfig.is_active == 1,
-    ).first()
+    )
+    if shop_id:
+        result = query.filter(AiPricingConfig.shop_id == shop_id).first()
+        if result:
+            return result
+    return query.first()
 
 
 def _hardcoded_defaults() -> dict:

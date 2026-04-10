@@ -10,27 +10,29 @@ ALTER TABLE ai_pricing_configs
   ADD COLUMN no_budget_limit TINYINT(1) DEFAULT 0
     COMMENT '是否不设预算上限' AFTER daily_budget_limit;
 
--- 2. 清除旧数据，插入三个标准模板
-DELETE FROM ai_pricing_configs;
+-- 2. 为已有记录设置默认模板类型（保留旧数据）
+UPDATE ai_pricing_configs SET template_type = 'default' WHERE template_type IS NULL;
 
-INSERT INTO ai_pricing_configs
+-- 3. 插入标准模板（仅当不存在时）
+-- 注意：实际部署时需替换tenant_id和shop_id为真实值
+INSERT IGNORE INTO ai_pricing_configs
 (tenant_id, shop_id, template_name, template_type,
  target_roas, min_roas, gross_margin,
  daily_budget_limit, no_budget_limit,
  max_bid, min_bid, max_adjust_pct,
  auto_execute, is_active, description)
 VALUES
-(1, 1, '默认标准', 'default',
+(4, 2, '默认标准', 'default',
  3.0, 1.8, 0.50,
  2000.00, 0,
  180.00, 3.00, 30.00,
  0, 1, '默认模板，所有活动未指定时使用此配置'),
-(1, 1, '保守测试', 'conservative',
+(4, 2, '保守测试', 'conservative',
  2.0, 1.5, 0.50,
  500.00, 0,
  100.00, 3.00, 15.00,
  0, 1, '新品冷启动、测试期使用，控制预算风险'),
-(1, 1, '激进冲量', 'aggressive',
+(4, 2, '激进冲量', 'aggressive',
  4.0, 2.5, 0.50,
  9999.00, 1,
  300.00, 3.00, 25.00,
@@ -45,7 +47,9 @@ ALTER TABLE ad_campaigns
   ADD COLUMN custom_daily_budget DECIMAL(10,2) DEFAULT NULL
     COMMENT '单活动覆盖日预算',
   ADD COLUMN custom_target_roas DECIMAL(5,2) DEFAULT NULL
-    COMMENT '单活动覆盖目标ROAS';
+    COMMENT '单活动覆盖目标ROAS',
+  ADD CONSTRAINT fk_campaign_pricing_config FOREIGN KEY (pricing_config_id)
+    REFERENCES ai_pricing_configs(id) ON DELETE SET NULL;
 
 -- 4. ai_pricing_suggestions表补充字段（跳过已有的history_avg_roas/data_days/decision_basis/time_slot/moscow_hour）
 ALTER TABLE ai_pricing_suggestions

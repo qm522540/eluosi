@@ -311,7 +311,6 @@ async def run_pricing_analysis(
     db: Session,
     tenant_id: int,
     shop: Shop,
-    category_name: Optional[str] = None,
     campaign_ids: Optional[List[int]] = None,
     time_strategy=None,
     moscow_hour: int = None,

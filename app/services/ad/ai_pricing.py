@@ -207,7 +207,6 @@ async def run_ai_analysis(
     db: Session,
     tenant_id: int,
     shop_id: int,
-    category_name: Optional[str] = None,
     campaign_ids: Optional[List[int]] = None,
     time_strategy=None,
     moscow_hour: int = None,
@@ -239,7 +238,6 @@ async def run_ai_analysis(
     )
     analysis_result = await run_pricing_analysis(
         db, tenant_id, shop,
-        category_name=category_name,
         campaign_ids=campaign_ids,
         time_strategy=time_strategy,
         moscow_hour=moscow_hour,
@@ -258,10 +256,7 @@ async def run_ai_analysis(
         AiPricingConfig.tenant_id == tenant_id,
         AiPricingConfig.shop_id == shop_id,
         AiPricingConfig.is_active == 1,
-    )
-    if category_name:
-        config = config.filter(AiPricingConfig.category_name == category_name)
-    config = config.first()
+    ).first()
 
     auto_execute = config and bool(config.auto_execute)
 

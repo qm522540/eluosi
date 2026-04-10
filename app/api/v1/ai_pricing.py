@@ -14,7 +14,7 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
 from app.dependencies import get_db, get_current_user, get_tenant_id
-from app.schemas.ai_pricing import PricingConfigUpdate, AnalyzeRequest, ToggleAutoRequest
+from app.schemas.ai_pricing import PricingConfigUpdate, AnalyzeRequest, ToggleAutoRequest, CampaignPricingConfigUpdate
 from app.models.ai_pricing import AiPricingConfig, AiPricingSuggestion
 from app.models.shop import Shop
 from app.services.ad.ai_pricing import (
@@ -46,7 +46,7 @@ def get_pricing_templates(
 @router.put("/campaigns/{campaign_id}/config")
 def update_campaign_pricing_config(
     campaign_id: int,
-    data: dict,
+    req: CampaignPricingConfigUpdate,
     db: Session = Depends(get_db),
     tenant_id: int = Depends(get_tenant_id),
 ):
@@ -60,12 +60,27 @@ def update_campaign_pricing_config(
     if not campaign:
         return error(ErrorCode.NOT_FOUND, "广告活动不存在")
 
-    allowed_keys = {"pricing_config_id", "custom_max_bid", "custom_daily_budget", "custom_target_roas"}
+    # 校验模板存在性
+    data = req.model_dump(exclude_none=True)
+    if "pricing_config_id" in data and data["pricing_config_id"] is not None:
+        config = db.query(AiPricingConfig).filter(
+            AiPricingConfig.id == data["pricing_config_id"],
+            AiPricingConfig.tenant_id == tenant_id,
+        ).first()
+        if not config:
+            return error(ErrorCode.NOT_FOUND, "策略模板不存在")
+
     for key, value in data.items():
-        if key in allowed_keys and hasattr(campaign, key):
+        if hasattr(campaign, key):
             setattr(campaign, key, value)
 
-    db.commit()
+    try:
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        logger.error(f"更新活动配置失败 campaign_id={campaign_id}: {e}")
+        return error(ErrorCode.UNKNOWN_ERROR, "更新配置失败")
+
     return success({
         "campaign_id": campaign_id,
         "pricing_config_id": campaign.pricing_config_id,
@@ -157,12 +172,10 @@ async def analyze(
     tenant_id: int = Depends(get_tenant_id),
 ):
     """手动触发AI分析（调DeepSeek）"""
-    category_name = req.category_name if req else None
     campaign_ids = req.campaign_ids if req else None
 
     result = await run_ai_analysis(
         db, tenant_id, shop_id,
-        category_name=category_name,
         campaign_ids=campaign_ids,
     )
 
@@ -256,9 +269,6 @@ def toggle_auto(
         AiPricingConfig.tenant_id == tenant_id,
         AiPricingConfig.shop_id == shop_id,
     )
-    if req.category_name:
-        query = query.filter(AiPricingConfig.category_name == req.category_name)
-
     configs = query.all()
     if not configs:
         return error(ErrorCode.NOT_FOUND, "未找到调价配置")

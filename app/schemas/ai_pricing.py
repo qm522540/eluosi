@@ -19,11 +19,17 @@ class PricingConfigUpdate(BaseModel):
 
 class AnalyzeRequest(BaseModel):
     """手动触发AI分析"""
-    category_name: Optional[str] = Field(None, max_length=100)
     campaign_ids: Optional[List[int]] = None
 
 
 class ToggleAutoRequest(BaseModel):
     """切换自动/建议模式"""
     auto_execute: bool
-    category_name: Optional[str] = Field(None, max_length=100)
+
+
+class CampaignPricingConfigUpdate(BaseModel):
+    """活动调价配置绑定/覆盖"""
+    pricing_config_id: Optional[int] = None
+    custom_max_bid: Optional[float] = Field(None, gt=0)
+    custom_daily_budget: Optional[float] = Field(None, gt=0)
+    custom_target_roas: Optional[float] = Field(None, gt=0, le=99.99)
