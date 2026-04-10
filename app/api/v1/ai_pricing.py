@@ -91,6 +91,77 @@ def update_campaign_pricing_config(
     }, msg="配置已更新")
 
 
+# ==================== 大促管理 ====================
+
+@router.get("/promo-calendars")
+def get_promo_calendars(
+    db: Session = Depends(get_db),
+    tenant_id: int = Depends(get_tenant_id),
+):
+    """获取大促日历列表"""
+    from app.models.promo_calendar import PromoCalendar
+    promos = db.query(PromoCalendar).filter(
+        PromoCalendar.tenant_id == tenant_id,
+    ).order_by(PromoCalendar.promo_date).all()
+
+    return success([{
+        "id": p.id,
+        "promo_name": p.promo_name,
+        "promo_date": p.promo_date.isoformat(),
+        "pre_heat_days": p.pre_heat_days,
+        "recovery_days": p.recovery_days,
+        "pre_heat_multiplier": float(p.pre_heat_multiplier),
+        "peak_multiplier": float(p.peak_multiplier),
+        "recovery_day1_multiplier": float(p.recovery_day1_multiplier),
+        "recovery_day2_multiplier": float(p.recovery_day2_multiplier),
+        "recovery_day3_multiplier": float(p.recovery_day3_multiplier),
+        "is_active": bool(p.is_active),
+    } for p in promos])
+
+
+@router.post("/promo-calendars")
+def create_promo_calendar(
+    data: dict,
+    db: Session = Depends(get_db),
+    tenant_id: int = Depends(get_tenant_id),
+):
+    """新增大促日期"""
+    from app.models.promo_calendar import PromoCalendar
+    promo = PromoCalendar(
+        tenant_id=tenant_id,
+        promo_name=data.get("promo_name", ""),
+        promo_date=data.get("promo_date"),
+        pre_heat_days=data.get("pre_heat_days", 1),
+        recovery_days=data.get("recovery_days", 3),
+        pre_heat_multiplier=data.get("pre_heat_multiplier", 1.30),
+        peak_multiplier=data.get("peak_multiplier", 1.70),
+        recovery_day1_multiplier=data.get("recovery_day1_multiplier", 0.90),
+        recovery_day2_multiplier=data.get("recovery_day2_multiplier", 0.95),
+        recovery_day3_multiplier=data.get("recovery_day3_multiplier", 1.00),
+    )
+    db.add(promo)
+    db.commit()
+    return success({"id": promo.id}, msg="大促日期已添加")
+
+
+@router.get("/promo-status")
+def get_promo_status(
+    db: Session = Depends(get_db),
+    tenant_id: int = Depends(get_tenant_id),
+):
+    """获取当前大促状态"""
+    from app.services.ai.promo_detector import detect_promo_context
+    ctx = detect_promo_context(db, tenant_id)
+    return success({
+        "is_promo_period": ctx.is_promo_period,
+        "promo_phase": ctx.promo_phase,
+        "promo_name": ctx.promo_name,
+        "bid_multiplier": ctx.bid_multiplier,
+        "strategy_hint": ctx.strategy_hint,
+        "days_to_promo": ctx.days_to_promo,
+    })
+
+
 # ==================== WB建议模式 ====================
 
 @router.post("/wb/analyze/{shop_id}")
@@ -483,4 +554,8 @@ def _suggestion_to_dict(s: AiPricingSuggestion) -> dict:
         "campaign_data_days": getattr(s, "campaign_data_days", 0),
         "is_new_campaign": bool(getattr(s, "is_new_campaign", 0)),
         "shop_avg_roas": float(s.shop_avg_roas) if getattr(s, "shop_avg_roas", None) else None,
+        "product_stage": getattr(s, "product_stage", "unknown"),
+        "stage_optimize_target": getattr(s, "stage_optimize_target", None),
+        "promo_phase": getattr(s, "promo_phase", None),
+        "promo_multiplier": float(s.promo_multiplier) if getattr(s, "promo_multiplier", None) else 1.0,
     }

@@ -31,6 +31,7 @@ class AiPricingConfig(BaseMixin, Base):
     max_adjust_pct: Mapped[float] = mapped_column(DECIMAL(5, 2), nullable=False, default=30.00)
     auto_execute: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=0)
     is_active: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=1)
+    optimize_target: Mapped[Optional[str]] = mapped_column(String(50), nullable=True, default="auto")
 
 
 class AiPricingSuggestion(BaseMixin, Base):
@@ -70,3 +71,8 @@ class AiPricingSuggestion(BaseMixin, Base):
     campaign_data_days: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, default=0)
     is_new_campaign: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=0)
     shop_avg_roas: Mapped[Optional[float]] = mapped_column(DECIMAL(5, 2), nullable=True, default=0)
+    # 020新增字段
+    product_stage: Mapped[Optional[str]] = mapped_column(String(50), nullable=True, default="unknown")
+    stage_optimize_target: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    promo_phase: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    promo_multiplier: Mapped[Optional[float]] = mapped_column(DECIMAL(4, 2), nullable=True, default=1.00)

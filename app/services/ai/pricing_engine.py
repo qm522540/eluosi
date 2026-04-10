@@ -407,6 +407,41 @@ async def run_pricing_analysis(
         f"调价记录{bid_history.get('bid_change_count', 0)}条"
     )
 
+    # 5.5 商品阶段判断
+    from app.services.ai.stage_detector import detect_product_stage
+    total_today_orders = sum(s.get("orders", 0) for s in stats_map.values())
+    total_today_spend = sum(s.get("spend", 0) for s in stats_map.values())
+    total_today_revenue = sum(s.get("revenue", 0) for s in stats_map.values())
+    today_roas = round(total_today_revenue / total_today_spend, 2) if total_today_spend > 0 else 0
+
+    # 计算avg_ctr和avg_cr（从历史数据推算）
+    hist_ctr = history_stats.get("avg_ctr", 0) if isinstance(history_stats, dict) else 0
+    hist_cr = history_stats.get("avg_cr", 0) if isinstance(history_stats, dict) else 0
+
+    stage_result = detect_product_stage(
+        data_days=history_stats.get("data_days", 0),
+        total_orders=history_stats.get("total_orders", 0) + total_today_orders,
+        avg_ctr=hist_ctr,
+        avg_cr=hist_cr,
+        roas_trend=history_stats.get("roas_trend", []),
+        today_roas=today_roas,
+        target_roas=float(config["target_roas"]),
+    )
+    logger.info(f"shop_id={shop.id} 阶段判断: {stage_result.stage.value} 目标={stage_result.optimize_target} 原因={stage_result.reason}")
+
+    # 5.6 大促周期识别
+    from app.services.ai.promo_detector import detect_promo_context
+    promo_context = detect_promo_context(db, tenant_id)
+    if promo_context.is_promo_period:
+        logger.info(f"shop_id={shop.id} 大促识别: {promo_context.promo_name} 阶段={promo_context.promo_phase} 系数={promo_context.bid_multiplier}")
+        # 大促期间调整配置
+        config["max_bid"] = config["max_bid"] * promo_context.bid_multiplier
+        config["max_adjust_pct"] = min(config["max_adjust_pct"] * 1.5, 50.0)
+
+    # 冷启动期放宽ROAS限制
+    if stage_result.allow_roas_override:
+        config["min_roas"] = max(config["min_roas"] * 0.7, 1.0)
+
     # 6. 构建Prompt数据
     total_spend = sum(s.get("spend", 0) for s in stats_map.values())
     total_revenue = sum(s.get("revenue", 0) for s in stats_map.values())
@@ -540,6 +575,50 @@ ROAS走势（近7天）：{roas_trend_text}
 }
 ROAS正常无需调整的商品不要出现在suggestions里。"""
 
+    # 追加阶段和大促信息到Prompt
+    prompt += f"""
+
+【商品生命周期阶段】
+当前阶段：{stage_result.stage.value}
+主导优化目标：{stage_result.optimize_target}
+判断理由：{stage_result.reason}
+策略指引：{stage_result.strategy_hint}
+本阶段最大调幅：{stage_result.max_bid_adjust_pct}%
+可忽略ROAS限制：{'是（冷启动）' if stage_result.allow_roas_override else '否'}
+
+阶段优化规则：
+- cold_start：不因ROAS低降价，维持出价保曝光，调幅≤10%
+- testing：降价减少无效消耗，等CR改善，不建议加价
+- growing：ROAS达标就加价，ROAS低了适度降，可大幅调整
+- declining：收缩预算，降价为主，控制亏损
+"""
+
+    if promo_context.is_promo_period:
+        prompt += f"""
+【大促周期】当前处于大促特殊时期
+大促名称：{promo_context.promo_name}
+当前阶段：{promo_context.promo_phase}
+出价系数：x{promo_context.bid_multiplier}
+策略：{promo_context.strategy_hint}
+
+大促特殊规则（优先级最高）：
+- pre_heat：出价x{promo_context.bid_multiplier}锁定排名
+- peak：出价x{promo_context.bid_multiplier}忽略ROAS限制冲销量
+- recovery：出价x{promo_context.bid_multiplier}逐步降价恢复
+"""
+    else:
+        prompt += "\n【大促周期】当前非大促期，按正常策略执行\n"
+
+    prompt += """
+【决策优先级（从高到低）】
+1. 大促周期策略（覆盖一切）
+2. 预算控制（消耗>85%且<20点）
+3. 商品阶段策略
+4. 时段策略
+5. ROAS目标优化
+请严格按优先级执行。
+"""
+
     # 6. 调用DeepSeek
     ai_result = await _call_deepseek(prompt)
     if not ai_result:
@@ -615,6 +694,10 @@ ROAS正常无需调整的商品不要出现在suggestions里。"""
             campaign_data_days=history_stats.get("data_days", 0),
             is_new_campaign=1 if history_stats.get("is_new_campaign") else 0,
             shop_avg_roas=shop_benchmark.get("shop_avg_roas_7d", 0),
+            product_stage=stage_result.stage.value,
+            stage_optimize_target=stage_result.optimize_target,
+            promo_phase=promo_context.promo_phase,
+            promo_multiplier=promo_context.bid_multiplier,
         )
         db.add(suggestion)
         db.flush()
@@ -758,4 +841,8 @@ def _suggestion_to_dict(s: AiPricingSuggestion) -> dict:
         "campaign_data_days": getattr(s, "campaign_data_days", 0),
         "is_new_campaign": bool(getattr(s, "is_new_campaign", 0)),
         "shop_avg_roas": float(s.shop_avg_roas) if getattr(s, "shop_avg_roas", None) else None,
+        "product_stage": getattr(s, "product_stage", "unknown"),
+        "stage_optimize_target": getattr(s, "stage_optimize_target", None),
+        "promo_phase": getattr(s, "promo_phase", None),
+        "promo_multiplier": float(s.promo_multiplier) if getattr(s, "promo_multiplier", None) else 1.0,
     }

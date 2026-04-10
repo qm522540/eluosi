@@ -8,6 +8,7 @@ from app.models.inventory import InventoryStock, PurchaseOrder, PurchaseOrderIte
 from app.models.finance import FinanceCost, FinanceRevenue, FinanceRoiSnapshot
 from app.models.ai import AiDecisionLog
 from app.models.ai_pricing import AiPricingConfig, AiPricingSuggestion
+from app.models.promo_calendar import PromoCalendar
 from app.models.notification import Notification
 from app.models.task_log import TaskLog
 
@@ -19,5 +20,6 @@ __all__ = [
     "InventoryStock", "PurchaseOrder", "PurchaseOrderItem",
     "FinanceCost", "FinanceRevenue", "FinanceRoiSnapshot",
     "AiDecisionLog", "AiPricingConfig", "AiPricingSuggestion",
+    "PromoCalendar",
     "Notification", "TaskLog",
 ]
