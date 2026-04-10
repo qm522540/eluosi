@@ -981,22 +981,6 @@ const Ads = () => {
       render: (v) => v != null ? `₽${v.toLocaleString()}` : '-',
     },
     {
-      title: '费用',
-      dataIndex: 'spend',
-      key: 'spend',
-      width: 100,
-      align: 'right',
-      render: (v) => v ? `₽${v.toLocaleString()}` : '0',
-    },
-    {
-      title: '展现次数',
-      dataIndex: 'impressions',
-      key: 'impressions',
-      width: 100,
-      align: 'right',
-      render: (v) => (v || 0).toLocaleString(),
-    },
-    {
       title: 'CTR',
       dataIndex: 'ctr',
       key: 'ctr',
@@ -1218,22 +1202,6 @@ const Ads = () => {
                     />
                   </Card>
 
-                  {/* 趋势图表 */}
-                  <Card title="广告趋势" size="small"
-                    extra={
-                      <Space>
-                        <Button icon={<DownloadOutlined />} size="small" loading={exporting} onClick={handleExport}>导出CSV</Button>
-                        <RangePicker value={dateRange} onChange={setDateRange} allowClear={false}
-                          presets={[
-                            { label: '近7天', value: [dayjs().subtract(6, 'day'), dayjs()] },
-                            { label: '近30天', value: [dayjs().subtract(29, 'day'), dayjs()] },
-                          ]}
-                        />
-                      </Space>
-                    }
-                  >
-                    <ReactECharts option={getChartOption()} style={{ height: 300 }} showLoading={statsLoading} />
-                  </Card>
                 </>
               ),
             },
