@@ -254,7 +254,15 @@ async def run_pricing_analysis(
         logger.info(f"shop_id={shop.id} DeepSeek未返回调价建议（所有商品正常）")
         return {"analyzed_count": len(campaigns), "suggestion_count": 0, "suggestions": [], "summary": summary}
 
-    # 7. 安全护栏校验 + 写入数据库
+    # 7. 将该店铺已有的pending建议标记为expired（防止重复）
+    db.query(AiPricingSuggestion).filter(
+        AiPricingSuggestion.tenant_id == tenant_id,
+        AiPricingSuggestion.shop_id == shop.id,
+        AiPricingSuggestion.status == "pending",
+    ).update({"status": "expired"})
+    db.flush()
+
+    # 8. 安全护栏校验 + 写入数据库
     saved = []
     for raw in raw_suggestions:
         product_id = str(raw.get("product_id", ""))
