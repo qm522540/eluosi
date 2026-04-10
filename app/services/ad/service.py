@@ -15,7 +15,9 @@ from app.utils.logger import logger
 def list_campaigns(db: Session, tenant_id: int, shop_id: int = None,
                    platform: str = None, status: str = None,
                    page: int = 1, page_size: int = 20) -> dict:
-    """获取广告活动列表（含近期统计：费用/展现/CTR）"""
+    """获取广告活动列表（含今日数据+7天汇总+预算消耗+ROAS趋势）"""
+    from datetime import date, timedelta
+
     try:
         query = db.query(AdCampaign).filter(AdCampaign.tenant_id == tenant_id)
         if shop_id:
@@ -25,11 +27,9 @@ def list_campaigns(db: Session, tenant_id: int, shop_id: int = None,
         if status:
             query = query.filter(AdCampaign.status == status)
         else:
-            # 默认不显示已归档的活动
             query = query.filter(AdCampaign.status != "archived")
 
         total = query.count()
-        # active排最前，其余按创建时间倒序
         status_order = case(
             (AdCampaign.status == "active", 0),
             (AdCampaign.status == "draft", 1),
@@ -41,49 +41,90 @@ def list_campaigns(db: Session, tenant_id: int, shop_id: int = None,
             (page - 1) * page_size
         ).limit(page_size).all()
 
-        # 批量查询这些活动的累计统计数据
         campaign_ids = [c.id for c in campaigns]
-        stats_map = {}
+        today = date.today()
+        seven_days_ago = today - timedelta(days=7)
+
+        # 今日数据
+        today_map = {}
         if campaign_ids:
-            stats_rows = db.query(
+            today_rows = db.query(
                 AdStat.campaign_id,
-                func.sum(AdStat.impressions).label("impressions"),
-                func.sum(AdStat.clicks).label("clicks"),
                 func.sum(AdStat.spend).label("spend"),
                 func.sum(AdStat.orders).label("orders"),
                 func.sum(AdStat.revenue).label("revenue"),
+                func.sum(AdStat.clicks).label("clicks"),
+                func.sum(AdStat.impressions).label("impressions"),
             ).filter(
                 AdStat.campaign_id.in_(campaign_ids),
+                AdStat.stat_date == today,
             ).group_by(AdStat.campaign_id).all()
 
-            for row in stats_rows:
-                imp = int(row.impressions or 0)
-                clk = int(row.clicks or 0)
+            for row in today_rows:
                 spend = float(row.spend or 0)
                 revenue = float(row.revenue or 0)
-                stats_map[row.campaign_id] = {
-                    "impressions": imp,
-                    "clicks": clk,
-                    "spend": round(spend, 2),
-                    "orders": int(row.orders or 0),
-                    "revenue": round(revenue, 2),
-                    "ctr": round(clk / imp * 100, 2) if imp > 0 else 0,
-                    "cpc": round(spend / clk, 2) if clk > 0 else 0,
-                    "roas": round(revenue / spend, 2) if spend > 0 else 0,
+                clicks = int(row.clicks or 0)
+                impressions = int(row.impressions or 0)
+                today_map[row.campaign_id] = {
+                    "today_spend": round(spend, 2),
+                    "today_orders": int(row.orders or 0),
+                    "today_revenue": round(revenue, 2),
+                    "today_clicks": clicks,
+                    "today_roas": round(revenue / spend, 2) if spend > 0 else 0,
+                    "today_ctr": round(clicks / impressions * 100, 2) if impressions > 0 else 0,
                 }
+
+        # 7天汇总（不含今天）
+        h7_map = {}
+        if campaign_ids:
+            h7_rows = db.query(
+                AdStat.campaign_id,
+                func.sum(AdStat.spend).label("spend_7d"),
+                func.sum(AdStat.orders).label("orders_7d"),
+                func.sum(AdStat.revenue).label("revenue_7d"),
+            ).filter(
+                AdStat.campaign_id.in_(campaign_ids),
+                AdStat.stat_date >= seven_days_ago,
+                AdStat.stat_date < today,
+            ).group_by(AdStat.campaign_id).all()
+
+            for row in h7_rows:
+                spend = float(row.spend_7d or 0)
+                revenue = float(row.revenue_7d or 0)
+                h7_map[row.campaign_id] = {
+                    "spend_7d": round(spend, 2),
+                    "orders_7d": int(row.orders_7d or 0),
+                    "avg_roas_7d": round(revenue / spend, 2) if spend > 0 else 0,
+                }
+
+        # 7天ROAS趋势
+        trends = _get_roas_trends(db, campaign_ids, seven_days_ago, today)
 
         items = []
         for c in campaigns:
             item = _campaign_to_dict(c)
-            stats = stats_map.get(c.id, {})
-            item["impressions"] = stats.get("impressions", 0)
-            item["clicks"] = stats.get("clicks", 0)
-            item["spend"] = stats.get("spend", 0)
-            item["orders"] = stats.get("orders", 0)
-            item["revenue"] = stats.get("revenue", 0)
-            item["ctr"] = stats.get("ctr", 0)
-            item["cpc"] = stats.get("cpc", 0)
-            item["roas"] = stats.get("roas", 0)
+            t = today_map.get(c.id, {})
+            h = h7_map.get(c.id, {})
+            item.update({
+                "today_spend": t.get("today_spend", 0),
+                "today_orders": t.get("today_orders", 0),
+                "today_roas": t.get("today_roas", 0),
+                "today_ctr": t.get("today_ctr", 0),
+                "spend_7d": h.get("spend_7d", 0),
+                "orders_7d": h.get("orders_7d", 0),
+                "avg_roas_7d": h.get("avg_roas_7d", 0),
+                "roas_trend": trends.get(c.id, []),
+                "budget_used_pct": round(
+                    t.get("today_spend", 0) / float(c.daily_budget) * 100, 1
+                ) if c.daily_budget and float(c.daily_budget) > 0 else 0,
+            })
+            # 预算剩余天数
+            avg_daily = h.get("spend_7d", 0) / 7 if h.get("spend_7d", 0) > 0 else 0
+            if c.daily_budget and float(c.daily_budget) > 0 and avg_daily > 0:
+                remaining = float(c.daily_budget) - t.get("today_spend", 0)
+                item["budget_days_left"] = max(0, int(remaining / avg_daily))
+            else:
+                item["budget_days_left"] = None
             items.append(item)
 
         return {
@@ -99,6 +140,32 @@ def list_campaigns(db: Session, tenant_id: int, shop_id: int = None,
     except Exception as e:
         logger.error(f"获取广告活动列表失败 tenant_id={tenant_id}: {e}")
         return {"code": ErrorCode.UNKNOWN_ERROR, "msg": "获取广告活动列表失败"}
+
+
+def _get_roas_trends(db: Session, campaign_ids: list, start_date, end_date) -> dict:
+    """获取各活动近7天ROAS趋势数组"""
+    if not campaign_ids:
+        return {}
+    rows = db.query(
+        AdStat.campaign_id,
+        AdStat.stat_date,
+        AdStat.spend,
+        AdStat.revenue,
+    ).filter(
+        AdStat.campaign_id.in_(campaign_ids),
+        AdStat.stat_date >= start_date,
+        AdStat.stat_date < end_date,
+    ).order_by(AdStat.campaign_id, AdStat.stat_date).all()
+
+    trends = {}
+    for row in rows:
+        cid = row.campaign_id
+        if cid not in trends:
+            trends[cid] = []
+        spend = float(row.spend or 0)
+        revenue = float(row.revenue or 0)
+        trends[cid].append(round(revenue / spend, 2) if spend > 0 else 0)
+    return trends
 
 
 def get_campaign(db: Session, campaign_id: int, tenant_id: int) -> dict:
@@ -261,6 +328,83 @@ def get_ad_summary(db: Session, tenant_id: int, start_date: date, end_date: date
     except Exception as e:
         logger.error(f"获取广告汇总失败 tenant_id={tenant_id}: {e}")
         return {"code": ErrorCode.UNKNOWN_ERROR, "msg": "获取广告汇总失败"}
+
+
+def get_shop_summary(db: Session, tenant_id: int, shop_id: int) -> dict:
+    """店铺今日/昨日/7天汇总数据（概览卡片用）"""
+    from datetime import date, timedelta
+    today = date.today()
+    yesterday = today - timedelta(days=1)
+    seven_days_ago = today - timedelta(days=7)
+
+    try:
+        campaign_ids_q = db.query(AdCampaign.id).filter(
+            AdCampaign.shop_id == shop_id,
+            AdCampaign.tenant_id == tenant_id,
+        ).subquery()
+
+        # 今日
+        today_row = db.query(
+            func.sum(AdStat.spend).label("spend"),
+            func.sum(AdStat.orders).label("orders"),
+            func.sum(AdStat.revenue).label("revenue"),
+        ).filter(
+            AdStat.campaign_id.in_(campaign_ids_q),
+            AdStat.stat_date == today,
+        ).one()
+
+        # 昨日
+        yest_row = db.query(
+            func.sum(AdStat.spend).label("spend"),
+        ).filter(
+            AdStat.campaign_id.in_(campaign_ids_q),
+            AdStat.stat_date == yesterday,
+        ).one()
+
+        # 7天（不含今天）
+        h7_row = db.query(
+            func.sum(AdStat.spend).label("spend"),
+            func.sum(AdStat.orders).label("orders"),
+            func.sum(AdStat.revenue).label("revenue"),
+        ).filter(
+            AdStat.campaign_id.in_(campaign_ids_q),
+            AdStat.stat_date >= seven_days_ago,
+            AdStat.stat_date < today,
+        ).one()
+
+        # 活动统计
+        total_count = db.query(func.count(AdCampaign.id)).filter(
+            AdCampaign.shop_id == shop_id,
+            AdCampaign.tenant_id == tenant_id,
+            AdCampaign.status != "archived",
+        ).scalar()
+        active_count = db.query(func.count(AdCampaign.id)).filter(
+            AdCampaign.shop_id == shop_id,
+            AdCampaign.tenant_id == tenant_id,
+            AdCampaign.status == "active",
+        ).scalar()
+
+        today_spend = float(today_row.spend or 0)
+        today_revenue = float(today_row.revenue or 0)
+        h7_spend = float(h7_row.spend or 0)
+        h7_revenue = float(h7_row.revenue or 0)
+
+        return {
+            "code": ErrorCode.SUCCESS,
+            "data": {
+                "today_spend": round(today_spend, 2),
+                "today_orders": int(today_row.orders or 0),
+                "today_roas": round(today_revenue / today_spend, 2) if today_spend > 0 else 0,
+                "yesterday_spend": round(float(yest_row.spend or 0), 2),
+                "avg_roas_7d": round(h7_revenue / h7_spend, 2) if h7_spend > 0 else 0,
+                "avg_orders_7d": round(int(h7_row.orders or 0) / 7, 1),
+                "total_count": total_count or 0,
+                "active_count": active_count or 0,
+            },
+        }
+    except Exception as e:
+        logger.error(f"获取店铺汇总失败 shop_id={shop_id}: {e}")
+        return {"code": ErrorCode.UNKNOWN_ERROR, "msg": "获取店铺汇总失败"}
 
 
 def get_campaign_count(db: Session, tenant_id: int, status: str = "active") -> int:

@@ -19,7 +19,7 @@ from app.services.ad.service import (
     list_campaigns, get_campaign, create_campaign, update_campaign, delete_campaign,
     list_ad_groups, create_ad_group, update_ad_group, delete_ad_group,
     list_keywords, create_keyword, batch_create_keywords, update_keyword, delete_keyword,
-    get_ad_stats, get_ad_summary,
+    get_ad_stats, get_ad_summary, get_shop_summary,
     optimize_bids, apply_bid_suggestions,
     export_stats_csv,
     get_roi_alerts,
@@ -267,6 +267,19 @@ def ad_summary(
         end_date = today
     result = get_ad_summary(db, tenant_id, start_date, end_date,
                             shop_id=shop_id, platform=platform)
+    if result["code"] != 0:
+        return error(result["code"], result["msg"])
+    return success(result["data"])
+
+
+@router.get("/shop-summary/{shop_id}")
+def shop_summary(
+    shop_id: int,
+    db: Session = Depends(get_db),
+    tenant_id: int = Depends(get_tenant_id),
+):
+    """店铺今日/昨日/7天汇总（概览卡片用）"""
+    result = get_shop_summary(db, tenant_id, shop_id)
     if result["code"] != 0:
         return error(result["code"], result["msg"])
     return success(result["data"])
