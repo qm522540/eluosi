@@ -15,7 +15,7 @@ celery_app.conf.update(
     task_serializer="json",
     accept_content=["json"],
     result_serializer="json",
-    timezone="Asia/Shanghai",
+    timezone="Europe/Moscow",
     enable_utc=True,
     task_track_started=True,
     task_acks_late=True,
@@ -32,12 +32,12 @@ celery_app.conf.update(
 
 # 定时任务调度表
 celery_app.conf.beat_schedule = {
-    # 每日数据同步：凌晨2点拉取所有Ozon店铺昨日数据
+    # 每日数据同步：莫斯科凌晨2点拉取所有Ozon店铺昨日数据
     "daily-sync-all-shops": {
         "task": "app.tasks.daily_sync_task.daily_sync_all_shops",
         "schedule": crontab(hour=2, minute=0),
     },
-    # 日报
+    # 日报：莫斯科早8点发送
     "daily-report": {
         "task": "app.tasks.report_tasks.generate_daily_report",
         "schedule": crontab(hour=8, minute=0),
