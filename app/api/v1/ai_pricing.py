@@ -183,26 +183,26 @@ async def trigger_data_init(
     db: Session = Depends(get_db),
     tenant_id: int = Depends(get_tenant_id),
 ):
-    """触发店铺首次3个月数据拉取"""
+    """触发店铺首次3个月数据拉取（后台异步执行，立即返回）"""
     # 先校验shop归属
     shop = db.query(Shop).filter(Shop.id == shop_id, Shop.tenant_id == tenant_id).first()
     if not shop:
         return error(ErrorCode.SHOP_NOT_FOUND, "店铺不存在")
 
-    from app.services.data.ozon_stats_collector import check_shop_init_status, init_shop_history
+    from app.services.data.ozon_stats_collector import check_shop_init_status
 
     status = check_shop_init_status(db, shop_id)
     if status.get("initialized"):
         return success(status, msg="数据已初始化，无需重复拉取")
 
+    # 提交Celery后台任务，不阻塞HTTP请求
     try:
-        result = await init_shop_history(db, shop_id, days=90)
-        if result.get("error"):
-            return error(ErrorCode.NOT_FOUND, result["error"])
-        return success(result, msg="数据初始化完成")
+        from app.tasks.ai_pricing_task import async_init_shop_data
+        async_init_shop_data.delay(shop_id)
+        return success({"initialized": False, "message": "数据初始化已在后台启动，约需1-3分钟"})
     except Exception as e:
-        logger.error(f"数据初始化失败 shop_id={shop_id}: {e}")
-        return error(ErrorCode.UNKNOWN_ERROR, "数据初始化失败")
+        logger.error(f"提交数据初始化任务失败 shop_id={shop_id}: {e}")
+        return error(ErrorCode.UNKNOWN_ERROR, "提交初始化任务失败")
 
 
 # ==================== WB建议模式 ====================

@@ -91,6 +91,28 @@ def _log_task_end(db, log_id: int, status: str, result: dict = None, error: str 
 
 
 @celery_app.task(
+    name="app.tasks.ai_pricing_task.async_init_shop_data",
+    bind=True,
+    max_retries=2,
+    default_retry_delay=60,
+)
+def async_init_shop_data(self, shop_id: int):
+    """后台异步执行店铺历史数据初始化（避免HTTP请求超时）"""
+    db = SessionLocal()
+    try:
+        from app.services.data.ozon_stats_collector import init_shop_history
+        logger.info(f"开始后台数据初始化 shop_id={shop_id}")
+        result = _run_async(init_shop_history(db, shop_id, days=90))
+        logger.info(f"数据初始化完成 shop_id={shop_id}: {result}")
+        return result
+    except Exception as e:
+        logger.error(f"数据初始化失败 shop_id={shop_id}: {e}")
+        raise self.retry(exc=e)
+    finally:
+        db.close()
+
+
+@celery_app.task(
     name="app.tasks.ai_pricing_task.check_and_run_ai_pricing",
     bind=True,
     max_retries=3,
