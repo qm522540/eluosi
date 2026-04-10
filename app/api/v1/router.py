@@ -1,6 +1,6 @@
 from fastapi import APIRouter
 
-from app.api.v1 import system, auth, shops, products, ads, finance, notifications, tasks
+from app.api.v1 import system, auth, shops, products, ads, finance, notifications, tasks, ai_pricing
 
 api_router = APIRouter()
 
@@ -27,6 +27,9 @@ api_router.include_router(notifications.router, prefix="/notifications", tags=["
 
 # 数据采集任务
 api_router.include_router(tasks.router, prefix="/tasks", tags=["任务"])
+
+# AI智能调价
+api_router.include_router(ai_pricing.router, prefix="/ai-pricing", tags=["AI调价"])
 
 # 后续模块:
 # from app.api.v1 import seo, inventory

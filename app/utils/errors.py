@@ -51,6 +51,13 @@ class ErrorCode:
     AI_TIMEOUT = 90002
     AI_QUOTA_EXCEEDED = 90003
 
+    # AI调价 91xxx
+    AI_PRICING_CONFIG_NOT_FOUND = 91001
+    AI_PRICING_SUGGESTION_NOT_FOUND = 91002
+    AI_PRICING_SUGGESTION_EXPIRED = 91003
+    AI_PRICING_INVALID_STATUS = 91004
+    AI_PRICING_API_FAILED = 91006
+
 
 ERROR_MESSAGES = {
     ErrorCode.SUCCESS: "成功",
@@ -71,4 +78,9 @@ ERROR_MESSAGES = {
     ErrorCode.AD_BUDGET_ERROR: "预算操作失败",
     ErrorCode.AI_MODEL_ERROR: "AI模型调用失败",
     ErrorCode.AI_TIMEOUT: "AI模型响应超时",
+    ErrorCode.AI_PRICING_CONFIG_NOT_FOUND: "调价配置不存在",
+    ErrorCode.AI_PRICING_SUGGESTION_NOT_FOUND: "调价建议不存在",
+    ErrorCode.AI_PRICING_SUGGESTION_EXPIRED: "调价建议已过期",
+    ErrorCode.AI_PRICING_INVALID_STATUS: "当前状态不允许该操作",
+    ErrorCode.AI_PRICING_API_FAILED: "调用平台API修改出价失败",
 }

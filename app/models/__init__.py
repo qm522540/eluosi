@@ -7,6 +7,7 @@ from app.models.seo import SeoKeyword, SeoTemplate, SeoGeneratedContent
 from app.models.inventory import InventoryStock, PurchaseOrder, PurchaseOrderItem
 from app.models.finance import FinanceCost, FinanceRevenue, FinanceRoiSnapshot
 from app.models.ai import AiDecisionLog
+from app.models.ai_pricing import AiPricingConfig, AiPricingSuggestion
 from app.models.notification import Notification
 from app.models.task_log import TaskLog
 
@@ -17,5 +18,6 @@ __all__ = [
     "SeoKeyword", "SeoTemplate", "SeoGeneratedContent",
     "InventoryStock", "PurchaseOrder", "PurchaseOrderItem",
     "FinanceCost", "FinanceRevenue", "FinanceRoiSnapshot",
-    "AiDecisionLog", "Notification", "TaskLog",
+    "AiDecisionLog", "AiPricingConfig", "AiPricingSuggestion",
+    "Notification", "TaskLog",
 ]
