@@ -2051,51 +2051,67 @@ const Ads = () => {
               if (rt === 'auto_bid') return (
                 <div>
                   <Alert message="根据莫斯科时间自动调整出价，高峰加价抢流量，低谷降价省预算" type="info" showIcon style={{ marginBottom: 16 }} />
-                  <Card size="small" title="高峰时段" style={{ marginBottom: 12, borderLeft: '3px solid #ff4d4f' }}>
-                    <Row gutter={16}>
-                      <Col span={16}>
-                        <Form.Item name="peak_hours" label="时间范围" initialValue={[19,20,21]}>
-                          <Select mode="multiple" placeholder="选择小时"
-                            options={Array.from({ length: 24 }, (_, i) => ({ value: i, label: `${i}:00` }))} />
-                        </Form.Item>
-                      </Col>
-                      <Col span={8}>
-                        <Form.Item name="peak_pct" label="加价比例(%)" initialValue={30}>
-                          <InputNumber min={0} max={200} style={{ width: '100%' }} addonAfter="%" />
-                        </Form.Item>
-                      </Col>
-                    </Row>
-                  </Card>
-                  <Card size="small" title="次高峰时段" style={{ marginBottom: 12, borderLeft: '3px solid #faad14' }}>
-                    <Row gutter={16}>
-                      <Col span={16}>
-                        <Form.Item name="sub_peak_hours" label="时间范围" initialValue={[22]}>
-                          <Select mode="multiple" placeholder="选择小时"
-                            options={Array.from({ length: 24 }, (_, i) => ({ value: i, label: `${i}:00` }))} />
-                        </Form.Item>
-                      </Col>
-                      <Col span={8}>
-                        <Form.Item name="sub_peak_pct" label="加价比例(%)" initialValue={20}>
-                          <InputNumber min={0} max={200} style={{ width: '100%' }} addonAfter="%" />
-                        </Form.Item>
-                      </Col>
-                    </Row>
-                  </Card>
-                  <Card size="small" title="低谷时段" style={{ marginBottom: 12, borderLeft: '3px solid #1890ff' }}>
-                    <Row gutter={16}>
-                      <Col span={16}>
-                        <Form.Item name="off_peak_hours" label="时间范围" initialValue={[2,3,4,5,6]}>
-                          <Select mode="multiple" placeholder="选择小时"
-                            options={Array.from({ length: 24 }, (_, i) => ({ value: i, label: `${i}:00` }))} />
-                        </Form.Item>
-                      </Col>
-                      <Col span={8}>
-                        <Form.Item name="off_peak_pct" label="降价比例(%)" initialValue={-50}>
-                          <InputNumber min={-90} max={0} style={{ width: '100%' }} addonAfter="%" />
-                        </Form.Item>
-                      </Col>
-                    </Row>
-                  </Card>
+                  <Form.Item noStyle shouldUpdate={(prev, cur) =>
+                    prev.peak_hours !== cur.peak_hours || prev.sub_peak_hours !== cur.sub_peak_hours || prev.off_peak_hours !== cur.off_peak_hours
+                  }>
+                    {({ getFieldValue }) => {
+                      const peakH = getFieldValue('peak_hours') || []
+                      const subPeakH = getFieldValue('sub_peak_hours') || []
+                      const offPeakH = getFieldValue('off_peak_hours') || []
+                      const hourOpts = (excludeA, excludeB) => {
+                        const used = new Set([...excludeA, ...excludeB])
+                        return Array.from({ length: 24 }, (_, i) => ({
+                          value: i, label: `${i}:00`, disabled: used.has(i),
+                        }))
+                      }
+                      return (
+                        <>
+                          <Card size="small" title="高峰时段" style={{ marginBottom: 12, borderLeft: '3px solid #ff4d4f' }}>
+                            <Row gutter={16}>
+                              <Col span={16}>
+                                <Form.Item name="peak_hours" label="时间范围" initialValue={[19,20,21]}>
+                                  <Select mode="multiple" placeholder="选择小时" options={hourOpts(subPeakH, offPeakH)} />
+                                </Form.Item>
+                              </Col>
+                              <Col span={8}>
+                                <Form.Item name="peak_pct" label="加价比例(%)" initialValue={30}>
+                                  <InputNumber min={0} max={200} style={{ width: '100%' }} addonAfter="%" />
+                                </Form.Item>
+                              </Col>
+                            </Row>
+                          </Card>
+                          <Card size="small" title="次高峰时段" style={{ marginBottom: 12, borderLeft: '3px solid #faad14' }}>
+                            <Row gutter={16}>
+                              <Col span={16}>
+                                <Form.Item name="sub_peak_hours" label="时间范围" initialValue={[22]}>
+                                  <Select mode="multiple" placeholder="选择小时" options={hourOpts(peakH, offPeakH)} />
+                                </Form.Item>
+                              </Col>
+                              <Col span={8}>
+                                <Form.Item name="sub_peak_pct" label="加价比例(%)" initialValue={20}>
+                                  <InputNumber min={0} max={200} style={{ width: '100%' }} addonAfter="%" />
+                                </Form.Item>
+                              </Col>
+                            </Row>
+                          </Card>
+                          <Card size="small" title="低谷时段" style={{ marginBottom: 12, borderLeft: '3px solid #1890ff' }}>
+                            <Row gutter={16}>
+                              <Col span={16}>
+                                <Form.Item name="off_peak_hours" label="时间范围" initialValue={[2,3,4,5,6]}>
+                                  <Select mode="multiple" placeholder="选择小时" options={hourOpts(peakH, subPeakH)} />
+                                </Form.Item>
+                              </Col>
+                              <Col span={8}>
+                                <Form.Item name="off_peak_pct" label="降价比例(%)" initialValue={-50}>
+                                  <InputNumber min={-90} max={0} style={{ width: '100%' }} addonAfter="%" />
+                                </Form.Item>
+                              </Col>
+                            </Row>
+                          </Card>
+                        </>
+                      )
+                    }}
+                  </Form.Item>
                   <Text type="secondary">其他未设置的时段将保持原始出价不变</Text>
                 </div>
               )
