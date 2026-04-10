@@ -1337,8 +1337,8 @@ async def _execute_auto_bid(db: Session, tenant_id: int, campaign: AdCampaign,
 
                 base_bid = original_bids[sku]
                 new_bid_exact = base_bid * (1 + adjust_pct / 100)
-                # Ozon出价只接受整数卢布，不足1卢布向上取整
-                new_bid = max(round(new_bid_exact), 1)
+                # Ozon出价只接受整数卢布，最低3卢布
+                new_bid = max(round(new_bid_exact), 3)
 
                 p_info.update({"base_bid": base_bid, "new_bid_exact": new_bid_exact, "new_bid": new_bid})
 
