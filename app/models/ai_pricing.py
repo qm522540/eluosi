@@ -53,3 +53,6 @@ class AiPricingSuggestion(BaseMixin, Base):
     auto_executed: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=0)
     executed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    decision_basis: Mapped[Optional[str]] = mapped_column(String(50), nullable=True, default="today_only")
+    history_avg_roas: Mapped[Optional[float]] = mapped_column(DECIMAL(5, 2), nullable=True, default=0)
+    data_days: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, default=0)

@@ -332,4 +332,7 @@ def _suggestion_to_dict(s: AiPricingSuggestion) -> dict:
         "executed_at": s.executed_at.isoformat() if s.executed_at else None,
         "created_at": s.created_at.isoformat() if s.created_at else None,
         "expires_at": s.expires_at.isoformat() if s.expires_at else None,
+        "decision_basis": getattr(s, "decision_basis", "today_only"),
+        "history_avg_roas": float(s.history_avg_roas) if getattr(s, "history_avg_roas", None) else None,
+        "data_days": getattr(s, "data_days", 0),
     }

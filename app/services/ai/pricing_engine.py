@@ -312,12 +312,44 @@ async def run_pricing_analysis(
     all_skus = list(set(pb["sku"] for pb in products_bids.values()))
     image_map = await _fetch_product_images(all_skus)
 
-    # 5. 构建Prompt数据
+    # 5. 收集历史数据（同步查询，用线程池并发避免阻塞）
+    campaign_ids_list = [c.id for c in campaigns]
+
+    from concurrent.futures import ThreadPoolExecutor
+    loop = asyncio.get_event_loop()
+    with ThreadPoolExecutor(max_workers=3) as pool:
+        history_future = loop.run_in_executor(pool, get_campaign_history_stats, db, campaign_ids_list)
+        bid_future = loop.run_in_executor(pool, get_bid_history, db, campaign_ids_list)
+        benchmark_future = loop.run_in_executor(pool, get_shop_benchmark, db, tenant_id, shop.id)
+
+        results = await asyncio.gather(history_future, bid_future, benchmark_future, return_exceptions=True)
+
+    history_stats = results[0] if not isinstance(results[0], Exception) else {"avg_roas": 0, "data_days": 0, "roas_trend": []}
+    bid_history = results[1] if not isinstance(results[1], Exception) else {"recent_bids": [], "avg_bid_30d": 0, "bid_change_count": 0}
+    shop_benchmark = results[2] if not isinstance(results[2], Exception) else {"shop_avg_roas_today": 0, "shop_avg_roas_7d": 0}
+
+    if isinstance(results[0], Exception):
+        logger.warning(f"历史数据查询失败: {results[0]}")
+    if isinstance(results[1], Exception):
+        logger.warning(f"出价历史查询失败: {results[1]}")
+    if isinstance(results[2], Exception):
+        logger.warning(f"店铺基准查询失败: {results[2]}")
+
+    logger.info(
+        f"AI调价数据收集完成 shop_id={shop.id}: "
+        f"历史{history_stats.get('data_days', 0)}天数据 "
+        f"7天均值ROAS={history_stats.get('avg_roas', 0)} "
+        f"调价记录{bid_history.get('bid_change_count', 0)}条"
+    )
+
+    # 6. 构建Prompt数据
     total_spend = sum(s.get("spend", 0) for s in stats_map.values())
     total_revenue = sum(s.get("revenue", 0) for s in stats_map.values())
+    total_orders = sum(s.get("orders", 0) for s in stats_map.values())
     daily_budget = float(config.daily_budget_limit)
     budget_pct = round(total_spend / daily_budget * 100, 1) if daily_budget > 0 else 0
     overall_roas = round(total_revenue / total_spend, 2) if total_spend > 0 else 0
+    moscow_hour = _get_moscow_hour()
 
     # 构建商品明细表
     products_lines = []
@@ -338,21 +370,87 @@ async def run_pricing_analysis(
 
     products_data = "\n".join(products_lines)
 
-    prompt = PRICING_USER_PROMPT.format(
-        category_name=config.category_name,
-        target_roas=float(config.target_roas),
-        min_roas=float(config.min_roas),
-        gross_margin=float(config.gross_margin),
-        daily_budget_limit=daily_budget,
-        moscow_hour=_get_moscow_hour(),
-        total_spend=f"{total_spend:.0f}",
-        daily_budget=f"{daily_budget:.0f}",
-        budget_pct=budget_pct,
-        overall_roas=overall_roas,
-        products_data=products_data,
-        max_bid=float(config.max_bid),
-        max_adjust_pct=float(config.max_adjust_pct),
-    )
+    # ROAS趋势文本
+    roas_trend = history_stats.get("roas_trend", [])
+    roas_trend_text = " → ".join(map(str, roas_trend)) if roas_trend else "暂无数据"
+    recent_bids = bid_history.get("recent_bids", [])
+    recent_bids_text = " → ".join(map(str, recent_bids)) if recent_bids else "暂无记录"
+
+    prompt = f"""请基于以下完整数据，对每个商品给出调价建议。
+
+【店铺配置】
+品类：{config.category_name}
+目标ROAS：{float(config.target_roas)}
+最低可接受ROAS：{float(config.min_roas)}
+毛利率：{float(config.gross_margin) * 100:.0f}%
+日预算上限：{daily_budget:.0f}卢布
+当前莫斯科时间：{moscow_hour}点
+
+【今日实时数据】
+总花费：{total_spend:.0f}卢布 / 日预算：{daily_budget:.0f}卢布（已消耗{budget_pct:.1f}%）
+今日整体ROAS：{overall_roas}
+今日订单：{total_orders}单
+
+【近7天历史表现】
+7天平均ROAS：{history_stats.get('avg_roas', 'N/A')}
+7天平均日花费：{history_stats.get('avg_daily_spend', 'N/A')}卢布
+7天总订单：{history_stats.get('total_orders_7d', 'N/A')}单
+ROAS走势（近7天从旧到新）：{roas_trend_text}
+最高单日ROAS：{history_stats.get('best_roas_day', 'N/A')}
+最低单日ROAS：{history_stats.get('worst_roas_day', 'N/A')}
+有效数据天数：{history_stats.get('data_days', 0)}天
+
+【历史出价记录】
+近期出价变化：{recent_bids_text}卢布
+30天平均出价：{bid_history.get('avg_bid_30d', 'N/A')}卢布
+近30天调价次数：{bid_history.get('bid_change_count', 0)}次
+最近调价方向：{bid_history.get('last_adjust_direction', 'none')}
+最近调价时间：{bid_history.get('last_adjust_time', 'N/A')}
+
+【店铺整体基准】
+店铺今日平均ROAS：{shop_benchmark.get('shop_avg_roas_today', 'N/A')}
+店铺7天平均ROAS：{shop_benchmark.get('shop_avg_roas_7d', 'N/A')}
+今日最佳商品ROAS：{shop_benchmark.get('top_performer_roas', 'N/A')}
+今日活跃广告数：{shop_benchmark.get('active_campaigns', 0)}个
+
+【各商品今日明细】
+{products_data}
+（格式：商品ID | 商品名 | 当前出价 | 今日点击 | 今日订单 | 今日花费 | 今日收入 | 今日ROAS）
+
+【调价决策规则】
+1. 今日ROAS低但7天均值正常（>目标ROAS的80%）→ 维持或小幅调整，注明"短期波动"
+2. 今日ROAS低且7天均值也低 → 明确降价，注明"持续低效"
+3. 今日ROAS高且预算充足 → 可适度加价抢量
+4. 预算消耗>85%且时间<20:00莫斯科时间 → 全线降价保预算
+5. 近期刚降过价（last_adjust_direction=down）→ 谨慎再次降价，避免过度调整
+6. 商品今日ROAS高于店铺平均2倍以上 → 重点加价，抢占优质流量
+
+【约束条件】
+最低出价：3卢布（Ozon限制）
+最高出价：{float(config.max_bid)}卢布
+单次最大调幅：{float(config.max_adjust_pct)}%
+出价必须为整数卢布
+
+【输出格式】
+只输出JSON，不要任何解释：
+{{{{
+  "summary": "本次分析总结（说明主要判断依据，提及是否参考了历史数据）",
+  "suggestions": [
+    {{{{
+      "product_id": "商品ID",
+      "product_name": "商品名",
+      "current_bid": 45,
+      "suggested_bid": 38,
+      "adjust_pct": -15.6,
+      "reason": "调价理由（需说明是基于今日数据还是历史趋势判断）",
+      "current_roas": 1.2,
+      "expected_roas": 1.8,
+      "decision_basis": "today_only|history_weighted|budget_control"
+    }}}}
+  ]
+}}}}
+
+注意：ROAS正常且无需调整的商品不要出现在suggestions里。"""
 
     # 6. 调用DeepSeek
     ai_result = await _call_deepseek(prompt)
@@ -419,6 +517,9 @@ async def run_pricing_analysis(
             status="pending",
             auto_executed=0,
             expires_at=datetime.now() + timedelta(hours=2),
+            decision_basis=raw.get("decision_basis", "today_only"),
+            history_avg_roas=history_stats.get("avg_roas", 0),
+            data_days=history_stats.get("data_days", 0),
         )
         db.add(suggestion)
         db.flush()
@@ -608,4 +709,7 @@ def _suggestion_to_dict(s: AiPricingSuggestion) -> dict:
         "executed_at": s.executed_at.isoformat() if s.executed_at else None,
         "created_at": s.created_at.isoformat() if s.created_at else None,
         "expires_at": s.expires_at.isoformat() if s.expires_at else None,
+        "decision_basis": getattr(s, "decision_basis", "today_only"),
+        "history_avg_roas": float(s.history_avg_roas) if getattr(s, "history_avg_roas", None) else None,
+        "data_days": getattr(s, "data_days", 0),
     }
