@@ -154,6 +154,11 @@ export function deleteAutomationRule(id) {
   return request.delete(`/ads/rules/${id}`)
 }
 
+/** 恢复规则原始出价 */
+export function restoreRuleBids(id) {
+  return request.post(`/ads/rules/${id}/restore-bids`)
+}
+
 /** 手动执行规则 */
 export function executeRules() {
   return request.post('/ads/rules/execute')

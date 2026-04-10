@@ -21,7 +21,7 @@ import {
   getOptimizeSuggestions, applyBidSuggestions,
   exportAdStats, getAlerts, getAlertConfig, updateAlertConfig,
   getPlatformComparison, getCampaignRanking, getProductRoi,
-  getAutomationRules, createAutomationRule, updateAutomationRule, deleteAutomationRule, executeRules,
+  getAutomationRules, createAutomationRule, updateAutomationRule, deleteAutomationRule, executeRules, restoreRuleBids,
   getBudgetOverview, getBudgetSuggestions,
   getCampaignProducts, updateCampaignBid, getCampaignBudget,
   getBidLogs,
@@ -404,23 +404,73 @@ const Ads = () => {
     }
   }
 
-  const handleDeleteRule = async (id) => {
-    try {
-      await deleteAutomationRule(id)
-      message.success('规则已删除')
-      fetchRules()
-    } catch (err) {
-      message.error(err.message || '删除失败')
+  const handleDeleteRule = (id) => {
+    const rule = rules.find(r => r.id === id)
+    if (rule?.rule_type === 'auto_bid' && rule?.actions?.original_bids) {
+      Modal.confirm({
+        title: '删除分时调价规则',
+        content: '删除后将自动恢复所有商品的原始出价，确定继续？',
+        okText: '确定删除并恢复出价',
+        okType: 'danger',
+        cancelText: '取消',
+        onOk: async () => {
+          try {
+            await restoreRuleBids(id)
+            await deleteAutomationRule(id)
+            message.success('规则已删除，出价已恢复')
+            fetchRules()
+          } catch (err) {
+            message.error(err.message || '操作失败')
+          }
+        },
+      })
+    } else {
+      Modal.confirm({
+        title: '确定删除此规则？',
+        okText: '确定',
+        okType: 'danger',
+        cancelText: '取消',
+        onOk: async () => {
+          try {
+            await deleteAutomationRule(id)
+            message.success('规则已删除')
+            fetchRules()
+          } catch (err) {
+            message.error(err.message || '删除失败')
+          }
+        },
+      })
     }
   }
 
-  const handleToggleRule = async (record) => {
-    try {
-      await updateAutomationRule(record.id, { enabled: record.enabled ? 0 : 1 })
-      message.success(record.enabled ? '规则已禁用' : '规则已启用')
-      fetchRules()
-    } catch (err) {
-      message.error(err.message || '操作失败')
+  const handleToggleRule = (record) => {
+    if (record.rule_type === 'auto_bid' && record.enabled && record.actions?.original_bids) {
+      Modal.confirm({
+        title: '关闭分时调价规则',
+        content: '关闭后将自动恢复所有商品的原始出价，确定继续？',
+        okText: '确定关闭并恢复出价',
+        cancelText: '取消',
+        onOk: async () => {
+          try {
+            await restoreRuleBids(record.id)
+            await updateAutomationRule(record.id, { enabled: 0 })
+            message.success('规则已禁用，出价已恢复')
+            fetchRules()
+          } catch (err) {
+            message.error(err.message || '操作失败')
+          }
+        },
+      })
+    } else {
+      (async () => {
+        try {
+          await updateAutomationRule(record.id, { enabled: record.enabled ? 0 : 1 })
+          message.success(record.enabled ? '规则已禁用' : '规则已启用')
+          fetchRules()
+        } catch (err) {
+          message.error(err.message || '操作失败')
+        }
+      })()
     }
   }
 
@@ -1321,9 +1371,7 @@ const Ads = () => {
                               <Button type="link" size="small" onClick={() => handleShowBidLogs(record.id)}>日志</Button>
                             )}
                             <Button type="link" size="small" icon={<EditOutlined />} onClick={() => handleEditRule(record)} />
-                            <Popconfirm title="确定删除此规则？" onConfirm={() => handleDeleteRule(record.id)}>
-                              <Button type="link" size="small" danger icon={<DeleteOutlined />} />
-                            </Popconfirm>
+                            <Button type="link" size="small" danger icon={<DeleteOutlined />} onClick={() => handleDeleteRule(record.id)} />
                           </Space>
                         ),
                       },

@@ -480,6 +480,20 @@ def rule_delete(
     return success(msg="自动化规则已删除")
 
 
+@router.post("/rules/{rule_id}/restore-bids")
+async def rule_restore_bids(
+    rule_id: int,
+    db: Session = Depends(get_db),
+    tenant_id: int = Depends(get_tenant_id),
+):
+    """恢复分时调价规则的原始出价"""
+    from app.services.ad.service import restore_auto_bid
+    result = await restore_auto_bid(db, rule_id, tenant_id)
+    if result["code"] != 0:
+        return error(result["code"], result["msg"])
+    return success(result["data"], msg="出价已恢复")
+
+
 @router.post("/rules/execute")
 async def rules_execute(
     db: Session = Depends(get_db),

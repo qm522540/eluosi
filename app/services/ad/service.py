@@ -1434,6 +1434,90 @@ async def _execute_auto_bid(db: Session, tenant_id: int, campaign: AdCampaign,
     return {"triggered": triggered, "debug": debug}
 
 
+async def restore_auto_bid(db: Session, rule_id: int, tenant_id: int) -> dict:
+    """恢复分时调价规则记录的原始出价"""
+    try:
+        rule = db.query(AdAutomationRule).filter(
+            AdAutomationRule.id == rule_id, AdAutomationRule.tenant_id == tenant_id
+        ).first()
+        if not rule:
+            return {"code": ErrorCode.AD_RULE_NOT_FOUND, "msg": "规则不存在"}
+        if rule.rule_type != "auto_bid":
+            return {"code": ErrorCode.SUCCESS, "data": {"restored": 0}}
+
+        actions = rule.actions or {}
+        original_bids_map = actions.get("original_bids") or {}
+        if not original_bids_map:
+            return {"code": ErrorCode.SUCCESS, "data": {"restored": 0, "msg": "无原始出价记录"}}
+
+        restored = 0
+        errors = []
+
+        for campaign_id_str, sku_bids in original_bids_map.items():
+            campaign = db.query(AdCampaign).filter(
+                AdCampaign.id == int(campaign_id_str),
+                AdCampaign.tenant_id == tenant_id,
+            ).first()
+            if not campaign or not campaign.platform_campaign_id:
+                continue
+
+            if campaign.platform == "ozon":
+                from app.models.shop import Shop
+                from app.services.platform.ozon import OzonClient
+
+                shop = db.query(Shop).filter(Shop.id == campaign.shop_id).first()
+                if not shop:
+                    continue
+
+                client = OzonClient(
+                    shop_id=shop.id, api_key=shop.api_key, client_id=shop.client_id,
+                    perf_client_id=shop.perf_client_id or '',
+                    perf_client_secret=shop.perf_client_secret or '',
+                )
+                try:
+                    for sku, original_bid in sku_bids.items():
+                        original_bid_raw = str(int(float(original_bid) * 1_000_000))
+                        api_result = await client.update_campaign_bid(
+                            campaign.platform_campaign_id, sku, original_bid_raw
+                        )
+                        if api_result["ok"]:
+                            restored += 1
+                            db.add(AdBidLog(
+                                tenant_id=tenant_id,
+                                campaign_id=campaign.id,
+                                platform=campaign.platform,
+                                campaign_name=campaign.name,
+                                group_id=None,
+                                group_name=f"SKU:{sku}",
+                                old_bid=0,
+                                new_bid=float(original_bid),
+                                change_pct=0,
+                                reason="规则关闭/删除，恢复原始出价",
+                                rule_id=rule.id,
+                                rule_name=rule.name,
+                            ))
+                            logger.info(f"恢复出价: 活动{campaign.id} SKU={sku} → {original_bid}卢布")
+                        else:
+                            errors.append(f"SKU:{sku} {api_result.get('error', '')}")
+                finally:
+                    await client.close()
+
+        # 清除原始出价记录
+        actions.pop("original_bids", None)
+        rule.actions = actions
+        from sqlalchemy.orm.attributes import flag_modified
+        flag_modified(rule, "actions")
+        db.commit()
+
+        result_data = {"restored": restored}
+        if errors:
+            result_data["errors"] = errors
+        return {"code": ErrorCode.SUCCESS, "data": result_data}
+    except Exception as e:
+        logger.error(f"恢复出价失败: {e}")
+        return {"code": ErrorCode.UNKNOWN_ERROR, "msg": f"恢复出价失败: {e}"}
+
+
 def _rule_to_dict(r: AdAutomationRule) -> dict:
     return {
         "id": r.id,
