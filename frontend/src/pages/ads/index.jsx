@@ -1,22 +1,31 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import {
-  Typography, Button, Space, Select, Tabs,
+  Typography, Button, Space, Select, Tabs, Tooltip, message,
 } from 'antd'
 import {
-  SearchOutlined,
+  SearchOutlined, SyncOutlined,
 } from '@ant-design/icons'
+import dayjs from 'dayjs'
+import relativeTime from 'dayjs/plugin/relativeTime'
+import 'dayjs/locale/zh-cn'
 import { getShops } from '@/api/shops'
+import { syncAdsByPlatform, getLastSyncTime } from '@/api/ads'
 import { useAuthStore } from '@/stores/authStore'
 import AdsOverview from './AdsOverview'
 import AdsRules from './AdsRules'
 import AdsAIPricing from './AdsAIPricing'
 import ComingSoon from './ComingSoon'
 
+dayjs.extend(relativeTime)
+dayjs.locale('zh-cn')
+
 const { Title } = Typography
 
 const Ads = () => {
   const [searched, setSearched] = useState(false)
   const [mainTab, setMainTab] = useState('overview')
+  const [syncing, setSyncing] = useState(false)
+  const [lastSyncTime, setLastSyncTime] = useState(null)
 
   // 筛选
   const [filterPlatform, setFilterPlatform] = useState(null)
@@ -35,11 +44,83 @@ const Ads = () => {
     }).catch(() => {})
   }, [])
 
+  // 选择店铺后获取上次同步时间
+  useEffect(() => {
+    if (filterShopId) {
+      getLastSyncTime(filterShopId).then(res => {
+        if (res.data?.last_sync_at) {
+          setLastSyncTime(new Date(res.data.last_sync_at))
+        } else {
+          setLastSyncTime(null)
+        }
+      }).catch(() => {})
+    } else {
+      setLastSyncTime(null)
+    }
+  }, [filterShopId])
+
   const canSearch = filterPlatform && filterShopId
 
   const handleSearch = () => {
     setSearched(true)
   }
+
+  // 刷新当前Tab数据：通过切换searched状态触发子组件重新加载
+  const refreshCurrentTab = useCallback(() => {
+    setSearched(false)
+    setTimeout(() => setSearched(true), 0)
+  }, [])
+
+  const handleSync = async () => {
+    if (!filterPlatform) return
+    setSyncing(true)
+    try {
+      await syncAdsByPlatform(filterPlatform)
+      setLastSyncTime(new Date())
+      message.success('同步任务已提交，数据将在后台更新')
+      if (searched) {
+        refreshCurrentTab()
+      }
+    } catch {
+      message.error('同步失败，请稍后重试')
+    } finally {
+      setSyncing(false)
+    }
+  }
+
+  // Tab栏右侧额外内容：同步按钮
+  const tabBarExtra = (filterPlatform && filterShopId) ? (
+    <Space size={8} style={{ paddingRight: 4, alignItems: 'center' }}>
+      {lastSyncTime && !syncing && (
+        <span style={{ fontSize: 12, color: 'var(--color-text-secondary, #999)', whiteSpace: 'nowrap' }}>
+          {dayjs(lastSyncTime).fromNow()}同步
+        </span>
+      )}
+      <Tooltip
+        title={
+          lastSyncTime
+            ? `上次同步：${dayjs(lastSyncTime).format('MM-DD HH:mm')}`
+            : '从平台拉取最新活动列表和状态'
+        }
+        placement="bottomRight"
+      >
+        <Button
+          size="small"
+          icon={<SyncOutlined spin={syncing} />}
+          onClick={handleSync}
+          loading={syncing}
+          style={{
+            fontSize: 13,
+            color: 'var(--color-text-secondary, #999)',
+            border: '1px solid var(--color-border-tertiary, #e8e8e8)',
+            background: 'transparent',
+          }}
+        >
+          {syncing ? '同步中' : '同步数据'}
+        </Button>
+      </Tooltip>
+    </Space>
+  ) : null
 
   return (
     <div>
@@ -73,33 +154,38 @@ const Ads = () => {
       </div>
 
       {/* 主功能Tab */}
-      <Tabs activeKey={mainTab} onChange={setMainTab} items={[
-        {
-          key: 'overview',
-          label: '概览',
-          children: <AdsOverview shopId={filterShopId} platform={filterPlatform} shops={shops} searched={searched} />,
-        },
-        {
-          key: 'rules',
-          label: '自动化规则',
-          children: <AdsRules shopId={filterShopId} platform={filterPlatform} searched={searched} />,
-        },
-        {
-          key: 'ai-pricing',
-          label: <Space size={4}><span>🤖</span><span>AI调价</span></Space>,
-          children: <AdsAIPricing shopId={filterShopId} platform={filterPlatform} searched={searched} />,
-        },
-        {
-          key: 'analysis',
-          label: '数据分析',
-          children: <ComingSoon title="数据分析" />,
-        },
-        {
-          key: 'budget',
-          label: '预算管理',
-          children: <ComingSoon title="预算管理" />,
-        },
-      ]} />
+      <Tabs
+        activeKey={mainTab}
+        onChange={setMainTab}
+        tabBarExtraContent={{ right: tabBarExtra }}
+        items={[
+          {
+            key: 'overview',
+            label: '概览',
+            children: <AdsOverview shopId={filterShopId} platform={filterPlatform} shops={shops} searched={searched} />,
+          },
+          {
+            key: 'rules',
+            label: '自动化规则',
+            children: <AdsRules shopId={filterShopId} platform={filterPlatform} searched={searched} />,
+          },
+          {
+            key: 'ai-pricing',
+            label: <Space size={4}><span>🤖</span><span>AI调价</span></Space>,
+            children: <AdsAIPricing shopId={filterShopId} platform={filterPlatform} searched={searched} />,
+          },
+          {
+            key: 'analysis',
+            label: '数据分析',
+            children: <ComingSoon title="数据分析" />,
+          },
+          {
+            key: 'budget',
+            label: '预算管理',
+            children: <ComingSoon title="预算管理" />,
+          },
+        ]}
+      />
     </div>
   )
 }
