@@ -243,6 +243,11 @@ const Ads = () => {
     if (mainTab === 'budget') { fetchBudget(); fetchBudgetSuggestions() }
   }
 
+  // 页面加载时自动查询
+  useEffect(() => {
+    handleSearch()
+  }, [])
+
   useEffect(() => {
     if (searched) fetchStats()
   }, [dateRange])
