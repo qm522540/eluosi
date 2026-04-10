@@ -247,18 +247,26 @@ const AdsAIPricing = ({ shopId, searched }) => {
 
   const suggestionColumns = [
     {
-      title: '商品名称', dataIndex: 'product_name', ellipsis: true,
-      render: (v, r) => v || r.product_id || '-',
+      title: '商品名称', dataIndex: 'product_name', width: 220, ellipsis: true,
+      render: (v, r) => {
+        const name = v || r.product_id || '-'
+        const ozonUrl = r.product_id ? `https://www.ozon.ru/product/${r.product_id}` : null
+        return ozonUrl ? (
+          <a href={ozonUrl} target="_blank" rel="noopener noreferrer" title="点击在Ozon查看商品图片">
+            {name}
+          </a>
+        ) : name
+      },
     },
     {
       title: '当前出价', dataIndex: 'current_bid', width: 100, align: 'right',
-      render: v => `₽${v}`,
+      render: v => `₽${Math.round(v)}`,
     },
     {
       title: '建议出价', dataIndex: 'suggested_bid', width: 100, align: 'right',
       render: (v, r) => (
         <Text style={{ color: v > r.current_bid ? '#52c41a' : '#ff4d4f', fontWeight: 600 }}>
-          ₽{v}
+          ₽{Math.round(v)}
         </Text>
       ),
     },
@@ -321,16 +329,20 @@ const AdsAIPricing = ({ shopId, searched }) => {
     },
     {
       title: '商品', dataIndex: 'product_name', ellipsis: true,
-      render: (v, r) => v || r.product_id || '-',
+      render: (v, r) => {
+        const name = v || r.product_id || '-'
+        const ozonUrl = r.product_id ? `https://www.ozon.ru/product/${r.product_id}` : null
+        return ozonUrl ? <a href={ozonUrl} target="_blank" rel="noopener noreferrer">{name}</a> : name
+      },
     },
     {
       title: '调整前', dataIndex: 'current_bid', width: 90, align: 'right',
-      render: v => `₽${v}`,
+      render: v => `₽${Math.round(v)}`,
     },
     {
       title: '调整后', dataIndex: 'suggested_bid', width: 90, align: 'right',
       render: (v, r) => (
-        <Text style={{ color: v > r.current_bid ? '#52c41a' : '#ff4d4f' }}>₽{v}</Text>
+        <Text style={{ color: v > r.current_bid ? '#52c41a' : '#ff4d4f' }}>₽{Math.round(v)}</Text>
       ),
     },
     {

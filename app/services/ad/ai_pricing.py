@@ -121,13 +121,18 @@ async def approve_suggestion(db: Session, tenant_id: int, suggestion_id: int) ->
 
 
 async def _execute_bid_change(shop: Shop, campaign: AdCampaign, suggestion: AiPricingSuggestion) -> dict:
-    """调用Ozon Performance API修改出价"""
+    """调用Ozon Performance API修改出价
+
+    注意：suggestion.suggested_bid 存的是卢布，Ozon API需要纳卢布（×1,000,000）
+    """
+    OZON_BID_UNIT = 1_000_000
     ozon_client = _build_ozon_client(shop)
     try:
+        bid_nano = int(suggestion.suggested_bid) * OZON_BID_UNIT
         result = await ozon_client.update_campaign_bid(
             campaign_id=campaign.platform_campaign_id,
             sku=suggestion.product_id,
-            new_bid=str(int(suggestion.suggested_bid)),
+            new_bid=str(bid_nano),
         )
         return result
     except Exception as e:

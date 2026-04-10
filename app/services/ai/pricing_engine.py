@@ -28,6 +28,9 @@ settings = get_settings()
 # 莫斯科时区偏移 UTC+3
 MOSCOW_UTC_OFFSET = 3
 
+# Ozon Performance API 出价单位：纳卢布（1卢布 = 1,000,000纳卢布）
+OZON_BID_UNIT = 1_000_000
+
 
 def _get_moscow_hour() -> int:
     """获取当前莫斯科时间的小时"""
@@ -180,9 +183,12 @@ async def run_pricing_analysis(
             for p in products:
                 sku = str(p.get("sku", ""))
                 if sku:
+                    raw_bid = float(p.get("bid", 0))
+                    bid_rub = raw_bid / OZON_BID_UNIT  # 纳卢布→卢布
                     products_bids[f"{campaign.id}_{sku}"] = {
                         "sku": sku,
-                        "bid": float(p.get("bid", 0)),
+                        "bid": bid_rub,
+                        "bid_raw": raw_bid,  # 保留原始值供回写
                         "name": p.get("title", "") or p.get("name", "") or sku,
                         "campaign_id": campaign.id,
                         "platform_campaign_id": campaign.platform_campaign_id,
