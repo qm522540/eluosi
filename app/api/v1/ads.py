@@ -1,13 +1,16 @@
 """广告路由"""
 
 from datetime import date, timedelta
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, HTTPException
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 import io
 
 from pydantic import BaseModel, Field
 from app.dependencies import get_db, get_current_user, get_tenant_id
+from app.utils.logger import setup_logger
+
+logger = setup_logger("api.ads")
 from app.schemas.ad import (
     AdCampaignCreate, AdCampaignUpdate,
     AdGroupCreate, AdGroupUpdate,
@@ -716,3 +719,244 @@ def budget_suggestions(
     if result["code"] != 0:
         return error(result["code"], result["msg"])
     return success(result["data"])
+
+
+# ==================== 手动同步 ====================
+
+
+def _map_ozon_status(ozon_state: str) -> str:
+    """
+    Ozon活动状态映射
+    先打日志确认真实的state值，再完善映射
+    """
+    mapping = {
+        # 常见状态，根据实际返回值补充
+        "CAMPAIGN_STATE_RUNNING":   "active",
+        "CAMPAIGN_STATE_STOPPED":   "paused",
+        "CAMPAIGN_STATE_ARCHIVED":  "archived",
+        "CAMPAIGN_STATE_INACTIVE":  "paused",
+        "CAMPAIGN_STATE_MODERATION": "paused",
+        "CAMPAIGN_STATE_REJECTED":  "paused",
+        "CAMPAIGN_STATE_PLANNED":   "draft",
+        "CAMPAIGN_STATE_FINISHED":  "archived",
+        # 简短格式（部分API版本）
+        "RUNNING":   "active",
+        "STOPPED":   "paused",
+        "ARCHIVED":  "archived",
+        "INACTIVE":  "paused",
+    }
+    result = mapping.get(ozon_state, "paused")
+    if ozon_state not in mapping:
+        logger.warning(
+            f"未知的Ozon活动状态: {ozon_state}，默认映射为paused"
+        )
+    return result
+
+
+async def _sync_ozon_campaigns(db, shop) -> tuple:
+    """同步Ozon活动列表和状态（精简版：不拉统计/出价）"""
+    from app.services.platform.ozon import OzonClient
+    from sqlalchemy import text
+
+    client = OzonClient(
+        shop_id=shop.id, api_key=shop.api_key, client_id=shop.client_id,
+        perf_client_id=getattr(shop, 'perf_client_id', None) or '',
+        perf_client_secret=getattr(shop, 'perf_client_secret', None) or '',
+    )
+
+    try:
+        campaigns_from_api = await client.fetch_ad_campaigns()
+    finally:
+        await client.close()
+
+    if not campaigns_from_api:
+        logger.warning(f"shop_id={shop.id} Ozon返回空活动列表")
+        return [], 0
+
+    updated = 0
+
+    for c in campaigns_from_api:
+        platform_id = c.get("platform_campaign_id", "")
+        if not platform_id:
+            continue
+
+        # fetch_ad_campaigns已经通过_parse_campaign做了状态映射
+        # 但这里我们用原始state再映射一次以打印日志
+        # _parse_campaign返回的data里status已经是映射后的值
+        mapped_status = c.get("status", "paused")
+
+        logger.info(
+            f"活动 {c.get('name')} "
+            f"platform_id={platform_id} "
+            f"→ 本地状态={mapped_status}"
+        )
+
+        result = db.execute(text("""
+            INSERT INTO ad_campaigns (
+                shop_id, tenant_id, platform,
+                platform_campaign_id,
+                name, ad_type, status,
+                daily_budget, created_at
+            ) VALUES (
+                :shop_id, :tenant_id, 'ozon',
+                :platform_id,
+                :name, :ad_type, :status,
+                :budget, NOW()
+            )
+            ON DUPLICATE KEY UPDATE
+                name          = VALUES(name),
+                status        = VALUES(status),
+                daily_budget  = VALUES(daily_budget),
+                updated_at    = NOW()
+        """), {
+            "shop_id": shop.id,
+            "tenant_id": shop.tenant_id,
+            "platform_id": platform_id,
+            "name": c.get("name", ""),
+            "ad_type": c.get("ad_type", "search"),
+            "status": mapped_status,
+            "budget": float(c.get("daily_budget") or 0),
+        })
+
+        if result.rowcount > 0:
+            updated += 1
+
+    db.commit()
+
+    # 返回本地campaign对象列表（供后续步骤使用）
+    from app.models.ad import AdCampaign
+    campaigns = db.query(AdCampaign).filter(
+        AdCampaign.shop_id == shop.id,
+        AdCampaign.platform == "ozon",
+    ).all()
+
+    logger.info(
+        f"shop_id={shop.id} Ozon活动同步完成 "
+        f"共{len(campaigns_from_api)}个活动 "
+        f"更新{updated}条"
+    )
+
+    return campaigns, updated
+
+
+async def _sync_wb_campaigns(db, shop) -> tuple:
+    """同步WB活动列表和状态（精简版：不拉统计/出价）"""
+    from app.services.platform.wb import WBClient
+    from sqlalchemy import text
+
+    client = WBClient(shop_id=shop.id, api_key=shop.api_key)
+
+    try:
+        campaigns_from_api = await client.fetch_ad_campaigns()
+    finally:
+        await client.close()
+
+    if not campaigns_from_api:
+        logger.warning(f"shop_id={shop.id} WB返回空活动列表")
+        return [], 0
+
+    updated = 0
+
+    for c in campaigns_from_api:
+        platform_id = c.get("platform_campaign_id", "")
+        if not platform_id:
+            continue
+
+        mapped_status = c.get("status", "paused")
+
+        logger.info(
+            f"WB活动 {c.get('name')} "
+            f"platform_id={platform_id} "
+            f"→ 本地状态={mapped_status}"
+        )
+
+        result = db.execute(text("""
+            INSERT INTO ad_campaigns (
+                shop_id, tenant_id, platform,
+                platform_campaign_id,
+                name, ad_type, status,
+                daily_budget, created_at
+            ) VALUES (
+                :shop_id, :tenant_id, 'wb',
+                :platform_id,
+                :name, :ad_type, :status,
+                :budget, NOW()
+            )
+            ON DUPLICATE KEY UPDATE
+                name          = IF(VALUES(name) != '', VALUES(name), name),
+                status        = VALUES(status),
+                daily_budget  = VALUES(daily_budget),
+                updated_at    = NOW()
+        """), {
+            "shop_id": shop.id,
+            "tenant_id": shop.tenant_id,
+            "platform_id": platform_id,
+            "name": c.get("name", ""),
+            "ad_type": c.get("ad_type", "search"),
+            "status": mapped_status,
+            "budget": float(c.get("daily_budget") or 0),
+        })
+
+        if result.rowcount > 0:
+            updated += 1
+
+    db.commit()
+
+    from app.models.ad import AdCampaign
+    campaigns = db.query(AdCampaign).filter(
+        AdCampaign.shop_id == shop.id,
+        AdCampaign.platform == "wb",
+    ).all()
+
+    logger.info(
+        f"shop_id={shop.id} WB活动同步完成 "
+        f"共{len(campaigns_from_api)}个活动 "
+        f"更新{updated}条"
+    )
+
+    return campaigns, updated
+
+
+@router.post("/sync/{shop_id}")
+async def manual_sync_shop(
+    shop_id: int,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    """手动同步店铺广告活动列表和状态（不含统计数据）"""
+    from app.models.shop import Shop
+    from sqlalchemy import text
+
+    shop = db.query(Shop).filter(Shop.id == shop_id).first()
+    if not shop:
+        raise HTTPException(status_code=404, detail="店铺不存在")
+
+    try:
+        if shop.platform == "ozon":
+            _, updated = await _sync_ozon_campaigns(db, shop)
+        elif shop.platform == "wb":
+            _, updated = await _sync_wb_campaigns(db, shop)
+        else:
+            updated = 0
+
+        # 更新同步时间
+        db.execute(text("""
+            INSERT INTO shop_data_init_status
+                (shop_id, tenant_id, last_sync_at)
+            VALUES (:shop_id, :tenant_id, NOW())
+            ON DUPLICATE KEY UPDATE
+                last_sync_at = NOW()
+        """), {
+            "shop_id": shop_id,
+            "tenant_id": shop.tenant_id,
+        })
+        db.commit()
+
+        return {
+            "code": 0,
+            "data": {"updated_campaigns": updated},
+        }
+
+    except Exception as e:
+        logger.error(f"同步失败 shop_id={shop_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
