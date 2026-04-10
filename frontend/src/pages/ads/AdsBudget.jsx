@@ -103,7 +103,7 @@ const AdsBudget = ({ shopId, platform, searched }) => {
           description={
             <ul style={{ margin: '8px 0', paddingLeft: 20 }}>
               {budgetData.alerts.map((a, i) => (
-                <li key={i}>
+                <li key={a.campaign_id || i}>
                   <Tag color={a.level === 'critical' ? 'red' : 'orange'}>{a.level === 'critical' ? '超标' : '预警'}</Tag>
                   {a.name}: {a.message}（今日 ₽{a.today_spend} / 预算 ₽{a.daily_budget}）
                 </li>

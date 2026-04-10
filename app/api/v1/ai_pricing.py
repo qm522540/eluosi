@@ -9,7 +9,7 @@
 """
 
 import asyncio
-from datetime import datetime
+from datetime import datetime, timedelta
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
@@ -39,16 +39,20 @@ def config_list(
     tenant_id: int = Depends(get_tenant_id),
 ):
     """获取店铺调价配置"""
-    shop = db.query(Shop).filter(Shop.id == shop_id, Shop.tenant_id == tenant_id).first()
-    if not shop:
-        return error(ErrorCode.SHOP_NOT_FOUND, "店铺不存在")
+    try:
+        shop = db.query(Shop).filter(Shop.id == shop_id, Shop.tenant_id == tenant_id).first()
+        if not shop:
+            return error(ErrorCode.SHOP_NOT_FOUND, "店铺不存在")
 
-    configs = db.query(AiPricingConfig).filter(
-        AiPricingConfig.tenant_id == tenant_id,
-        AiPricingConfig.shop_id == shop_id,
-    ).order_by(AiPricingConfig.id).all()
+        configs = db.query(AiPricingConfig).filter(
+            AiPricingConfig.tenant_id == tenant_id,
+            AiPricingConfig.shop_id == shop_id,
+        ).order_by(AiPricingConfig.id).all()
 
-    return success([_config_to_dict(c) for c in configs])
+        return success([_config_to_dict(c) for c in configs])
+    except Exception as e:
+        logger.error(f"获取调价配置失败 shop_id={shop_id}: {e}")
+        return error(ErrorCode.UNKNOWN_ERROR, "获取配置失败")
 
 
 @router.put("/configs/{config_id}")
@@ -85,13 +89,17 @@ def config_update(
     if "is_active" in data and data["is_active"] is not None:
         data["is_active"] = 1 if data["is_active"] else 0
 
-    for key, value in data.items():
-        if value is not None and hasattr(config, key):
-            setattr(config, key, value)
-    db.commit()
-    db.refresh(config)
-
-    return success(_config_to_dict(config), msg="配置更新成功")
+    try:
+        for key, value in data.items():
+            if value is not None and hasattr(config, key):
+                setattr(config, key, value)
+        db.commit()
+        db.refresh(config)
+        return success(_config_to_dict(config), msg="配置更新成功")
+    except Exception as e:
+        db.rollback()
+        logger.error(f"更新配置失败 config_id={config_id}: {e}")
+        return error(ErrorCode.UNKNOWN_ERROR, "更新配置失败")
 
 
 # ==================== AI分析 ====================
@@ -245,9 +253,17 @@ def history_list(
     if status:
         query = query.filter(AiPricingSuggestion.status == status)
     if start_date:
-        query = query.filter(AiPricingSuggestion.created_at >= start_date)
+        try:
+            dt_start = datetime.strptime(start_date, "%Y-%m-%d")
+            query = query.filter(AiPricingSuggestion.created_at >= dt_start)
+        except ValueError:
+            return error(ErrorCode.PARAM_ERROR, "start_date格式错误，应为YYYY-MM-DD")
     if end_date:
-        query = query.filter(AiPricingSuggestion.created_at <= end_date + " 23:59:59")
+        try:
+            dt_end = datetime.strptime(end_date, "%Y-%m-%d").replace(hour=23, minute=59, second=59)
+            query = query.filter(AiPricingSuggestion.created_at <= dt_end)
+        except ValueError:
+            return error(ErrorCode.PARAM_ERROR, "end_date格式错误，应为YYYY-MM-DD")
 
     total = query.count()
     items = query.order_by(AiPricingSuggestion.created_at.desc()).offset(

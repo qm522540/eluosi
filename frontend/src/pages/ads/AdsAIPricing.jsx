@@ -111,11 +111,11 @@ const AdsAIPricing = ({ shopId, searched }) => {
       fetchSuggestions()
       fetchHistory()
     }
-  }, [searched, shopId])
+  }, [searched, shopId, fetchConfigs, fetchSuggestions, fetchHistory])
 
   useEffect(() => {
     if (searched && shopId) fetchHistory(1)
-  }, [historyDateRange])
+  }, [historyDateRange, searched, shopId, fetchHistory])
 
   // ==================== 配置编辑 ====================
 
@@ -204,8 +204,14 @@ const AdsAIPricing = ({ shopId, searched }) => {
     if (selectedRowKeys.length === 0) return
     setBatchApproving(true)
     try {
-      await Promise.all(selectedRowKeys.map(id => approveAIPricingSuggestion(id)))
-      message.success(`已批量执行 ${selectedRowKeys.length} 条建议`)
+      const results = await Promise.allSettled(selectedRowKeys.map(id => approveAIPricingSuggestion(id)))
+      const succeeded = results.filter(r => r.status === 'fulfilled').length
+      const failed = results.filter(r => r.status === 'rejected').length
+      if (failed > 0) {
+        message.warning(`批量执行完成：${succeeded}条成功，${failed}条失败`)
+      } else {
+        message.success(`已批量执行 ${succeeded} 条建议`)
+      }
       setSelectedRowKeys([])
       fetchSuggestions(1)
       fetchHistory(1)
@@ -220,8 +226,14 @@ const AdsAIPricing = ({ shopId, searched }) => {
     if (selectedRowKeys.length === 0) return
     setBatchRejecting(true)
     try {
-      await Promise.all(selectedRowKeys.map(id => rejectAIPricingSuggestion(id)))
-      message.success(`已批量忽略 ${selectedRowKeys.length} 条建议`)
+      const results = await Promise.allSettled(selectedRowKeys.map(id => rejectAIPricingSuggestion(id)))
+      const succeeded = results.filter(r => r.status === 'fulfilled').length
+      const failed = results.filter(r => r.status === 'rejected').length
+      if (failed > 0) {
+        message.warning(`批量忽略完成：${succeeded}条成功，${failed}条失败`)
+      } else {
+        message.success(`已批量忽略 ${succeeded} 条建议`)
+      }
       setSelectedRowKeys([])
       fetchSuggestions(1)
     } catch (err) {

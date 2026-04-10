@@ -137,7 +137,7 @@ const AdsAnalysis = ({ shopId, platform, searched }) => {
 
       {/* 商品ROI */}
       <Card title="商品级ROI分析" size="small">
-        <Table size="small" dataSource={productRoiData} rowKey={(_, i) => i} loading={analysisLoading}
+        <Table size="small" dataSource={productRoiData} rowKey={(r) => `${r.listing_id || ''}_${r.group_name || ''}`} loading={analysisLoading}
           pagination={{ pageSize: 10, size: 'small' }}
           columns={[
             { title: '商品/广告组', dataIndex: 'group_name', ellipsis: true },

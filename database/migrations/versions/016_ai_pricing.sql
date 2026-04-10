@@ -54,6 +54,7 @@ CREATE TABLE IF NOT EXISTS `ai_pricing_suggestions` (
     `auto_executed` TINYINT(1) NOT NULL DEFAULT 0 COMMENT '是否自动执行',
     `executed_at` DATETIME DEFAULT NULL COMMENT '实际执行时间',
     `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     `expires_at` DATETIME DEFAULT NULL COMMENT '建议过期时间，默认2小时后',
     PRIMARY KEY (`id`),
     INDEX `idx_suggestion_tenant` (`tenant_id`),

@@ -51,13 +51,13 @@ async def approve_suggestion(db: Session, tenant_id: int, suggestion_id: int) ->
         db.commit()
         return {"code": 40001, "msg": "建议已过期（2小时有效期）"}
 
-    # 获取店铺信息
-    shop = db.query(Shop).filter(Shop.id == suggestion.shop_id).first()
+    # 获取店铺信息（带tenant_id隔离）
+    shop = db.query(Shop).filter(Shop.id == suggestion.shop_id, Shop.tenant_id == tenant_id).first()
     if not shop:
         return {"code": 40004, "msg": "店铺不存在"}
 
-    # 获取活动信息
-    campaign = db.query(AdCampaign).filter(AdCampaign.id == suggestion.campaign_id).first()
+    # 获取活动信息（带tenant_id隔离）
+    campaign = db.query(AdCampaign).filter(AdCampaign.id == suggestion.campaign_id, AdCampaign.tenant_id == tenant_id).first()
     if not campaign:
         return {"code": 40004, "msg": "广告活动不存在"}
 

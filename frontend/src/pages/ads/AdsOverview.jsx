@@ -278,7 +278,7 @@ const AdsOverview = ({ shopId, platform, shops, searched }) => {
       const res = await getCampaign(id)
       setDetailData(res.data)
       fetchAdGroups(id)
-      getCampaignBudget(id).then(r => setCampaignBudget(r.data)).catch(() => {})
+      getCampaignBudget(id).then(r => setCampaignBudget(r.data)).catch(err => console.warn('预算加载失败', err))
       fetchCampaignProducts(id)
     } catch {
       message.error('获取广告详情失败')

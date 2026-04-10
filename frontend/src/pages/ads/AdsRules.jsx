@@ -78,7 +78,7 @@ const AdsRules = ({ shopId, platform, searched }) => {
 
   useEffect(() => {
     if (searched) fetchRules()
-  }, [searched, shopId, platform])
+  }, [searched, shopId])
 
   const handleCreateRule = () => {
     setEditingRule(null)

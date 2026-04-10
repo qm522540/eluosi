@@ -166,7 +166,11 @@ def _analyze_campaign(db: Session, tenant_id: int, shop, campaign, config) -> li
     min_bid = float(config.min_bid)
     daily_limit = float(config.daily_budget_limit)
 
+    if daily_limit <= 0:
+        return []
+
     suggestions = []
+    budget_usage_pct = round(today_spend / daily_limit * 100)
 
     # 决策逻辑
     if current_roas >= target_roas and today_spend < daily_limit * 0.7:
@@ -175,7 +179,7 @@ def _analyze_campaign(db: Session, tenant_id: int, shop, campaign, config) -> li
         adjust_pct = round(min(adjust_pct, max_adjust), 2)
         suggested_bid = round(current_bid * (1 + adjust_pct / 100), 2)
         suggested_bid = min(suggested_bid, max_bid)
-        reason = f"当前ROAS {current_roas}高于目标{target_roas}，且日预算使用率仅{round(today_spend/daily_limit*100)}%，建议加价抢量"
+        reason = f"当前ROAS {current_roas}高于目标{target_roas}，且日预算使用率仅{budget_usage_pct}%，建议加价抢量"
         expected_roas = round(current_roas * 0.85, 2)  # 加价后ROAS预计下降
     elif current_roas < min_roas:
         # ROAS过低 → 降价止损
@@ -190,7 +194,7 @@ def _analyze_campaign(db: Session, tenant_id: int, shop, campaign, config) -> li
         adjust_pct = -round(min(max_adjust * 0.5, 15), 2)
         suggested_bid = round(current_bid * (1 + adjust_pct / 100), 2)
         suggested_bid = max(suggested_bid, min_bid)
-        reason = f"今日花费{today_spend}已达预算{daily_limit}的{round(today_spend/daily_limit*100)}%，建议降价控制成本"
+        reason = f"今日花费{today_spend}已达预算{daily_limit}的{budget_usage_pct}%，建议降价控制成本"
         expected_roas = round(current_roas * 1.1, 2)
     else:
         # 无需调整
