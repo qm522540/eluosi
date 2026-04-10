@@ -81,64 +81,113 @@ PRICING_SYSTEM_PROMPT = "你是俄罗斯电商Ozon平台的广告出价优化专
 # ==================== 历史数据查询 ====================
 
 def get_campaign_history_stats(db: Session, campaign_ids: List[int]) -> dict:
-    """查询多个广告活动近7天历史数据汇总"""
-    seven_days_ago = date.today() - timedelta(days=7)
+    """动态窗口采集活动历史数据（7-21天）
+
+    数据充足用21天，一般用14天，不足用7天。
+    自动排除大促异常数据。
+    """
+    twenty_one_ago = date.today() - timedelta(days=21)
 
     try:
         stats = db.query(AdStat).filter(
             AdStat.campaign_id.in_(campaign_ids),
-            AdStat.stat_date >= seven_days_ago,
-            AdStat.stat_date < date.today(),  # 不含今天，今天数据单独统计
+            AdStat.stat_date >= twenty_one_ago,
+            AdStat.stat_date < date.today(),
         ).all()
 
         if not stats:
             return {
-                "avg_roas": 0, "avg_daily_spend": 0, "avg_ctr": 0,
-                "avg_cr": 0, "roas_trend": [], "total_orders_7d": 0,
-                "total_spend_7d": 0, "best_roas_day": 0,
-                "worst_roas_day": 0, "data_days": 0,
+                "is_new_campaign": True, "data_days": 0, "window_desc": "无数据",
+                "avg_roas": 0, "avg_daily_spend": 0, "roas_trend": [],
+                "total_orders": 0, "best_roas": 0, "worst_roas": 0,
+                "has_promo_data": False, "promo_avg_roas": None,
+                "note": "新活动，暂无历史数据，使用店铺基准",
             }
 
-        # 按天汇总
-        daily = {}
+        # 按天汇总，区分正常/大促
+        daily_normal = {}
+        daily_promo = {}
         for s in stats:
             d = str(s.stat_date)
-            if d not in daily:
-                daily[d] = {"spend": 0, "revenue": 0, "clicks": 0, "orders": 0, "impressions": 0}
-            daily[d]["spend"] += float(s.spend)
-            daily[d]["revenue"] += float(s.revenue)
-            daily[d]["clicks"] += int(s.clicks)
-            daily[d]["orders"] += int(s.orders)
-            daily[d]["impressions"] += int(s.impressions)
+            is_promo = _is_promo_date(s.stat_date)
+            target = daily_promo if is_promo else daily_normal
+            if d not in target:
+                target[d] = {"spend": 0, "revenue": 0, "clicks": 0, "orders": 0}
+            target[d]["spend"] += float(s.spend)
+            target[d]["revenue"] += float(s.revenue)
+            target[d]["clicks"] += int(s.clicks)
+            target[d]["orders"] += int(s.orders)
+
+        data_days = len(daily_normal)
+        is_new = data_days < 7
+
+        if data_days == 0:
+            return {
+                "is_new_campaign": True, "data_days": 0, "window_desc": "无常规数据",
+                "avg_roas": 0, "avg_daily_spend": 0, "roas_trend": [],
+                "total_orders": 0, "best_roas": 0, "worst_roas": 0,
+                "has_promo_data": len(daily_promo) > 0, "promo_avg_roas": None,
+                "note": "新活动",
+            }
+
+        # 动态窗口
+        sorted_days = sorted(daily_normal.keys())
+        if data_days >= 14:
+            use_days = sorted_days[-21:]
+            window_desc = "近21天"
+        elif data_days >= 7:
+            use_days = sorted_days[-14:]
+            window_desc = "近14天"
+        else:
+            use_days = sorted_days
+            window_desc = f"近{data_days}天（数据有限）"
 
         roas_list = []
-        ctr_list = []
-        cr_list = []
-        for d in sorted(daily.keys()):
-            v = daily[d]
+        total_spend = 0
+        total_orders = 0
+        for d in use_days:
+            v = daily_normal[d]
             roas_list.append(round(v["revenue"] / v["spend"], 2) if v["spend"] > 0 else 0)
-            ctr_list.append(round(v["clicks"] / v["impressions"] * 100, 2) if v["impressions"] > 0 else 0)
-            cr_list.append(round(v["orders"] / v["clicks"] * 100, 2) if v["clicks"] > 0 else 0)
+            total_spend += v["spend"]
+            total_orders += v["orders"]
 
-        total_spend = sum(v["spend"] for v in daily.values())
-        total_orders = sum(v["orders"] for v in daily.values())
-        n = len(daily)
+        # 大促数据
+        promo_roas = None
+        if daily_promo:
+            promo_spends = [v["spend"] for v in daily_promo.values()]
+            promo_revs = [v["revenue"] for v in daily_promo.values()]
+            ts, tr = sum(promo_spends), sum(promo_revs)
+            promo_roas = round(tr / ts, 2) if ts > 0 else None
 
+        n = len(use_days)
         return {
+            "is_new_campaign": is_new,
+            "data_days": data_days,
+            "window_desc": window_desc,
             "avg_roas": round(sum(roas_list) / n, 2) if n > 0 else 0,
             "avg_daily_spend": round(total_spend / n, 2) if n > 0 else 0,
-            "avg_ctr": round(sum(ctr_list) / n, 2) if n > 0 else 0,
-            "avg_cr": round(sum(cr_list) / n, 2) if n > 0 else 0,
-            "roas_trend": roas_list,
-            "total_orders_7d": total_orders,
-            "total_spend_7d": round(total_spend, 2),
-            "best_roas_day": round(max(roas_list), 2) if roas_list else 0,
-            "worst_roas_day": round(min(roas_list), 2) if roas_list else 0,
-            "data_days": n,
+            "roas_trend": roas_list[-7:],
+            "total_orders": total_orders,
+            "best_roas": round(max(roas_list), 2) if roas_list else 0,
+            "worst_roas": round(min(roas_list), 2) if roas_list else 0,
+            "has_promo_data": len(daily_promo) > 0,
+            "promo_avg_roas": promo_roas,
         }
     except Exception as e:
         logger.error(f"查询历史数据失败: {e}")
-        return {"avg_roas": 0, "data_days": 0, "roas_trend": []}
+        return {"is_new_campaign": True, "data_days": 0, "roas_trend": [], "avg_roas": 0}
+
+
+# 大促日期列表（排除异常数据）
+_PROMO_RANGES = [("03-06", "03-10"), ("12-28", "12-31"), ("01-01", "01-05")]
+
+def _is_promo_date(d) -> bool:
+    """判断是否为大促日期"""
+    md = d.strftime("%m-%d") if hasattr(d, 'strftime') else str(d)[5:10]
+    for start, end in _PROMO_RANGES:
+        if start <= md <= end:
+            return True
+    return False
 
 
 def get_bid_history(db: Session, campaign_ids: List[int]) -> dict:
@@ -230,11 +279,12 @@ def get_shop_benchmark(db: Session, tenant_id: int, shop_id: int) -> dict:
 
 # ==================== 安全护栏 ====================
 
-def validate_suggestion(suggested_bid: float, current_bid: float, config: AiPricingConfig, time_strategy=None) -> int:
-    """安全护栏校验，返回校验后的整数出价"""
-    min_bid = float(config.min_bid)
-    max_bid = float(config.max_bid)
-    max_adjust_pct = float(config.max_adjust_pct)
+def validate_suggestion(suggested_bid: float, current_bid: float, config, time_strategy=None) -> int:
+    """安全护栏校验，返回校验后的整数出价。config可以是dict或ORM对象。"""
+    _get = lambda k: float(config[k]) if isinstance(config, dict) else float(getattr(config, k))
+    min_bid = _get("min_bid")
+    max_bid = _get("max_bid")
+    max_adjust_pct = _get("max_adjust_pct")
     # 时段策略有独立的单次最大调幅限制，取两者较小值
     if time_strategy and hasattr(time_strategy, 'max_single_change_pct'):
         max_adjust_pct = min(max_adjust_pct, time_strategy.max_single_change_pct)
@@ -276,20 +326,8 @@ async def run_pricing_analysis(
             "summary": str,
         }
     """
-    # 1. 获取品类配置
-    config_query = db.query(AiPricingConfig).filter(
-        AiPricingConfig.tenant_id == tenant_id,
-        AiPricingConfig.shop_id == shop.id,
-        AiPricingConfig.is_active == 1,
-    )
-    if category_name:
-        config_query = config_query.filter(AiPricingConfig.category_name == category_name)
-    configs = config_query.all()
-
-    if not configs:
-        logger.info(f"shop_id={shop.id} 无有效配置，使用默认配置")
-        configs = [_default_config(tenant_id, shop.id)]
-    config = configs[0]
+    # 1. 获取活跃广告活动（配置在后面按活动解析）
+    from app.services.ai.config_resolver import get_effective_config
 
     # 2. 获取活跃广告活动
     campaign_query = db.query(AdCampaign).filter(
@@ -305,6 +343,9 @@ async def run_pricing_analysis(
     if not campaigns:
         logger.info(f"shop_id={shop.id} 无活跃Ozon广告活动")
         return {"analyzed_count": 0, "suggestion_count": 0, "suggestions": [], "summary": "无活跃广告活动"}
+
+    # 2.5 解析配置（用第一个活动的模板，后续可按活动差异化）
+    config = get_effective_config(db, tenant_id, campaigns[0])
 
     # 3. 获取今日统计数据
     today = date.today()
@@ -371,7 +412,7 @@ async def run_pricing_analysis(
     total_spend = sum(s.get("spend", 0) for s in stats_map.values())
     total_revenue = sum(s.get("revenue", 0) for s in stats_map.values())
     total_orders = sum(s.get("orders", 0) for s in stats_map.values())
-    daily_budget = float(config.daily_budget_limit)
+    daily_budget = float(config["daily_budget_limit"])
     budget_pct = round(total_spend / daily_budget * 100, 1) if daily_budget > 0 else 0
     overall_roas = round(total_revenue / total_spend, 2) if total_spend > 0 else 0
     if moscow_hour is None:
@@ -401,79 +442,89 @@ async def run_pricing_analysis(
 
     products_data = "\n".join(products_lines)
 
+    # 冷启动/大促提示
+    cold_start_note = ""
+    if history_stats.get("is_new_campaign"):
+        cold_start_note = f"""
+!! 新活动冷启动提示：该活动历史数据不足7天（当前{history_stats.get('data_days', 0)}天），
+请以店铺整体基准为主要参考，调价幅度控制在10%以内，标注 decision_basis = "shop_benchmark"
+"""
+    promo_note = ""
+    if history_stats.get("has_promo_data"):
+        promo_note = f"注意：历史数据中包含大促期间数据（已排除在均值计算外），大促ROAS={history_stats.get('promo_avg_roas', 'N/A')}"
+
+    budget_note = "不设预算上限（激进冲量模板）" if config.get("no_budget_limit") else f"日预算上限：{daily_budget:.0f}卢布"
+
     # ROAS趋势文本
     roas_trend = history_stats.get("roas_trend", [])
     roas_trend_text = " → ".join(map(str, roas_trend)) if roas_trend else "暂无数据"
     recent_bids = bid_history.get("recent_bids", [])
     recent_bids_text = " → ".join(map(str, recent_bids)) if recent_bids else "暂无记录"
 
-    prompt = f"""请基于以下完整数据，对每个商品给出调价建议。
+    prompt = f"""请基于以下三层数据，对每个商品给出调价建议。
+{cold_start_note}{promo_note}
 
-【店铺配置】
-品类：{config.category_name}
-目标ROAS：{float(config.target_roas)}
-最低可接受ROAS：{float(config.min_roas)}
-毛利率：{float(config.gross_margin) * 100:.0f}%
-日预算上限：{daily_budget:.0f}卢布
-当前莫斯科时间：{moscow_hour}点
+【当前策略模板】
+模板名称：{config['template_name']}（{config['template_type']}）
+模板说明：{config.get('description', '')}
+目标ROAS：{config['target_roas']}
+最低ROAS：{config['min_roas']}（低于此值必须降价或暂停）
+毛利率：{config['gross_margin'] * 100:.0f}%
+{budget_note}
+最高出价：{config['max_bid']}卢布
+单次最大调幅：{config['max_adjust_pct']}%
 
-【今日实时数据】
-总花费：{total_spend:.0f}卢布 / 日预算：{daily_budget:.0f}卢布（已消耗{budget_pct:.1f}%）
-今日整体ROAS：{overall_roas}
-今日订单：{total_orders}单
-
-【近7天历史表现】
-7天平均ROAS：{history_stats.get('avg_roas', 'N/A')}
-7天平均日花费：{history_stats.get('avg_daily_spend', 'N/A')}卢布
-7天总订单：{history_stats.get('total_orders_7d', 'N/A')}单
-ROAS走势（近7天从旧到新）：{roas_trend_text}
-最高单日ROAS：{history_stats.get('best_roas_day', 'N/A')}
-最低单日ROAS：{history_stats.get('worst_roas_day', 'N/A')}
+【第一层：活动历史数据（权重60%）】
+数据窗口：{history_stats.get('window_desc', 'N/A')}
+历史平均ROAS：{history_stats.get('avg_roas', 'N/A')}
+ROAS走势（近7天）：{roas_trend_text}
+历史最高ROAS：{history_stats.get('best_roas', 'N/A')}
+历史最低ROAS：{history_stats.get('worst_roas', 'N/A')}
+日均花费：{history_stats.get('avg_daily_spend', 'N/A')}卢布
+历史总订单：{history_stats.get('total_orders', 0)}单
 有效数据天数：{history_stats.get('data_days', 0)}天
 
-【历史出价记录】
-近期出价变化：{recent_bids_text}卢布
-30天平均出价：{bid_history.get('avg_bid_30d', 'N/A')}卢布
-近30天调价次数：{bid_history.get('bid_change_count', 0)}次
-最近调价方向：{bid_history.get('last_adjust_direction', 'none')}
-最近调价时间：{bid_history.get('last_adjust_time', 'N/A')}
-
-【店铺整体基准】
+【第二层：店铺整体基准（权重30%）】
 店铺今日平均ROAS：{shop_benchmark.get('shop_avg_roas_today', 'N/A')}
 店铺7天平均ROAS：{shop_benchmark.get('shop_avg_roas_7d', 'N/A')}
 今日最佳商品ROAS：{shop_benchmark.get('top_performer_roas', 'N/A')}
 今日活跃广告数：{shop_benchmark.get('active_campaigns', 0)}个
 
-【各商品今日明细】
-{products_data}
-（格式：商品ID | 商品名 | 当前出价 | 今日点击 | 今日订单 | 今日花费 | 今日收入 | 今日ROAS）
+【今日实时数据】
+总花费：{total_spend:.0f}卢布 / 预算：{daily_budget:.0f}卢布（已消耗{budget_pct:.1f}%）
+今日ROAS：{overall_roas}
+今日订单：{total_orders}单
+当前莫斯科时间：{moscow_hour}点
 
-【当前时段策略】
-时段名称：{time_strategy.name}
-调价方向倾向：{time_strategy.bid_adjust_direction}（up=主动加价抢曝光 / down=大幅降价省预算 / neutral=ROI优先）
-建议调整幅度范围：{time_strategy.bid_adjust_min_pct}% ~ {time_strategy.bid_adjust_max_pct}%
-本时段ROAS目标系数：{time_strategy.target_roas_multiplier}（<1可接受更低ROAS换曝光，>1要求更高ROAS才值得投）
-策略说明：{time_strategy.description}
+【时段策略】
+时段：{time_strategy.name}（{time_strategy.bid_adjust_direction}）
+建议调幅：{time_strategy.bid_adjust_min_pct}%~{time_strategy.bid_adjust_max_pct}%
 
 {_build_time_slot_rules(time_strategy)}
 
-【历史数据决策规则】
-1. 今日ROAS低但7天均值正常（>目标ROAS的80%）→ 维持或小幅调整，注明"短期波动"
-2. 今日ROAS低且7天均值也低 → 明确降价，注明"持续低效"
-3. 近期刚降过价（last_adjust_direction=down）→ 谨慎再次降价，避免过度调整
-4. 商品今日ROAS高于店铺平均2倍以上 → 重点加价，抢占优质流量
+【历史出价记录】
+近期出价：{recent_bids_text}卢布 | 30天均值：{bid_history.get('avg_bid_30d', 'N/A')}卢布
+最近调价方向：{bid_history.get('last_adjust_direction', 'none')} | 调价{bid_history.get('bid_change_count', 0)}次
 
-【约束条件】
-最低出价：3卢布（Ozon限制）
-最高出价：{float(config.max_bid)}卢布
-单次最大调幅：{time_strategy.max_single_change_pct}%
-出价必须为整数卢布
+【各商品明细】
+{products_data}
+（商品ID | 商品名 | 当前出价 | 今日点击 | 今日订单 | 今日花费 | 今日收入 | 今日ROAS）
 
-【输出格式】
-只输出JSON，不要任何解释：
-""" + """
-{
-  "summary": "本次分析总结（说明主要判断依据，提及是否参考了历史数据）",
+【三层数据决策规则】
+1. 活动历史ROAS > 目标×0.9，今日偏低 → 短期波动，维持或小幅调整，decision_basis="history_weighted"
+2. 活动历史ROAS低，今日也低 → 持续低效，降价，decision_basis="history_weighted"
+3. 活动历史差，但店铺整体今日也差 → 市场问题，不过度调，decision_basis="shop_benchmark"
+4. 新活动数据不足 → 以店铺均值参考，调幅≤10%，decision_basis="shop_benchmark"
+5. 预算消耗>85%且<20:00 → 全线降价保预算，decision_basis="budget_control"
+6. 近期刚降过价 → 谨慎再次降价
+
+【约束】
+最低出价：3卢布 | 最高出价：{config['max_bid']}卢布 | 单次调幅：≤{time_strategy.max_single_change_pct}% | 出价取整数
+
+【输出：纯JSON】
+""" + """{
+  "summary": "分析总结（说明判断依据和数据来源）",
+  "data_quality": "good|limited|poor",
   "suggestions": [
     {
       "product_id": "商品ID",
@@ -481,15 +532,14 @@ ROAS走势（近7天从旧到新）：{roas_trend_text}
       "current_bid": 45,
       "suggested_bid": 38,
       "adjust_pct": -15.6,
-      "reason": "调价理由（需说明是基于今日数据还是历史趋势判断）",
+      "reason": "调价理由（说明参考了哪层数据）",
       "current_roas": 1.2,
       "expected_roas": 1.8,
-      "decision_basis": "today_only|history_weighted|budget_control"
+      "decision_basis": "history_weighted|shop_benchmark|budget_control|today_only"
     }
   ]
 }
-
-注意：ROAS正常且无需调整的商品不要出现在suggestions里。"""
+ROAS正常无需调整的商品不要出现在suggestions里。"""
 
     # 6. 调用DeepSeek
     ai_result = await _call_deepseek(prompt)
@@ -561,6 +611,11 @@ ROAS走势（近7天从旧到新）：{roas_trend_text}
             data_days=history_stats.get("data_days", 0),
             time_slot=time_strategy.name if time_strategy else None,
             moscow_hour=moscow_hour,
+            template_name=config.get("template_name", ""),
+            data_source=raw.get("decision_basis", "today_only"),
+            campaign_data_days=history_stats.get("data_days", 0),
+            is_new_campaign=1 if history_stats.get("is_new_campaign") else 0,
+            shop_avg_roas=shop_benchmark.get("shop_avg_roas_7d", 0),
         )
         db.add(suggestion)
         db.flush()
@@ -670,22 +725,7 @@ def _get_today_stats(db: Session, tenant_id: int, campaigns: list, today: date) 
     return result
 
 
-def _default_config(tenant_id: int, shop_id: int) -> AiPricingConfig:
-    """返回默认配置对象（不持久化）"""
-    config = AiPricingConfig()
-    config.tenant_id = tenant_id
-    config.shop_id = shop_id
-    config.category_name = "通用默认"
-    config.target_roas = 2.00
-    config.min_roas = 1.20
-    config.gross_margin = 0.45
-    config.daily_budget_limit = 1500.00
-    config.max_bid = 180.00
-    config.min_bid = 3.00
-    config.max_adjust_pct = 30.00
-    config.auto_execute = 0
-    config.is_active = 1
-    return config
+# _default_config已移至config_resolver.py
 
 
 def _suggestion_to_dict(s: AiPricingSuggestion) -> dict:
@@ -714,4 +754,9 @@ def _suggestion_to_dict(s: AiPricingSuggestion) -> dict:
         "data_days": getattr(s, "data_days", 0),
         "time_slot": getattr(s, "time_slot", None),
         "moscow_hour": getattr(s, "moscow_hour", None),
+        "template_name": getattr(s, "template_name", None),
+        "data_source": getattr(s, "data_source", "today_only"),
+        "campaign_data_days": getattr(s, "campaign_data_days", 0),
+        "is_new_campaign": bool(getattr(s, "is_new_campaign", 0)),
+        "shop_avg_roas": float(s.shop_avg_roas) if getattr(s, "shop_avg_roas", None) else None,
     }

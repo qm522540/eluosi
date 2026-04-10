@@ -239,3 +239,13 @@ export function toggleAIAutoExecute(shopId, data) {
 export function getAIPricingHistory(shopId, params) {
   return request.get(`/ai-pricing/history/${shopId}`, { params })
 }
+
+/** 获取所有策略模板列表 */
+export function getAIPricingTemplates() {
+  return request.get('/ai-pricing/templates')
+}
+
+/** 更新广告活动的调价配置（绑定模板/覆盖参数） */
+export function updateCampaignPricingConfig(campaignId, data) {
+  return request.put(`/ai-pricing/campaigns/${campaignId}/config`, data)
+}

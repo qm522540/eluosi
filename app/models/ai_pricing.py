@@ -10,17 +10,23 @@ from app.models.base import BaseMixin
 
 
 class AiPricingConfig(BaseMixin, Base):
-    """品类调价配置"""
+    """策略模板配置"""
     __tablename__ = "ai_pricing_configs"
 
     tenant_id: Mapped[int] = mapped_column(BigInteger, nullable=False, index=True)
     shop_id: Mapped[int] = mapped_column(BigInteger, nullable=False, index=True)
-    category_name: Mapped[str] = mapped_column(String(100), nullable=False)
-    target_roas: Mapped[float] = mapped_column(DECIMAL(5, 2), nullable=False, default=2.00)
-    min_roas: Mapped[float] = mapped_column(DECIMAL(5, 2), nullable=False, default=1.20)
+    template_name: Mapped[str] = mapped_column(String(100), nullable=False)
+    template_type: Mapped[Optional[str]] = mapped_column(
+        Enum("default", "conservative", "aggressive", "custom", name="template_type_enum"),
+        nullable=True, default="default"
+    )
+    description: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
+    target_roas: Mapped[float] = mapped_column(DECIMAL(5, 2), nullable=False, default=3.00)
+    min_roas: Mapped[float] = mapped_column(DECIMAL(5, 2), nullable=False, default=1.80)
     gross_margin: Mapped[float] = mapped_column(DECIMAL(5, 2), nullable=False, default=0.50)
-    daily_budget_limit: Mapped[float] = mapped_column(DECIMAL(10, 2), nullable=False, default=1000.00)
-    max_bid: Mapped[float] = mapped_column(DECIMAL(10, 2), nullable=False, default=200.00)
+    daily_budget_limit: Mapped[float] = mapped_column(DECIMAL(10, 2), nullable=False, default=2000.00)
+    no_budget_limit: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=0)
+    max_bid: Mapped[float] = mapped_column(DECIMAL(10, 2), nullable=False, default=180.00)
     min_bid: Mapped[float] = mapped_column(DECIMAL(10, 2), nullable=False, default=3.00)
     max_adjust_pct: Mapped[float] = mapped_column(DECIMAL(5, 2), nullable=False, default=30.00)
     auto_execute: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=0)
@@ -58,3 +64,9 @@ class AiPricingSuggestion(BaseMixin, Base):
     data_days: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, default=0)
     time_slot: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
     moscow_hour: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    # 019新增字段
+    template_name: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    data_source: Mapped[Optional[str]] = mapped_column(String(50), nullable=True, default="today_only")
+    campaign_data_days: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, default=0)
+    is_new_campaign: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=0)
+    shop_avg_roas: Mapped[Optional[float]] = mapped_column(DECIMAL(5, 2), nullable=True, default=0)

@@ -29,6 +29,11 @@ class AdCampaign(BaseMixin, Base):
     )
     start_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
     end_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
+    # AI调价模板关联
+    pricing_config_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    custom_max_bid: Mapped[Optional[float]] = mapped_column(DECIMAL(10, 2), nullable=True)
+    custom_daily_budget: Mapped[Optional[float]] = mapped_column(DECIMAL(10, 2), nullable=True)
+    custom_target_roas: Mapped[Optional[float]] = mapped_column(DECIMAL(5, 2), nullable=True)
 
 
 class AdGroup(BaseMixin, Base):

@@ -30,6 +30,51 @@ logger = setup_logger("api.ai_pricing")
 router = APIRouter()
 
 
+# ==================== 模板管理 ====================
+
+@router.get("/templates")
+def get_pricing_templates(
+    db: Session = Depends(get_db),
+    tenant_id: int = Depends(get_tenant_id),
+):
+    """获取所有可用策略模板列表（供前端下拉选择）"""
+    from app.services.ai.config_resolver import get_all_templates
+    templates = get_all_templates(db, tenant_id)
+    return success(templates)
+
+
+@router.put("/campaigns/{campaign_id}/config")
+def update_campaign_pricing_config(
+    campaign_id: int,
+    data: dict,
+    db: Session = Depends(get_db),
+    tenant_id: int = Depends(get_tenant_id),
+):
+    """给广告活动绑定模板或设置覆盖参数"""
+    from app.models.ad import AdCampaign
+
+    campaign = db.query(AdCampaign).filter(
+        AdCampaign.id == campaign_id,
+        AdCampaign.tenant_id == tenant_id,
+    ).first()
+    if not campaign:
+        return error(ErrorCode.NOT_FOUND, "广告活动不存在")
+
+    allowed_keys = {"pricing_config_id", "custom_max_bid", "custom_daily_budget", "custom_target_roas"}
+    for key, value in data.items():
+        if key in allowed_keys and hasattr(campaign, key):
+            setattr(campaign, key, value)
+
+    db.commit()
+    return success({
+        "campaign_id": campaign_id,
+        "pricing_config_id": campaign.pricing_config_id,
+        "custom_max_bid": float(campaign.custom_max_bid) if campaign.custom_max_bid else None,
+        "custom_daily_budget": float(campaign.custom_daily_budget) if campaign.custom_daily_budget else None,
+        "custom_target_roas": float(campaign.custom_target_roas) if campaign.custom_target_roas else None,
+    }, msg="配置已更新")
+
+
 # ==================== 配置管理 ====================
 
 @router.get("/configs/{shop_id}")
@@ -296,11 +341,14 @@ def _config_to_dict(config: AiPricingConfig) -> dict:
     return {
         "id": config.id,
         "shop_id": config.shop_id,
-        "category_name": config.category_name,
+        "template_name": config.template_name,
+        "template_type": getattr(config, 'template_type', 'default') or 'default',
+        "description": getattr(config, 'description', '') or '',
         "target_roas": float(config.target_roas),
         "min_roas": float(config.min_roas),
         "gross_margin": float(config.gross_margin),
         "daily_budget_limit": float(config.daily_budget_limit),
+        "no_budget_limit": bool(getattr(config, 'no_budget_limit', 0)),
         "max_bid": float(config.max_bid),
         "min_bid": float(config.min_bid),
         "max_adjust_pct": float(config.max_adjust_pct),
@@ -337,4 +385,9 @@ def _suggestion_to_dict(s: AiPricingSuggestion) -> dict:
         "data_days": getattr(s, "data_days", 0),
         "time_slot": getattr(s, "time_slot", None),
         "moscow_hour": getattr(s, "moscow_hour", None),
+        "template_name": getattr(s, "template_name", None),
+        "data_source": getattr(s, "data_source", "today_only"),
+        "campaign_data_days": getattr(s, "campaign_data_days", 0),
+        "is_new_campaign": bool(getattr(s, "is_new_campaign", 0)),
+        "shop_avg_roas": float(s.shop_avg_roas) if getattr(s, "shop_avg_roas", None) else None,
     }

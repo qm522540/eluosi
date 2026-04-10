@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import {
   Typography, Card, Table, Button, Tag, Space, Row, Col,
-  Modal, Form, InputNumber, message, Tooltip, Empty, Switch, Collapse, DatePicker, Avatar,
+  Modal, Form, InputNumber, message, Tooltip, Empty, Switch, Collapse, DatePicker, Avatar, Badge,
 } from 'antd'
 import {
   EditOutlined, CheckOutlined, CloseOutlined, RobotOutlined,
@@ -15,11 +15,18 @@ import {
   toggleAIAutoExecute, getAIPricingHistory,
 } from '@/api/ads'
 
-const { Text, Title } = Typography
+const { Text } = Typography
 const { RangePicker } = DatePicker
 
+const templateTypeConfig = {
+  default: { color: 'blue', label: '标准' },
+  conservative: { color: 'green', label: '保守' },
+  aggressive: { color: 'red', label: '激进' },
+  custom: { color: 'purple', label: '自定义' },
+}
+
 const AdsAIPricing = ({ shopId, searched }) => {
-  // 品类配置
+  // 模板配置
   const [configs, setConfigs] = useState([])
   const [configsLoading, setConfigsLoading] = useState(false)
   const [editingConfig, setEditingConfig] = useState(null)
@@ -59,7 +66,6 @@ const AdsAIPricing = ({ shopId, searched }) => {
       const res = await getAIPricingConfigs(shopId)
       const data = res.data || []
       setConfigs(data)
-      // 取第一个配置的auto_execute作为全局开关状态
       if (data.length > 0) {
         setAutoExecute(!!data[0].auto_execute)
       }
@@ -247,7 +253,7 @@ const AdsAIPricing = ({ shopId, searched }) => {
 
   const suggestionColumns = [
     {
-      title: '商品名称', dataIndex: 'product_name', width: 260, ellipsis: true,
+      title: '商品名称', dataIndex: 'product_name', width: 220, ellipsis: true,
       render: (v, r) => {
         const name = v || r.product_id || '-'
         const ozonUrl = r.product_id ? `https://www.ozon.ru/product/${r.product_id}` : null
@@ -259,9 +265,7 @@ const AdsAIPricing = ({ shopId, searched }) => {
             {img}
             <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
               {ozonUrl ? (
-                <Tooltip title="点击在Ozon查看商品图片和详情">
-                  <a href={ozonUrl} target="_blank" rel="noopener noreferrer">🔗 {name}</a>
-                </Tooltip>
+                <a href={ozonUrl} target="_blank" rel="noopener noreferrer">{name}</a>
               ) : name}
             </div>
           </div>
@@ -269,11 +273,11 @@ const AdsAIPricing = ({ shopId, searched }) => {
       },
     },
     {
-      title: '当前出价', dataIndex: 'current_bid', width: 100, align: 'right',
+      title: '当前出价', dataIndex: 'current_bid', width: 90, align: 'right',
       render: v => `₽${Math.round(v)}`,
     },
     {
-      title: '建议出价', dataIndex: 'suggested_bid', width: 100, align: 'right',
+      title: '建议出价', dataIndex: 'suggested_bid', width: 90, align: 'right',
       render: (v, r) => (
         <Text style={{ color: v > r.current_bid ? '#52c41a' : '#ff4d4f', fontWeight: 600 }}>
           ₽{Math.round(v)}
@@ -281,7 +285,7 @@ const AdsAIPricing = ({ shopId, searched }) => {
       ),
     },
     {
-      title: '调整幅度', dataIndex: 'adjust_pct', width: 100, align: 'center',
+      title: '调幅', dataIndex: 'adjust_pct', width: 80, align: 'center',
       render: (v) => {
         const isUp = v > 0
         return (
@@ -292,28 +296,45 @@ const AdsAIPricing = ({ shopId, searched }) => {
       },
     },
     {
-      title: '当前ROAS', dataIndex: 'current_roas', width: 95, align: 'right',
-      render: v => v != null ? `${v}x` : '-',
-    },
-    {
-      title: '预期ROAS', dataIndex: 'expected_roas', width: 95, align: 'right',
-      render: (v, r) => {
-        if (v == null) return '-'
-        const isUp = v > (r.current_roas || 0)
+      title: '数据质量', width: 90, align: 'center',
+      render: (_, r) => {
+        const days = r.campaign_data_days || r.data_days || 0
+        const isNew = r.is_new_campaign
+        let status = 'success', text = '数据充足'
+        if (isNew || days < 7) { status = 'error'; text = '数据不足' }
+        else if (days < 14) { status = 'warning'; text = '数据有限' }
         return (
-          <Text style={{ color: isUp ? '#52c41a' : '#ff4d4f' }}>
-            {v}x {isUp ? '↑' : '↓'}
-          </Text>
+          <Tooltip title={isNew ? `新活动，仅${days}天数据，建议谨慎执行` : `基于${days}天历史数据`}>
+            <Badge status={status} text={text} />
+          </Tooltip>
         )
       },
     },
     {
-      title: 'AI理由', dataIndex: 'reason', ellipsis: { showTitle: false },
-      render: v => <Tooltip title={v} placement="topLeft">{v}</Tooltip>,
+      title: '决策依据', dataIndex: 'decision_basis', width: 100, align: 'center',
+      render: basis => ({
+        'history_weighted': <Tag color="blue">历史数据</Tag>,
+        'shop_benchmark': <Tag color="green">店铺基准</Tag>,
+        'budget_control': <Tag color="orange">预算控制</Tag>,
+        'today_only': <Tag>今日数据</Tag>,
+      }[basis] || <Tag>{basis || '未知'}</Tag>),
     },
     {
-      title: '生成时间', dataIndex: 'created_at', width: 130,
-      render: v => v ? dayjs(v).format('MM-DD HH:mm') : '-',
+      title: 'ROAS', width: 110, align: 'right',
+      render: (_, r) => (
+        <span>
+          {r.current_roas != null ? `${r.current_roas}x` : '-'}
+          {r.expected_roas != null && (
+            <Text style={{ color: r.expected_roas > (r.current_roas || 0) ? '#52c41a' : '#ff4d4f', marginLeft: 4 }}>
+              →{r.expected_roas}x
+            </Text>
+          )}
+        </span>
+      ),
+    },
+    {
+      title: 'AI理由', dataIndex: 'reason', ellipsis: { showTitle: false },
+      render: v => <Tooltip title={v} placement="topLeft">{v}</Tooltip>,
     },
     {
       title: '操作', key: 'action', width: 140, fixed: 'right',
@@ -341,30 +362,33 @@ const AdsAIPricing = ({ shopId, searched }) => {
       title: '商品', dataIndex: 'product_name', ellipsis: true,
       render: (v, r) => {
         const name = v || r.product_id || '-'
-        const ozonUrl = r.product_id ? `https://www.ozon.ru/product/${r.product_id}` : null
         const img = r.image_url ? (
           <Avatar src={r.image_url} size={28} shape="square" style={{ marginRight: 6, flexShrink: 0 }} />
         ) : null
         return (
           <div style={{ display: 'flex', alignItems: 'center' }}>
             {img}
-            {ozonUrl ? <a href={ozonUrl} target="_blank" rel="noopener noreferrer">🔗 {name}</a> : name}
+            {name}
           </div>
         )
       },
     },
     {
-      title: '调整前', dataIndex: 'current_bid', width: 90, align: 'right',
+      title: '调整前', dataIndex: 'current_bid', width: 80, align: 'right',
       render: v => `₽${Math.round(v)}`,
     },
     {
-      title: '调整后', dataIndex: 'suggested_bid', width: 90, align: 'right',
+      title: '调整后', dataIndex: 'suggested_bid', width: 80, align: 'right',
       render: (v, r) => (
         <Text style={{ color: v > r.current_bid ? '#52c41a' : '#ff4d4f' }}>₽{Math.round(v)}</Text>
       ),
     },
     {
-      title: '执行方式', dataIndex: 'auto_executed', width: 90, align: 'center',
+      title: '模板', dataIndex: 'template_name', width: 90, ellipsis: true,
+      render: v => v || '-',
+    },
+    {
+      title: '执行方式', dataIndex: 'auto_executed', width: 80, align: 'center',
       render: v => v ? <Tag color="blue">自动</Tag> : <Tag>手动</Tag>,
     },
     {
@@ -389,41 +413,42 @@ const AdsAIPricing = ({ shopId, searched }) => {
 
   return (
     <div>
-      {/* 区域1：品类配置卡片 */}
-      <Card title="品类调价配置" size="small" style={{ marginBottom: 16 }} loading={configsLoading}>
+      {/* 区域1：策略模板配置 */}
+      <Card title="策略模板配置" size="small" style={{ marginBottom: 16 }} loading={configsLoading}>
         {configs.length > 0 ? (
           <Table size="small" dataSource={configs} rowKey="id" pagination={false}
             columns={[
-              { title: '品类', dataIndex: 'category_name', width: 100 },
               {
-                title: <Tooltip title="广告ROAS的理想目标值，高于此值AI会建议加价抢量">目标ROAS</Tooltip>,
+                title: '模板名称', dataIndex: 'template_name', width: 160,
+                render: (name, record) => (
+                  <Space>
+                    <Tag color={templateTypeConfig[record.template_type]?.color || 'default'}>
+                      {templateTypeConfig[record.template_type]?.label || record.template_type}
+                    </Tag>
+                    <span style={{ fontWeight: 500 }}>{name}</span>
+                  </Space>
+                ),
+              },
+              {
+                title: <Tooltip title="广告ROAS的理想目标值">目标ROAS</Tooltip>,
                 dataIndex: 'target_roas', width: 90, align: 'right',
                 render: v => `${v}x`,
               },
               {
-                title: <Tooltip title="ROAS低于此值触发止损降价">最低ROAS</Tooltip>,
+                title: <Tooltip title="ROAS低于此值触发止损">最低ROAS</Tooltip>,
                 dataIndex: 'min_roas', width: 90, align: 'right',
                 render: v => `${v}x`,
               },
               {
-                title: <Tooltip title="商品毛利率，用于计算盈亏平衡点">毛利率</Tooltip>,
-                dataIndex: 'gross_margin', width: 80, align: 'right',
-                render: v => `${(v * 100).toFixed(0)}%`,
-              },
-              {
-                title: <Tooltip title="单日最大广告预算上限">日预算上限</Tooltip>,
-                dataIndex: 'daily_budget_limit', width: 100, align: 'right',
+                title: '最高出价', dataIndex: 'max_bid', width: 90, align: 'right',
                 render: v => `₽${v}`,
               },
               {
-                title: <Tooltip title="单次出价的最高限额">最高出价</Tooltip>,
-                dataIndex: 'max_bid', width: 90, align: 'right',
-                render: v => `₽${v}`,
+                title: '日预算', dataIndex: 'daily_budget_limit', width: 100, align: 'right',
+                render: (v, r) => r.no_budget_limit ? <Tag color="red">不限</Tag> : `₽${v}`,
               },
               {
-                title: <Tooltip title="单次调价的最大比例">最大调幅</Tooltip>,
-                dataIndex: 'max_adjust_pct', width: 90, align: 'right',
-                render: v => `${v}%`,
+                title: '说明', dataIndex: 'description', ellipsis: true,
               },
               {
                 title: '操作', key: 'action', width: 70,
@@ -435,7 +460,7 @@ const AdsAIPricing = ({ shopId, searched }) => {
               },
             ]}
           />
-        ) : <Empty description="暂无品类配置" />}
+        ) : <Empty description="暂无策略模板" />}
       </Card>
 
       {/* 区域2：模式开关 */}
@@ -449,7 +474,7 @@ const AdsAIPricing = ({ shopId, searched }) => {
         />
         <span style={{ color: autoExecute ? '#52c41a' : '#faad14', fontSize: 13 }}>
           {autoExecute
-            ? '✓ AI将自动调整出价，每小时执行一次'
+            ? '✓ AI将自动调整出价（高峰30分钟/平稳2小时巡检）'
             : '✓ AI将生成建议，需要你手动确认执行'}
         </span>
         <Button icon={<RobotOutlined />} onClick={handleManualAnalyze} loading={analyzing}>
@@ -498,7 +523,7 @@ const AdsAIPricing = ({ shopId, searched }) => {
               onChange: p => fetchSuggestions(p),
             }}
             columns={suggestionColumns}
-            scroll={{ x: 1000 }}
+            scroll={{ x: 1200 }}
           />
         </Card>
       )}
@@ -541,9 +566,9 @@ const AdsAIPricing = ({ shopId, searched }) => {
         }]}
       />
 
-      {/* ==================== 配置编辑弹窗 ==================== */}
+      {/* ==================== 模板编辑弹窗 ==================== */}
       <Modal
-        title={`编辑配置 — ${editingConfig?.category_name || ''}`}
+        title={`编辑模板 — ${editingConfig?.template_name || ''}`}
         open={!!editingConfig}
         onOk={handleConfigSave}
         onCancel={() => setEditingConfig(null)}
@@ -570,7 +595,7 @@ const AdsAIPricing = ({ shopId, searched }) => {
           <Row gutter={16}>
             <Col span={12}>
               <Form.Item name="gross_margin" label={
-                <Tooltip title="商品毛利率(0~1)，用于计算盈亏平衡">毛利率</Tooltip>
+                <Tooltip title="商品毛利率(0~1)">毛利率</Tooltip>
               } rules={[{ required: true }]}>
                 <InputNumber min={0.01} max={0.99} step={0.05} style={{ width: '100%' }} />
               </Form.Item>
