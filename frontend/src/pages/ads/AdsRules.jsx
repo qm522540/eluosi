@@ -267,8 +267,9 @@ const AdsRules = ({ shopId, platform, searched }) => {
     <>
       <div style={{ marginBottom: 16, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <Text>
-          系统每小时自动执行（莫斯科时间每小时的 :25 分）。
-          下次执行：<Text strong>{getNextExecTime().format('HH:mm')}（莫斯科）</Text>
+          当前莫斯科时间：<Text strong>{dayjs().tz('Europe/Moscow').format('HH:mm')}</Text>，
+          系统每小时 :25 分自动执行，
+          下次执行：<Text strong>{getNextExecTime().format('HH:mm')}</Text>
         </Text>
         <Space>
           <Button icon={<PlayCircleOutlined />} loading={executing} onClick={handleExecuteRules}>立即执行</Button>
