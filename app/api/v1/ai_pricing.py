@@ -162,6 +162,39 @@ def get_promo_status(
     })
 
 
+# ==================== 数据初始化 ====================
+
+@router.get("/data-status/{shop_id}")
+def get_data_status(
+    shop_id: int,
+    db: Session = Depends(get_db),
+    tenant_id: int = Depends(get_tenant_id),
+):
+    """查询店铺数据初始化状态（前端进入AI调价时调用）"""
+    from app.services.data.ozon_stats_collector import check_shop_init_status
+    result = check_shop_init_status(db, shop_id)
+    return success(result)
+
+
+@router.post("/data-init/{shop_id}")
+async def trigger_data_init(
+    shop_id: int,
+    db: Session = Depends(get_db),
+    tenant_id: int = Depends(get_tenant_id),
+):
+    """触发店铺首次3个月数据拉取"""
+    from app.services.data.ozon_stats_collector import check_shop_init_status, init_shop_history
+
+    status = check_shop_init_status(db, shop_id)
+    if status.get("initialized"):
+        return success(status, msg="数据已初始化，无需重复拉取")
+
+    result = await init_shop_history(db, shop_id, days=90)
+    if result.get("error"):
+        return error(ErrorCode.NOT_FOUND, result["error"])
+    return success(result, msg="数据初始化完成")
+
+
 # ==================== WB建议模式 ====================
 
 @router.post("/wb/analyze/{shop_id}")

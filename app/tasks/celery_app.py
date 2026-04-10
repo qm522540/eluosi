@@ -26,35 +26,15 @@ celery_app.conf.update(
         "app.tasks.report_tasks",
         "app.tasks.roi_alert",
         "app.tasks.ai_pricing_task",
+        "app.tasks.daily_sync_task",
     ],
 )
 
 # 定时任务调度表
 celery_app.conf.beat_schedule = {
-    # 每小时拉取广告数据
-    "fetch-wb-ads-hourly": {
-        "task": "app.tasks.ad_tasks.fetch_wb_ad_stats",
-        "schedule": crontab(minute=5),  # 每小时05分
-    },
-    "fetch-ozon-ads-hourly": {
-        "task": "app.tasks.ad_tasks.fetch_ozon_ad_stats",
-        "schedule": crontab(minute=10),
-    },
-    "fetch-yandex-ads-hourly": {
-        "task": "app.tasks.ad_tasks.fetch_yandex_ad_stats",
-        "schedule": crontab(minute=15),
-    },
-    # 每日统计
-    "daily-wb-stats": {
-        "task": "app.tasks.daily_stats.fetch_wb_daily",
-        "schedule": crontab(hour=0, minute=10),
-    },
-    "daily-ozon-stats": {
-        "task": "app.tasks.daily_stats.fetch_ozon_daily",
-        "schedule": crontab(hour=1, minute=0),
-    },
-    "daily-yandex-stats": {
-        "task": "app.tasks.daily_stats.fetch_yandex_daily",
+    # 每日数据同步：凌晨2点拉取所有Ozon店铺昨日数据
+    "daily-sync-all-shops": {
+        "task": "app.tasks.daily_sync_task.daily_sync_all_shops",
         "schedule": crontab(hour=2, minute=0),
     },
     # 日报
