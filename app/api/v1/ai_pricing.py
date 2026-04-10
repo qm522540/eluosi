@@ -335,4 +335,6 @@ def _suggestion_to_dict(s: AiPricingSuggestion) -> dict:
         "decision_basis": getattr(s, "decision_basis", "today_only"),
         "history_avg_roas": float(s.history_avg_roas) if getattr(s, "history_avg_roas", None) else None,
         "data_days": getattr(s, "data_days", 0),
+        "time_slot": getattr(s, "time_slot", None),
+        "moscow_hour": getattr(s, "moscow_hour", None),
     }

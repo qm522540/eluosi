@@ -39,6 +39,30 @@ def _get_moscow_hour() -> int:
     return (datetime.utcnow().hour + MOSCOW_UTC_OFFSET) % 24
 
 
+def _build_time_slot_rules(strategy) -> str:
+    """根据时段策略生成Prompt中的出价规则文本"""
+    if strategy.bid_adjust_direction == "up":
+        return f"""【时段出价规则——高峰期加价】
+- 当前是流量高峰期，核心目标是抢曝光抢订单
+- ROAS高于（目标ROAS × {strategy.target_roas_multiplier}）的商品，主动加价{strategy.bid_adjust_min_pct}%-{strategy.bid_adjust_max_pct}%
+- 即使ROAS略低于目标，只要高于最低ROAS，也可维持或小幅加价
+- 预算充足时优先保证曝光，不要因为轻微ROAS问题降价
+- 加价幅度：流量好的商品加{strategy.bid_adjust_max_pct}%，一般商品加{strategy.bid_adjust_min_pct}%"""
+    elif strategy.bid_adjust_direction == "down":
+        return f"""【时段出价规则——低谷期降价】
+- 当前是深夜低谷期，核心目标是节省预算留给高峰期
+- 所有商品统一降价{strategy.bid_adjust_min_pct}%-{strategy.bid_adjust_max_pct}%（相对于正常出价）
+- 只有ROAS极高（>目标ROAS×2）且订单持续的商品可以少降一点
+- 降价后如果ROAS仍低于（目标ROAS×{strategy.target_roas_multiplier}），建议暂停该商品广告
+- 这个时段宁可少曝光，不要浪费预算"""
+    else:
+        return f"""【时段出价规则——平稳期优化】
+- 当前是平稳过渡期，以ROI最优为核心目标
+- ROAS低于目标的商品适度降价，ROAS高的商品维持或小幅加价
+- 调整幅度保持温和，不超过{strategy.bid_adjust_max_pct}%
+- 重点关注预算消耗节奏，避免高峰期前预算耗尽"""
+
+
 def _build_ozon_client(shop: Shop) -> OzonClient:
     """从shop构建OzonClient"""
     return OzonClient(
@@ -237,6 +261,8 @@ async def run_pricing_analysis(
     shop: Shop,
     category_name: Optional[str] = None,
     campaign_ids: Optional[List[int]] = None,
+    time_strategy=None,
+    moscow_hour: int = None,
 ) -> dict:
     """对一个店铺执行AI调价分析
 
@@ -349,7 +375,13 @@ async def run_pricing_analysis(
     daily_budget = float(config.daily_budget_limit)
     budget_pct = round(total_spend / daily_budget * 100, 1) if daily_budget > 0 else 0
     overall_roas = round(total_revenue / total_spend, 2) if total_spend > 0 else 0
-    moscow_hour = _get_moscow_hour()
+    if moscow_hour is None:
+        moscow_hour = _get_moscow_hour()
+
+    # 获取时段策略（如果没传入）
+    if time_strategy is None:
+        from app.services.ai.time_strategy import get_strategy_for_hour
+        time_strategy = get_strategy_for_hour(moscow_hour)
 
     # 构建商品明细表
     products_lines = []
@@ -417,18 +449,25 @@ ROAS走势（近7天从旧到新）：{roas_trend_text}
 {products_data}
 （格式：商品ID | 商品名 | 当前出价 | 今日点击 | 今日订单 | 今日花费 | 今日收入 | 今日ROAS）
 
-【调价决策规则】
+【当前时段策略】
+时段名称：{time_strategy.name}
+调价方向倾向：{time_strategy.bid_adjust_direction}（up=主动加价抢曝光 / down=大幅降价省预算 / neutral=ROI优先）
+建议调整幅度范围：{time_strategy.bid_adjust_min_pct}% ~ {time_strategy.bid_adjust_max_pct}%
+本时段ROAS目标系数：{time_strategy.target_roas_multiplier}（<1可接受更低ROAS换曝光，>1要求更高ROAS才值得投）
+策略说明：{time_strategy.description}
+
+{_build_time_slot_rules(time_strategy)}
+
+【历史数据决策规则】
 1. 今日ROAS低但7天均值正常（>目标ROAS的80%）→ 维持或小幅调整，注明"短期波动"
 2. 今日ROAS低且7天均值也低 → 明确降价，注明"持续低效"
-3. 今日ROAS高且预算充足 → 可适度加价抢量
-4. 预算消耗>85%且时间<20:00莫斯科时间 → 全线降价保预算
-5. 近期刚降过价（last_adjust_direction=down）→ 谨慎再次降价，避免过度调整
-6. 商品今日ROAS高于店铺平均2倍以上 → 重点加价，抢占优质流量
+3. 近期刚降过价（last_adjust_direction=down）→ 谨慎再次降价，避免过度调整
+4. 商品今日ROAS高于店铺平均2倍以上 → 重点加价，抢占优质流量
 
 【约束条件】
 最低出价：3卢布（Ozon限制）
 最高出价：{float(config.max_bid)}卢布
-单次最大调幅：{float(config.max_adjust_pct)}%
+单次最大调幅：{time_strategy.max_single_change_pct}%
 出价必须为整数卢布
 
 【输出格式】
@@ -520,6 +559,8 @@ ROAS走势（近7天从旧到新）：{roas_trend_text}
             decision_basis=raw.get("decision_basis", "today_only"),
             history_avg_roas=history_stats.get("avg_roas", 0),
             data_days=history_stats.get("data_days", 0),
+            time_slot=time_strategy.name if time_strategy else None,
+            moscow_hour=moscow_hour,
         )
         db.add(suggestion)
         db.flush()
@@ -712,4 +753,6 @@ def _suggestion_to_dict(s: AiPricingSuggestion) -> dict:
         "decision_basis": getattr(s, "decision_basis", "today_only"),
         "history_avg_roas": float(s.history_avg_roas) if getattr(s, "history_avg_roas", None) else None,
         "data_days": getattr(s, "data_days", 0),
+        "time_slot": getattr(s, "time_slot", None),
+        "moscow_hour": getattr(s, "moscow_hour", None),
     }

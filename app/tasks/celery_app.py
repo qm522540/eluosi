@@ -72,9 +72,9 @@ celery_app.conf.beat_schedule = {
         "task": "app.tasks.ad_tasks.run_automation_rules",
         "schedule": crontab(minute=25),
     },
-    # AI智能调价分析（每小时55分）
-    "ai-pricing-hourly": {
-        "task": "app.tasks.ai_pricing_task.run_ai_pricing_analysis",
-        "schedule": crontab(minute=55),
+    # AI智能调价（每10分钟检查，由莫斯科时段策略决定是否执行）
+    "ai-pricing-smart-check": {
+        "task": "app.tasks.ai_pricing_task.check_and_run_ai_pricing",
+        "schedule": crontab(minute="*/10"),
     },
 }

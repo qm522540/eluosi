@@ -6,21 +6,33 @@
 """
 
 import asyncio
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional, List
 
+import redis as redis_lib
 from sqlalchemy.orm import Session
 
+from app.config import get_settings
 from app.models.ai_pricing import AiPricingConfig, AiPricingSuggestion
 from app.models.ad import AdCampaign, AdBidLog
 from app.models.shop import Shop
 from app.services.ai.pricing_engine import (
     run_pricing_analysis, _build_ozon_client, _suggestion_to_dict,
 )
+from app.services.ai.time_strategy import check_cooldown
 from app.services.notification.service import send_wechat_work_bot
 from app.utils.logger import setup_logger
 
 logger = setup_logger("ad.ai_pricing")
+settings = get_settings()
+
+COOLDOWN_KEY = "ai_pricing:cooldown:{campaign_id}"
+COOLDOWN_MINUTES = 20
+COOLDOWN_TTL = 1500  # 25分钟Redis过期
+
+
+def _get_redis():
+    return redis_lib.from_url(settings.REDIS_URL, decode_responses=True)
 
 
 # ==================== 执行建议 ====================
@@ -61,10 +73,24 @@ async def approve_suggestion(db: Session, tenant_id: int, suggestion_id: int) ->
     if not campaign:
         return {"code": 40004, "msg": "广告活动不存在"}
 
+    # 冷却时间检查（同一活动20分钟内不重复调价）
+    r = _get_redis()
+    cooldown_key = COOLDOWN_KEY.format(campaign_id=suggestion.campaign_id)
+    last_bid_iso = r.get(cooldown_key)
+    is_cooled, remaining = check_cooldown(last_bid_iso, COOLDOWN_MINUTES)
+    if not is_cooled:
+        logger.warning(
+            f"campaign_id={suggestion.campaign_id} "
+            f"距上次调价不足{COOLDOWN_MINUTES}分钟，剩余{remaining}分钟，跳过"
+        )
+        r.close()
+        return {"code": 40001, "msg": f"调价冷却中，剩余{remaining:.0f}分钟"}
+
     # 调Ozon API修改出价
     api_result = await _execute_bid_change(shop, campaign, suggestion)
 
     if not api_result["ok"]:
+        r.close()
         logger.error(f"出价修改API失败: suggestion_id={suggestion_id}, error={api_result['error']}")
         return {"code": 50001, "msg": f"Ozon API调用失败: {api_result['error']}"}
 
@@ -87,6 +113,10 @@ async def approve_suggestion(db: Session, tenant_id: int, suggestion_id: int) ->
     db.add(bid_log)
     db.commit()
     db.refresh(suggestion)
+
+    # 设置冷却时间（25分钟过期，略大于20分钟冷却）
+    r.setex(cooldown_key, COOLDOWN_TTL, datetime.now(timezone.utc).isoformat())
+    r.close()
 
     logger.info(
         f"建议已执行: id={suggestion_id} "
@@ -175,14 +205,22 @@ async def run_ai_analysis(
     shop_id: int,
     category_name: Optional[str] = None,
     campaign_ids: Optional[List[int]] = None,
+    time_strategy=None,
+    moscow_hour: int = None,
 ) -> dict:
     """触发一次完整的AI调价分析
 
     流程：
-    1. 调pricing_engine生成建议
-    2. auto_execute=True → 自动approve所有建议
+    1. 调pricing_engine生成建议（含时段策略）
+    2. auto_execute=True → 自动approve所有建议（含冷却检查）
     3. auto_execute=False → 发企业微信推送待确认通知
     """
+    from app.services.ai.time_strategy import get_current_moscow_strategy
+
+    # 如果没传策略（手动触发），实时获取
+    if time_strategy is None:
+        moscow_hour, time_strategy = get_current_moscow_strategy()
+
     shop = db.query(Shop).filter(
         Shop.id == shop_id,
         Shop.tenant_id == tenant_id,
@@ -191,11 +229,16 @@ async def run_ai_analysis(
         return {"code": 40004, "msg": "店铺不存在"}
 
     # 调引擎生成建议
-    logger.info(f"开始AI分析: shop_id={shop_id}, shop_name={shop.name}")
+    logger.info(
+        f"开始AI分析: shop_id={shop_id}, shop_name={shop.name} "
+        f"时段={time_strategy.name} 方向={time_strategy.bid_adjust_direction}"
+    )
     analysis_result = await run_pricing_analysis(
         db, tenant_id, shop,
         category_name=category_name,
         campaign_ids=campaign_ids,
+        time_strategy=time_strategy,
+        moscow_hour=moscow_hour,
     )
 
     suggestion_count = analysis_result.get("suggestion_count", 0)
