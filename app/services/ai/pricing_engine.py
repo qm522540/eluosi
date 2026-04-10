@@ -8,7 +8,9 @@
 """
 
 import json
+import re
 import asyncio
+import httpx
 from datetime import datetime, date, timedelta
 from typing import Optional, List
 
@@ -200,6 +202,10 @@ async def run_pricing_analysis(
         logger.warning(f"shop_id={shop.id} 未获取到商品出价数据")
         return {"analyzed_count": len(campaigns), "suggestion_count": 0, "suggestions": [], "summary": "未获取到商品出价"}
 
+    # 4.5 异步获取商品图片
+    all_skus = list(set(pb["sku"] for pb in products_bids.values()))
+    image_map = await _fetch_product_images(all_skus)
+
     # 5. 构建Prompt数据
     total_spend = sum(s.get("spend", 0) for s in stats_map.values())
     total_revenue = sum(s.get("revenue", 0) for s in stats_map.values())
@@ -294,6 +300,7 @@ async def run_pricing_analysis(
             campaign_id=matched_pb["campaign_id"],
             product_id=product_id,
             product_name=raw.get("product_name", matched_pb["name"])[:200],
+            image_url=image_map.get(product_id, None),
             current_bid=current_bid,
             suggested_bid=safe_bid,
             adjust_pct=actual_adjust_pct,
@@ -391,6 +398,47 @@ def _parse_ai_response(content: str) -> Optional[dict]:
     return None
 
 
+# ==================== 图片获取 ====================
+
+async def _fetch_product_images(skus: list) -> dict:
+    """从Ozon公开页面批量获取商品图片URL
+
+    尝试从 ozon.ru/product/{sku}/ 页面提取og:image
+    失败则返回空，不影响主流程
+    """
+    result = {}
+    if not skus:
+        return result
+
+    async with httpx.AsyncClient(
+        timeout=8,
+        headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"},
+        follow_redirects=True,
+    ) as client:
+        tasks = [_fetch_one_image(client, sku) for sku in skus[:10]]  # 最多10个
+        responses = await asyncio.gather(*tasks, return_exceptions=True)
+        for sku, resp in zip(skus[:10], responses):
+            if isinstance(resp, str) and resp:
+                result[str(sku)] = resp
+
+    logger.info(f"获取商品图片: {len(skus)}个SKU, 成功{len(result)}个")
+    return result
+
+
+async def _fetch_one_image(client: httpx.AsyncClient, sku: str) -> str:
+    """从Ozon商品页面提取og:image"""
+    try:
+        url = f"https://www.ozon.ru/product/{sku}/"
+        r = await client.get(url)
+        if r.status_code == 200:
+            match = re.search(r'og:image["\s]+content="([^"]+)"', r.text)
+            if match:
+                return match.group(1)
+    except Exception:
+        pass
+    return ""
+
+
 # ==================== 辅助函数 ====================
 
 def _get_today_stats(db: Session, tenant_id: int, campaigns: list, today: date) -> dict:
@@ -439,6 +487,7 @@ def _suggestion_to_dict(s: AiPricingSuggestion) -> dict:
         "campaign_id": s.campaign_id,
         "product_id": s.product_id,
         "product_name": s.product_name,
+        "image_url": s.image_url,
         "current_bid": float(s.current_bid),
         "suggested_bid": float(s.suggested_bid),
         "adjust_pct": float(s.adjust_pct),

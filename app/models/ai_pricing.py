@@ -36,6 +36,7 @@ class AiPricingSuggestion(BaseMixin, Base):
     campaign_id: Mapped[int] = mapped_column(BigInteger, nullable=False, index=True)
     product_id: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     product_name: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
+    image_url: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
     current_bid: Mapped[float] = mapped_column(DECIMAL(10, 2), nullable=False)
     suggested_bid: Mapped[float] = mapped_column(DECIMAL(10, 2), nullable=False)
     adjust_pct: Mapped[float] = mapped_column(DECIMAL(5, 2), nullable=False)

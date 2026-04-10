@@ -317,6 +317,7 @@ def _suggestion_to_dict(s: AiPricingSuggestion) -> dict:
         "campaign_id": s.campaign_id,
         "product_id": s.product_id,
         "product_name": s.product_name,
+        "image_url": s.image_url,
         "current_bid": float(s.current_bid),
         "suggested_bid": float(s.suggested_bid),
         "adjust_pct": float(s.adjust_pct),
