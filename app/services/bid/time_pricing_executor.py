@@ -1,0 +1,530 @@
+"""分时调价执行器（按老林规范 docs/api/bid_management.md §2 + §9）
+
+数据流：
+  time_pricing_rules.is_active=1 触发执行
+  → 遍历 ad_campaigns(status='active', platform='ozon')
+    → 遍历 ad_groups（platform_group_id 当作 Ozon SKU 字符串使用）
+      → 跳过 user_managed=1
+      → first run：original_bid 为空时写入当前价
+      → new_bid = original_bid * ratio / 100
+      → 调 Ozon update_campaign_bid → 写 bid_adjustment_logs(execute_type='time_pricing')
+      → 更新 last_auto_bid
+
+约束：
+  - 项目用 sync SessionLocal，db.execute/commit 不带 await
+  - OzonClient 是统一客户端
+  - 出价 Ozon Performance API: micro 字符串(int × 1_000_000)
+  - 互斥校验用 SELECT ... FOR UPDATE
+"""
+
+from sqlalchemy import text
+
+from app.utils.errors import ErrorCode
+from app.utils.logger import setup_logger
+from app.utils.moscow_time import get_current_period, moscow_hour, now_moscow
+
+logger = setup_logger("bid.time_pricing_executor")
+
+MIN_BID = 3.0
+MIN_DIFF = 1.0
+
+
+# ==================== 主入口（Celery 调用） ====================
+
+async def execute(db, shop_id: int) -> dict:
+    """Celery 触发的分时调价主流程
+
+    Returns:
+        {checked, adjusted, skipped, errors, period}
+    """
+    counters = {"checked": 0, "adjusted": 0, "skipped": 0, "errors": 0, "period": None}
+
+    rule = db.execute(text("""
+        SELECT id, tenant_id, shop_id, is_active,
+               peak_hours, peak_ratio, mid_hours, mid_ratio,
+               low_hours, low_ratio
+        FROM time_pricing_rules
+        WHERE shop_id = :shop_id AND is_active = 1
+        LIMIT 1
+    """), {"shop_id": shop_id}).fetchone()
+
+    if not rule:
+        logger.info(f"shop_id={shop_id} 分时调价未启用，跳过")
+        return counters
+
+    period = get_current_period(rule)
+    if not period:
+        logger.warning(f"shop_id={shop_id} 时段判断失败 hour={moscow_hour()}")
+        _save_result(db, shop_id, counters, "时段判断失败")
+        return counters
+
+    ratio = {"peak": rule.peak_ratio, "mid": rule.mid_ratio, "low": rule.low_ratio}[period]
+    counters["period"] = period
+
+    from app.models.shop import Shop
+    shop = db.query(Shop).filter(Shop.id == shop_id).first()
+    if not shop or shop.platform != "ozon":
+        return counters
+
+    logger.info(
+        f"shop={shop.name} 分时调价 莫斯科{moscow_hour()}点 时段={period} 系数={ratio}%"
+    )
+
+    from app.models.ad import AdCampaign
+    campaigns = db.query(AdCampaign).filter(
+        AdCampaign.shop_id == shop_id,
+        AdCampaign.platform == "ozon",
+        AdCampaign.status == "active",
+    ).all()
+
+    if not campaigns:
+        _save_result(db, shop_id, counters, "无active活动")
+        return counters
+
+    from app.services.platform.ozon import OzonClient
+    client = OzonClient(
+        shop_id=shop.id, api_key=shop.api_key, client_id=shop.client_id,
+        perf_client_id=shop.perf_client_id or "",
+        perf_client_secret=shop.perf_client_secret or "",
+    )
+
+    try:
+        for camp in campaigns:
+            await _process_campaign(db, client, camp, period, ratio, counters)
+        db.commit()
+    finally:
+        await client.close()
+
+    _save_result(
+        db, shop_id, counters,
+        f"{period}时段 调整{counters['adjusted']}个 跳过{counters['skipped']}个 失败{counters['errors']}个"
+    )
+    logger.info(
+        f"shop={shop.name} 分时调价完成 "
+        f"checked={counters['checked']} adjusted={counters['adjusted']} "
+        f"skipped={counters['skipped']} errors={counters['errors']}"
+    )
+    return counters
+
+
+async def _process_campaign(db, client, campaign, period: str, ratio: int, counters: dict):
+    """遍历活动下所有商品"""
+    try:
+        products = await client.fetch_campaign_products(campaign.platform_campaign_id)
+    except Exception as e:
+        logger.error(f"读取活动商品失败 campaign={campaign.name} ({campaign.id}): {e}")
+        counters["errors"] += 1
+        return
+
+    for product in products or []:
+        sku = str(product.get("sku") or "")
+        if not sku:
+            continue
+        bid_raw = product.get("bid", "0")
+        try:
+            current_bid = float(int(bid_raw)) / 1_000_000
+        except (ValueError, TypeError):
+            current_bid = 0.0
+        sku_name = (product.get("title") or "")[:300]
+
+        counters["checked"] += 1
+        try:
+            outcome = await _process_sku(
+                db, client, campaign, sku, sku_name,
+                current_bid, period, ratio
+            )
+            if outcome == "adjusted":
+                counters["adjusted"] += 1
+            elif outcome == "error":
+                counters["errors"] += 1
+            else:
+                counters["skipped"] += 1
+        except Exception as e:
+            counters["errors"] += 1
+            logger.error(f"SKU {sku} 处理异常: {e}")
+
+
+async def _process_sku(db, client, campaign, sku: str, sku_name: str,
+                      current_bid: float, period: str, ratio: int) -> str:
+    """处理单个 SKU。返回 adjusted | skipped | error"""
+    # 1. 取 ad_groups 行（platform_group_id 当作 SKU）
+    row = db.execute(text("""
+        SELECT id, user_managed, original_bid, last_auto_bid
+        FROM ad_groups
+        WHERE campaign_id = :cid AND platform_group_id = :sku
+        LIMIT 1
+    """), {"cid": campaign.id, "sku": sku}).fetchone()
+
+    if row and row.user_managed:
+        return "skipped"
+
+    last_auto = float(row.last_auto_bid) if (row and row.last_auto_bid) else None
+    original = float(row.original_bid) if (row and row.original_bid) else None
+
+    # 2. 检测系统外手改：last_auto_bid 与平台当前价偏差 > MIN_DIFF
+    if last_auto is not None and current_bid > 0:
+        if abs(current_bid - last_auto) > MIN_DIFF:
+            logger.info(
+                f"SKU {sku} 检测系统外手改 last_auto={last_auto} platform={current_bid}"
+                f" → 标记 user_managed"
+            )
+            db.execute(text("""
+                UPDATE ad_groups
+                SET user_managed = 1, user_managed_at = NOW()
+                WHERE campaign_id = :cid AND platform_group_id = :sku
+            """), {"cid": campaign.id, "sku": sku})
+            return "skipped"
+
+    # 3. first run：original_bid 为空时写入当前价
+    base = original if (original and original > 0) else current_bid
+    if base <= 0:
+        return "skipped"
+
+    # 4. 计算目标出价
+    target = max(base * ratio / 100.0, MIN_BID)
+    target = round(target)  # Ozon 只接受整数卢布
+
+    # 5. 差值 < MIN_DIFF 跳过 API
+    if abs(target - current_bid) < MIN_DIFF:
+        # 仍然要确保 ad_groups 行存在并写入 original_bid（首次）
+        if not row or not row.original_bid:
+            _upsert_group(db, campaign, sku, sku_name, base_bid=base, last_auto=current_bid)
+        return "skipped"
+
+    # 6. 调用 Ozon API
+    api_result = await client.update_campaign_bid(
+        campaign.platform_campaign_id, sku, str(int(target * 1_000_000))
+    )
+    if not api_result.get("ok"):
+        err = api_result.get("error") or "unknown"
+        logger.error(f"SKU {sku} 出价修改失败: {err}")
+        _write_log(
+            db, campaign, sku, sku_name,
+            old_bid=current_bid, new_bid=target,
+            execute_type="time_pricing", time_period=period, period_ratio=ratio,
+            success=False, error_msg=err,
+        )
+        return "error"
+
+    # 7. 更新 ad_groups
+    _upsert_group(db, campaign, sku, sku_name, base_bid=base, last_auto=target)
+
+    # 8. 写日志
+    _write_log(
+        db, campaign, sku, sku_name,
+        old_bid=current_bid, new_bid=target,
+        execute_type="time_pricing", time_period=period, period_ratio=ratio,
+        success=True,
+    )
+
+    logger.info(
+        f"SKU {sku} 调价 {current_bid:.0f}→{target:.0f}卢布 ({period}{ratio}%)"
+    )
+    return "adjusted"
+
+
+# ==================== 启用 / 停用 ====================
+
+def update_rule(db, tenant_id: int, shop_id: int, data: dict) -> dict:
+    """更新分时调价规则（PUT /time-pricing/{shop_id}）
+
+    校验：24小时全覆盖 + 两两不相交 + ratio∈[10,500]
+    """
+    import json
+
+    peak = data.get("peak_hours") or []
+    mid = data.get("mid_hours") or []
+    low = data.get("low_hours") or []
+    peak_ratio = int(data.get("peak_ratio") or 120)
+    mid_ratio = int(data.get("mid_ratio") or 100)
+    low_ratio = int(data.get("low_ratio") or 60)
+
+    # 校验1：24小时全覆盖
+    union = set(peak) | set(mid) | set(low)
+    if union != set(range(24)):
+        return {"code": ErrorCode.BID_INVALID_HOURS_CONFIG, "msg": "时段必须覆盖0-23全部24小时"}
+    # 校验2：两两不相交
+    if len(peak) + len(mid) + len(low) != 24:
+        return {"code": ErrorCode.BID_INVALID_HOURS_CONFIG, "msg": "时段不能重叠"}
+    # 校验3：ratio 范围
+    for r in (peak_ratio, mid_ratio, low_ratio):
+        if not 10 <= r <= 500:
+            return {"code": ErrorCode.BID_INVALID_RATIO, "msg": "ratio 必须在 [10, 500] 范围"}
+
+    db.execute(text("""
+        INSERT INTO time_pricing_rules (
+            tenant_id, shop_id,
+            peak_hours, peak_ratio,
+            mid_hours, mid_ratio,
+            low_hours, low_ratio,
+            is_active
+        ) VALUES (
+            :tenant_id, :shop_id,
+            :peak_hours, :peak_ratio,
+            :mid_hours, :mid_ratio,
+            :low_hours, :low_ratio,
+            0
+        )
+        ON DUPLICATE KEY UPDATE
+            peak_hours = VALUES(peak_hours),
+            peak_ratio = VALUES(peak_ratio),
+            mid_hours = VALUES(mid_hours),
+            mid_ratio = VALUES(mid_ratio),
+            low_hours = VALUES(low_hours),
+            low_ratio = VALUES(low_ratio),
+            updated_at = NOW()
+    """), {
+        "tenant_id": tenant_id,
+        "shop_id": shop_id,
+        "peak_hours": json.dumps(peak),
+        "peak_ratio": peak_ratio,
+        "mid_hours": json.dumps(mid),
+        "mid_ratio": mid_ratio,
+        "low_hours": json.dumps(low),
+        "low_ratio": low_ratio,
+    })
+    db.commit()
+    return {"code": 0}
+
+
+def enable(db, tenant_id: int, shop_id: int) -> dict:
+    """启用分时调价（FOR UPDATE 互斥校验）"""
+    # FOR UPDATE 锁住两张表对应行
+    time_row = db.execute(text("""
+        SELECT id, is_active FROM time_pricing_rules
+        WHERE shop_id = :shop_id FOR UPDATE
+    """), {"shop_id": shop_id}).fetchone()
+
+    if not time_row:
+        return {"code": ErrorCode.BID_TIME_RULE_NOT_FOUND, "msg": "分时调价规则不存在"}
+
+    ai_row = db.execute(text("""
+        SELECT id, is_active FROM ai_pricing_configs
+        WHERE shop_id = :shop_id FOR UPDATE
+    """), {"shop_id": shop_id}).fetchone()
+
+    if ai_row and ai_row.is_active:
+        return {"code": ErrorCode.BID_CONFLICT_TIME_AI, "msg": "AI调价已启用，请先停用"}
+
+    db.execute(text("""
+        UPDATE time_pricing_rules SET is_active = 1, updated_at = NOW()
+        WHERE shop_id = :shop_id
+    """), {"shop_id": shop_id})
+    db.commit()
+    return {"code": 0}
+
+
+def disable(db, shop_id: int) -> dict:
+    """停用分时调价（不主动回弹出价，由用户走 restore_sku 逐SKU恢复）"""
+    db.execute(text("""
+        UPDATE time_pricing_rules SET is_active = 0, updated_at = NOW()
+        WHERE shop_id = :shop_id
+    """), {"shop_id": shop_id})
+    db.commit()
+    return {"code": 0}
+
+
+async def restore_sku(db, shop_id: int, sku: str) -> dict:
+    """单SKU恢复到 original_bid，写 user_manual 日志"""
+    from app.models.shop import Shop
+
+    row = db.execute(text("""
+        SELECT
+            ag.id, ag.platform_group_id, ag.original_bid,
+            ag.user_managed, ag.last_auto_bid,
+            c.id AS campaign_id, c.platform_campaign_id, c.name AS campaign_name,
+            c.tenant_id, c.shop_id
+        FROM ad_groups ag
+        JOIN ad_campaigns c ON ag.campaign_id = c.id
+        WHERE c.shop_id = :shop_id
+          AND ag.platform_group_id = :sku
+        LIMIT 1
+    """), {"shop_id": shop_id, "sku": sku}).fetchone()
+
+    if not row or not row.original_bid:
+        return {"code": ErrorCode.LISTING_NOT_FOUND, "msg": "SKU或原始出价不存在"}
+
+    target = max(round(float(row.original_bid)), 3)
+    shop = db.query(Shop).filter(Shop.id == shop_id).first()
+
+    from app.services.platform.ozon import OzonClient
+    client = OzonClient(
+        shop_id=shop.id, api_key=shop.api_key, client_id=shop.client_id,
+        perf_client_id=shop.perf_client_id or "",
+        perf_client_secret=shop.perf_client_secret or "",
+    )
+    try:
+        api_result = await client.update_campaign_bid(
+            row.platform_campaign_id, row.platform_group_id,
+            str(int(target * 1_000_000))
+        )
+    finally:
+        await client.close()
+
+    if not api_result.get("ok"):
+        return {"code": ErrorCode.BID_EXECUTION_FAILED,
+                "msg": api_result.get("error") or "Ozon API失败"}
+
+    previous = float(row.last_auto_bid or row.original_bid)
+    db.execute(text("""
+        INSERT INTO bid_adjustment_logs (
+            tenant_id, shop_id, campaign_id, campaign_name,
+            platform_sku_id, sku_name,
+            old_bid, new_bid, adjust_pct,
+            execute_type, success, created_at
+        ) VALUES (
+            :tenant_id, :shop_id, :campaign_id, :campaign_name,
+            :sku, NULL, :old_bid, :new_bid,
+            :pct, 'user_manual', 1, NOW()
+        )
+    """), {
+        "tenant_id": row.tenant_id,
+        "shop_id": row.shop_id,
+        "campaign_id": row.campaign_id,
+        "campaign_name": row.campaign_name,
+        "sku": row.platform_group_id,
+        "old_bid": previous,
+        "new_bid": target,
+        "pct": round((target - previous) / previous * 100, 2) if previous > 0 else 0,
+    })
+    db.commit()
+
+    return {
+        "code": 0,
+        "data": {
+            "platform_sku_id": row.platform_group_id,
+            "restored_bid": target,
+            "previous_bid": previous,
+        }
+    }
+
+
+# ==================== 状态查询 ====================
+
+def get_sku_status(db, shop_id: int, campaign_id: int = None, keyword: str = None) -> dict:
+    """获取分时调价当前各 SKU 状态（按活动分组）"""
+    where = ["c.shop_id = :shop_id", "c.platform = 'ozon'"]
+    params = {"shop_id": shop_id}
+    if campaign_id:
+        where.append("c.id = :cid")
+        params["cid"] = campaign_id
+    if keyword:
+        where.append("(c.name LIKE :kw OR ag.name LIKE :kw OR ag.platform_group_id LIKE :kw)")
+        params["kw"] = f"%{keyword}%"
+
+    where_sql = " AND ".join(where)
+    rows = db.execute(text(f"""
+        SELECT
+            c.id AS campaign_id, c.name AS campaign_name,
+            ag.platform_group_id AS sku, ag.name AS sku_name,
+            ag.original_bid, ag.bid AS current_bid, ag.last_auto_bid,
+            ag.user_managed, ag.user_managed_at, ag.updated_at
+        FROM ad_campaigns c
+        LEFT JOIN ad_groups ag ON ag.campaign_id = c.id
+            AND ag.platform_group_id IS NOT NULL
+        WHERE {where_sql}
+        ORDER BY c.name, ag.platform_group_id
+    """), params).fetchall()
+
+    groups = {}
+    for r in rows:
+        cid = r.campaign_id
+        if cid not in groups:
+            groups[cid] = {
+                "campaign_id": cid,
+                "campaign_name": r.campaign_name,
+                "skus": [],
+            }
+        if r.sku:
+            groups[cid]["skus"].append({
+                "platform_sku_id": r.sku,
+                "sku_name": r.sku_name,
+                "original_bid": float(r.original_bid or 0),
+                "current_bid": float(r.current_bid or 0),
+                "last_auto_bid": float(r.last_auto_bid or 0),
+                "period": None,  # 不再单独存,由 dashboard 接口提供
+                "ratio": None,
+                "user_managed": bool(r.user_managed),
+                "last_adjusted_at": r.updated_at.isoformat() if r.updated_at else None,
+            })
+
+    return {"campaigns": list(groups.values())}
+
+
+# ==================== 内部工具 ====================
+
+def _upsert_group(db, campaign, sku: str, sku_name: str,
+                  base_bid: float, last_auto: float):
+    """ad_groups upsert：first run 写 original_bid，每次更新 last_auto_bid"""
+    db.execute(text("""
+        INSERT INTO ad_groups (
+            tenant_id, campaign_id, platform_group_id, name,
+            original_bid, last_auto_bid, status
+        ) VALUES (
+            :tenant_id, :campaign_id, :sku, :name,
+            :original, :last_auto, 'active'
+        )
+        ON DUPLICATE KEY UPDATE
+            name = VALUES(name),
+            original_bid = COALESCE(original_bid, VALUES(original_bid)),
+            last_auto_bid = VALUES(last_auto_bid),
+            updated_at = NOW()
+    """), {
+        "tenant_id": campaign.tenant_id,
+        "campaign_id": campaign.id,
+        "sku": sku,
+        "name": sku_name[:200] if sku_name else f"SKU-{sku}",
+        "original": base_bid,
+        "last_auto": last_auto,
+    })
+
+
+def _write_log(db, campaign, sku: str, sku_name: str,
+               old_bid: float, new_bid: float,
+               execute_type: str, time_period: str = None, period_ratio: int = None,
+               success: bool = True, error_msg: str = None):
+    """写 bid_adjustment_logs（统一调价日志，新表）"""
+    pct = 0.0
+    if old_bid > 0:
+        pct = round((new_bid - old_bid) / old_bid * 100, 2)
+    db.execute(text("""
+        INSERT INTO bid_adjustment_logs (
+            tenant_id, shop_id, campaign_id, campaign_name,
+            platform_sku_id, sku_name,
+            old_bid, new_bid, adjust_pct,
+            execute_type, time_period, period_ratio,
+            moscow_hour, success, error_msg, created_at
+        ) VALUES (
+            :tenant_id, :shop_id, :campaign_id, :campaign_name,
+            :sku, :sku_name,
+            :old_bid, :new_bid, :pct,
+            :execute_type, :period, :ratio,
+            :hour, :success, :error_msg, NOW()
+        )
+    """), {
+        "tenant_id": campaign.tenant_id,
+        "shop_id": campaign.shop_id,
+        "campaign_id": campaign.id,
+        "campaign_name": campaign.name,
+        "sku": sku,
+        "sku_name": sku_name[:300] if sku_name else None,
+        "old_bid": old_bid,
+        "new_bid": new_bid,
+        "pct": pct,
+        "execute_type": execute_type,
+        "period": time_period,
+        "ratio": period_ratio,
+        "hour": moscow_hour(),
+        "success": 1 if success else 0,
+        "error_msg": (error_msg or "")[:500] if error_msg else None,
+    })
+
+
+def _save_result(db, shop_id: int, counters: dict, summary: str):
+    """保存最后一次执行结果摘要到 time_pricing_rules"""
+    db.execute(text("""
+        UPDATE time_pricing_rules
+        SET last_executed_at = NOW(), last_execute_result = :summary
+        WHERE shop_id = :shop_id
+    """), {"shop_id": shop_id, "summary": summary[:200]})
+    db.commit()

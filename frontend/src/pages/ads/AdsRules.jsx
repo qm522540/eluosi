@@ -1,8 +1,8 @@
 import { useState, useEffect } from 'react'
 import {
   Typography, Card, Table, Button, Tag, Space, Select, Row, Col,
-  Modal, Form, Input, InputNumber, message, Tooltip, Empty,
-  Switch, Alert, Divider,
+  Modal, Form, InputNumber, message, Empty,
+  Switch, Divider,
 } from 'antd'
 import {
   EditOutlined, PlusOutlined, DeleteOutlined, PlayCircleOutlined,
@@ -15,15 +15,13 @@ dayjs.extend(utc)
 dayjs.extend(timezone)
 import {
   getAutomationRules, createAutomationRule, updateAutomationRule, deleteAutomationRule,
-  executeRules, restoreRuleBids, getBidLogs,
+  executeRules,
 } from '@/api/ads'
-import { PLATFORMS } from '@/utils/constants'
 
 const { Text } = Typography
 
 const RULE_TYPES = {
   pause_low_roi: { label: '低ROI自动暂停', color: 'red' },
-  auto_bid: { label: '分时自动调价', color: 'blue' },
   budget_cap: { label: '预算封顶', color: 'orange' },
 }
 
@@ -35,14 +33,6 @@ const AdsRules = ({ shopId, platform, searched }) => {
   const [ruleForm] = Form.useForm()
   const [ruleSubmitting, setRuleSubmitting] = useState(false)
   const [executing, setExecuting] = useState(false)
-
-  // 调价日志
-  const [bidLogVisible, setBidLogVisible] = useState(false)
-  const [bidLogRuleId, setBidLogRuleId] = useState(null)
-  const [bidLogs, setBidLogs] = useState([])
-  const [bidLogsLoading, setBidLogsLoading] = useState(false)
-  const [bidLogsTotal, setBidLogsTotal] = useState(0)
-  const [bidLogsPage, setBidLogsPage] = useState(1)
 
   const fetchRules = async () => {
     setRulesLoading(true)
@@ -56,28 +46,6 @@ const AdsRules = ({ shopId, platform, searched }) => {
     } finally {
       setRulesLoading(false)
     }
-  }
-
-  const fetchBidLogs = async (ruleId, p = 1) => {
-    setBidLogsLoading(true)
-    setBidLogsPage(p)
-    try {
-      const params = { page: p, page_size: 10 }
-      if (ruleId) params.rule_id = ruleId
-      const res = await getBidLogs(params)
-      setBidLogs(res.data.items || [])
-      setBidLogsTotal(res.data.total || 0)
-    } catch {
-      setBidLogs([])
-    } finally {
-      setBidLogsLoading(false)
-    }
-  }
-
-  const handleShowBidLogs = (ruleId) => {
-    setBidLogRuleId(ruleId)
-    setBidLogVisible(true)
-    fetchBidLogs(ruleId, 1)
   }
 
   useEffect(() => {
@@ -99,12 +67,6 @@ const AdsRules = ({ shopId, platform, searched }) => {
       ...record,
       min_roas: c.min_roas,
       min_spend: c.min_spend,
-      peak_hours: c.peak_hours,
-      peak_pct: c.peak_pct,
-      sub_peak_hours: c.sub_peak_hours,
-      sub_peak_pct: c.sub_peak_pct,
-      off_peak_hours: c.off_peak_hours,
-      off_peak_pct: c.off_peak_pct,
       max_daily_spend: c.max_daily_spend,
     })
     setRuleFormVisible(true)
@@ -121,14 +83,6 @@ const AdsRules = ({ shopId, platform, searched }) => {
         conditions.min_roas = values.min_roas || 1.0
         conditions.min_spend = values.min_spend || 100
         actions.action = 'pause'
-      } else if (ruleType === 'auto_bid') {
-        conditions.peak_hours = values.peak_hours || [19, 20, 21]
-        conditions.peak_pct = values.peak_pct ?? 30
-        conditions.sub_peak_hours = values.sub_peak_hours || [22]
-        conditions.sub_peak_pct = values.sub_peak_pct ?? 20
-        conditions.off_peak_hours = values.off_peak_hours || [2, 3, 4, 5, 6]
-        conditions.off_peak_pct = values.off_peak_pct ?? -50
-        actions.action = 'time_bid'
       } else if (ruleType === 'budget_cap') {
         conditions.max_daily_spend = values.max_daily_spend || 5000
         actions.action = 'pause'
@@ -161,72 +115,30 @@ const AdsRules = ({ shopId, platform, searched }) => {
   }
 
   const handleDeleteRule = (id) => {
-    const rule = rules.find(r => r.id === id)
-    if (rule?.rule_type === 'auto_bid' && rule?.actions?.original_bids) {
-      Modal.confirm({
-        title: '删除分时调价规则',
-        content: '删除后将自动恢复所有商品的原始出价，确定继续？',
-        okText: '确定删除并恢复出价',
-        okType: 'danger',
-        cancelText: '取消',
-        onOk: async () => {
-          try {
-            await restoreRuleBids(id)
-            await deleteAutomationRule(id)
-            message.success('规则已删除，出价已恢复')
-            fetchRules()
-          } catch (err) {
-            message.error(err.message || '操作失败')
-          }
-        },
-      })
-    } else {
-      Modal.confirm({
-        title: '确定删除此规则？',
-        okText: '确定',
-        okType: 'danger',
-        cancelText: '取消',
-        onOk: async () => {
-          try {
-            await deleteAutomationRule(id)
-            message.success('规则已删除')
-            fetchRules()
-          } catch (err) {
-            message.error(err.message || '删除失败')
-          }
-        },
-      })
-    }
-  }
-
-  const handleToggleRule = (record) => {
-    if (record.rule_type === 'auto_bid' && record.enabled && record.actions?.original_bids) {
-      Modal.confirm({
-        title: '关闭分时调价规则',
-        content: '关闭后将自动恢复所有商品的原始出价，确定继续？',
-        okText: '确定关闭并恢复出价',
-        cancelText: '取消',
-        onOk: async () => {
-          try {
-            await restoreRuleBids(record.id)
-            await updateAutomationRule(record.id, { enabled: 0 })
-            message.success('规则已禁用，出价已恢复')
-            fetchRules()
-          } catch (err) {
-            message.error(err.message || '操作失败')
-          }
-        },
-      })
-    } else {
-      (async () => {
+    Modal.confirm({
+      title: '确定删除此规则？',
+      okText: '确定',
+      okType: 'danger',
+      cancelText: '取消',
+      onOk: async () => {
         try {
-          await updateAutomationRule(record.id, { enabled: record.enabled ? 0 : 1 })
-          message.success(record.enabled ? '规则已禁用' : '规则已启用')
+          await deleteAutomationRule(id)
+          message.success('规则已删除')
           fetchRules()
         } catch (err) {
-          message.error(err.message || '操作失败')
+          message.error(err.message || '删除失败')
         }
-      })()
+      },
+    })
+  }
+
+  const handleToggleRule = async (record) => {
+    try {
+      await updateAutomationRule(record.id, { enabled: record.enabled ? 0 : 1 })
+      message.success(record.enabled ? '规则已禁用' : '规则已启用')
+      fetchRules()
+    } catch (err) {
+      message.error(err.message || '操作失败')
     }
   }
 
@@ -282,7 +194,6 @@ const AdsRules = ({ shopId, platform, searched }) => {
             render: (_, r) => {
               const c = r.conditions || {}
               if (r.rule_type === 'pause_low_roi') return `ROAS < ${c.min_roas || 1}，花费 >= ₽${c.min_spend || 100}`
-              if (r.rule_type === 'auto_bid') return `高峰+${c.peak_pct||30}% | 次峰+${c.sub_peak_pct||20}% | 低谷${c.off_peak_pct||-50}%`
               if (r.rule_type === 'budget_cap') return `日花费上限 ₽${c.max_daily_spend || 0}`
               return '-'
             },
@@ -305,49 +216,16 @@ const AdsRules = ({ shopId, platform, searched }) => {
               : <Text type="secondary">已停用</Text>,
           },
           {
-            title: '操作', key: 'action', width: 160,
+            title: '操作', key: 'action', width: 120,
             render: (_, record) => (
               <Space size="small">
-                {record.rule_type === 'auto_bid' && (
-                  <Button type="link" size="small" onClick={() => handleShowBidLogs(record.id)}>日志</Button>
-                )}
-                <Tooltip title={record.rule_type === 'auto_bid' && record.enabled ? '请先关闭规则再编辑' : ''}>
-                  <Button type="link" size="small" icon={<EditOutlined />}
-                    disabled={record.rule_type === 'auto_bid' && !!record.enabled}
-                    onClick={() => handleEditRule(record)} />
-                </Tooltip>
+                <Button type="link" size="small" icon={<EditOutlined />} onClick={() => handleEditRule(record)} />
                 <Button type="link" size="small" danger icon={<DeleteOutlined />} onClick={() => handleDeleteRule(record.id)} />
               </Space>
             ),
           },
         ]}
       />
-
-      {/* ==================== 调价日志弹窗 ==================== */}
-      <Modal
-        title="调价日志"
-        open={bidLogVisible}
-        onCancel={() => setBidLogVisible(false)}
-        footer={null}
-        width={800}
-      >
-        <Table size="small" dataSource={bidLogs} rowKey="id" loading={bidLogsLoading}
-          pagination={{
-            current: bidLogsPage, total: bidLogsTotal, pageSize: 10, size: 'small',
-            onChange: (p) => fetchBidLogs(bidLogRuleId, p),
-          }}
-          columns={[
-            { title: '时间', dataIndex: 'created_at', width: 130, render: v => v ? dayjs(v).format('MM-DD HH:mm') : '-' },
-            { title: '活动', dataIndex: 'campaign_name', ellipsis: true, render: (v, r) => <Tooltip title={`ID: ${r.campaign_id}`}>{v || r.campaign_id}</Tooltip> },
-            { title: '平台', dataIndex: 'platform', width: 100, render: p => <Tag color={PLATFORMS[p]?.color}>{PLATFORMS[p]?.label || p}</Tag> },
-            { title: '广告组', dataIndex: 'group_name', width: 110, ellipsis: true },
-            { title: '原出价', dataIndex: 'old_bid', width: 75, align: 'right', render: v => `₽${v}` },
-            { title: '新出价', dataIndex: 'new_bid', width: 75, align: 'right', render: (v, r) => <Text style={{ color: r.change_pct > 0 ? '#52c41a' : '#ff4d4f' }}>₽{v}</Text> },
-            { title: '调幅', dataIndex: 'change_pct', width: 65, align: 'center', render: v => <Tag color={v > 0 ? 'green' : 'red'}>{v > 0 ? '+' : ''}{v}%</Tag> },
-            { title: '原因', dataIndex: 'reason', ellipsis: true },
-          ]}
-        />
-      </Modal>
 
       {/* ==================== 自动化规则 表单弹窗 ==================== */}
       <Modal
@@ -393,73 +271,6 @@ const AdsRules = ({ shopId, platform, searched }) => {
                     </Form.Item>
                   </Col>
                 </Row>
-              )
-              if (rt === 'auto_bid') return (
-                <div>
-                  <Alert message="根据莫斯科时间自动调整出价，高峰加价抢流量，低谷降价省预算" type="info" showIcon style={{ marginBottom: 16 }} />
-                  <Form.Item noStyle shouldUpdate={(prev, cur) =>
-                    prev.peak_hours !== cur.peak_hours || prev.sub_peak_hours !== cur.sub_peak_hours || prev.off_peak_hours !== cur.off_peak_hours
-                  }>
-                    {({ getFieldValue }) => {
-                      const peakH = getFieldValue('peak_hours') || []
-                      const subPeakH = getFieldValue('sub_peak_hours') || []
-                      const offPeakH = getFieldValue('off_peak_hours') || []
-                      const hourOpts = (excludeA, excludeB) => {
-                        const used = new Set([...excludeA, ...excludeB])
-                        return Array.from({ length: 24 }, (_, i) => ({
-                          value: i, label: `${i}:00`, disabled: used.has(i),
-                        }))
-                      }
-                      return (
-                        <>
-                          <Card size="small" title="高峰时段" style={{ marginBottom: 12, borderLeft: '3px solid #ff4d4f' }}>
-                            <Row gutter={16}>
-                              <Col span={16}>
-                                <Form.Item name="peak_hours" label="时间范围" initialValue={[19,20,21]}>
-                                  <Select mode="multiple" placeholder="选择小时" options={hourOpts(subPeakH, offPeakH)} />
-                                </Form.Item>
-                              </Col>
-                              <Col span={8}>
-                                <Form.Item name="peak_pct" label="加价比例(%)" initialValue={30}>
-                                  <InputNumber min={0} max={200} style={{ width: '100%' }} addonAfter="%" />
-                                </Form.Item>
-                              </Col>
-                            </Row>
-                          </Card>
-                          <Card size="small" title="次高峰时段" style={{ marginBottom: 12, borderLeft: '3px solid #faad14' }}>
-                            <Row gutter={16}>
-                              <Col span={16}>
-                                <Form.Item name="sub_peak_hours" label="时间范围" initialValue={[22]}>
-                                  <Select mode="multiple" placeholder="选择小时" options={hourOpts(peakH, offPeakH)} />
-                                </Form.Item>
-                              </Col>
-                              <Col span={8}>
-                                <Form.Item name="sub_peak_pct" label="加价比例(%)" initialValue={20}>
-                                  <InputNumber min={0} max={200} style={{ width: '100%' }} addonAfter="%" />
-                                </Form.Item>
-                              </Col>
-                            </Row>
-                          </Card>
-                          <Card size="small" title="低谷时段" style={{ marginBottom: 12, borderLeft: '3px solid #1890ff' }}>
-                            <Row gutter={16}>
-                              <Col span={16}>
-                                <Form.Item name="off_peak_hours" label="时间范围" initialValue={[2,3,4,5,6]}>
-                                  <Select mode="multiple" placeholder="选择小时" options={hourOpts(peakH, subPeakH)} />
-                                </Form.Item>
-                              </Col>
-                              <Col span={8}>
-                                <Form.Item name="off_peak_pct" label="降价比例(%)" initialValue={-50}>
-                                  <InputNumber min={-90} max={0} style={{ width: '100%' }} addonAfter="%" />
-                                </Form.Item>
-                              </Col>
-                            </Row>
-                          </Card>
-                        </>
-                      )
-                    }}
-                  </Form.Item>
-                  <Text type="secondary">其他未设置的时段将保持原始出价不变。系统每小时（莫斯科时间 :25 分）自动执行。</Text>
-                </div>
               )
               if (rt === 'budget_cap') return (
                 <Form.Item name="max_daily_spend" label="日花费上限(₽)" initialValue={5000}>

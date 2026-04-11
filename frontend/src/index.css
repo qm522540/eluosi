@@ -15,3 +15,14 @@ body {
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
+
+/* 出价管理：活动分组行 */
+.campaign-group-row td {
+  background: var(--color-background-secondary, #fafafa) !important;
+  font-weight: 500;
+}
+
+/* 出价管理：数据不足的建议行 */
+.row-low-data td {
+  background: #FFFBE6 !important;
+}

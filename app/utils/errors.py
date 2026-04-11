@@ -45,6 +45,12 @@ class ErrorCode:
 
     # 财务 8xxxx
     FINANCE_CALC_FAILED = 80001
+    FINANCE_COST_NOT_FOUND = 80002
+    FINANCE_INVALID_PERIOD = 80003
+    FINANCE_INVALID_CURRENCY = 80004
+    FINANCE_DUPLICATE_SNAPSHOT = 80005
+    FINANCE_SYNC_FAILED = 80006
+    FINANCE_RATE_NOT_FOUND = 80007
 
     # AI 9xxxx
     AI_MODEL_ERROR = 90001
@@ -57,6 +63,20 @@ class ErrorCode:
     AI_PRICING_SUGGESTION_EXPIRED = 91003
     AI_PRICING_INVALID_STATUS = 91004
     AI_PRICING_API_FAILED = 91006
+
+    # 出价管理 92xxx（统一分时调价 + AI调价 + 冲突检测）
+    BID_TIME_RULE_NOT_FOUND = 92001
+    BID_AI_CONFIG_NOT_FOUND = 92002
+    BID_CONFLICT_TIME_AI = 92003        # 分时和AI只能开一个
+    BID_SUGGESTION_NOT_FOUND = 92004
+    BID_SUGGESTION_EXPIRED = 92005      # 次日即过期
+    BID_INVALID_STATUS = 92006
+    BID_INVALID_HOURS_CONFIG = 92007    # 24小时未覆盖/重复
+    BID_INVALID_RATIO = 92008           # ratio 超出合理范围
+    BID_DATA_NOT_READY = 92009          # 首次3个月数据未拉完
+    BID_DATA_SYNC_RUNNING = 92010       # 数据同步中
+    BID_EXECUTION_FAILED = 92011
+    BID_SKU_LOCKED = 92012              # user_managed 锁定
 
 
 ERROR_MESSAGES = {
@@ -83,4 +103,23 @@ ERROR_MESSAGES = {
     ErrorCode.AI_PRICING_SUGGESTION_EXPIRED: "调价建议已过期",
     ErrorCode.AI_PRICING_INVALID_STATUS: "当前状态不允许该操作",
     ErrorCode.AI_PRICING_API_FAILED: "调用平台API修改出价失败",
+    ErrorCode.FINANCE_CALC_FAILED: "财务计算失败",
+    ErrorCode.FINANCE_COST_NOT_FOUND: "费用记录不存在",
+    ErrorCode.FINANCE_INVALID_PERIOD: "无效的统计周期",
+    ErrorCode.FINANCE_INVALID_CURRENCY: "不支持的货币代码",
+    ErrorCode.FINANCE_DUPLICATE_SNAPSHOT: "ROI快照已存在",
+    ErrorCode.FINANCE_SYNC_FAILED: "财务数据同步失败",
+    ErrorCode.FINANCE_RATE_NOT_FOUND: "汇率配置不存在",
+    ErrorCode.BID_TIME_RULE_NOT_FOUND: "分时调价规则不存在",
+    ErrorCode.BID_AI_CONFIG_NOT_FOUND: "AI调价配置不存在",
+    ErrorCode.BID_CONFLICT_TIME_AI: "分时调价与AI调价互斥，同一店铺只能启用其一",
+    ErrorCode.BID_SUGGESTION_NOT_FOUND: "调价建议不存在",
+    ErrorCode.BID_SUGGESTION_EXPIRED: "调价建议已过期（次日自动作废）",
+    ErrorCode.BID_INVALID_STATUS: "当前状态不允许该操作",
+    ErrorCode.BID_INVALID_HOURS_CONFIG: "时段配置非法：24小时未覆盖或存在重复",
+    ErrorCode.BID_INVALID_RATIO: "出价系数超出合理范围",
+    ErrorCode.BID_DATA_NOT_READY: "店铺历史数据未初始化完成，请稍后",
+    ErrorCode.BID_DATA_SYNC_RUNNING: "数据同步进行中",
+    ErrorCode.BID_EXECUTION_FAILED: "出价执行失败",
+    ErrorCode.BID_SKU_LOCKED: "该SKU已被用户手动管理，不允许自动调价",
 }

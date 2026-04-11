@@ -25,8 +25,8 @@ celery_app.conf.update(
         "app.tasks.daily_stats",
         "app.tasks.report_tasks",
         "app.tasks.roi_alert",
-        "app.tasks.ai_pricing_task",
         "app.tasks.daily_sync_task",
+        "app.tasks.bid_management",
     ],
 )
 
@@ -52,9 +52,9 @@ celery_app.conf.beat_schedule = {
         "task": "app.tasks.ad_tasks.run_automation_rules",
         "schedule": crontab(minute=25),
     },
-    # AI智能调价（每10分钟检查，由莫斯科时段策略决定是否执行）
-    "ai-pricing-smart-check": {
-        "task": "app.tasks.ai_pricing_task.check_and_run_ai_pricing",
-        "schedule": crontab(minute="*/10"),
+    # 出价管理统一入口（莫斯科时间每小时:05触发，分时调价 + AI调价二选一）
+    "bid-management-hourly": {
+        "task": "app.tasks.bid_management.run_bid_management",
+        "schedule": crontab(minute=5),
     },
 }

@@ -13,7 +13,7 @@ import { syncAdsByPlatform, getLastSyncTime } from '@/api/ads'
 import { useAuthStore } from '@/stores/authStore'
 import AdsOverview from './AdsOverview'
 import AdsRules from './AdsRules'
-import AdsAIPricing from './AdsAIPricing'
+import BidManagement from './BidManagement'
 import ComingSoon from './ComingSoon'
 
 dayjs.extend(relativeTime)
@@ -176,9 +176,9 @@ const Ads = () => {
             children: <AdsRules shopId={committedShopId} platform={committedPlatform} searched={searched} />,
           },
           {
-            key: 'ai-pricing',
-            label: <Space size={4}><span>🤖</span><span>AI调价</span></Space>,
-            children: <AdsAIPricing shopId={committedShopId} platform={committedPlatform} searched={searched} />,
+            key: 'bid-management',
+            label: <Space size={4}><span>💰</span><span>出价管理</span></Space>,
+            children: <BidManagement shopId={committedShopId} platform={committedPlatform} tenantId={tenantId} />,
           },
           {
             key: 'analysis',

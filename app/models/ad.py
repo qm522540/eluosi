@@ -29,11 +29,7 @@ class AdCampaign(BaseMixin, Base):
     )
     start_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
     end_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
-    # AI调价模板关联
-    pricing_config_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
-    custom_max_bid: Mapped[Optional[float]] = mapped_column(DECIMAL(10, 2), nullable=True)
-    custom_daily_budget: Mapped[Optional[float]] = mapped_column(DECIMAL(10, 2), nullable=True)
-    custom_target_roas: Mapped[Optional[float]] = mapped_column(DECIMAL(5, 2), nullable=True)
+    # 旧的 pricing_config_id / custom_* 字段已由 023_bid_management.sql 迁移移除
 
 
 class AdGroup(BaseMixin, Base):
@@ -49,6 +45,11 @@ class AdGroup(BaseMixin, Base):
         Enum("active", "paused", "archived", name="adgroup_status"),
         nullable=False, default="active"
     )
+    # 023_bid_management.sql 新增字段
+    user_managed: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=0)
+    user_managed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    original_bid: Mapped[Optional[float]] = mapped_column(DECIMAL(10, 2), nullable=True)
+    last_auto_bid: Mapped[Optional[float]] = mapped_column(DECIMAL(10, 2), nullable=True)
 
 
 class AdKeyword(BaseMixin, Base):
