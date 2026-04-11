@@ -476,29 +476,24 @@ async def get_sku_status(db, tenant_id: int, shop_id: int,
                          campaign_id: int = None, keyword: str = None) -> dict:
     """获取分时调价当前各 SKU 状态（按活动分组），多租户隔离
 
-    Lazy 加载策略：
-      - 先用 LEFT JOIN 查 ad_groups
-      - 对于"无 SKU 数据"的 active 活动，实时调 OzonClient.fetch_campaign_products
-        拉商品列表写入 ad_groups（一次性 lazy load）
-      - 再次查询返回完整结构
+    语义：只返回真正被分时调价处理过的 SKU（last_auto_bid IS NOT NULL）。
+    平谷期 / 从未执行过 / 店铺无活动 → 返回空 campaigns 列表。
     """
     rows = _query_status_rows(db, tenant_id, shop_id, campaign_id, keyword)
     groups = _rows_to_groups(rows)
-
-    # 找出"无 SKU 数据"的 active 活动 → 实时拉 + 写入 ad_groups
-    empty_active_campaigns = await _lazy_load_missing_skus(
-        db, tenant_id, shop_id, groups
-    )
-    if empty_active_campaigns:
-        # 重新查询拿到刚写入的数据
-        rows = _query_status_rows(db, tenant_id, shop_id, campaign_id, keyword)
-        groups = _rows_to_groups(rows)
-
     return {"campaigns": list(groups.values())}
 
 
 def _query_status_rows(db, tenant_id, shop_id, campaign_id, keyword):
-    where = ["c.shop_id = :shop_id", "c.tenant_id = :tenant_id", "c.platform = 'ozon'"]
+    """只查 last_auto_bid IS NOT NULL 的行 → 仅返回真正被分时调价处理过的 SKU。
+    使用 INNER JOIN：未被处理过的活动不会出现在结果里。
+    """
+    where = [
+        "c.shop_id = :shop_id",
+        "c.tenant_id = :tenant_id",
+        "c.platform = 'ozon'",
+        "ag.last_auto_bid IS NOT NULL",
+    ]
     params = {"shop_id": shop_id, "tenant_id": tenant_id}
     if campaign_id:
         where.append("c.id = :cid")
@@ -515,7 +510,7 @@ def _query_status_rows(db, tenant_id, shop_id, campaign_id, keyword):
             ag.original_bid, ag.bid AS current_bid, ag.last_auto_bid,
             ag.user_managed, ag.user_managed_at, ag.updated_at
         FROM ad_campaigns c
-        LEFT JOIN ad_groups ag ON ag.campaign_id = c.id
+        JOIN ad_groups ag ON ag.campaign_id = c.id
             AND ag.platform_group_id IS NOT NULL
         WHERE {where_sql}
         ORDER BY c.name, ag.platform_group_id
@@ -546,91 +541,6 @@ def _rows_to_groups(rows) -> dict:
                 "last_adjusted_at": r.updated_at.isoformat() if r.updated_at else None,
             })
     return groups
-
-
-async def _lazy_load_missing_skus(db, tenant_id: int, shop_id: int, groups: dict) -> list:
-    """对 active/paused 活动且无 SKU 数据的，实时调 Ozon API 拉商品 + 写 ad_groups
-
-    Returns: 触发了 lazy load 的活动 id 列表
-
-    注意：archived 状态的活动不拉，Ozon API 对 archived 活动可能 400
-    paused 活动可以读 fetch_campaign_products（但不能 update_campaign_bid）
-    """
-    # 找出 active/paused 活动 + 当前 skus 为空的
-    targets = [
-        g for g in groups.values()
-        if g.get("campaign_status") in ("active", "paused") and not g.get("skus")
-    ]
-    if not targets:
-        return []
-
-    from app.models.shop import Shop
-    from app.models.ad import AdCampaign
-    from app.services.platform.ozon import OzonClient
-
-    shop = db.query(Shop).filter(
-        Shop.id == shop_id, Shop.tenant_id == tenant_id
-    ).first()
-    if not shop:
-        return []
-
-    client = OzonClient(
-        shop_id=shop.id, api_key=shop.api_key, client_id=shop.client_id,
-        perf_client_id=shop.perf_client_id or "",
-        perf_client_secret=shop.perf_client_secret or "",
-    )
-
-    triggered = []
-    try:
-        for g in targets:
-            camp = db.query(AdCampaign).filter(
-                AdCampaign.id == g["campaign_id"],
-                AdCampaign.tenant_id == tenant_id,
-            ).first()
-            if not camp:
-                continue
-            try:
-                products = await client.fetch_campaign_products(camp.platform_campaign_id)
-            except Exception as e:
-                logger.warning(f"lazy load 拉商品失败 campaign={camp.id}: {e}")
-                continue
-            for p in products or []:
-                sku = str(p.get("sku") or "")
-                if not sku:
-                    continue
-                bid_raw = p.get("bid", "0")
-                try:
-                    bid_rub = float(int(bid_raw)) / 1_000_000
-                except (ValueError, TypeError):
-                    bid_rub = 0
-                title = (p.get("title") or "")[:200] or f"SKU-{sku}"
-                # 不写 original_bid（只有 enable 分时调价才记录基准）
-                # 只写 name + bid，让用户能在状态表里看到商品
-                db.execute(text("""
-                    INSERT INTO ad_groups (
-                        tenant_id, campaign_id, platform_group_id, name,
-                        bid, status
-                    ) VALUES (
-                        :tenant_id, :campaign_id, :sku, :name,
-                        :bid, 'active'
-                    )
-                    ON DUPLICATE KEY UPDATE
-                        name = VALUES(name),
-                        bid = VALUES(bid),
-                        updated_at = NOW()
-                """), {
-                    "tenant_id": camp.tenant_id,
-                    "campaign_id": camp.id,
-                    "sku": sku,
-                    "name": title,
-                    "bid": bid_rub,
-                })
-            triggered.append(camp.id)
-        db.commit()
-    finally:
-        await client.close()
-
-    return triggered
 
 
 # ==================== 内部工具 ====================
