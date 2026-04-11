@@ -1517,7 +1517,8 @@ const AIPricingConfig = ({ shopId, onSaved }) => {
 // ==========================================
 const BidManagement = ({ shopId, platform }) => {
   const [activeMode, setActiveMode] = useState('none')
-  const [selectedMode, setSelectedMode] = useState('ai')
+  // 第一次进入页面默认选中"分时调价"
+  const [selectedMode, setSelectedMode] = useState('time_pricing')
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {

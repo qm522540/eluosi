@@ -173,15 +173,15 @@ async def restore_sku(
 
 
 @router.get("/time-pricing/{shop_id}/status")
-def get_time_pricing_status(
+async def get_time_pricing_status(
     campaign_id: int = Query(None),
     keyword: str = Query(None),
     shop: Shop = Depends(get_owned_shop),
     db: Session = Depends(get_db),
 ):
     from app.services.bid.time_pricing_executor import get_sku_status
-    return success(get_sku_status(db, shop.tenant_id, shop.id,
-                                   campaign_id=campaign_id, keyword=keyword))
+    return success(await get_sku_status(db, shop.tenant_id, shop.id,
+                                         campaign_id=campaign_id, keyword=keyword))
 
 
 # ==================== §3 AI调价 ====================
