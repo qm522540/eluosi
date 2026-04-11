@@ -38,3 +38,6 @@ frontend/.env.local
 .coverage
 htmlcov/
 .pytest_cache/
+
+# Claude Code 本地设置（用户/机器特定权限白名单，不入库）
+.claude/settings.local.json
