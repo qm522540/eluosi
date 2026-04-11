@@ -128,9 +128,14 @@ class WBClient(BasePlatformClient):
 
         流程：
         1. GET /adv/v1/promotion/count 获取活动ID列表和状态/类型
-        2. GET /adv/v1/budget?id=X 逐个获取活动预算余额
-        注意：WB已移除详情接口(/adv/v1/promotion/adverts返回404)，
-        活动名称无法从API获取，需用户在系统内手动设置。
+        2. GET /api/advert/v2/adverts?ids=... 分批获取活动名称 (settings.name)
+        3. GET /adv/v1/budget?id=X 逐个获取活动预算余额
+        4. 组装数据
+
+        说明：
+          旧接口 /adv/v1/promotion/adverts 已被WB废弃 (返回404)，
+          新接口 /api/advert/v2/adverts 单次最多支持50个id，返回字段包含
+          settings.name (活动名称) + timestamps (created/updated) + status。
         """
         campaigns = []
 
@@ -144,7 +149,7 @@ class WBClient(BasePlatformClient):
                 return []
 
             # 收集所有活动ID及其状态/类型
-            advert_info = {}  # advertId -> {status, type}
+            advert_info = {}  # advertId -> {status, type, changeTime}
             for status_group in count_data.get("adverts", []):
                 group_status = status_group.get("status")
                 group_type = status_group.get("type")
@@ -163,7 +168,10 @@ class WBClient(BasePlatformClient):
             if not advert_info:
                 return []
 
-            # 第2步: 逐个获取预算余额
+            # 第2步: 分批调用 /api/advert/v2/adverts 拉取活动名称
+            name_map = await self._fetch_advert_names(list(advert_info.keys()))
+
+            # 第3步: 逐个获取预算余额
             budget_map = {}  # advertId -> budget total
             for advert_id in advert_info:
                 try:
@@ -176,13 +184,13 @@ class WBClient(BasePlatformClient):
                 except Exception:
                     pass  # 预算获取失败不影响主流程
 
-            # 第3步: 组装数据
+            # 第4步: 组装数据
             for advert_id, info in advert_info.items():
                 merged = {
                     "advertId": advert_id,
                     "status": info["status"],
                     "type": info["type"],
-                    "name": "",  # WB API不再提供名称，用户可在系统内手动编辑
+                    "name": name_map.get(advert_id, ""),
                     "dailyBudget": budget_map.get(advert_id),
                     "createTime": info.get("changeTime"),
                     "endTime": None,
@@ -190,7 +198,8 @@ class WBClient(BasePlatformClient):
                 campaigns.append(self._parse_campaign(merged))
 
             logger.info(
-                f"WB shop_id={self.shop_id} 发现 {len(campaigns)} 个广告活动"
+                f"WB shop_id={self.shop_id} 发现 {len(campaigns)} 个广告活动，"
+                f"其中 {sum(1 for n in name_map.values() if n)} 个带真实名称"
             )
 
         except Exception as e:
@@ -198,6 +207,54 @@ class WBClient(BasePlatformClient):
             raise
 
         return campaigns
+
+    async def _fetch_advert_names(self, advert_ids: list) -> dict:
+        """通过 /api/advert/v2/adverts 批量拉取活动名称
+
+        Args:
+            advert_ids: 活动ID列表
+
+        Returns:
+            {advert_id: name} 映射，未拿到的advert_id不在返回中
+        """
+        if not advert_ids:
+            return {}
+
+        name_map: dict = {}
+        batch_size = 50  # WB API 单次最多50个id
+
+        for i in range(0, len(advert_ids), batch_size):
+            batch = advert_ids[i:i + batch_size]
+            ids_param = ",".join(str(x) for x in batch)
+            url = f"{WB_ADVERT_API}/api/advert/v2/adverts"
+
+            try:
+                resp = await self._request("GET", url, params={"ids": ids_param})
+            except Exception as e:
+                logger.warning(
+                    f"WB /api/advert/v2/adverts 批次失败 size={len(batch)}: {e}"
+                )
+                continue
+
+            # 兼容多种响应格式: {adverts: [...]} 或 [...]
+            adverts = []
+            if isinstance(resp, dict):
+                adverts = resp.get("adverts") or []
+            elif isinstance(resp, list):
+                adverts = resp
+
+            for adv in adverts:
+                adv_id = adv.get("id")
+                settings_obj = adv.get("settings") or {}
+                name = settings_obj.get("name") or adv.get("name") or ""
+                if adv_id and name:
+                    name_map[adv_id] = name.strip()
+
+        logger.info(
+            f"WB shop_id={self.shop_id} 获取活动名称 "
+            f"请求{len(advert_ids)}个 命中{len(name_map)}个"
+        )
+        return name_map
 
     def _parse_campaign(self, raw: dict) -> dict:
         """解析WB广告活动数据为标准格式"""
