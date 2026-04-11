@@ -393,7 +393,8 @@ const BidLogs = ({ shopId }) => {
 // ==========================================
 // 分时调价配置组件
 // ==========================================
-const TimePricingConfig = ({ shopId, onSaved }) => {
+const TimePricingConfig = ({ shopId, activeMode, onSaved }) => {
+  const isEnabled = activeMode === 'time_pricing'
   const [peakHours, setPeakHours] = useState(DEFAULT_PEAK_HOURS)
   const [midHours, setMidHours] = useState(DEFAULT_MID_HOURS)
   const [lowHours, setLowHours] = useState(DEFAULT_LOW_HOURS)
@@ -739,54 +740,60 @@ const TimePricingConfig = ({ shopId, onSaved }) => {
           </div>
 
           <Space>
-            <Button type="primary" loading={saving} onClick={handleSaveAndEnable}>
-              保存并开启
-            </Button>
-            <Button
-              onClick={async () => {
-                try {
-                  await disableTimePricing(shopId)
-                  message.success('分时调价已关闭')
-                  onSaved()
-                } catch (e) {
-                  message.error(e?.message || '关闭失败')
-                }
-              }}
-            >
-              关闭分时调价
-            </Button>
+            {isEnabled ? (
+              <Button
+                danger
+                onClick={async () => {
+                  try {
+                    await disableTimePricing(shopId)
+                    message.success('分时调价已关闭')
+                    onSaved()
+                  } catch (e) {
+                    message.error(e?.message || '关闭失败')
+                  }
+                }}
+              >
+                关闭分时调价
+              </Button>
+            ) : (
+              <Button type="primary" loading={saving} onClick={handleSaveAndEnable}>
+                保存并开启
+              </Button>
+            )}
           </Space>
         </Collapse.Panel>
       </Collapse>
 
-      {/* 执行状态 */}
-      <div style={{
-        background: 'var(--color-background-primary, #fff)',
-        border: '0.5px solid var(--color-border-tertiary, #e8e8e8)',
-        borderRadius: 8,
-        padding: 14,
-        marginBottom: 10,
-      }}>
+      {/* 执行状态 - 仅在分时调价开启时显示 */}
+      {isEnabled && (
         <div style={{
-          fontSize: 13,
-          fontWeight: 500,
+          background: 'var(--color-background-primary, #fff)',
+          border: '0.5px solid var(--color-border-tertiary, #e8e8e8)',
+          borderRadius: 8,
+          padding: 14,
           marginBottom: 10,
-          display: 'flex',
-          justifyContent: 'space-between',
         }}>
-          当前执行状态
-          <Button size="small" onClick={loadStatus}>刷新</Button>
+          <div style={{
+            fontSize: 13,
+            fontWeight: 500,
+            marginBottom: 10,
+            display: 'flex',
+            justifyContent: 'space-between',
+          }}>
+            当前执行状态
+            <Button size="small" onClick={loadStatus}>刷新</Button>
+          </div>
+          <Table
+            dataSource={statusRows}
+            columns={statusColumns}
+            rowKey="key"
+            pagination={false}
+            size="small"
+            scroll={{ x: 600 }}
+            rowClassName={r => (r.isGroup ? 'campaign-group-row' : '')}
+          />
         </div>
-        <Table
-          dataSource={statusRows}
-          columns={statusColumns}
-          rowKey="key"
-          pagination={false}
-          size="small"
-          scroll={{ x: 600 }}
-          rowClassName={r => (r.isGroup ? 'campaign-group-row' : '')}
-        />
-      </div>
+      )}
 
       {/* 调价历史 */}
       <BidLogs shopId={shopId} />
@@ -1638,7 +1645,7 @@ const BidManagement = ({ shopId, platform }) => {
 
       {/* 根据选择展示对应配置 */}
       {selectedMode === 'time_pricing' ? (
-        <TimePricingConfig shopId={shopId} onSaved={loadActiveMode} />
+        <TimePricingConfig shopId={shopId} activeMode={activeMode} onSaved={loadActiveMode} />
       ) : (
         <AIPricingConfig shopId={shopId} onSaved={loadActiveMode} />
       )}
