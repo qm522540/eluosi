@@ -27,9 +27,13 @@ const Ads = () => {
   const [syncing, setSyncing] = useState(false)
   const [lastSyncTime, setLastSyncTime] = useState(null)
 
-  // 筛选
+  // 筛选（下拉框当前值，随时变化）
   const [filterPlatform, setFilterPlatform] = useState(null)
   const [filterShopId, setFilterShopId] = useState(null)
+
+  // 已确认的查询参数（只在点击"确定"时更新，驱动下方Tab内容）
+  const [committedPlatform, setCommittedPlatform] = useState(null)
+  const [committedShopId, setCommittedShopId] = useState(null)
 
   // 店铺列表
   const [shops, setShops] = useState([])
@@ -44,10 +48,10 @@ const Ads = () => {
     }).catch(() => {})
   }, [])
 
-  // 选择店铺后获取上次同步时间
+  // 已确认店铺后获取上次同步时间
   useEffect(() => {
-    if (filterShopId) {
-      getLastSyncTime(filterShopId).then(res => {
+    if (committedShopId) {
+      getLastSyncTime(committedShopId).then(res => {
         if (res.data?.last_sync_at) {
           setLastSyncTime(new Date(res.data.last_sync_at))
         } else {
@@ -57,11 +61,13 @@ const Ads = () => {
     } else {
       setLastSyncTime(null)
     }
-  }, [filterShopId])
+  }, [committedShopId])
 
   const canSearch = filterPlatform && filterShopId
 
   const handleSearch = () => {
+    setCommittedPlatform(filterPlatform)
+    setCommittedShopId(filterShopId)
     setSearched(true)
   }
 
@@ -72,10 +78,10 @@ const Ads = () => {
   }, [])
 
   const handleSync = async () => {
-    if (!filterPlatform) return
+    if (!committedPlatform) return
     setSyncing(true)
     try {
-      await syncAdsByPlatform(filterPlatform)
+      await syncAdsByPlatform(committedPlatform)
       setLastSyncTime(new Date())
       message.success('同步任务已提交，数据将在后台更新')
       if (searched) {
@@ -88,8 +94,8 @@ const Ads = () => {
     }
   }
 
-  // Tab栏右侧额外内容：同步按钮
-  const tabBarExtra = (filterPlatform && filterShopId) ? (
+  // Tab栏右侧额外内容：同步按钮（跟随已确认的店铺）
+  const tabBarExtra = (committedPlatform && committedShopId) ? (
     <Space size={8} style={{ paddingRight: 4, alignItems: 'center' }}>
       {lastSyncTime && !syncing && (
         <span style={{ fontSize: 12, color: 'var(--color-text-secondary, #999)', whiteSpace: 'nowrap' }}>
@@ -133,7 +139,7 @@ const Ads = () => {
             allowClear
             style={{ width: 150 }}
             value={filterPlatform}
-            onChange={(v) => { setFilterPlatform(v); setFilterShopId(null); setSearched(false) }}
+            onChange={(v) => { setFilterPlatform(v); setFilterShopId(null) }}
             options={[
               { value: 'wb', label: 'Wildberries' },
               { value: 'ozon', label: 'Ozon' },
@@ -145,7 +151,7 @@ const Ads = () => {
             allowClear
             style={{ width: 160 }}
             value={filterShopId}
-            onChange={(v) => { setFilterShopId(v); setSearched(false) }}
+            onChange={(v) => setFilterShopId(v)}
             disabled={!filterPlatform}
             options={shops.filter(s => s.platform === filterPlatform).map(s => ({ value: s.id, label: s.name }))}
           />
@@ -162,17 +168,17 @@ const Ads = () => {
           {
             key: 'overview',
             label: '概览',
-            children: <AdsOverview shopId={filterShopId} platform={filterPlatform} shops={shops} searched={searched} />,
+            children: <AdsOverview shopId={committedShopId} platform={committedPlatform} shops={shops} searched={searched} />,
           },
           {
             key: 'rules',
             label: '自动化规则',
-            children: <AdsRules shopId={filterShopId} platform={filterPlatform} searched={searched} />,
+            children: <AdsRules shopId={committedShopId} platform={committedPlatform} searched={searched} />,
           },
           {
             key: 'ai-pricing',
             label: <Space size={4}><span>🤖</span><span>AI调价</span></Space>,
-            children: <AdsAIPricing shopId={filterShopId} platform={filterPlatform} searched={searched} />,
+            children: <AdsAIPricing shopId={committedShopId} platform={committedPlatform} searched={searched} />,
           },
           {
             key: 'analysis',
