@@ -61,35 +61,16 @@ def daily_sync_all_shops(self):
 
         logger.info(f"开始每日数据同步，共{len(shops)}个Ozon店铺")
 
-        from app.services.inventory.linkage_engine import run_linkage_check
-        from app.services.inventory.stock_syncer import sync_ozon_platform_stocks
-
         results = []
         for shop in shops:
             try:
                 result = _run_async(sync_yesterday_stats(db, shop.id))
-                shop_entry = {
+                results.append({
                     "shop_id": shop.id,
                     "shop_name": shop.name,
                     "synced": result.get("synced", 0),
-                }
-                logger.info(f"店铺 {shop.name} 数据同步完成: {result.get('synced', 0)}条")
-
-                # 库存同步 + 联动检查（失败不影响数据同步结果）
-                try:
-                    synced_skus = _run_async(sync_ozon_platform_stocks(db, shop))
-                    linkage = _run_async(run_linkage_check(db, shop.id))
-                    shop_entry["inventory_skus"] = synced_skus
-                    shop_entry["linkage"] = linkage
-                    logger.info(
-                        f"店铺 {shop.name} 库存联动完成: "
-                        f"SKU={synced_skus} linkage={linkage}"
-                    )
-                except Exception as ie:
-                    logger.error(f"店铺 {shop.name} 库存联动失败: {ie}")
-                    shop_entry["inventory_error"] = str(ie)[:200]
-
-                results.append(shop_entry)
+                })
+                logger.info(f"店铺 {shop.name} 同步完成: {result.get('synced', 0)}条")
             except Exception as e:
                 logger.error(f"店铺 {shop.name} 同步失败: {e}")
                 results.append({
