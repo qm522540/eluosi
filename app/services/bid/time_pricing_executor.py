@@ -536,14 +536,17 @@ def _rows_to_groups(rows) -> dict:
 
 
 async def _lazy_load_missing_skus(db, tenant_id: int, shop_id: int, groups: dict) -> list:
-    """对 active 活动且无 SKU 数据的，实时调 Ozon API 拉商品 + 写 ad_groups
+    """对 active/paused 活动且无 SKU 数据的，实时调 Ozon API 拉商品 + 写 ad_groups
 
     Returns: 触发了 lazy load 的活动 id 列表
+
+    注意：archived 状态的活动不拉，Ozon API 对 archived 活动可能 400
+    paused 活动可以读 fetch_campaign_products（但不能 update_campaign_bid）
     """
-    # 找出 active 活动 + 当前 skus 为空的
+    # 找出 active/paused 活动 + 当前 skus 为空的
     targets = [
         g for g in groups.values()
-        if g.get("campaign_status") == "active" and not g.get("skus")
+        if g.get("campaign_status") in ("active", "paused") and not g.get("skus")
     ]
     if not targets:
         return []
