@@ -5,9 +5,12 @@
   - AiPricingSuggestion: 精简版建议（platform_sku_id/sku_name/product_stage/decision_basis）
   - TimePricingRule: 店铺级分时调价规则
   - BidAdjustmentLog: 出价调整日志（分时+AI 合并）
+
+#12 修复：所有 default 用 timezone-aware UTC 包装函数 _utc_now，
+而不是已弃用的 _utc_now。
 """
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 
 from sqlalchemy import (
@@ -17,6 +20,11 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database import Base
 from app.models.base import BaseMixin
+
+
+def _utc_now() -> datetime:
+    """统一 timezone-aware UTC datetime（避免 _utc_now 弃用警告）"""
+    return datetime.now(timezone.utc)
 
 
 class AiPricingConfig(Base):
@@ -41,9 +49,9 @@ class AiPricingConfig(Base):
     )
     last_error_msg: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     retry_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=_utc_now)
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow,
+        DateTime, nullable=False, default=_utc_now, onupdate=_utc_now,
     )
 
 
@@ -78,7 +86,7 @@ class AiPricingSuggestion(Base):
         Enum("pending", "approved", "rejected", name="ai_suggest_status"),
         nullable=False, default="pending",
     )
-    generated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
+    generated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=_utc_now)
     executed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
 
 
@@ -98,9 +106,9 @@ class TimePricingRule(Base):
     is_active: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=0)
     last_executed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     last_execute_result: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=_utc_now)
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow,
+        DateTime, nullable=False, default=_utc_now, onupdate=_utc_now,
     )
 
 
@@ -131,4 +139,4 @@ class BidAdjustmentLog(Base):
     moscow_hour: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     success: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=1)
     error_msg: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=_utc_now)

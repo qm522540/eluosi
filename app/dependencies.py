@@ -43,3 +43,27 @@ def get_current_user(
 
 def get_tenant_id(current_user: dict = Depends(get_current_user)) -> int:
     return current_user["tenant_id"]
+
+
+def get_owned_shop(
+    shop_id: int,
+    db: Session = Depends(get_db),
+    tenant_id: int = Depends(get_tenant_id),
+):
+    """多租户隔离守卫：所有带 {shop_id} 路径参数的接口必须用此 Depends
+
+    校验 shop 存在 + 属于当前租户。任意一项不通过返回 404。
+    Returns: Shop 模型对象（路由内部用 shop.id / shop.tenant_id）。
+    """
+    from app.models.shop import Shop
+
+    shop = db.query(Shop).filter(
+        Shop.id == shop_id,
+        Shop.tenant_id == tenant_id,
+    ).first()
+    if not shop:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="店铺不存在或无访问权限",
+        )
+    return shop

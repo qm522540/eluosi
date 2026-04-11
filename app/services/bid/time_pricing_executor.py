@@ -31,22 +31,35 @@ MIN_DIFF = 1.0
 
 # ==================== 主入口（Celery 调用） ====================
 
-async def execute(db, shop_id: int) -> dict:
+async def execute(db, shop_id: int, tenant_id: int = None) -> dict:
     """Celery 触发的分时调价主流程
+
+    Args:
+        tenant_id: 手动触发时由路由透传；Celery 不传，从 shops 表反查。
 
     Returns:
         {checked, adjusted, skipped, errors, period}
     """
     counters = {"checked": 0, "adjusted": 0, "skipped": 0, "errors": 0, "period": None}
 
+    # Celery 路径未传 tenant_id 时反查
+    if tenant_id is None:
+        from app.models.shop import Shop
+        s = db.query(Shop).filter(Shop.id == shop_id).first()
+        if not s:
+            return counters
+        tenant_id = s.tenant_id
+
     rule = db.execute(text("""
         SELECT id, tenant_id, shop_id, is_active,
                peak_hours, peak_ratio, mid_hours, mid_ratio,
                low_hours, low_ratio
         FROM time_pricing_rules
-        WHERE shop_id = :shop_id AND is_active = 1
+        WHERE shop_id = :shop_id
+          AND tenant_id = :tenant_id
+          AND is_active = 1
         LIMIT 1
-    """), {"shop_id": shop_id}).fetchone()
+    """), {"shop_id": shop_id, "tenant_id": tenant_id}).fetchone()
 
     if not rule:
         logger.info(f"shop_id={shop_id} 分时调价未启用，跳过")
@@ -62,7 +75,9 @@ async def execute(db, shop_id: int) -> dict:
     counters["period"] = period
 
     from app.models.shop import Shop
-    shop = db.query(Shop).filter(Shop.id == shop_id).first()
+    shop = db.query(Shop).filter(
+        Shop.id == shop_id, Shop.tenant_id == tenant_id
+    ).first()
     if not shop or shop.platform != "ozon":
         return counters
 
@@ -72,13 +87,14 @@ async def execute(db, shop_id: int) -> dict:
 
     from app.models.ad import AdCampaign
     campaigns = db.query(AdCampaign).filter(
+        AdCampaign.tenant_id == tenant_id,
         AdCampaign.shop_id == shop_id,
         AdCampaign.platform == "ozon",
         AdCampaign.status == "active",
     ).all()
 
     if not campaigns:
-        _save_result(db, shop_id, counters, "无active活动")
+        _save_result(db, shop_id, tenant_id, counters, "无active活动")
         return counters
 
     from app.services.platform.ozon import OzonClient
@@ -96,7 +112,7 @@ async def execute(db, shop_id: int) -> dict:
         await client.close()
 
     _save_result(
-        db, shop_id, counters,
+        db, shop_id, tenant_id, counters,
         f"{period}时段 调整{counters['adjusted']}个 跳过{counters['skipped']}个 失败{counters['errors']}个"
     )
     logger.info(
@@ -229,6 +245,7 @@ def update_rule(db, tenant_id: int, shop_id: int, data: dict) -> dict:
     """更新分时调价规则（PUT /time-pricing/{shop_id}）
 
     校验：24小时全覆盖 + 两两不相交 + ratio∈[10,500]
+    多租户：tenant_id 来自路由层 get_owned_shop 校验后的 Shop.tenant_id
     """
     import json
 
@@ -251,6 +268,15 @@ def update_rule(db, tenant_id: int, shop_id: int, data: dict) -> dict:
         if not 10 <= r <= 500:
             return {"code": ErrorCode.BID_INVALID_RATIO, "msg": "ratio 必须在 [10, 500] 范围"}
 
+    # 先检查是否已有该 shop 的规则（必须 tenant_id 匹配，防 ON DUPLICATE 跨租户覆盖）
+    existing = db.execute(text("""
+        SELECT id, tenant_id FROM time_pricing_rules WHERE shop_id = :shop_id
+    """), {"shop_id": shop_id}).fetchone()
+
+    if existing and existing.tenant_id != tenant_id:
+        # UNIQUE KEY 是 shop_id 但实际属于其他租户 — 拒绝（理论上 get_owned_shop 已防住）
+        return {"code": ErrorCode.SHOP_NOT_FOUND, "msg": "店铺不存在或无权限"}
+
     db.execute(text("""
         INSERT INTO time_pricing_rules (
             tenant_id, shop_id,
@@ -266,6 +292,7 @@ def update_rule(db, tenant_id: int, shop_id: int, data: dict) -> dict:
             0
         )
         ON DUPLICATE KEY UPDATE
+            tenant_id = VALUES(tenant_id),
             peak_hours = VALUES(peak_hours),
             peak_ratio = VALUES(peak_ratio),
             mid_hours = VALUES(mid_hours),
@@ -288,47 +315,52 @@ def update_rule(db, tenant_id: int, shop_id: int, data: dict) -> dict:
 
 
 def enable(db, tenant_id: int, shop_id: int) -> dict:
-    """启用分时调价（FOR UPDATE 互斥校验）"""
-    # FOR UPDATE 锁住两张表对应行
+    """启用分时调价（FOR UPDATE 互斥校验 + 多租户隔离）"""
     time_row = db.execute(text("""
         SELECT id, is_active FROM time_pricing_rules
-        WHERE shop_id = :shop_id FOR UPDATE
-    """), {"shop_id": shop_id}).fetchone()
+        WHERE shop_id = :shop_id AND tenant_id = :tenant_id
+        FOR UPDATE
+    """), {"shop_id": shop_id, "tenant_id": tenant_id}).fetchone()
 
     if not time_row:
         return {"code": ErrorCode.BID_TIME_RULE_NOT_FOUND, "msg": "分时调价规则不存在"}
 
     ai_row = db.execute(text("""
         SELECT id, is_active FROM ai_pricing_configs
-        WHERE shop_id = :shop_id FOR UPDATE
-    """), {"shop_id": shop_id}).fetchone()
+        WHERE shop_id = :shop_id AND tenant_id = :tenant_id
+        FOR UPDATE
+    """), {"shop_id": shop_id, "tenant_id": tenant_id}).fetchone()
 
     if ai_row and ai_row.is_active:
         return {"code": ErrorCode.BID_CONFLICT_TIME_AI, "msg": "AI调价已启用，请先停用"}
 
     db.execute(text("""
         UPDATE time_pricing_rules SET is_active = 1, updated_at = NOW()
-        WHERE shop_id = :shop_id
-    """), {"shop_id": shop_id})
+        WHERE shop_id = :shop_id AND tenant_id = :tenant_id
+    """), {"shop_id": shop_id, "tenant_id": tenant_id})
     db.commit()
     return {"code": 0}
 
 
-def disable(db, shop_id: int) -> dict:
+def disable(db, tenant_id: int, shop_id: int) -> dict:
     """停用分时调价（不主动回弹出价，由用户走 restore_sku 逐SKU恢复）"""
     db.execute(text("""
         UPDATE time_pricing_rules SET is_active = 0, updated_at = NOW()
-        WHERE shop_id = :shop_id
-    """), {"shop_id": shop_id})
+        WHERE shop_id = :shop_id AND tenant_id = :tenant_id
+    """), {"shop_id": shop_id, "tenant_id": tenant_id})
     db.commit()
     return {"code": 0}
 
 
-async def restore_sku(db, shop_id: int, sku: str) -> dict:
-    """单SKU恢复到 original_bid，写 user_manual 日志"""
+async def restore_sku(db, tenant_id: int, shop_id: int, sku: str) -> dict:
+    """单SKU恢复到 original_bid（遍历该 SKU 在所有活动里的所有 ad_group 都恢复）
+
+    多租户：必须校验 c.tenant_id = :tenant_id
+    #17 修复：不再 LIMIT 1，遍历所有匹配
+    """
     from app.models.shop import Shop
 
-    row = db.execute(text("""
+    rows = db.execute(text("""
         SELECT
             ag.id, ag.platform_group_id, ag.original_bid,
             ag.user_managed, ag.last_auto_bid,
@@ -337,15 +369,19 @@ async def restore_sku(db, shop_id: int, sku: str) -> dict:
         FROM ad_groups ag
         JOIN ad_campaigns c ON ag.campaign_id = c.id
         WHERE c.shop_id = :shop_id
+          AND c.tenant_id = :tenant_id
           AND ag.platform_group_id = :sku
-        LIMIT 1
-    """), {"shop_id": shop_id, "sku": sku}).fetchone()
+          AND ag.original_bid IS NOT NULL
+    """), {"shop_id": shop_id, "tenant_id": tenant_id, "sku": sku}).fetchall()
 
-    if not row or not row.original_bid:
+    if not rows:
         return {"code": ErrorCode.LISTING_NOT_FOUND, "msg": "SKU或原始出价不存在"}
 
-    target = max(round(float(row.original_bid)), 3)
-    shop = db.query(Shop).filter(Shop.id == shop_id).first()
+    shop = db.query(Shop).filter(
+        Shop.id == shop_id, Shop.tenant_id == tenant_id
+    ).first()
+    if not shop:
+        return {"code": ErrorCode.SHOP_NOT_FOUND, "msg": "店铺不存在"}
 
     from app.services.platform.ozon import OzonClient
     client = OzonClient(
@@ -353,58 +389,81 @@ async def restore_sku(db, shop_id: int, sku: str) -> dict:
         perf_client_id=shop.perf_client_id or "",
         perf_client_secret=shop.perf_client_secret or "",
     )
+
+    restored_count = 0
+    last_target = 0
+    last_previous = 0
+    sku_name_returned = None
+
     try:
-        api_result = await client.update_campaign_bid(
-            row.platform_campaign_id, row.platform_group_id,
-            str(int(target * 1_000_000))
-        )
+        for row in rows:
+            target = max(round(float(row.original_bid)), 3)
+            try:
+                api_result = await client.update_campaign_bid(
+                    row.platform_campaign_id, row.platform_group_id,
+                    str(int(target * 1_000_000))
+                )
+            except Exception as e:
+                logger.warning(f"恢复 sku={sku} 活动={row.campaign_id} 失败: {e}")
+                continue
+            if not api_result.get("ok"):
+                logger.warning(
+                    f"恢复 sku={sku} 活动={row.campaign_id} API失败: {api_result.get('error')}"
+                )
+                continue
+
+            previous = float(row.last_auto_bid or row.original_bid)
+            db.execute(text("""
+                INSERT INTO bid_adjustment_logs (
+                    tenant_id, shop_id, campaign_id, campaign_name,
+                    platform_sku_id, sku_name,
+                    old_bid, new_bid, adjust_pct,
+                    execute_type, success, created_at
+                ) VALUES (
+                    :tenant_id, :shop_id, :campaign_id, :campaign_name,
+                    :sku, NULL, :old_bid, :new_bid,
+                    :pct, 'user_manual', 1, NOW()
+                )
+            """), {
+                "tenant_id": row.tenant_id,
+                "shop_id": row.shop_id,
+                "campaign_id": row.campaign_id,
+                "campaign_name": row.campaign_name,
+                "sku": row.platform_group_id,
+                "old_bid": previous,
+                "new_bid": target,
+                "pct": round((target - previous) / previous * 100, 2) if previous > 0 else 0,
+            })
+            restored_count += 1
+            last_target = target
+            last_previous = previous
+            sku_name_returned = sku_name_returned or row.platform_group_id
     finally:
         await client.close()
 
-    if not api_result.get("ok"):
-        return {"code": ErrorCode.BID_EXECUTION_FAILED,
-                "msg": api_result.get("error") or "Ozon API失败"}
-
-    previous = float(row.last_auto_bid or row.original_bid)
-    db.execute(text("""
-        INSERT INTO bid_adjustment_logs (
-            tenant_id, shop_id, campaign_id, campaign_name,
-            platform_sku_id, sku_name,
-            old_bid, new_bid, adjust_pct,
-            execute_type, success, created_at
-        ) VALUES (
-            :tenant_id, :shop_id, :campaign_id, :campaign_name,
-            :sku, NULL, :old_bid, :new_bid,
-            :pct, 'user_manual', 1, NOW()
-        )
-    """), {
-        "tenant_id": row.tenant_id,
-        "shop_id": row.shop_id,
-        "campaign_id": row.campaign_id,
-        "campaign_name": row.campaign_name,
-        "sku": row.platform_group_id,
-        "old_bid": previous,
-        "new_bid": target,
-        "pct": round((target - previous) / previous * 100, 2) if previous > 0 else 0,
-    })
     db.commit()
+
+    if restored_count == 0:
+        return {"code": ErrorCode.BID_EXECUTION_FAILED, "msg": "Ozon API 全部调用失败"}
 
     return {
         "code": 0,
         "data": {
-            "platform_sku_id": row.platform_group_id,
-            "restored_bid": target,
-            "previous_bid": previous,
+            "platform_sku_id": sku,
+            "restored_bid": last_target,
+            "previous_bid": last_previous,
+            "restored_count": restored_count,
         }
     }
 
 
 # ==================== 状态查询 ====================
 
-def get_sku_status(db, shop_id: int, campaign_id: int = None, keyword: str = None) -> dict:
-    """获取分时调价当前各 SKU 状态（按活动分组）"""
-    where = ["c.shop_id = :shop_id", "c.platform = 'ozon'"]
-    params = {"shop_id": shop_id}
+def get_sku_status(db, tenant_id: int, shop_id: int,
+                   campaign_id: int = None, keyword: str = None) -> dict:
+    """获取分时调价当前各 SKU 状态（按活动分组），多租户隔离"""
+    where = ["c.shop_id = :shop_id", "c.tenant_id = :tenant_id", "c.platform = 'ozon'"]
+    params = {"shop_id": shop_id, "tenant_id": tenant_id}
     if campaign_id:
         where.append("c.id = :cid")
         params["cid"] = campaign_id
@@ -520,11 +579,11 @@ def _write_log(db, campaign, sku: str, sku_name: str,
     })
 
 
-def _save_result(db, shop_id: int, counters: dict, summary: str):
-    """保存最后一次执行结果摘要到 time_pricing_rules"""
+def _save_result(db, shop_id: int, tenant_id: int, counters: dict, summary: str):
+    """保存最后一次执行结果摘要到 time_pricing_rules（多租户过滤）"""
     db.execute(text("""
         UPDATE time_pricing_rules
         SET last_executed_at = NOW(), last_execute_result = :summary
-        WHERE shop_id = :shop_id
-    """), {"shop_id": shop_id, "summary": summary[:200]})
+        WHERE shop_id = :shop_id AND tenant_id = :tenant_id
+    """), {"shop_id": shop_id, "tenant_id": tenant_id, "summary": summary[:200]})
     db.commit()

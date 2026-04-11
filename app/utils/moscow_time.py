@@ -63,8 +63,10 @@ def get_current_period(rule) -> Optional[str]:
     return None
 
 
-def get_dashboard_info(db, shop_id: int) -> dict:
+def get_dashboard_info(db, shop_id: int, tenant_id: int) -> dict:
     """组装 GET /bid-management/dashboard/{shop_id} 接口返回数据
+
+    多租户隔离：必须传 tenant_id，所有 JOIN 都按 tenant_id 过滤
 
     返回字段（与 docs/api/bid_management.md §1.1 对齐）：
         moscow_time, moscow_hour, current_period, current_period_name,
@@ -85,7 +87,7 @@ def get_dashboard_info(db, shop_id: int) -> dict:
         next_str = f"{next_hour:02d}:{EXECUTE_MINUTE:02d}"
         remaining = 60 - now.minute + EXECUTE_MINUTE
 
-    # 一次查询拿到分时和AI两边的状态
+    # 一次查询拿到分时和AI两边的状态（多租户过滤）
     row = db.execute(text("""
         SELECT
             t.is_active           AS time_active,
@@ -102,11 +104,13 @@ def get_dashboard_info(db, shop_id: int) -> dict:
             a.last_execute_status AS ai_status,
             a.last_error_msg      AS ai_error
         FROM shops s
-        LEFT JOIN time_pricing_rules t ON s.id = t.shop_id
-        LEFT JOIN ai_pricing_configs a ON s.id = a.shop_id
-        WHERE s.id = :shop_id
+        LEFT JOIN time_pricing_rules t
+            ON s.id = t.shop_id AND t.tenant_id = :tenant_id
+        LEFT JOIN ai_pricing_configs a
+            ON s.id = a.shop_id AND a.tenant_id = :tenant_id
+        WHERE s.id = :shop_id AND s.tenant_id = :tenant_id
         LIMIT 1
-    """), {"shop_id": shop_id}).fetchone()
+    """), {"shop_id": shop_id, "tenant_id": tenant_id}).fetchone()
 
     period: Optional[str] = None
     period_name = "基准期"
@@ -183,17 +187,16 @@ def _parse_hours(value) -> list:
 def _iso(dt) -> Optional[str]:
     """datetime → ISO 8601 字符串（带 +03:00 时区信息）
 
-    数据库里 last_executed_at 是 naive datetime（CURRENT_TIMESTAMP）。
-    服务器假设按 UTC 存。这里加上 UTC tzinfo 再转莫斯科。
+    #14 修复：注释和代码保持一致。
+    项目约定：MySQL 服务器时区配置为 UTC，所有 NOW()/CURRENT_TIMESTAMP 存的是 UTC naive。
+    Celery 配置 enable_utc=True，写库时用 datetime.now(timezone.utc)（去掉 tzinfo 存）。
+    所以 naive datetime 一律按 UTC 解释，再 convert 到莫斯科展示。
     """
     if dt is None:
         return None
     if isinstance(dt, datetime):
         if dt.tzinfo is None:
-            # 假设 naive 的 last_executed_at 来自 NOW()，按服务器时区。
-            # 服务器 Celery 时区设置为 Europe/Moscow，所以 NOW() 已经是莫斯科时间。
-            dt = MOSCOW_TZ.localize(dt)
-        else:
-            dt = dt.astimezone(MOSCOW_TZ)
+            dt = pytz.UTC.localize(dt)
+        dt = dt.astimezone(MOSCOW_TZ)
         return dt.isoformat()
     return str(dt)

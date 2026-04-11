@@ -97,10 +97,10 @@ const StatusBar = ({ shopId }) => {
     },
     {
       label: '执行结果',
-      value: data.last_execute_status === 'failed'
-        ? `失败·${data.last_error_msg || ''}`.slice(0, 20)
-        : data.last_execute_result || '-',
-      color: data.last_execute_status === 'failed' ? '#A32D2D' : '#3B6D11',
+      value: data.last_execute_result || '-',
+      color: data.last_execute_status === 'failed' ? '#A32D2D'
+        : data.last_execute_status === 'success' ? '#3B6D11'
+        : 'var(--color-text-primary, #262626)',
     },
   ]
 
@@ -259,8 +259,9 @@ const BidLogs = ({ shopId }) => {
     setLoading(true)
     try {
       const res = await getBidLogs(shopId, { page, size: 20, execute_type: 'all' })
-      setLogs(res.data.list || [])
-      setTotal(res.data.total || 0)
+      // 后端响应：{ total, page, size, items: [...] }
+      setLogs(res.data?.items || [])
+      setTotal(res.data?.total || 0)
     } catch {
       setLogs([])
     } finally {
@@ -413,7 +414,8 @@ const TimePricingConfig = ({ shopId, onSaved }) => {
   const loadStatus = async () => {
     try {
       const res = await getTimePricingStatus(shopId)
-      setStatusData(res.data || [])
+      // 后端响应：{ campaigns: [{ campaign_id, campaign_name, skus: [...] }] }
+      setStatusData(res.data?.campaigns || [])
     } catch {
       setStatusData([])
     }
@@ -435,21 +437,45 @@ const TimePricingConfig = ({ shopId, onSaved }) => {
     else if (targetType === 'low') setLowHours(prev => [...prev, h].sort((a, b) => a - b))
   }
 
+  // #16 修复：保存前本地校验 24 小时全覆盖 + 不重叠
+  const validateHoursLocal = () => {
+    const all = [...peakHours, ...midHours, ...lowHours]
+    if (all.length !== 24 || new Set(all).size !== 24) {
+      message.error('时段必须覆盖 0-23 全部 24 小时且不重叠')
+      return false
+    }
+    for (const r of [peakRatio, midRatio, lowRatio]) {
+      if (r < 10 || r > 500) {
+        message.error('系数必须在 10% - 500% 之间')
+        return false
+      }
+    }
+    return true
+  }
+
   const handleSaveAndEnable = async () => {
+    if (!validateHoursLocal()) return
     try {
       const conflictRes = await checkConflict(shopId, 'time_pricing')
       if (conflictRes.data?.conflict) {
-        Modal.confirm({
-          title: '规则冲突',
-          content: conflictRes.data.message,
-          okText: '确认开启',
-          cancelText: '取消',
-          onOk: doSaveAndEnable,
+        // #15 修复：冲突时不再提供"确认开启"误导按钮，
+        // 引导用户去停用对应模式（无 onOk 强制开启路径）
+        Modal.warning({
+          title: '规则冲突，无法开启',
+          content: (
+            <div>
+              <p>{conflictRes.data.message}</p>
+              <p style={{ marginTop: 12, color: '#999', fontSize: 13 }}>
+                请先到 AI 调价 Tab 停用 AI 调价，然后再回来开启分时调价。
+              </p>
+            </div>
+          ),
+          okText: '我知道了',
         })
         return
       }
     } catch {
-      // 冲突检测失败时仍继续保存
+      // 冲突检测接口失败时仍继续保存（容错）
     }
     await doSaveAndEnable()
   }
@@ -500,18 +526,18 @@ const TimePricingConfig = ({ shopId, onSaved }) => {
             color: 'var(--color-text-secondary, #666)',
             marginLeft: 8,
           }}>
-            ID:{record.platform_campaign_id}
+            ID:{record.campaign_id}
           </span>
         </span>
       ) : (
         <div style={{ paddingLeft: 20 }}>
-          <Tooltip title={record.platform_sku_id}>
+          <Tooltip title={record.sku_name || record.platform_sku_id}>
             <span style={{
               fontSize: 12,
               color: 'var(--color-text-secondary, #666)',
               cursor: 'help',
             }}>
-              {record.platform_sku_id?.slice(0, 16)}...
+              {record.platform_sku_id}
             </span>
           </Tooltip>
         </div>
@@ -522,25 +548,22 @@ const TimePricingConfig = ({ shopId, onSaved }) => {
       render: (v, r) => r.isGroup ? null : `₽${v || 0}`,
     },
     {
-      title: '上次出价', dataIndex: 'last_auto_bid', width: 90,
+      title: '当前出价', dataIndex: 'current_bid', width: 90,
       render: (v, r) => r.isGroup ? null : `₽${v || 0}`,
     },
     {
       title: '状态', width: 120,
       render: (_, r) => {
         if (r.isGroup) return null
-        const cfg = {
-          normal: { status: 'success', text: '正常执行' },
-          user_managed: { status: 'warning', text: '用户管理' },
-          campaign_paused: { status: 'error', text: '活动暂停' },
-        }[r.status] || { status: 'default', text: r.status }
-        return <Badge status={cfg.status} text={cfg.text} />
+        return r.user_managed
+          ? <Badge status="warning" text="用户管理" />
+          : <Badge status="success" text="正常执行" />
       },
     },
     {
       title: '操作', width: 90,
       render: (_, r) => {
-        if (r.isGroup || r.status !== 'user_managed') return null
+        if (r.isGroup || !r.user_managed) return null
         return (
           <Button
             type="link"
@@ -755,8 +778,6 @@ const AIPricingConfig = ({ shopId, onSaved }) => {
   const [editModalOpen, setEditModalOpen] = useState(false)
   const [editingTemplate, setEditingTemplate] = useState({})
   const [suggestions, setSuggestions] = useState([])
-  const [hasExpired, setHasExpired] = useState(false)
-  const [lastGeneratedAt, setLastGeneratedAt] = useState(null)
   const [analyzing, setAnalyzing] = useState(false)
   const [selected, setSelected] = useState([])
   const [dataStatus, setDataStatus] = useState(null)
@@ -794,9 +815,9 @@ const AIPricingConfig = ({ shopId, onSaved }) => {
   const loadSuggestions = async () => {
     try {
       const res = await getSuggestions(shopId)
-      setSuggestions(res.data?.groups || [])
-      setHasExpired(res.data?.has_expired || false)
-      setLastGeneratedAt(res.data?.last_generated_at)
+      // 后端响应：{ date_moscow, campaigns: [{ campaign_id, campaign_name, suggestions: [...] }] }
+      // 注：建议过期由后端按莫斯科日期自动过滤
+      setSuggestions(res.data?.campaigns || [])
     } catch {
       setSuggestions([])
     }
@@ -952,7 +973,7 @@ const AIPricingConfig = ({ shopId, onSaved }) => {
             color: 'var(--color-text-secondary, #666)',
             marginLeft: 8,
           }}>
-            ID:{r.platform_campaign_id} · {r.suggestions?.length}条建议
+            ID:{r.campaign_id} · {r.suggestions?.length}条建议
           </span>
         </span>
       ) : (
@@ -1298,26 +1319,6 @@ const AIPricingConfig = ({ shopId, onSaved }) => {
           立即分析
         </Button>
       </div>
-
-      {/* 过期提示 */}
-      {hasExpired && (
-        <div style={{
-          padding: '10px 14px',
-          background: '#FAEEDA',
-          borderRadius: 6,
-          marginBottom: 12,
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-        }}>
-          <span style={{ fontSize: 13, color: '#633806' }}>
-            上次建议生成于{lastGeneratedAt?.slice(0, 10)}，数据已过期，请重新分析
-          </span>
-          <Button size="small" loading={analyzing} onClick={handleAnalyze}>
-            立即分析
-          </Button>
-        </div>
-      )}
 
       {/* 建议列表 */}
       <div style={{

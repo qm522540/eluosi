@@ -1,48 +1,57 @@
-"""AI调价执行器（按老林规范 docs/api/bid_management.md §3 + §4）
+"""AI调价执行器（按老林审查报告 V2 修复版）
+
+修复点（对照 docs/daily/2026-04-11_审查报告_出价管理_老林.md）:
+  - #1-#11 多租户隔离：所有函数加 tenant_id 参数，所有 SQL WHERE 加 tenant_id
+  - #12 datetime.utcnow → datetime.now(timezone.utc)
+  - #18 analyze_now Redis SETNX 60秒同店铺锁
+  - #19 retry_at timezone-aware 比较
 
 数据流：
   ai_pricing_configs.is_active=1 触发执行
   → 读取当前 template_name 指向的 JSON 模板配置
   → 遍历 ad_campaigns(status='active', platform='ozon')
     → 拉商品 + 当前出价
-    → 简化版 prompt → DeepSeek → 解析建议
+    → DeepSeek prompt → 解析建议
     → 写入 ai_pricing_suggestions
     → 若 auto_execute=1，立即调 Ozon API 执行（跳过 user_managed=1 的 group）
-
-注意：
-  - 完全不依赖被删的 app/services/ad/ai_pricing.py 和 app/services/ai/pricing_engine.py
-  - 复用 app/services/ai/deepseek.DeepSeekClient（仅是 HTTP 客户端）
-  - sync session
-  - 出价单位：业务层用卢布，调 Ozon API 时再 ×1_000_000
 """
 
 import json
 import re
-from datetime import date, datetime
+from datetime import datetime, timezone
 from typing import Optional
 
-from sqlalchemy import text
+from sqlalchemy import bindparam, text
 
 from app.config import get_settings
 from app.utils.errors import ErrorCode
 from app.utils.logger import setup_logger
-from app.utils.moscow_time import moscow_hour, moscow_today, now_moscow
+from app.utils.moscow_time import moscow_hour, moscow_today
 
 logger = setup_logger("bid.ai_pricing_executor")
 settings = get_settings()
 
 MIN_BID = 3.0
 MIN_DIFF = 1.0
+ANALYZE_LOCK_TTL = 60  # #18 同店铺 analyze 锁 60s
+
+
+def _utc_now() -> datetime:
+    """统一的 timezone-aware UTC now（#12 修复）"""
+    return datetime.now(timezone.utc)
 
 
 # ==================== Config 更新 ====================
 
 def update_config(db, tenant_id: int, shop_id: int, data: dict) -> dict:
     """更新 ai_pricing_configs（PUT /ai-pricing/{shop_id}）"""
-    # 确保有行
     existing = db.execute(text("""
-        SELECT id FROM ai_pricing_configs WHERE shop_id = :shop_id LIMIT 1
+        SELECT id, tenant_id FROM ai_pricing_configs
+        WHERE shop_id = :shop_id LIMIT 1
     """), {"shop_id": shop_id}).fetchone()
+
+    if existing and existing.tenant_id != tenant_id:
+        return {"code": ErrorCode.SHOP_NOT_FOUND, "msg": "店铺不存在或无权限"}
 
     template_name = data.get("template_name", "default")
     if template_name not in ("conservative", "default", "aggressive"):
@@ -60,13 +69,21 @@ def update_config(db, tenant_id: int, shop_id: int, data: dict) -> dict:
 
     if existing:
         sets = ["template_name = :template_name", "auto_execute = :auto_execute", "updated_at = NOW()"]
-        params = {"id": existing.id, "template_name": template_name, "auto_execute": auto_execute}
+        params = {
+            "id": existing.id,
+            "tenant_id": tenant_id,
+            "template_name": template_name,
+            "auto_execute": auto_execute,
+        }
         for k, v in fields.items():
             sets.append(f"{k} = :{k}")
             params[k] = v
-        db.execute(text(f"UPDATE ai_pricing_configs SET {', '.join(sets)} WHERE id = :id"), params)
+        # 双重保险：UPDATE 仍按 tenant_id 过滤
+        db.execute(
+            text(f"UPDATE ai_pricing_configs SET {', '.join(sets)} WHERE id = :id AND tenant_id = :tenant_id"),
+            params,
+        )
     else:
-        # 必须给三个模板都填默认（NOT NULL JSON）
         defaults = {
             "conservative_config": json.dumps(_DEFAULT_CONSERVATIVE),
             "default_config": json.dumps(_DEFAULT_DEFAULT),
@@ -96,98 +113,148 @@ def update_config(db, tenant_id: int, shop_id: int, data: dict) -> dict:
 # ==================== 启用 / 停用 ====================
 
 def enable(db, tenant_id: int, shop_id: int, auto_execute: bool = False) -> dict:
-    """启用 AI 调价（FOR UPDATE 互斥校验 + 数据初始化校验）"""
-    # 校验数据初始化
+    """启用 AI 调价（FOR UPDATE 互斥校验 + 数据初始化校验 + 多租户隔离）"""
     init_row = db.execute(text("""
-        SELECT is_initialized FROM shop_data_init_status WHERE shop_id = :shop_id
-    """), {"shop_id": shop_id}).fetchone()
+        SELECT is_initialized FROM shop_data_init_status
+        WHERE shop_id = :shop_id AND tenant_id = :tenant_id
+    """), {"shop_id": shop_id, "tenant_id": tenant_id}).fetchone()
     if not init_row or not init_row.is_initialized:
         return {"code": ErrorCode.BID_DATA_NOT_READY, "msg": "店铺数据未初始化完成"}
 
     ai_row = db.execute(text("""
-        SELECT id FROM ai_pricing_configs WHERE shop_id = :shop_id FOR UPDATE
-    """), {"shop_id": shop_id}).fetchone()
+        SELECT id FROM ai_pricing_configs
+        WHERE shop_id = :shop_id AND tenant_id = :tenant_id
+        FOR UPDATE
+    """), {"shop_id": shop_id, "tenant_id": tenant_id}).fetchone()
     if not ai_row:
         return {"code": ErrorCode.BID_AI_CONFIG_NOT_FOUND, "msg": "AI调价配置不存在"}
 
     time_row = db.execute(text("""
-        SELECT id, is_active FROM time_pricing_rules WHERE shop_id = :shop_id FOR UPDATE
-    """), {"shop_id": shop_id}).fetchone()
+        SELECT id, is_active FROM time_pricing_rules
+        WHERE shop_id = :shop_id AND tenant_id = :tenant_id
+        FOR UPDATE
+    """), {"shop_id": shop_id, "tenant_id": tenant_id}).fetchone()
     if time_row and time_row.is_active:
         return {"code": ErrorCode.BID_CONFLICT_TIME_AI, "msg": "分时调价已启用，请先停用"}
 
     db.execute(text("""
         UPDATE ai_pricing_configs
         SET is_active = 1, auto_execute = :auto_execute, updated_at = NOW()
-        WHERE shop_id = :shop_id
-    """), {"shop_id": shop_id, "auto_execute": 1 if auto_execute else 0})
+        WHERE shop_id = :shop_id AND tenant_id = :tenant_id
+    """), {
+        "shop_id": shop_id,
+        "tenant_id": tenant_id,
+        "auto_execute": 1 if auto_execute else 0,
+    })
     db.commit()
     return {"code": 0}
 
 
-def disable(db, shop_id: int) -> dict:
-    """停用 AI 调价（pending建议保留）"""
+def disable(db, tenant_id: int, shop_id: int) -> dict:
+    """停用 AI 调价（pending建议保留），多租户过滤"""
     db.execute(text("""
         UPDATE ai_pricing_configs
         SET is_active = 0, auto_execute = 0, updated_at = NOW()
-        WHERE shop_id = :shop_id
-    """), {"shop_id": shop_id})
+        WHERE shop_id = :shop_id AND tenant_id = :tenant_id
+    """), {"shop_id": shop_id, "tenant_id": tenant_id})
     db.commit()
     return {"code": 0}
 
 
 # ==================== 主分析流程 ====================
 
-async def execute(db, shop_id: int) -> dict:
+async def execute(db, shop_id: int, tenant_id: int = None) -> dict:
     """Celery 触发的 AI 调价主流程
+
+    Args:
+        tenant_id: 手动触发时由路由透传；Celery 不传，从 ai_pricing_configs 反查
 
     Returns: {analyzed_count, suggestion_count, auto_executed_count, status, message}
     """
+    # Celery 路径反查 tenant_id
+    if tenant_id is None:
+        cfg_row = db.execute(text("""
+            SELECT tenant_id FROM ai_pricing_configs
+            WHERE shop_id = :shop_id AND is_active = 1
+            LIMIT 1
+        """), {"shop_id": shop_id}).fetchone()
+        if not cfg_row:
+            return {"status": "skipped", "message": "AI调价未启用"}
+        tenant_id = cfg_row.tenant_id
+
     cfg = db.execute(text("""
         SELECT id, tenant_id, shop_id, is_active, auto_execute, template_name,
                conservative_config, default_config, aggressive_config,
                retry_at
         FROM ai_pricing_configs
-        WHERE shop_id = :shop_id AND is_active = 1
+        WHERE shop_id = :shop_id AND tenant_id = :tenant_id AND is_active = 1
         LIMIT 1
-    """), {"shop_id": shop_id}).fetchone()
+    """), {"shop_id": shop_id, "tenant_id": tenant_id}).fetchone()
 
     if not cfg:
         return {"status": "skipped", "message": "AI调价未启用"}
 
-    if cfg.retry_at and now_moscow().replace(tzinfo=None) < cfg.retry_at:
+    # #19 修复：retry_at 是 naive UTC（NOW() 在 enable_utc 设置下存的是 UTC），用 naive UTC 比较
+    if cfg.retry_at and _utc_now().replace(tzinfo=None) < cfg.retry_at:
         return {"status": "skipped", "message": "等待失败重试时间"}
 
-    return await analyze_now(db, shop_id, force=False)
+    return await analyze_now(db, tenant_id, shop_id, force=False)
 
 
-async def analyze_now(db, shop_id: int, force: bool = True, campaign_ids: Optional[list] = None) -> dict:
+async def analyze_now(db, tenant_id: int, shop_id: int,
+                      force: bool = True, campaign_ids: Optional[list] = None) -> dict:
     """立即分析（手动触发或 Celery）
+
+    #18 修复：用 Redis SETNX 限制同店铺 60 秒只能跑一次
 
     Returns: {analyzed_count, suggestion_count, auto_executed_count, time_cost_ms}
     """
-    start = datetime.now()
+    # #18 Redis 锁
+    lock_acquired = _try_acquire_analyze_lock(shop_id)
+    if not lock_acquired:
+        return {
+            "status": "skipped",
+            "message": "AI 分析进行中，请等待 60 秒",
+            "analyzed_count": 0,
+            "suggestion_count": 0,
+            "auto_executed_count": 0,
+        }
+
+    try:
+        return await _analyze_now_inner(db, tenant_id, shop_id, force, campaign_ids)
+    finally:
+        _release_analyze_lock(shop_id)
+
+
+async def _analyze_now_inner(db, tenant_id: int, shop_id: int,
+                             force: bool, campaign_ids: Optional[list]) -> dict:
+    start = _utc_now()
     cfg = db.execute(text("""
         SELECT id, tenant_id, shop_id, is_active, auto_execute, template_name,
                conservative_config, default_config, aggressive_config
-        FROM ai_pricing_configs WHERE shop_id = :shop_id LIMIT 1
-    """), {"shop_id": shop_id}).fetchone()
+        FROM ai_pricing_configs
+        WHERE shop_id = :shop_id AND tenant_id = :tenant_id
+        LIMIT 1
+    """), {"shop_id": shop_id, "tenant_id": tenant_id}).fetchone()
 
     if not cfg:
         return {"status": "failed", "message": "AI配置不存在", "analyzed_count": 0, "suggestion_count": 0, "auto_executed_count": 0}
 
     template = _read_template(cfg)
     if not template:
-        _update_status(db, shop_id, "failed", "模板配置缺失", retry=False)
+        _update_status(db, tenant_id, shop_id, "failed", "模板配置缺失", retry=False)
         return {"status": "failed", "message": "模板配置缺失", "analyzed_count": 0, "suggestion_count": 0, "auto_executed_count": 0}
 
     from app.models.shop import Shop
-    shop = db.query(Shop).filter(Shop.id == shop_id).first()
+    shop = db.query(Shop).filter(
+        Shop.id == shop_id, Shop.tenant_id == tenant_id
+    ).first()
     if not shop or shop.platform != "ozon":
         return {"status": "failed", "message": "非Ozon店铺", "analyzed_count": 0, "suggestion_count": 0, "auto_executed_count": 0}
 
     from app.models.ad import AdCampaign
     q = db.query(AdCampaign).filter(
+        AdCampaign.tenant_id == tenant_id,
         AdCampaign.shop_id == shop_id,
         AdCampaign.platform == "ozon",
         AdCampaign.status == "active",
@@ -197,7 +264,7 @@ async def analyze_now(db, shop_id: int, force: bool = True, campaign_ids: Option
     campaigns = q.all()
 
     if not campaigns:
-        _update_status(db, shop_id, "success", "无活跃活动")
+        _update_status(db, tenant_id, shop_id, "success", "无活跃活动")
         return {"status": "success", "message": "无活跃活动", "analyzed_count": 0, "suggestion_count": 0, "auto_executed_count": 0}
 
     # 拉商品出价
@@ -221,25 +288,26 @@ async def analyze_now(db, shop_id: int, force: bool = True, campaign_ids: Option
         await client.close()
 
     if not any(products_by_campaign.values()):
-        _update_status(db, shop_id, "success", "活跃活动下无商品")
+        _update_status(db, tenant_id, shop_id, "success", "活跃活动下无商品")
         return {"status": "success", "message": "无商品数据", "analyzed_count": len(campaigns), "suggestion_count": 0, "auto_executed_count": 0}
 
-    # 调 DeepSeek 分析
     suggestions_raw = []
     try:
         suggestions_raw = await _call_ai(template, campaigns, products_by_campaign)
     except Exception as e:
         logger.error(f"DeepSeek 调用失败 shop_id={shop_id}: {e}")
-        _update_status(db, shop_id, "failed", f"DeepSeek调用失败: {e}", retry=True)
+        _update_status(db, tenant_id, shop_id, "failed", f"DeepSeek调用失败: {e}", retry=True)
         return {"status": "failed", "message": str(e), "analyzed_count": len(campaigns), "suggestion_count": 0, "auto_executed_count": 0}
 
-    # 标记昨天及之前的 pending 建议为 rejected（自动过期）
+    # 标记昨天及之前的 pending 建议为 rejected（自动过期），多租户过滤
     db.execute(text("""
         UPDATE ai_pricing_suggestions
         SET status = 'rejected'
-        WHERE shop_id = :shop_id AND status = 'pending'
+        WHERE shop_id = :shop_id
+          AND tenant_id = :tenant_id
+          AND status = 'pending'
           AND DATE(generated_at) < :today
-    """), {"shop_id": shop_id, "today": moscow_today()})
+    """), {"shop_id": shop_id, "tenant_id": tenant_id, "today": moscow_today()})
 
     # 写入新建议
     saved = []
@@ -251,7 +319,7 @@ async def analyze_now(db, shop_id: int, force: bool = True, campaign_ids: Option
         current_bid = float(raw.get("current_bid") or 0)
         suggested_bid = float(raw.get("suggested_bid") or 0)
 
-        # 安全护栏：max_bid 上限 + MIN_BID 下限 + max_adjust_pct
+        # 安全护栏
         max_bid = float(template.get("max_bid", 999))
         max_pct = float(template.get("max_adjust_pct", 30))
         suggested_bid = max(suggested_bid, MIN_BID)
@@ -259,7 +327,6 @@ async def analyze_now(db, shop_id: int, force: bool = True, campaign_ids: Option
         if current_bid > 0:
             change_pct = abs(suggested_bid - current_bid) / current_bid * 100
             if change_pct > max_pct:
-                # 限幅
                 if suggested_bid > current_bid:
                     suggested_bid = round(current_bid * (1 + max_pct / 100))
                 else:
@@ -287,7 +354,7 @@ async def analyze_now(db, shop_id: int, force: bool = True, campaign_ids: Option
                 :data_days, :reason, 'pending', NOW()
             )
         """), {
-            "tenant_id": cfg.tenant_id,
+            "tenant_id": tenant_id,
             "shop_id": shop_id,
             "campaign_id": camp_id,
             "sku": sku,
@@ -304,6 +371,8 @@ async def analyze_now(db, shop_id: int, force: bool = True, campaign_ids: Option
         })
         saved.append({
             "id": result.lastrowid,
+            "tenant_id": tenant_id,
+            "shop_id": shop_id,
             "campaign_id": camp_id,
             "platform_sku_id": sku,
             "current_bid": current_bid,
@@ -318,13 +387,13 @@ async def analyze_now(db, shop_id: int, force: bool = True, campaign_ids: Option
 
     auto_executed = 0
     if cfg.auto_execute and saved:
-        auto_executed = await _auto_execute(db, shop, saved)
+        auto_executed = await _auto_execute(db, tenant_id, shop, saved)
 
-    elapsed = int((datetime.now() - start).total_seconds() * 1000)
+    elapsed = int((_utc_now() - start).total_seconds() * 1000)
     summary = f"分析{len(campaigns)}个活动 生成{len(saved)}条建议"
     if auto_executed:
         summary += f" 自动执行{auto_executed}条"
-    _update_status(db, shop_id, "success", summary)
+    _update_status(db, tenant_id, shop_id, "success", summary)
 
     return {
         "status": "success",
@@ -336,7 +405,7 @@ async def analyze_now(db, shop_id: int, force: bool = True, campaign_ids: Option
     }
 
 
-async def _auto_execute(db, shop, suggestions: list) -> int:
+async def _auto_execute(db, tenant_id: int, shop, suggestions: list) -> int:
     """auto_execute=1 模式：直接执行所有建议"""
     from app.services.platform.ozon import OzonClient
     from app.models.ad import AdCampaign
@@ -350,16 +419,25 @@ async def _auto_execute(db, shop, suggestions: list) -> int:
     executed = 0
     try:
         for s in suggestions:
-            campaign = db.query(AdCampaign).filter(AdCampaign.id == s["campaign_id"]).first()
+            campaign = db.query(AdCampaign).filter(
+                AdCampaign.id == s["campaign_id"],
+                AdCampaign.tenant_id == tenant_id,
+            ).first()
             if not campaign:
                 continue
 
             # 跳过 user_managed=1
             ag_row = db.execute(text("""
                 SELECT user_managed FROM ad_groups
-                WHERE campaign_id = :cid AND platform_group_id = :sku
+                WHERE campaign_id = :cid
+                  AND tenant_id = :tenant_id
+                  AND platform_group_id = :sku
                 LIMIT 1
-            """), {"cid": campaign.id, "sku": s["platform_sku_id"]}).fetchone()
+            """), {
+                "cid": campaign.id,
+                "tenant_id": tenant_id,
+                "sku": s["platform_sku_id"],
+            }).fetchone()
             if ag_row and ag_row.user_managed:
                 continue
 
@@ -374,9 +452,13 @@ async def _auto_execute(db, shop, suggestions: list) -> int:
                 _upsert_group_last_auto(db, campaign, s["platform_sku_id"], s.get("sku_name") or "", s["suggested_bid"])
                 db.execute(text("""
                     UPDATE ai_pricing_suggestions
-                    SET status = 'approved', executed_at = NOW()
-                    WHERE id = :id
-                """), {"id": s["id"]})
+                    SET status = 'approved', executed_at = :now
+                    WHERE id = :id AND tenant_id = :tenant_id
+                """), {
+                    "id": s["id"],
+                    "tenant_id": tenant_id,
+                    "now": _utc_now().replace(tzinfo=None),
+                })
                 _write_bidlog(db, campaign, s, "ai_auto", success=True)
                 executed += 1
             except Exception as e:
@@ -391,8 +473,11 @@ async def _auto_execute(db, shop, suggestions: list) -> int:
 
 # ==================== 单条 / 批量 approve ====================
 
-async def approve_suggestion(db, suggestion_id: int) -> dict:
-    """单条 approve（POST /suggestions/{id}/approve）"""
+async def approve_suggestion(db, tenant_id: int, suggestion_id: int) -> dict:
+    """单条 approve（POST /suggestions/{id}/approve）
+
+    多租户隔离：必须 WHERE s.tenant_id = :tenant_id
+    """
     row = db.execute(text("""
         SELECT
             s.id, s.tenant_id, s.shop_id, s.campaign_id,
@@ -402,8 +487,8 @@ async def approve_suggestion(db, suggestion_id: int) -> dict:
             c.platform_campaign_id, c.name AS campaign_name
         FROM ai_pricing_suggestions s
         JOIN ad_campaigns c ON s.campaign_id = c.id
-        WHERE s.id = :id
-    """), {"id": suggestion_id}).fetchone()
+        WHERE s.id = :id AND s.tenant_id = :tenant_id
+    """), {"id": suggestion_id, "tenant_id": tenant_id}).fetchone()
 
     if not row:
         return {"code": ErrorCode.BID_SUGGESTION_NOT_FOUND, "msg": "建议不存在"}
@@ -415,7 +500,9 @@ async def approve_suggestion(db, suggestion_id: int) -> dict:
     from app.models.shop import Shop
     from app.services.platform.ozon import OzonClient
 
-    shop = db.query(Shop).filter(Shop.id == row.shop_id).first()
+    shop = db.query(Shop).filter(
+        Shop.id == row.shop_id, Shop.tenant_id == tenant_id
+    ).first()
     if not shop:
         return {"code": ErrorCode.SHOP_NOT_FOUND, "msg": "店铺不存在"}
 
@@ -436,20 +523,20 @@ async def approve_suggestion(db, suggestion_id: int) -> dict:
         return {"code": ErrorCode.BID_EXECUTION_FAILED,
                 "msg": api_result.get("error") or "Ozon API失败"}
 
-    # 更新建议
-    now = datetime.now()
+    # #12 修复：UTC now（naive 用于存数据库）
+    now_utc = _utc_now().replace(tzinfo=None)
     db.execute(text("""
         UPDATE ai_pricing_suggestions
         SET status = 'approved', executed_at = :now
-        WHERE id = :id
-    """), {"id": suggestion_id, "now": now})
+        WHERE id = :id AND tenant_id = :tenant_id
+    """), {"id": suggestion_id, "tenant_id": tenant_id, "now": now_utc})
 
-    # 更新 ad_groups.last_auto_bid（防分时调价误判）
     from app.models.ad import AdCampaign
-    campaign = db.query(AdCampaign).filter(AdCampaign.id == row.campaign_id).first()
+    campaign = db.query(AdCampaign).filter(
+        AdCampaign.id == row.campaign_id, AdCampaign.tenant_id == tenant_id
+    ).first()
     _upsert_group_last_auto(db, campaign, row.platform_sku_id, row.sku_name or "", float(row.suggested_bid))
 
-    # 写日志
     _write_bidlog(
         db, campaign,
         {
@@ -469,21 +556,21 @@ async def approve_suggestion(db, suggestion_id: int) -> dict:
         "data": {
             "id": suggestion_id,
             "status": "approved",
-            "executed_at": now.isoformat(),
+            "executed_at": now_utc.isoformat() + "Z",
             "old_bid": float(row.current_bid),
             "new_bid": float(row.suggested_bid),
         }
     }
 
 
-async def approve_batch(db, ids: list) -> dict:
+async def approve_batch(db, tenant_id: int, ids: list) -> dict:
     """批量 approve（部分成功语义）"""
     results = []
     success_cnt = 0
     failed_cnt = 0
     for sid in ids:
         try:
-            r = await approve_suggestion(db, sid)
+            r = await approve_suggestion(db, tenant_id, sid)
             if r.get("code") == 0:
                 results.append({"id": sid, "status": "approved"})
                 success_cnt += 1
@@ -511,25 +598,26 @@ async def approve_batch(db, ids: list) -> dict:
     }
 
 
-def reject_suggestion(db, suggestion_id: int) -> dict:
+def reject_suggestion(db, tenant_id: int, suggestion_id: int) -> dict:
+    """多租户隔离 reject"""
     db.execute(text("""
         UPDATE ai_pricing_suggestions
         SET status = 'rejected'
-        WHERE id = :id AND status = 'pending'
-    """), {"id": suggestion_id})
+        WHERE id = :id AND tenant_id = :tenant_id AND status = 'pending'
+    """), {"id": suggestion_id, "tenant_id": tenant_id})
     db.commit()
     return {"code": 0, "data": {"id": suggestion_id, "status": "rejected"}}
 
 
-def reject_batch(db, ids: list) -> dict:
+def reject_batch(db, tenant_id: int, ids: list) -> dict:
+    """多租户隔离批量 reject"""
     if ids:
-        from sqlalchemy import bindparam
         stmt = text("""
             UPDATE ai_pricing_suggestions
             SET status = 'rejected'
-            WHERE id IN :ids AND status = 'pending'
+            WHERE id IN :ids AND tenant_id = :tenant_id AND status = 'pending'
         """).bindparams(bindparam("ids", expanding=True))
-        db.execute(stmt, {"ids": list(ids)})
+        db.execute(stmt, {"ids": list(ids), "tenant_id": tenant_id})
         db.commit()
     return {"code": 0, "data": {"total": len(ids)}}
 
@@ -586,6 +674,34 @@ def _read_template(cfg) -> dict:
         return {}
 
 
+# ==================== Redis 锁（#18）====================
+
+def _try_acquire_analyze_lock(shop_id: int) -> bool:
+    """尝试获取同店铺 60 秒分析锁，成功返回 True"""
+    try:
+        import redis as redis_lib
+        pool = redis_lib.ConnectionPool.from_url(settings.REDIS_URL, decode_responses=True)
+        r = redis_lib.Redis(connection_pool=pool)
+        key = f"bid:analyze_lock:{shop_id}"
+        return bool(r.set(key, "1", nx=True, ex=ANALYZE_LOCK_TTL))
+    except Exception as e:
+        logger.warning(f"Redis 锁不可用，降级直接执行: {e}")
+        return True
+
+
+def _release_analyze_lock(shop_id: int):
+    """释放分析锁（异常路径用，正常路径靠 ex 自动过期）"""
+    try:
+        import redis as redis_lib
+        pool = redis_lib.ConnectionPool.from_url(settings.REDIS_URL, decode_responses=True)
+        r = redis_lib.Redis(connection_pool=pool)
+        r.delete(f"bid:analyze_lock:{shop_id}")
+    except Exception:
+        pass
+
+
+# ==================== AI 调用 + 解析 ====================
+
 async def _call_ai(template: dict, campaigns: list, products_by_campaign: dict) -> list:
     """调 DeepSeek 生成调价建议（简化版 prompt）"""
     from app.services.ai.deepseek import DeepSeekClient
@@ -594,12 +710,11 @@ async def _call_ai(template: dict, campaigns: list, products_by_campaign: dict) 
     if not api_key:
         raise RuntimeError("DEEPSEEK_API_KEY 未配置")
 
-    # 构造 prompt 数据
     prompt_data = []
     for camp in campaigns:
         products = products_by_campaign.get(camp.id) or []
         items = []
-        for p in products[:50]:  # 单活动最多50个商品
+        for p in products[:50]:
             sku = str(p.get("sku") or "")
             bid_raw = p.get("bid", "0")
             try:
@@ -672,14 +787,12 @@ def _parse_ai_response(content: str) -> dict:
         return json.loads(content)
     except (ValueError, TypeError):
         pass
-    # 提取 ```json ... ``` 块
     m = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", content, re.DOTALL)
     if m:
         try:
             return json.loads(m.group(1))
         except (ValueError, TypeError):
             pass
-    # 提取最外层大括号
     m = re.search(r"\{.*\}", content, re.DOTALL)
     if m:
         try:
@@ -689,6 +802,8 @@ def _parse_ai_response(content: str) -> dict:
     logger.error(f"AI响应解析失败: {content[:200]}")
     return {}
 
+
+# ==================== 写库小工具 ====================
 
 def _upsert_group_last_auto(db, campaign, sku: str, sku_name: str, last_auto: float):
     db.execute(text("""
@@ -747,16 +862,17 @@ def _write_bidlog(db, campaign, suggestion: dict, execute_type: str,
     })
 
 
-def _update_status(db, shop_id: int, status: str, msg: str, retry: bool = False):
+def _update_status(db, tenant_id: int, shop_id: int, status: str, msg: str, retry: bool = False):
     db.execute(text("""
         UPDATE ai_pricing_configs
         SET last_executed_at = NOW(),
             last_execute_status = :status,
             last_error_msg = :msg,
             retry_at = CASE WHEN :retry = 1 THEN DATE_ADD(NOW(), INTERVAL 30 MINUTE) ELSE NULL END
-        WHERE shop_id = :shop_id
+        WHERE shop_id = :shop_id AND tenant_id = :tenant_id
     """), {
         "shop_id": shop_id,
+        "tenant_id": tenant_id,
         "status": status,
         "msg": msg[:500] if msg else None,
         "retry": 1 if retry else 0,

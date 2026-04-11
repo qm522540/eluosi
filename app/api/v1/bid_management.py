@@ -1,23 +1,27 @@
-"""出价管理 API 路由（按 docs/api/bid_management.md 规范实现）
+"""出价管理 API 路由（按老林审查报告 V2 修复版）
+
+修复点（对照 docs/daily/2026-04-11_审查报告_出价管理_老林.md）：
+  - #1-#6 路由层多租户隔离：所有 {shop_id} 路径参数路由统一使用 Depends(get_owned_shop)
+  - service 层 tenant_id 透传
 
 路径前缀: /api/v1/bid-management
 """
 
 import json
 from io import BytesIO
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, Query
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
-from sqlalchemy import bindparam, text
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-from app.dependencies import get_current_user, get_db, get_tenant_id
+from app.dependencies import get_db, get_owned_shop, get_tenant_id
+from app.models.shop import Shop
 from app.utils.errors import ErrorCode
 from app.utils.logger import setup_logger
-from app.utils.moscow_time import (
-    EXECUTE_MINUTE, MOSCOW_TZ, get_dashboard_info, moscow_today, now_moscow,
-)
+from app.utils.moscow_time import EXECUTE_MINUTE, get_dashboard_info, now_moscow
 from app.utils.response import error, success
 
 logger = setup_logger("api.bid_management")
@@ -63,12 +67,11 @@ class AnalyzeRequest(BaseModel):
 
 @router.get("/dashboard/{shop_id}")
 def get_dashboard(
-    shop_id: int,
+    shop: Shop = Depends(get_owned_shop),
     db: Session = Depends(get_db),
-    tenant_id: int = Depends(get_tenant_id),
 ):
     """状态栏：莫斯科时间 + 当前时段 + 下次执行 + 最后执行"""
-    data = get_dashboard_info(db, shop_id)
+    data = get_dashboard_info(db, shop.id, shop.tenant_id)
     return success(data)
 
 
@@ -76,9 +79,8 @@ def get_dashboard(
 
 @router.get("/time-pricing/{shop_id}")
 def get_time_pricing(
-    shop_id: int,
+    shop: Shop = Depends(get_owned_shop),
     db: Session = Depends(get_db),
-    tenant_id: int = Depends(get_tenant_id),
 ):
     row = db.execute(text("""
         SELECT id, tenant_id, shop_id, is_active,
@@ -87,12 +89,12 @@ def get_time_pricing(
                last_executed_at, last_execute_result,
                updated_at
         FROM time_pricing_rules
-        WHERE shop_id = :shop_id
-    """), {"shop_id": shop_id}).fetchone()
+        WHERE shop_id = :shop_id AND tenant_id = :tenant_id
+    """), {"shop_id": shop.id, "tenant_id": shop.tenant_id}).fetchone()
 
     if not row:
         return success({
-            "shop_id": shop_id,
+            "shop_id": shop.id,
             "is_active": False,
             "peak_hours": [10, 11, 12, 13, 19, 20, 21, 22],
             "peak_ratio": 120,
@@ -124,53 +126,47 @@ def get_time_pricing(
 
 @router.put("/time-pricing/{shop_id}")
 def update_time_pricing(
-    shop_id: int,
     req: TimePricingUpdate,
+    shop: Shop = Depends(get_owned_shop),
     db: Session = Depends(get_db),
-    tenant_id: int = Depends(get_tenant_id),
 ):
     from app.services.bid.time_pricing_executor import update_rule
-    result = update_rule(db, tenant_id, shop_id, req.model_dump())
+    result = update_rule(db, shop.tenant_id, shop.id, req.model_dump())
     if result.get("code") != 0:
         return error(result["code"], result.get("msg") or "")
-    # 返回更新后的完整对象
-    return get_time_pricing(shop_id, db, tenant_id)
+    return get_time_pricing(shop=shop, db=db)
 
 
 @router.post("/time-pricing/{shop_id}/enable")
 def enable_time_pricing(
-    shop_id: int,
+    shop: Shop = Depends(get_owned_shop),
     db: Session = Depends(get_db),
-    tenant_id: int = Depends(get_tenant_id),
 ):
     from app.services.bid.time_pricing_executor import enable
-    result = enable(db, tenant_id, shop_id)
+    result = enable(db, shop.tenant_id, shop.id)
     if result.get("code") != 0:
         return error(result["code"], result.get("msg") or "")
-    next_str = _next_execute_str()
-    return success({"shop_id": shop_id, "is_active": True, "next_execute_at": next_str})
+    return success({"shop_id": shop.id, "is_active": True, "next_execute_at": _next_execute_str()})
 
 
 @router.post("/time-pricing/{shop_id}/disable")
 def disable_time_pricing(
-    shop_id: int,
+    shop: Shop = Depends(get_owned_shop),
     db: Session = Depends(get_db),
-    tenant_id: int = Depends(get_tenant_id),
 ):
     from app.services.bid.time_pricing_executor import disable
-    disable(db, shop_id)
-    return success({"shop_id": shop_id, "is_active": False})
+    disable(db, shop.tenant_id, shop.id)
+    return success({"shop_id": shop.id, "is_active": False})
 
 
 @router.post("/time-pricing/{shop_id}/restore-sku")
 async def restore_sku(
-    shop_id: int,
     req: RestoreSkuRequest,
+    shop: Shop = Depends(get_owned_shop),
     db: Session = Depends(get_db),
-    tenant_id: int = Depends(get_tenant_id),
 ):
     from app.services.bid.time_pricing_executor import restore_sku as restore_fn
-    result = await restore_fn(db, shop_id, req.platform_sku_id)
+    result = await restore_fn(db, shop.tenant_id, shop.id, req.platform_sku_id)
     if result.get("code") != 0:
         return error(result["code"], result.get("msg") or "")
     return success(result.get("data") or {})
@@ -178,36 +174,35 @@ async def restore_sku(
 
 @router.get("/time-pricing/{shop_id}/status")
 def get_time_pricing_status(
-    shop_id: int,
     campaign_id: int = Query(None),
     keyword: str = Query(None),
+    shop: Shop = Depends(get_owned_shop),
     db: Session = Depends(get_db),
-    tenant_id: int = Depends(get_tenant_id),
 ):
     from app.services.bid.time_pricing_executor import get_sku_status
-    return success(get_sku_status(db, shop_id, campaign_id=campaign_id, keyword=keyword))
+    return success(get_sku_status(db, shop.tenant_id, shop.id,
+                                   campaign_id=campaign_id, keyword=keyword))
 
 
 # ==================== §3 AI调价 ====================
 
 @router.get("/ai-pricing/{shop_id}")
 def get_ai_pricing(
-    shop_id: int,
+    shop: Shop = Depends(get_owned_shop),
     db: Session = Depends(get_db),
-    tenant_id: int = Depends(get_tenant_id),
 ):
     row = db.execute(text("""
         SELECT id, tenant_id, shop_id, is_active, auto_execute, template_name,
                conservative_config, default_config, aggressive_config,
                last_executed_at, last_execute_status, last_error_msg, retry_at
         FROM ai_pricing_configs
-        WHERE shop_id = :shop_id
+        WHERE shop_id = :shop_id AND tenant_id = :tenant_id
         LIMIT 1
-    """), {"shop_id": shop_id}).fetchone()
+    """), {"shop_id": shop.id, "tenant_id": shop.tenant_id}).fetchone()
 
     if not row:
         return success({
-            "shop_id": shop_id,
+            "shop_id": shop.id,
             "is_active": False,
             "auto_execute": False,
             "template_name": "default",
@@ -232,57 +227,53 @@ def get_ai_pricing(
 
 @router.put("/ai-pricing/{shop_id}")
 def update_ai_pricing(
-    shop_id: int,
     req: AIConfigUpdate,
+    shop: Shop = Depends(get_owned_shop),
     db: Session = Depends(get_db),
-    tenant_id: int = Depends(get_tenant_id),
 ):
     from app.services.bid.ai_pricing_executor import update_config
-    result = update_config(db, tenant_id, shop_id, req.model_dump())
+    result = update_config(db, shop.tenant_id, shop.id, req.model_dump())
     if result.get("code") != 0:
         return error(result["code"], result.get("msg") or "")
-    return get_ai_pricing(shop_id, db, tenant_id)
+    return get_ai_pricing(shop=shop, db=db)
 
 
 @router.post("/ai-pricing/{shop_id}/enable")
 def enable_ai_pricing(
-    shop_id: int,
     req: EnableAIRequest,
+    shop: Shop = Depends(get_owned_shop),
     db: Session = Depends(get_db),
-    tenant_id: int = Depends(get_tenant_id),
 ):
     from app.services.bid.ai_pricing_executor import enable
-    result = enable(db, tenant_id, shop_id, auto_execute=req.auto_execute)
+    result = enable(db, shop.tenant_id, shop.id, auto_execute=req.auto_execute)
     if result.get("code") != 0:
         return error(result["code"], result.get("msg") or "")
-    return success({"shop_id": shop_id, "is_active": True, "auto_execute": req.auto_execute})
+    return success({"shop_id": shop.id, "is_active": True, "auto_execute": req.auto_execute})
 
 
 @router.post("/ai-pricing/{shop_id}/disable")
 def disable_ai_pricing(
-    shop_id: int,
+    shop: Shop = Depends(get_owned_shop),
     db: Session = Depends(get_db),
-    tenant_id: int = Depends(get_tenant_id),
 ):
     from app.services.bid.ai_pricing_executor import disable
-    disable(db, shop_id)
-    return success({"shop_id": shop_id, "is_active": False})
+    disable(db, shop.tenant_id, shop.id)
+    return success({"shop_id": shop.id, "is_active": False})
 
 
 @router.post("/ai-pricing/{shop_id}/analyze")
 async def manual_analyze(
-    shop_id: int,
     req: AnalyzeRequest = None,
+    shop: Shop = Depends(get_owned_shop),
     db: Session = Depends(get_db),
-    tenant_id: int = Depends(get_tenant_id),
 ):
     from app.services.bid.ai_pricing_executor import analyze_now
     campaign_ids = req.campaign_ids if req else None
-    result = await analyze_now(db, shop_id, force=True, campaign_ids=campaign_ids)
+    result = await analyze_now(db, shop.tenant_id, shop.id, force=True, campaign_ids=campaign_ids)
     if result.get("status") == "failed":
         return error(ErrorCode.AI_MODEL_ERROR, result.get("message") or "")
     return success({
-        "shop_id": shop_id,
+        "shop_id": shop.id,
         "analyzed_count": result.get("analyzed_count", 0),
         "suggestion_count": result.get("suggestion_count", 0),
         "auto_executed_count": result.get("auto_executed_count", 0),
@@ -295,16 +286,16 @@ async def manual_analyze(
 
 @router.get("/suggestions/{shop_id}")
 def get_suggestions(
-    shop_id: int,
     status: str = Query("pending"),
     campaign_id: int = Query(None),
+    shop: Shop = Depends(get_owned_shop),
     db: Session = Depends(get_db),
-    tenant_id: int = Depends(get_tenant_id),
 ):
     """按活动分组返回今日 status 状态的建议"""
+    from app.utils.moscow_time import moscow_today
     today = moscow_today()
-    where = ["s.shop_id = :shop_id", "DATE(s.generated_at) = :today"]
-    params = {"shop_id": shop_id, "today": today}
+    where = ["s.shop_id = :shop_id", "s.tenant_id = :tenant_id", "DATE(s.generated_at) = :today"]
+    params = {"shop_id": shop.id, "tenant_id": shop.tenant_id, "today": today}
     if status and status != "all":
         where.append("s.status = :status")
         params["status"] = status
@@ -367,8 +358,9 @@ async def approve_suggestion(
     db: Session = Depends(get_db),
     tenant_id: int = Depends(get_tenant_id),
 ):
+    """注：按建议ID操作，不带 shop_id；service 层用 tenant_id 校验"""
     from app.services.bid.ai_pricing_executor import approve_suggestion as approve_fn
-    result = await approve_fn(db, suggestion_id)
+    result = await approve_fn(db, tenant_id, suggestion_id)
     if result.get("code") != 0:
         return error(result["code"], result.get("msg") or "")
     return success(result.get("data") or {})
@@ -381,7 +373,7 @@ def reject_suggestion(
     tenant_id: int = Depends(get_tenant_id),
 ):
     from app.services.bid.ai_pricing_executor import reject_suggestion as reject_fn
-    result = reject_fn(db, suggestion_id)
+    result = reject_fn(db, tenant_id, suggestion_id)
     return success(result.get("data") or {})
 
 
@@ -392,7 +384,7 @@ async def approve_batch(
     tenant_id: int = Depends(get_tenant_id),
 ):
     from app.services.bid.ai_pricing_executor import approve_batch as approve_fn
-    result = await approve_fn(db, req.ids)
+    result = await approve_fn(db, tenant_id, req.ids)
     return success(result.get("data") or {})
 
 
@@ -403,7 +395,7 @@ def reject_batch(
     tenant_id: int = Depends(get_tenant_id),
 ):
     from app.services.bid.ai_pricing_executor import reject_batch as reject_fn
-    result = reject_fn(db, req.ids)
+    result = reject_fn(db, tenant_id, req.ids)
     return success(result.get("data") or {})
 
 
@@ -411,16 +403,17 @@ def reject_batch(
 
 @router.get("/conflict-check/{shop_id}")
 def conflict_check(
-    shop_id: int,
     enabling: str = Query(..., description="time_pricing | ai_auto"),
+    shop: Shop = Depends(get_owned_shop),
     db: Session = Depends(get_db),
-    tenant_id: int = Depends(get_tenant_id),
 ):
     row = db.execute(text("""
         SELECT
-            (SELECT is_active FROM time_pricing_rules WHERE shop_id = :sid LIMIT 1) AS time_active,
-            (SELECT is_active FROM ai_pricing_configs WHERE shop_id = :sid LIMIT 1) AS ai_active
-    """), {"sid": shop_id}).fetchone()
+            (SELECT is_active FROM time_pricing_rules
+             WHERE shop_id = :sid AND tenant_id = :tid LIMIT 1) AS time_active,
+            (SELECT is_active FROM ai_pricing_configs
+             WHERE shop_id = :sid AND tenant_id = :tid LIMIT 1) AS ai_active
+    """), {"sid": shop.id, "tid": shop.tenant_id}).fetchone()
 
     if not row:
         return success({"conflict": False, "message": "可以启用"})
@@ -446,7 +439,6 @@ def conflict_check(
 
 @router.get("/bid-logs/{shop_id}")
 def get_bid_logs(
-    shop_id: int,
     page: int = Query(1, ge=1),
     size: int = Query(20, ge=1, le=100),
     execute_type: str = Query("all"),
@@ -454,11 +446,11 @@ def get_bid_logs(
     start_date: str = Query(None),
     end_date: str = Query(None),
     success_filter: bool = Query(None, alias="success"),
+    shop: Shop = Depends(get_owned_shop),
     db: Session = Depends(get_db),
-    tenant_id: int = Depends(get_tenant_id),
 ):
-    where = ["shop_id = :shop_id"]
-    params = {"shop_id": shop_id}
+    where = ["shop_id = :shop_id", "tenant_id = :tenant_id"]
+    params = {"shop_id": shop.id, "tenant_id": shop.tenant_id}
     if execute_type and execute_type != "all":
         where.append("execute_type = :execute_type")
         params["execute_type"] = execute_type
@@ -523,20 +515,19 @@ def get_bid_logs(
 
 @router.get("/data-status/{shop_id}")
 def get_data_status(
-    shop_id: int,
+    shop: Shop = Depends(get_owned_shop),
     db: Session = Depends(get_db),
-    tenant_id: int = Depends(get_tenant_id),
 ):
     row = db.execute(text("""
         SELECT is_initialized, initialized_at, last_sync_at, last_sync_date,
                COALESCE(data_days, 0) AS data_days
         FROM shop_data_init_status
-        WHERE shop_id = :shop_id
-    """), {"shop_id": shop_id}).fetchone()
+        WHERE shop_id = :shop_id AND tenant_id = :tenant_id
+    """), {"shop_id": shop.id, "tenant_id": shop.tenant_id}).fetchone()
 
     if not row:
         return success({
-            "shop_id": shop_id,
+            "shop_id": shop.id,
             "is_initialized": False,
             "initialized_at": None,
             "last_sync_at": None,
@@ -545,7 +536,7 @@ def get_data_status(
         })
 
     return success({
-        "shop_id": shop_id,
+        "shop_id": shop.id,
         "is_initialized": bool(row.is_initialized),
         "initialized_at": row.initialized_at.isoformat() if row.initialized_at else None,
         "last_sync_at": row.last_sync_at.isoformat() if row.last_sync_at else None,
@@ -556,9 +547,8 @@ def get_data_status(
 
 @router.post("/data-sync/{shop_id}")
 async def sync_data(
-    shop_id: int,
+    shop: Shop = Depends(get_owned_shop),
     db: Session = Depends(get_db),
-    tenant_id: int = Depends(get_tenant_id),
 ):
     """手动触发数据同步：清理90天前数据 + 同步昨日"""
     from app.services.data.ozon_stats_collector import sync_yesterday_stats
@@ -567,29 +557,29 @@ async def sync_data(
         DELETE s FROM ad_stats s
         JOIN ad_campaigns c ON s.campaign_id = c.id
         WHERE c.shop_id = :shop_id
+          AND c.tenant_id = :tenant_id
           AND s.stat_date < DATE_SUB(CURDATE(), INTERVAL 90 DAY)
-    """), {"shop_id": shop_id})
+    """), {"shop_id": shop.id, "tenant_id": shop.tenant_id})
     db.commit()
 
     try:
-        result = await sync_yesterday_stats(db, shop_id)
+        result = await sync_yesterday_stats(db, shop.id)
         return success({
-            "shop_id": shop_id,
+            "shop_id": shop.id,
             "task_id": "sync-immediate",
             "msg": "数据同步完成",
             **(result if isinstance(result, dict) else {}),
         })
     except Exception as e:
-        logger.error(f"数据同步失败 shop_id={shop_id}: {e}")
+        logger.error(f"数据同步失败 shop_id={shop.id}: {e}")
         return error(ErrorCode.AD_STATS_FETCH_FAILED, f"同步失败: {e}")
 
 
 @router.get("/data-download/{shop_id}")
 def download_data(
-    shop_id: int,
     days: int = Query(30, ge=1, le=180),
+    shop: Shop = Depends(get_owned_shop),
     db: Session = Depends(get_db),
-    tenant_id: int = Depends(get_tenant_id),
 ):
     """下载 Excel 数据源"""
     try:
@@ -608,9 +598,10 @@ def download_data(
         FROM ad_stats s
         JOIN ad_campaigns c ON s.campaign_id = c.id
         WHERE c.shop_id = :shop_id
+          AND c.tenant_id = :tenant_id
           AND s.stat_date >= DATE_SUB(CURDATE(), INTERVAL :days DAY)
         ORDER BY c.name, s.stat_date DESC
-    """), {"shop_id": shop_id, "days": days}).fetchall()
+    """), {"shop_id": shop.id, "tenant_id": shop.tenant_id, "days": days}).fetchall()
 
     wb = openpyxl.Workbook()
     ws = wb.active
@@ -634,7 +625,7 @@ def download_data(
     wb.save(output)
     output.seek(0)
     today = now_moscow().strftime("%Y%m%d")
-    filename = f"shop_{shop_id}_bid_data_{today}.xlsx"
+    filename = f"shop_{shop.id}_bid_data_{today}.xlsx"
     return StreamingResponse(
         output,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
