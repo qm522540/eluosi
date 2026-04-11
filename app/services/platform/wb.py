@@ -169,7 +169,22 @@ class WBClient(BasePlatformClient):
                 return []
 
             # 第2步: 分批调用 /api/advert/v2/adverts 拉取活动名称
-            name_map = await self._fetch_advert_names(list(advert_info.keys()))
+            # 同时识别WB后台已软删除的活动(timestamps.deleted是真实时间点)
+            name_map, deleted_ids = await self._fetch_advert_names(
+                list(advert_info.keys())
+            )
+
+            # 跳过已删除的活动
+            if deleted_ids:
+                for d_id in deleted_ids:
+                    advert_info.pop(d_id, None)
+                logger.info(
+                    f"WB shop_id={self.shop_id} 跳过{len(deleted_ids)}个"
+                    f"已在WB后台删除的活动: {sorted(deleted_ids)}"
+                )
+
+            if not advert_info:
+                return []
 
             # 第3步: 逐个获取预算余额
             budget_map = {}  # advertId -> budget total
@@ -208,19 +223,23 @@ class WBClient(BasePlatformClient):
 
         return campaigns
 
-    async def _fetch_advert_names(self, advert_ids: list) -> dict:
-        """通过 /api/advert/v2/adverts 批量拉取活动名称
+    async def _fetch_advert_names(self, advert_ids: list) -> tuple:
+        """通过 /api/advert/v2/adverts 批量拉取活动名称和删除状态
 
         Args:
             advert_ids: 活动ID列表
 
         Returns:
-            {advert_id: name} 映射，未拿到的advert_id不在返回中
+            (name_map, deleted_ids) 元组:
+              - name_map: {advert_id: name}
+              - deleted_ids: 在WB后台已软删除的活动ID集合
+                  判断依据: timestamps.deleted 是真实时间点(非21xx哨兵值)
         """
         if not advert_ids:
-            return {}
+            return {}, set()
 
         name_map: dict = {}
+        deleted_ids: set = set()
         batch_size = 50  # WB API 单次最多50个id
 
         for i in range(0, len(advert_ids), batch_size):
@@ -245,16 +264,27 @@ class WBClient(BasePlatformClient):
 
             for adv in adverts:
                 adv_id = adv.get("id")
+                if not adv_id:
+                    continue
+
+                # 识别软删除：timestamps.deleted 是真实时间(非2100+哨兵值)
+                # WB用 "2100-01-01T00:00:00+03:00" 表示"未删除"
+                deleted_ts = (adv.get("timestamps") or {}).get("deleted") or ""
+                if deleted_ts and not deleted_ts.startswith("21"):
+                    deleted_ids.add(adv_id)
+                    continue  # 已删除的活动不再提取名称
+
                 settings_obj = adv.get("settings") or {}
                 name = settings_obj.get("name") or adv.get("name") or ""
-                if adv_id and name:
+                if name:
                     name_map[adv_id] = name.strip()
 
         logger.info(
-            f"WB shop_id={self.shop_id} 获取活动名称 "
-            f"请求{len(advert_ids)}个 命中{len(name_map)}个"
+            f"WB shop_id={self.shop_id} 获取活动元信息 "
+            f"请求{len(advert_ids)}个 命中名称{len(name_map)}个 "
+            f"已删除{len(deleted_ids)}个"
         )
-        return name_map
+        return name_map, deleted_ids
 
     def _parse_campaign(self, raw: dict) -> dict:
         """解析WB广告活动数据为标准格式"""
