@@ -396,6 +396,9 @@ async def _fetch_single_ozon_shop(db, shop: Shop) -> tuple:
         campaigns_synced = 0
         api_ids = set()
         for camp_data in campaigns_data:
+            # 跳过Ozon系统级SEARCH_PROMO活动（平台自动创建的"搜索中推广-所有商品"）
+            if camp_data.get("ad_type") == "search":
+                continue
             campaigns_synced += _upsert_campaign(
                 db, shop.tenant_id, shop.id, "ozon", camp_data
             )

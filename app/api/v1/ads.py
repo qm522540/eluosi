@@ -780,6 +780,15 @@ async def _sync_ozon_campaigns(db, shop) -> tuple:
         if not platform_id:
             continue
 
+        # 跳过Ozon系统级SEARCH_PROMO活动（平台自动创建的"搜索中推广-所有商品"）
+        # 这类活动无法手动创建或删除，业务上不需要同步到本地
+        if c.get("ad_type") == "search":
+            logger.info(
+                f"跳过Ozon系统搜索推广活动 {c.get('name')} "
+                f"platform_id={platform_id}"
+            )
+            continue
+
         # fetch_ad_campaigns已经通过_parse_campaign做了状态映射
         # 但这里我们用原始state再映射一次以打印日志
         # _parse_campaign返回的data里status已经是映射后的值
