@@ -971,51 +971,68 @@ const AdsOverview = ({ shopId, platform, shops, searched }) => {
                 <div>
                   <div style={{ marginBottom: 12 }}>
                     <Text type="secondary">
-                      {detailData.platform === 'ozon' ? '以下是该活动关联的商品及出价，点击出价可修改。' : 'WB暂不支持通过API获取商品列表。'}
+                      {detailData.platform === 'ozon'
+                        ? '以下是该活动关联的商品及出价，点击出价可修改。'
+                        : 'WB活动按搜索 / 推荐两个广告位分别定价，下表展示每个 SKU 的当前 CPM。当前为只读视图。'}
                     </Text>
                   </div>
                   {campaignProducts.length > 0 ? (
-                    <Table size="small" dataSource={campaignProducts} rowKey="sku" loading={productsLoading} pagination={false}
-                      columns={[
-                        { title: 'SKU', dataIndex: 'sku', key: 'sku', width: 130 },
-                        {
-                          title: '商品', key: 'product', ellipsis: { showTitle: false },
-                          render: (_, record) => (
-                            <Space>
-                              {record.image ? (
-                                <img src={record.image} alt="" style={{ width: 40, height: 40, objectFit: 'cover', borderRadius: 4 }} />
-                              ) : (
-                                <div style={{ width: 40, height: 40, background: '#f0f0f0', borderRadius: 4, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#ccc', fontSize: 12 }}>无图</div>
-                              )}
-                              <Tooltip title={record.title} placement="topLeft">
-                                <Text ellipsis style={{ maxWidth: 350 }}>{record.title || '-'}</Text>
-                              </Tooltip>
-                            </Space>
-                          ),
-                        },
-                        {
-                          title: '出价 (₽)', dataIndex: 'bid', key: 'bid', width: 180,
-                          render: (v, record) => {
-                            const displayBid = Math.round(Number(v || 0) / 1000000)
-                            if (editingBid?.sku === record.sku) {
-                              return (
-                                <Space>
-                                  <InputNumber size="small" value={newBidValue} onChange={setNewBidValue}
-                                    min={1} step={1} style={{ width: 80 }} addonAfter="₽" />
-                                  <Button size="small" type="primary" loading={bidUpdating} onClick={handleUpdateBid}>保存</Button>
-                                  <Button size="small" onClick={() => setEditingBid(null)}>取消</Button>
-                                </Space>
-                              )
-                            }
-                            return (
-                              <a onClick={() => { setEditingBid(record); setNewBidValue(displayBid) }}>
-                                {displayBid} ₽
-                              </a>
-                            )
+                    detailData.platform === 'ozon' ? (
+                      <Table size="small" dataSource={campaignProducts} rowKey="sku" loading={productsLoading} pagination={false}
+                        columns={[
+                          { title: 'SKU', dataIndex: 'sku', key: 'sku', width: 130 },
+                          {
+                            title: '商品', key: 'product', ellipsis: { showTitle: false },
+                            render: (_, record) => (
+                              <Space>
+                                {record.image ? (
+                                  <img src={record.image} alt="" style={{ width: 40, height: 40, objectFit: 'cover', borderRadius: 4 }} />
+                                ) : (
+                                  <div style={{ width: 40, height: 40, background: '#f0f0f0', borderRadius: 4, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#ccc', fontSize: 12 }}>无图</div>
+                                )}
+                                <Tooltip title={record.title} placement="topLeft">
+                                  <Text ellipsis style={{ maxWidth: 350 }}>{record.title || '-'}</Text>
+                                </Tooltip>
+                              </Space>
+                            ),
                           },
-                        },
-                      ]}
-                    />
+                          {
+                            title: '出价 (₽)', dataIndex: 'bid', key: 'bid', width: 180,
+                            render: (v, record) => {
+                              const displayBid = Math.round(Number(v || 0) / 1000000)
+                              if (editingBid?.sku === record.sku) {
+                                return (
+                                  <Space>
+                                    <InputNumber size="small" value={newBidValue} onChange={setNewBidValue}
+                                      min={1} step={1} style={{ width: 80 }} addonAfter="₽" />
+                                    <Button size="small" type="primary" loading={bidUpdating} onClick={handleUpdateBid}>保存</Button>
+                                    <Button size="small" onClick={() => setEditingBid(null)}>取消</Button>
+                                  </Space>
+                                )
+                              }
+                              return (
+                                <a onClick={() => { setEditingBid(record); setNewBidValue(displayBid) }}>
+                                  {displayBid} ₽
+                                </a>
+                              )
+                            },
+                          },
+                        ]}
+                      />
+                    ) : (
+                      // WB 平台：per-SKU 出价表格（搜索 / 推荐双 CPM）
+                      <Table size="small" dataSource={campaignProducts} rowKey="sku" loading={productsLoading} pagination={false}
+                        columns={[
+                          { title: 'SKU (nm_id)', dataIndex: 'sku', key: 'sku', width: 140 },
+                          { title: '类目', dataIndex: 'subject_name', key: 'subject_name', width: 180,
+                            render: v => v || '-' },
+                          { title: '搜索 CPM (₽)', dataIndex: 'bid_search', key: 'bid_search', width: 140,
+                            render: v => `${Number(v || 0).toLocaleString()} ₽` },
+                          { title: '推荐 CPM (₽)', dataIndex: 'bid_recommendations', key: 'bid_recommendations', width: 140,
+                            render: v => `${Number(v || 0).toLocaleString()} ₽` },
+                        ]}
+                      />
+                    )
                   ) : (
                     <Empty description={productsLoading ? '加载中...' : '暂无商品数据'} />
                   )}

@@ -459,6 +459,50 @@ class WBClient(BasePlatformClient):
             "roas": round(roas, 4),
         }
 
+    # ==================== 广告活动商品 ====================
+
+    async def fetch_campaign_products(self, advert_id: str) -> list:
+        """拉取 WB 广告活动下的商品列表及出价
+
+        通过 /api/advert/v2/adverts?ids={advert_id} 解析 nm_settings 数组。
+        每个 nm 的出价按 placement 分（search / recommendations），单位戈比转卢布。
+
+        Returns:
+            [{sku, subject_name, bid_search, bid_recommendations}]
+            sku 为 WB 的 nm_id（字符串形式，与 Ozon 字段名对齐）
+        """
+        try:
+            url = f"{WB_ADVERT_API}/api/advert/v2/adverts"
+            resp = await self._request("GET", url, params={"ids": str(advert_id)})
+        except Exception as e:
+            logger.error(
+                f"WB 拉取活动商品失败 shop_id={self.shop_id} "
+                f"advert_id={advert_id}: {e}"
+            )
+            return []
+
+        if not isinstance(resp, dict):
+            return []
+        adverts = resp.get("adverts") or []
+        if not adverts:
+            return []
+
+        nm_settings = (adverts[0] or {}).get("nm_settings") or []
+        products = []
+        for nm in nm_settings:
+            if not isinstance(nm, dict):
+                continue
+            bids = nm.get("bids_kopecks") or {}
+            subject = nm.get("subject") or {}
+            products.append({
+                "sku": str(nm.get("nm_id") or ""),
+                "subject_name": subject.get("name") or "",
+                # 戈比 → 卢布（1 ₽ = 100 копейки）
+                "bid_search": round((bids.get("search") or 0) / 100, 2),
+                "bid_recommendations": round((bids.get("recommendations") or 0) / 100, 2),
+            })
+        return products
+
     # ==================== 商品 ====================
 
     async def fetch_products(self, page: int = 1, limit: int = 100) -> dict:

@@ -576,8 +576,13 @@ async def campaign_products(
         finally:
             await client.close()
     elif camp.platform == "wb":
-        # WB 暂无可用的商品接口
-        return success([])
+        from app.services.platform.wb import WBClient
+        client = WBClient(shop_id=shop.id, api_key=shop.api_key)
+        try:
+            products = await client.fetch_campaign_products(camp.platform_campaign_id)
+            return success(products)
+        finally:
+            await client.close()
     else:
         return success([])
 
@@ -627,51 +632,6 @@ async def update_campaign_bid(
             await client.close()
     else:
         return error(10002, "该平台暂不支持出价修改")
-
-
-@router.get("/debug/wb-advert/{campaign_id}")
-async def debug_wb_advert(
-    campaign_id: int,
-    db: Session = Depends(get_db),
-    tenant_id: int = Depends(get_tenant_id),
-):
-    """[临时调试接口] 拉取 WB /api/advert/v2/adverts 的原始返回，用于研究字段结构。
-    用完即删。
-    多租户隔离：通过 tenant_id 校验广告活动归属。
-    """
-    from app.models.ad import AdCampaign
-    from app.models.shop import Shop
-    from app.services.platform.wb import WBClient, WB_ADVERT_API
-
-    camp = db.query(AdCampaign).filter(
-        AdCampaign.id == campaign_id, AdCampaign.tenant_id == tenant_id
-    ).first()
-    if not camp:
-        return error(50001, "广告活动不存在")
-    if camp.platform != "wb":
-        return error(10002, "该接口仅用于WB活动调试")
-
-    shop = db.query(Shop).filter(
-        Shop.id == camp.shop_id, Shop.tenant_id == tenant_id
-    ).first()
-    if not shop:
-        return error(30001, "店铺不存在")
-
-    client = WBClient(shop_id=shop.id, api_key=shop.api_key)
-    try:
-        url = f"{WB_ADVERT_API}/api/advert/v2/adverts"
-        raw = await client._request(
-            "GET", url, params={"ids": str(camp.platform_campaign_id)}
-        )
-        return success({
-            "campaign_id": camp.id,
-            "platform_campaign_id": camp.platform_campaign_id,
-            "campaign_name": camp.name,
-            "ad_type": camp.ad_type,
-            "raw_response": raw,
-        })
-    finally:
-        await client.close()
 
 
 @router.get("/campaign-budget/{campaign_id}")
