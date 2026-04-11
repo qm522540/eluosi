@@ -1,6 +1,6 @@
 """广告路由"""
 
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 from fastapi import APIRouter, Depends, Query, HTTPException
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
@@ -982,16 +982,18 @@ async def manual_sync_shop(
         else:
             updated = 0
 
-        # 更新同步时间
+        # 更新同步时间（用 Python tz-aware UTC，不依赖 MySQL NOW() 的服务器时区）
+        now_utc = datetime.now(timezone.utc)
         db.execute(text("""
             INSERT INTO shop_data_init_status
                 (shop_id, tenant_id, last_sync_at)
-            VALUES (:shop_id, :tenant_id, NOW())
+            VALUES (:shop_id, :tenant_id, :now_utc)
             ON DUPLICATE KEY UPDATE
-                last_sync_at = NOW()
+                last_sync_at = :now_utc
         """), {
             "shop_id": shop_id,
             "tenant_id": shop.tenant_id,
+            "now_utc": now_utc,
         })
         db.commit()
 

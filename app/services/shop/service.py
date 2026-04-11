@@ -1,5 +1,7 @@
 """店铺业务逻辑"""
 
+from datetime import datetime, timezone
+
 from sqlalchemy.orm import Session
 
 from app.models.shop import Shop
@@ -186,6 +188,20 @@ async def test_connection(db: Session, shop_id: int, tenant_id: int) -> dict:
         return {"code": ErrorCode.UNKNOWN_ERROR, "msg": "测试连接异常"}
 
 
+def _iso_utc(dt: datetime | None) -> str | None:
+    """把数据库的 naive datetime 当作 UTC 输出 ISO 字符串（带 +00:00 后缀）。
+
+    DB 列是 naive DateTime，但项目约定写入时存的就是 UTC clock。
+    前端 new Date(str) 对无时区后缀的 ISO 串会按本地时区解析，导致 8 小时偏差。
+    在边界统一附加 UTC tz。
+    """
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.isoformat()
+
+
 def _shop_to_dict(shop: Shop) -> dict:
     """将Shop ORM对象转为字典（不暴露敏感凭证）"""
     return {
@@ -197,7 +213,7 @@ def _shop_to_dict(shop: Shop) -> dict:
         "currency": shop.currency,
         "timezone": shop.timezone,
         "status": shop.status,
-        "last_sync_at": shop.last_sync_at.isoformat() if shop.last_sync_at else None,
-        "created_at": shop.created_at.isoformat() if shop.created_at else None,
-        "updated_at": shop.updated_at.isoformat() if shop.updated_at else None,
+        "last_sync_at": _iso_utc(shop.last_sync_at),
+        "created_at": _iso_utc(shop.created_at),
+        "updated_at": _iso_utc(shop.updated_at),
     }

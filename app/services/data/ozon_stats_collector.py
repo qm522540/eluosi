@@ -9,7 +9,7 @@
 """
 
 import asyncio
-from datetime import datetime, timedelta, date
+from datetime import datetime, timedelta, date, timezone
 
 from sqlalchemy.orm import Session
 
@@ -81,17 +81,17 @@ async def init_shop_history(db: Session, shop_id: int, days: int = 90) -> dict:
     ).first()
     if status:
         status.is_initialized = 1
-        status.initialized_at = datetime.now()
+        status.initialized_at = datetime.now(timezone.utc)
         status.last_sync_date = end_date
-        status.last_sync_at = datetime.now()
+        status.last_sync_at = datetime.now(timezone.utc)
     else:
         status = ShopDataInitStatus(
             shop_id=shop_id,
             tenant_id=shop.tenant_id,
             is_initialized=1,
-            initialized_at=datetime.now(),
+            initialized_at=datetime.now(timezone.utc),
             last_sync_date=end_date,
-            last_sync_at=datetime.now(),
+            last_sync_at=datetime.now(timezone.utc),
         )
         db.add(status)
     db.commit()
@@ -141,7 +141,7 @@ async def sync_yesterday_stats(db: Session, shop_id: int) -> dict:
     ).first()
     if status:
         status.last_sync_date = yesterday
-        status.last_sync_at = datetime.now()
+        status.last_sync_at = datetime.now(timezone.utc)
         db.commit()
 
     logger.info(f"shop_id={shop_id} 昨日数据同步完成: {yesterday} {total_inserted}条")

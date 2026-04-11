@@ -544,11 +544,18 @@ def get_data_status(
             "data_days": 0,
         })
 
+    def _iso_utc(dt):
+        if dt is None:
+            return None
+        if hasattr(dt, "tzinfo") and dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.isoformat()
+
     return success({
         "shop_id": shop.id,
         "is_initialized": bool(row.is_initialized),
-        "initialized_at": row.initialized_at.isoformat() if row.initialized_at else None,
-        "last_sync_at": row.last_sync_at.isoformat() if row.last_sync_at else None,
+        "initialized_at": _iso_utc(row.initialized_at),
+        "last_sync_at": _iso_utc(row.last_sync_at),
         "last_sync_date": row.last_sync_date.isoformat() if row.last_sync_date else None,
         "data_days": row.data_days,
     })

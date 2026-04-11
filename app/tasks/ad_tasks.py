@@ -5,7 +5,7 @@
 """
 
 import asyncio
-from datetime import datetime, date, timedelta
+from datetime import datetime, date, timedelta, timezone
 
 from app.tasks.celery_app import celery_app
 from app.database import SessionLocal
@@ -108,7 +108,7 @@ def fetch_wb_ad_stats(self):
                 total_stats += shop_stats
 
                 # 更新最后同步时间
-                shop.last_sync_at = datetime.utcnow()
+                shop.last_sync_at = datetime.now(timezone.utc)
                 db.commit()
 
             except Exception as e:
@@ -352,7 +352,7 @@ def fetch_ozon_ad_stats(self):
                 c, s = _run_async(_fetch_single_ozon_shop(db, shop))
                 total_campaigns += c
                 total_stats += s
-                shop.last_sync_at = datetime.utcnow()
+                shop.last_sync_at = datetime.now(timezone.utc)
                 db.commit()
             except Exception as e:
                 error_msg = f"shop_id={shop.id} Ozon采集失败: {str(e)}"
@@ -489,7 +489,7 @@ def fetch_yandex_ad_stats(self):
                 c, s = _run_async(_fetch_single_yandex_shop(db, shop))
                 total_campaigns += c
                 total_stats += s
-                shop.last_sync_at = datetime.utcnow()
+                shop.last_sync_at = datetime.now(timezone.utc)
                 db.commit()
             except Exception as e:
                 error_msg = f"shop_id={shop.id} Yandex采集失败: {str(e)}"
