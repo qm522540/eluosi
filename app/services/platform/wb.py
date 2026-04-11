@@ -504,90 +504,101 @@ class WBClient(BasePlatformClient):
     ) -> dict:
         """修改 WB 广告活动中某个 SKU 的 CPM 出价
 
-        调 PATCH /api/advert/v1/bids 接口。默认同时更新 search 和 recommendations
-        两个广告位（对齐 WB 后台 UI："一个输入框同时影响两个位置"）。
+        调 PATCH /api/advert/v1/bids 接口。WB 的 placement 取值和 bid_type 对应：
+          - bid_type='unified'（统一出价，新版默认）→ placement='combined'
+            一次性同时影响搜索和推荐两个广告位（对应 WB 后台 UI 的"一个输入框"）
+          - bid_type='manual'（每广告位独立出价，旧版）→ placement='search' 或 'recommendations'
 
-        容错回退：如果 WB 返回 "X placement is disabled"，自动把禁用的 placement
-        从列表里移除后重试，直到成功或列表为空。
+        策略：
+          1. 默认先用 ['combined']（unified 类型，绝大多数活动）
+          2. 如果 combined 被拒绝 ("placement is disabled" / "not applicable")，
+             自动 fallback 到 ['search', 'recommendations']
+          3. 在 search/recommendations 层再做 disabled 回退
 
         Args:
             advert_id: WB advertId
             nm_id:     WB nmId (SKU)
             cpm_rub:   新出价，卢布单位（内部转戈比）
-            placements: 要修改的 placement 列表，默认 ['search', 'recommendations']
+            placements: 覆盖默认顺序（调试用），默认 None 走自动策略
 
         Returns:
             {
-              "ok": bool,        # 至少有一个 placement 改成功
-              "error": str|None, # 全部失败时的错误原因
+              "ok": bool,
+              "error": str|None,
               "updated": list,   # 实际改成功的 placement
-              "skipped": list,   # 被 WB 拒绝的 placement（disabled 等）
+              "skipped": list,   # 被 WB 拒绝的 placement
             }
         """
-        if placements is None:
-            placements = ["search", "recommendations"]
-
         bid_kopecks = int(round(float(cpm_rub) * 100))
         if bid_kopecks <= 0:
             return {"ok": False, "error": "出价必须大于 0", "updated": [], "skipped": []}
 
         advert_id_int = int(advert_id)
         nm_id_int = int(nm_id)
-        remaining = list(placements)
+
+        # 生成候选列表：先试 combined，如果失败再试 [search, recommendations]
+        if placements is not None:
+            candidate_lists = [list(placements)]
+        else:
+            candidate_lists = [["combined"], ["search", "recommendations"]]
+
         skipped: list = []
 
-        # 最多尝试 placements+1 次，每次根据错误消息移除一个 disabled 的 placement
-        for attempt in range(len(placements) + 1):
-            if not remaining:
-                break
-            result = await self._patch_bids_once(
-                advert_id_int, nm_id_int, bid_kopecks, remaining,
-            )
-            if result["status"] and result["status"] < 400:
-                logger.info(
-                    f"WB 修改 CPM 成功 shop_id={self.shop_id} "
-                    f"advert={advert_id} nm={nm_id} kopecks={bid_kopecks} "
-                    f"updated={remaining} skipped={skipped}"
-                )
-                return {
-                    "ok": True,
-                    "error": None,
-                    "updated": remaining,
-                    "skipped": skipped,
-                }
-
-            detail = (result.get("detail") or "").lower()
-            # 识别 "X placement is disabled" 错误 → 移除该 placement 重试
-            disabled = None
-            for p in remaining:
-                if f"{p} placement is disabled" in detail:
-                    disabled = p
+        for candidate in candidate_lists:
+            remaining = list(candidate)
+            # 对单个候选列表内再做 disabled 回退
+            for _ in range(len(candidate) + 1):
+                if not remaining:
                     break
-            if disabled:
-                remaining.remove(disabled)
-                skipped.append(disabled)
-                logger.warning(
-                    f"WB placement={disabled} disabled，从列表移除继续 "
-                    f"remaining={remaining}"
+                result = await self._patch_bids_once(
+                    advert_id_int, nm_id_int, bid_kopecks, remaining,
                 )
-                continue
+                if result["status"] and result["status"] < 400:
+                    logger.info(
+                        f"WB 修改 CPM 成功 shop_id={self.shop_id} "
+                        f"advert={advert_id} nm={nm_id} kopecks={bid_kopecks} "
+                        f"updated={remaining} skipped={skipped}"
+                    )
+                    return {
+                        "ok": True,
+                        "error": None,
+                        "updated": remaining,
+                        "skipped": skipped,
+                    }
 
-            # 其它错误（非 disabled）→ 整体失败
-            logger.warning(
-                f"WB 修改 CPM 响应 {result['status']} "
-                f"advert={advert_id} nm={nm_id}: {result.get('detail')}"
-            )
-            return {
-                "ok": False,
-                "error": f"HTTP {result['status']}: {result.get('detail')}",
-                "updated": [],
-                "skipped": skipped,
-            }
+                detail = (result.get("detail") or "").lower()
+                # 识别 "X placement is disabled" → 移除该 placement 重试
+                disabled = None
+                for p in remaining:
+                    if f"{p} placement is disabled" in detail:
+                        disabled = p
+                        break
+                if disabled:
+                    remaining.remove(disabled)
+                    skipped.append(disabled)
+                    logger.warning(
+                        f"WB placement={disabled} disabled，重试 remaining={remaining}"
+                    )
+                    continue
 
-        # 走到这里说明所有 placement 都被 disabled
+                # 其它错误 → 这个候选列表彻底失败，跳出让外层换下一个候选
+                logger.warning(
+                    f"WB 修改 CPM 响应 {result['status']} "
+                    f"candidate={candidate} advert={advert_id} nm={nm_id}: "
+                    f"{result.get('detail')}"
+                )
+                remaining = []  # 跳出内循环
+                last_error = f"HTTP {result['status']}: {result.get('detail')}"
+                break
+
+        # 所有候选都失败了
         return {
             "ok": False,
-            "error": f"该活动所有广告位均未启用（{', '.join(skipped)}）",
+            "error": (
+                f"该活动所有广告位均未启用（已尝试：{', '.join(skipped) or 'combined'}）"
+                if skipped
+                else locals().get("last_error", "未知错误")
+            ),
             "updated": [],
             "skipped": skipped,
         }

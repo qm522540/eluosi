@@ -386,7 +386,11 @@ const AdsOverview = ({ shopId, platform, shops, searched }) => {
       // WB 可能部分成功：updated 里的广告位改了，skipped 里的没启用被跳过
       if (detailData.platform === 'wb') {
         const { updated = [], skipped = [] } = res?.data || {}
-        const placementLabel = { search: '搜索', recommendations: '推荐' }
+        const placementLabel = {
+          combined: '搜索+推荐',
+          search: '搜索',
+          recommendations: '推荐',
+        }
         if (skipped.length > 0) {
           Modal.warning({
             title: '出价部分修改成功',
