@@ -64,6 +64,8 @@ async def run_linkage_check(db, shop_id: int) -> dict:
     )
 
     # 2. 查询所有SKU库存 + 关联活动
+    # 仅处理所属活动为active状态的SKU
+    # (已暂停的活动不允许调用 Performance API 修改商品出价，Ozon会返回400)
     stocks = db.execute(text("""
         SELECT
             s.id, s.tenant_id, s.shop_id, s.campaign_id,
@@ -73,6 +75,7 @@ async def run_linkage_check(db, shop_id: int) -> dict:
         FROM inventory_platform_stocks s
         JOIN ad_campaigns c ON c.id = s.campaign_id
         WHERE s.shop_id = :shop_id
+          AND c.status = 'active'
         ORDER BY s.quantity ASC
     """), {"shop_id": shop_id}).fetchall()
 
