@@ -512,11 +512,16 @@ async def rule_restore_bids(
 
 @router.post("/rules/execute")
 async def rules_execute(
+    shop_id: int = Query(None, description="店铺ID，传入时只执行该店铺的规则"),
     db: Session = Depends(get_db),
     tenant_id: int = Depends(get_tenant_id),
 ):
-    """手动执行所有启用的自动化规则"""
-    result = await execute_automation_rules(db, tenant_id)
+    """手动执行启用的自动化规则
+
+    - 传 shop_id 时：只执行该店铺下启用的规则
+    - 不传时：执行整个租户下所有启用规则（保留给定时任务用）
+    """
+    result = await execute_automation_rules(db, tenant_id, shop_id=shop_id)
     if result["code"] != 0:
         return error(result["code"], result["msg"])
     return success(result["data"], msg="规则执行完成")

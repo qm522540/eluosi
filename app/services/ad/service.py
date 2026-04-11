@@ -1277,13 +1277,25 @@ def delete_automation_rule(db: Session, rule_id: int, tenant_id: int) -> dict:
         return {"code": ErrorCode.UNKNOWN_ERROR, "msg": "删除自动化规则失败"}
 
 
-async def execute_automation_rules(db: Session, tenant_id: int) -> dict:
-    """执行所有启用的自动化规则"""
+async def execute_automation_rules(
+    db: Session, tenant_id: int, shop_id: int = None
+) -> dict:
+    """执行自动化规则
+
+    Args:
+        db: 数据库会话
+        tenant_id: 租户ID (必填)
+        shop_id: 店铺ID (可选)。传入时只执行该店铺的启用规则；
+                 不传时执行租户下所有启用规则（用于Celery定时全量任务）
+    """
     try:
-        rules = db.query(AdAutomationRule).filter(
+        query = db.query(AdAutomationRule).filter(
             AdAutomationRule.tenant_id == tenant_id,
             AdAutomationRule.enabled == 1,
-        ).all()
+        )
+        if shop_id is not None:
+            query = query.filter(AdAutomationRule.shop_id == shop_id)
+        rules = query.all()
 
         results = []
         today = date.today()

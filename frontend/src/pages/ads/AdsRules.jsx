@@ -233,7 +233,8 @@ const AdsRules = ({ shopId, platform, searched }) => {
   const handleExecuteRules = async () => {
     setExecuting(true)
     try {
-      const res = await executeRules()
+      // 传入当前选中的shopId，只执行该店铺下启用的规则
+      const res = await executeRules(shopId)
       message.success(`规则执行完成，检查了 ${res.data?.rules_checked || 0} 条规则`)
       fetchRules()
     } catch (err) {

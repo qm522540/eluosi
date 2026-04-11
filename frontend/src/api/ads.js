@@ -174,9 +174,10 @@ export function restoreRuleBids(id) {
   return request.post(`/ads/rules/${id}/restore-bids`)
 }
 
-/** 手动执行规则 */
-export function executeRules() {
-  return request.post('/ads/rules/execute')
+/** 手动执行规则（传shopId时只执行该店铺的启用规则） */
+export function executeRules(shopId) {
+  const params = shopId ? { shop_id: shopId } : undefined
+  return request.post('/ads/rules/execute', null, { params })
 }
 
 // ==================== 预算管理 ====================
