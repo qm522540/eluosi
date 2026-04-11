@@ -15,3 +15,17 @@ body {
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
+
+/* 库存联动表格行状态高亮 */
+.row-paused > td {
+  background-color: #fff1f0 !important;
+}
+.row-paused:hover > td {
+  background-color: #ffccc7 !important;
+}
+.row-alert > td {
+  background-color: #fffbe6 !important;
+}
+.row-alert:hover > td {
+  background-color: #fff1b8 !important;
+}

@@ -18,6 +18,7 @@ import {
   executeRules, restoreRuleBids, getBidLogs,
 } from '@/api/ads'
 import { PLATFORMS } from '@/utils/constants'
+import InventoryLinkage from './InventoryLinkage'
 
 const { Text } = Typography
 
@@ -276,6 +277,11 @@ const AdsRules = ({ shopId, platform, searched }) => {
           <Button type="primary" icon={<PlusOutlined />} onClick={handleCreateRule}>新建规则</Button>
         </Space>
       </div>
+
+      {/* 库存联动专属板块 */}
+      <Card size="small" style={{ marginBottom: 16 }} bodyStyle={{ padding: 16 }}>
+        <InventoryLinkage shopId={shopId} />
+      </Card>
 
       <Table size="small" dataSource={rules} rowKey="id" loading={rulesLoading} pagination={false}
         columns={[
