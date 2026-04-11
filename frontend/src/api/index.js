@@ -27,10 +27,15 @@ request.interceptors.response.use(
     const res = response.data
     // 后端统一响应格式: {code, msg, data, timestamp}
     if (res.code !== 0) {
-      // 认证失败，清除登录状态
-      if (res.code === 20001 || res.code === 20002) {
-        useAuthStore.getState().logout()
-        window.location.href = '/login'
+      // 仅 token 过期/失效才自动跳转登录页（20002=TOKEN_EXPIRED, 20003=TOKEN_INVALID）
+      // 注意：20001=AUTH_FAILED（邮箱密码错）不应跳转，因为用户已经在登录页，
+      // 跳转会触发整页刷新导致 message.error 提示被吞掉，看起来"点登录没反应"
+      if (res.code === 20002 || res.code === 20003) {
+        // 已经在登录页就不要重复跳转，避免覆盖错误提示
+        if (window.location.pathname !== '/login') {
+          useAuthStore.getState().logout()
+          window.location.href = '/login'
+        }
       }
       return Promise.reject(new Error(res.msg || '请求失败'))
     }
@@ -39,7 +44,9 @@ request.interceptors.response.use(
   (error) => {
     if (error.response) {
       const status = error.response.status
-      if (status === 401 || status === 403) {
+      // 401/403 认证类错误：仅在非登录页才跳转
+      if ((status === 401 || status === 403)
+          && window.location.pathname !== '/login') {
         useAuthStore.getState().logout()
         window.location.href = '/login'
       }
