@@ -381,8 +381,39 @@ const AdsOverview = ({ shopId, platform, shops, searched }) => {
       const apiBid = detailData.platform === 'ozon'
         ? String(newBidValue * 1000000)
         : String(newBidValue)
-      await updateCampaignBid(detailData.id, { sku: editingBid.sku, bid: apiBid })
-      message.success('出价修改成功')
+      const res = await updateCampaignBid(detailData.id, { sku: editingBid.sku, bid: apiBid })
+
+      // WB 可能部分成功：updated 里的广告位改了，skipped 里的没启用被跳过
+      if (detailData.platform === 'wb') {
+        const { updated = [], skipped = [] } = res?.data || {}
+        const placementLabel = { search: '搜索', recommendations: '推荐' }
+        if (skipped.length > 0) {
+          Modal.warning({
+            title: '出价部分修改成功',
+            content: (
+              <div>
+                <p>
+                  已更新：
+                  {updated.map(p => placementLabel[p] || p).join('、') || '无'}
+                </p>
+                <p style={{ color: '#faad14' }}>
+                  未启用跳过：
+                  {skipped.map(p => placementLabel[p] || p).join('、')}
+                </p>
+                <p style={{ marginTop: 12, fontSize: 12, color: '#999' }}>
+                  被跳过的广告位需要先到 WB 后台启用才能修改出价。WB 修改一般 3 分钟内生效。
+                </p>
+              </div>
+            ),
+            okText: '我知道了',
+          })
+        } else {
+          message.success(`出价修改成功：${updated.map(p => placementLabel[p] || p).join('、')}`)
+        }
+      } else {
+        message.success('出价修改成功')
+      }
+
       setEditingBid(null)
       setNewBidValue(null)
       fetchCampaignProducts(detailData.id)

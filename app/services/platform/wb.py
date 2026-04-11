@@ -461,14 +461,54 @@ class WBClient(BasePlatformClient):
 
     # ==================== 广告活动商品 ====================
 
+    async def _patch_bids_once(
+        self, advert_id: int, nm_id: int, bid_kopecks: int, placements: list,
+    ) -> dict:
+        """单次 PATCH /api/advert/v1/bids 调用，返回 {status, detail}"""
+        url = f"{WB_ADVERT_API}/api/advert/v1/bids"
+        payload = {
+            "bids": [
+                {
+                    "advert_id": advert_id,
+                    "nm_bids": [
+                        {"nm_id": nm_id, "bid_kopecks": bid_kopecks, "placement": p}
+                        for p in placements
+                    ],
+                }
+            ],
+        }
+        try:
+            await self._rate_limit()
+            client = await self._get_client()
+            r = await client.request("PATCH", url, json=payload)
+        except Exception as e:
+            logger.error(
+                f"WB PATCH bids 异常 shop_id={self.shop_id} "
+                f"advert_id={advert_id} nm_id={nm_id}: {e}"
+            )
+            return {"status": 0, "detail": str(e)}
+
+        if r.status_code < 400:
+            return {"status": r.status_code, "detail": None}
+
+        try:
+            err_body = r.json()
+            detail = err_body.get("detail") or err_body.get("title") or r.text[:300]
+        except Exception:
+            detail = r.text[:300]
+        return {"status": r.status_code, "detail": detail}
+
     async def update_campaign_cpm(
         self, advert_id: str, nm_id: int, cpm_rub: float,
         placements: Optional[list] = None,
     ) -> dict:
         """修改 WB 广告活动中某个 SKU 的 CPM 出价
 
-        调 PATCH /api/advert/v1/bids 接口，同时更新 search 和 recommendations
-        两个广告位（对齐 WB 后台 UI 行为：一个输入框同时影响两个位置）。
+        调 PATCH /api/advert/v1/bids 接口。默认同时更新 search 和 recommendations
+        两个广告位（对齐 WB 后台 UI："一个输入框同时影响两个位置"）。
+
+        容错回退：如果 WB 返回 "X placement is disabled"，自动把禁用的 placement
+        从列表里移除后重试，直到成功或列表为空。
 
         Args:
             advert_id: WB advertId
@@ -477,58 +517,80 @@ class WBClient(BasePlatformClient):
             placements: 要修改的 placement 列表，默认 ['search', 'recommendations']
 
         Returns:
-            {"ok": bool, "error": str|None}
+            {
+              "ok": bool,        # 至少有一个 placement 改成功
+              "error": str|None, # 全部失败时的错误原因
+              "updated": list,   # 实际改成功的 placement
+              "skipped": list,   # 被 WB 拒绝的 placement（disabled 等）
+            }
         """
         if placements is None:
             placements = ["search", "recommendations"]
 
         bid_kopecks = int(round(float(cpm_rub) * 100))
         if bid_kopecks <= 0:
-            return {"ok": False, "error": "出价必须大于 0"}
+            return {"ok": False, "error": "出价必须大于 0", "updated": [], "skipped": []}
 
-        url = f"{WB_ADVERT_API}/api/advert/v1/bids"
-        payload = {
-            "bids": [
-                {
-                    "advert_id": int(advert_id),
-                    "nm_bids": [
-                        {
-                            "nm_id": int(nm_id),
-                            "bid_kopecks": bid_kopecks,
-                            "placement": p,
-                        }
-                        for p in placements
-                    ],
-                }
-            ],
-        }
+        advert_id_int = int(advert_id)
+        nm_id_int = int(nm_id)
+        remaining = list(placements)
+        skipped: list = []
 
-        # 不走 _request（它会在 4xx 抛异常），这里要读取错误 body 返回给前端
-        try:
-            await self._rate_limit()
-            client = await self._get_client()
-            r = await client.request("PATCH", url, json=payload)
-        except Exception as e:
-            logger.error(
-                f"WB 修改 CPM 失败 shop_id={self.shop_id} "
-                f"advert_id={advert_id} nm_id={nm_id}: {e}"
+        # 最多尝试 placements+1 次，每次根据错误消息移除一个 disabled 的 placement
+        for attempt in range(len(placements) + 1):
+            if not remaining:
+                break
+            result = await self._patch_bids_once(
+                advert_id_int, nm_id_int, bid_kopecks, remaining,
             )
-            return {"ok": False, "error": str(e)}
+            if result["status"] and result["status"] < 400:
+                logger.info(
+                    f"WB 修改 CPM 成功 shop_id={self.shop_id} "
+                    f"advert={advert_id} nm={nm_id} kopecks={bid_kopecks} "
+                    f"updated={remaining} skipped={skipped}"
+                )
+                return {
+                    "ok": True,
+                    "error": None,
+                    "updated": remaining,
+                    "skipped": skipped,
+                }
 
-        if r.status_code < 400:
-            return {"ok": True, "error": None}
+            detail = (result.get("detail") or "").lower()
+            # 识别 "X placement is disabled" 错误 → 移除该 placement 重试
+            disabled = None
+            for p in remaining:
+                if f"{p} placement is disabled" in detail:
+                    disabled = p
+                    break
+            if disabled:
+                remaining.remove(disabled)
+                skipped.append(disabled)
+                logger.warning(
+                    f"WB placement={disabled} disabled，从列表移除继续 "
+                    f"remaining={remaining}"
+                )
+                continue
 
-        # 4xx / 5xx：尝试解析 WB 标准错误 body
-        try:
-            err_body = r.json()
-            detail = err_body.get("detail") or err_body.get("title") or r.text[:300]
-        except Exception:
-            detail = r.text[:300]
-        logger.warning(
-            f"WB 修改 CPM 响应 {r.status_code} "
-            f"advert_id={advert_id} nm_id={nm_id}: {detail}"
-        )
-        return {"ok": False, "error": f"HTTP {r.status_code}: {detail}"}
+            # 其它错误（非 disabled）→ 整体失败
+            logger.warning(
+                f"WB 修改 CPM 响应 {result['status']} "
+                f"advert={advert_id} nm={nm_id}: {result.get('detail')}"
+            )
+            return {
+                "ok": False,
+                "error": f"HTTP {result['status']}: {result.get('detail')}",
+                "updated": [],
+                "skipped": skipped,
+            }
+
+        # 走到这里说明所有 placement 都被 disabled
+        return {
+            "ok": False,
+            "error": f"该活动所有广告位均未启用（{', '.join(skipped)}）",
+            "updated": [],
+            "skipped": skipped,
+        }
 
     async def fetch_campaign_products(self, advert_id: str) -> list:
         """拉取 WB 广告活动下的商品列表及出价

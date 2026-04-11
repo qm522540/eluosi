@@ -645,7 +645,12 @@ async def update_campaign_bid(
                 cpm_rub=bid_rub,
             )
             if api_result["ok"]:
-                return success(msg="出价修改成功")
+                updated = api_result.get("updated") or []
+                skipped = api_result.get("skipped") or []
+                msg = f"出价修改成功（已更新 {', '.join(updated)}）"
+                if skipped:
+                    msg += f"；{', '.join(skipped)} 广告位未启用已跳过"
+                return success({"updated": updated, "skipped": skipped}, msg=msg)
             return error(50003, f"出价修改失败: {api_result.get('error', '未知错误')}")
         finally:
             await client.close()
