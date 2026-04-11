@@ -355,14 +355,132 @@ def enable(db, tenant_id: int, shop_id: int) -> dict:
     return {"code": 0}
 
 
-def disable(db, tenant_id: int, shop_id: int) -> dict:
-    """停用分时调价（不主动回弹出价，由用户走 restore_sku 逐SKU恢复）"""
+async def disable(db, tenant_id: int, shop_id: int) -> dict:
+    """停用分时调价：
+    1. 立刻 is_active=0，停掉 Celery executor
+    2. 遍历所有 last_auto_bid IS NOT NULL 的 SKU → 调 Ozon API 恢复 original_bid
+    3. 成功的清空 last_auto_bid + 写日志（execute_type='user_manual'）
+    4. 失败的保留 last_auto_bid，让用户能在状态表里看到、手动 restore_sku 重试
+
+    多租户隔离：所有 SQL 都带 tenant_id
+    Returns: {code, data: {restored, failed, errors[]}}
+    """
+    from app.models.shop import Shop
+    from app.services.platform.ozon import OzonClient
+
+    # 1. 先停 executor（避免回弹途中被并发执行覆盖）
     db.execute(text("""
         UPDATE time_pricing_rules SET is_active = 0, updated_at = NOW()
         WHERE shop_id = :shop_id AND tenant_id = :tenant_id
     """), {"shop_id": shop_id, "tenant_id": tenant_id})
     db.commit()
-    return {"code": 0}
+
+    # 2. 找出所有需要回弹的 SKU
+    rows = db.execute(text("""
+        SELECT
+            ag.id, ag.platform_group_id, ag.original_bid, ag.last_auto_bid,
+            c.id AS campaign_id, c.platform_campaign_id, c.name AS campaign_name
+        FROM ad_groups ag
+        JOIN ad_campaigns c ON ag.campaign_id = c.id
+        WHERE c.shop_id = :shop_id
+          AND c.tenant_id = :tenant_id
+          AND c.platform = 'ozon'
+          AND ag.last_auto_bid IS NOT NULL
+          AND ag.original_bid IS NOT NULL
+    """), {"shop_id": shop_id, "tenant_id": tenant_id}).fetchall()
+
+    if not rows:
+        return {"code": 0, "data": {"restored": 0, "failed": 0, "errors": []}}
+
+    shop = db.query(Shop).filter(
+        Shop.id == shop_id, Shop.tenant_id == tenant_id
+    ).first()
+    if not shop:
+        return {"code": ErrorCode.SHOP_NOT_FOUND, "msg": "店铺不存在"}
+
+    client = OzonClient(
+        shop_id=shop.id, api_key=shop.api_key, client_id=shop.client_id,
+        perf_client_id=shop.perf_client_id or "",
+        perf_client_secret=shop.perf_client_secret or "",
+    )
+
+    restored = 0
+    failed = 0
+    errors: list[str] = []
+
+    try:
+        for row in rows:
+            target_bid = max(round(float(row.original_bid)), int(MIN_BID))
+            try:
+                api_result = await client.update_campaign_bid(
+                    row.platform_campaign_id,
+                    row.platform_group_id,
+                    str(int(target_bid * 1_000_000)),
+                )
+            except Exception as e:
+                logger.warning(
+                    f"disable 回弹 sku={row.platform_group_id} "
+                    f"活动={row.campaign_id} 异常: {e}"
+                )
+                failed += 1
+                errors.append(f"SKU {row.platform_group_id}: {e}")
+                continue
+
+            if not api_result.get("ok"):
+                err_msg = api_result.get("error") or "unknown"
+                logger.warning(
+                    f"disable 回弹 sku={row.platform_group_id} "
+                    f"活动={row.campaign_id} API失败: {err_msg}"
+                )
+                failed += 1
+                errors.append(f"SKU {row.platform_group_id}: {err_msg}")
+                continue
+
+            # 写调价日志（execute_type='user_manual'，复用现有枚举）
+            previous = float(row.last_auto_bid)
+            pct = round((target_bid - previous) / previous * 100, 2) if previous > 0 else 0.0
+            db.execute(text("""
+                INSERT INTO bid_adjustment_logs (
+                    tenant_id, shop_id, campaign_id, campaign_name,
+                    platform_sku_id, sku_name,
+                    old_bid, new_bid, adjust_pct,
+                    execute_type, success, created_at
+                ) VALUES (
+                    :tenant_id, :shop_id, :campaign_id, :campaign_name,
+                    :sku, NULL, :old_bid, :new_bid, :pct,
+                    'user_manual', 1, NOW()
+                )
+            """), {
+                "tenant_id": tenant_id,
+                "shop_id": shop_id,
+                "campaign_id": row.campaign_id,
+                "campaign_name": row.campaign_name,
+                "sku": row.platform_group_id,
+                "old_bid": previous,
+                "new_bid": target_bid,
+                "pct": pct,
+            })
+
+            # 清空 last_auto_bid → 该行从"当前执行状态"消失
+            db.execute(text("""
+                UPDATE ad_groups SET last_auto_bid = NULL, updated_at = NOW()
+                WHERE id = :id AND tenant_id = :tenant_id
+            """), {"id": row.id, "tenant_id": tenant_id})
+
+            restored += 1
+
+        db.commit()
+    finally:
+        await client.close()
+
+    return {
+        "code": 0,
+        "data": {
+            "restored": restored,
+            "failed": failed,
+            "errors": errors[:10],  # 前端最多展示 10 条
+        },
+    }
 
 
 async def restore_sku(db, tenant_id: int, shop_id: int, sku: str) -> dict:

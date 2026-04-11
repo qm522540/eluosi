@@ -743,13 +743,38 @@ const TimePricingConfig = ({ shopId, activeMode, onSaved }) => {
             {isEnabled ? (
               <Button
                 danger
+                loading={saving}
                 onClick={async () => {
+                  setSaving(true)
                   try {
-                    await disableTimePricing(shopId)
-                    message.success('分时调价已关闭')
+                    const res = await disableTimePricing(shopId)
+                    const { restored = 0, failed = 0, errors = [] } = res?.data || {}
+                    if (failed > 0) {
+                      Modal.warning({
+                        title: '分时调价已关闭，部分 SKU 回弹失败',
+                        content: (
+                          <div>
+                            <p>成功恢复 {restored} 个 SKU，失败 {failed} 个</p>
+                            <p style={{ marginTop: 8, color: '#999', fontSize: 12 }}>
+                              失败的 SKU 仍保留在「当前执行状态」中，可手动点「恢复原价」重试：
+                            </p>
+                            <ul style={{ marginTop: 8, fontSize: 12, color: '#666' }}>
+                              {errors.map((e, i) => <li key={i}>{e}</li>)}
+                            </ul>
+                          </div>
+                        ),
+                        okText: '我知道了',
+                      })
+                    } else if (restored > 0) {
+                      message.success(`分时调价已关闭，已回弹 ${restored} 个 SKU 到原价`)
+                    } else {
+                      message.success('分时调价已关闭')
+                    }
                     onSaved()
                   } catch (e) {
                     message.error(e?.message || '关闭失败')
+                  } finally {
+                    setSaving(false)
                   }
                 }}
               >

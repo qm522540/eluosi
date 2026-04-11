@@ -150,13 +150,22 @@ def enable_time_pricing(
 
 
 @router.post("/time-pricing/{shop_id}/disable")
-def disable_time_pricing(
+async def disable_time_pricing(
     shop: Shop = Depends(get_owned_shop),
     db: Session = Depends(get_db),
 ):
     from app.services.bid.time_pricing_executor import disable
-    disable(db, shop.tenant_id, shop.id)
-    return success({"shop_id": shop.id, "is_active": False})
+    result = await disable(db, shop.tenant_id, shop.id)
+    if result.get("code") != 0:
+        return error(result["code"], result.get("msg") or "")
+    data = result.get("data") or {}
+    return success({
+        "shop_id": shop.id,
+        "is_active": False,
+        "restored": data.get("restored", 0),
+        "failed": data.get("failed", 0),
+        "errors": data.get("errors", []),
+    })
 
 
 @router.post("/time-pricing/{shop_id}/restore-sku")
