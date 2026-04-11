@@ -3,6 +3,7 @@ import {
   Button, Modal, message,
   Table, Tag, Tooltip, Space,
   InputNumber, Collapse, Spin, Badge,
+  Card, Row, Col, Select, Alert,
 } from 'antd'
 import {
   getDashboard, getTimePricing, updateTimePricing,
@@ -83,8 +84,16 @@ const StatusBar = ({ shopId }) => {
 
   if (!data) return null
 
+  // 把 ISO 8601 时间字符串截成 HH:mm:ss
+  // 例：2026-04-11T11:30:48.791109+03:00 → 11:30:48
+  const formatTime = (iso) => {
+    if (!iso) return '-'
+    const m = iso.match(/T(\d{2}:\d{2}:\d{2})/)
+    return m ? m[1] : iso
+  }
+
   const items = [
-    { label: '莫斯科时间', value: data.moscow_time, color: '#534AB7' },
+    { label: '莫斯科时间', value: formatTime(data.moscow_time), color: '#534AB7' },
     { label: '当前时段', value: data.current_period_name || '基准期' },
     {
       label: '下次执行',
@@ -421,20 +430,14 @@ const TimePricingConfig = ({ shopId, onSaved }) => {
     }
   }
 
-  const getHourType = (h) => {
-    if (peakHours.includes(h)) return 'peak'
-    if (midHours.includes(h)) return 'mid'
-    if (lowHours.includes(h)) return 'low'
-    return 'none'
-  }
-
-  const toggleHour = (h, targetType) => {
-    setPeakHours(prev => prev.filter(x => x !== h))
-    setMidHours(prev => prev.filter(x => x !== h))
-    setLowHours(prev => prev.filter(x => x !== h))
-    if (targetType === 'peak') setPeakHours(prev => [...prev, h].sort((a, b) => a - b))
-    else if (targetType === 'mid') setMidHours(prev => [...prev, h].sort((a, b) => a - b))
-    else if (targetType === 'low') setLowHours(prev => [...prev, h].sort((a, b) => a - b))
+  // 生成 24 小时下拉选项，已被其他档位占用的小时 disabled
+  const hourOpts = (excludeA, excludeB) => {
+    const used = new Set([...excludeA, ...excludeB])
+    return HOURS.map(i => ({
+      value: i,
+      label: `${String(i).padStart(2, '0')}:00`,
+      disabled: used.has(i),
+    }))
   }
 
   // #16 修复：保存前本地校验 24 小时全覆盖 + 不重叠
@@ -499,17 +502,6 @@ const TimePricingConfig = ({ shopId, onSaved }) => {
     } finally {
       setSaving(false)
     }
-  }
-
-  const HOUR_COLORS = {
-    peak: { bg: '#FAEEDA', border: '#EF9F27', color: '#633806' },
-    mid:  { bg: '#E6F1FB', border: '#378ADD', color: '#0C447C' },
-    low:  { bg: '#FCEBEB', border: '#E24B4A', color: '#791F1F' },
-    none: {
-      bg: 'var(--color-background-primary, #fff)',
-      border: 'var(--color-border-secondary, #d9d9d9)',
-      color: 'var(--color-text-secondary, #666)',
-    },
   }
 
   // 状态表格列
@@ -606,110 +598,134 @@ const TimePricingConfig = ({ shopId, onSaved }) => {
     <div>
       {/* 时段配置（可折叠） */}
       <Collapse defaultActiveKey={['config']} style={{ marginBottom: 10 }}>
-        <Collapse.Panel key="config" header="时段配置">
-          <div style={{ marginBottom: 12 }}>
-            <div style={{
-              fontSize: 12,
-              color: 'var(--color-text-secondary, #666)',
-              marginBottom: 10,
-            }}>
-              点击小时分配时段，未分配时段维持基准出价不变
-            </div>
+        <Collapse.Panel key="config" header="规则条件">
+          <Alert
+            message="根据莫斯科时间自动调整出价，高峰加价抢流量，低谷降价省预算"
+            type="info"
+            showIcon
+            style={{ marginBottom: 16 }}
+          />
 
-            {/* 小时选择器 */}
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginBottom: 14 }}>
-              {HOURS.map(h => {
-                const type = getHourType(h)
-                const c = HOUR_COLORS[type]
-                return (
-                  <Tooltip key={h} title="点击选择时段" trigger={type === 'none' ? 'hover' : ''}>
-                    <div
-                      style={{
-                        width: 44, height: 28,
-                        border: `0.5px solid ${c.border}`,
-                        borderRadius: 6,
-                        background: c.bg,
-                        color: c.color,
-                        fontSize: 11,
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        cursor: 'pointer',
-                        fontWeight: type !== 'none' ? 500 : 400,
-                      }}
-                      onClick={() => {
-                        if (type === 'none') {
-                          Modal.confirm({
-                            title: `${String(h).padStart(2, '0')}:00 分配到`,
-                            content: (
-                              <Space>
-                                <Button onClick={() => { toggleHour(h, 'peak'); Modal.destroyAll() }}>高峰期</Button>
-                                <Button onClick={() => { toggleHour(h, 'mid'); Modal.destroyAll() }}>次高峰</Button>
-                                <Button onClick={() => { toggleHour(h, 'low'); Modal.destroyAll() }}>低谷期</Button>
-                              </Space>
-                            ),
-                            footer: null,
-                          })
-                        } else {
-                          toggleHour(h, 'none')
-                        }
-                      }}
-                    >
-                      {String(h).padStart(2, '0')}
-                    </div>
-                  </Tooltip>
-                )
-              })}
-            </div>
-
-            {/* 三时段系数 */}
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 10 }}>
-              {[
-                { label: '高峰期系数', value: peakRatio, onChange: setPeakRatio, color: '#EF9F27', hours: peakHours },
-                { label: '次高峰期系数', value: midRatio, onChange: setMidRatio, color: '#378ADD', hours: midHours },
-                { label: '低谷期系数', value: lowRatio, onChange: setLowRatio, color: '#E24B4A', hours: lowHours },
-              ].map(item => (
-                <div key={item.label}>
-                  <div style={{
-                    fontSize: 11,
-                    color: 'var(--color-text-secondary, #666)',
-                    marginBottom: 4,
-                  }}>
-                    {item.label}
-                    <span style={{
-                      fontSize: 10,
-                      color: 'var(--color-text-tertiary, #999)',
-                      marginLeft: 4,
-                    }}>
-                      ({item.hours.length}个时段)
-                    </span>
-                  </div>
-                  <Space>
-                    <InputNumber
-                      value={item.value}
-                      onChange={item.onChange}
-                      min={10} max={200} step={5}
-                      style={{ width: 80 }}
-                    />
-                    <span style={{
-                      fontSize: 12,
-                      color: 'var(--color-text-secondary, #666)',
-                    }}>%</span>
-                  </Space>
-                  <div style={{ fontSize: 11, color: item.color, marginTop: 4 }}>
-                    原价₽50 → ₽{Math.round(50 * item.value / 100)}
-                  </div>
+          {/* 高峰时段 */}
+          <Card
+            size="small"
+            title="高峰时段"
+            style={{ marginBottom: 12, borderLeft: '3px solid #ff4d4f' }}
+          >
+            <Row gutter={16}>
+              <Col span={16}>
+                <div style={{ fontSize: 13, marginBottom: 6, color: 'var(--color-text-secondary, #666)' }}>
+                  时间范围
                 </div>
-              ))}
-            </div>
-          </div>
+                <Select
+                  mode="multiple"
+                  placeholder="选择小时"
+                  value={peakHours}
+                  onChange={vs => setPeakHours([...vs].sort((a, b) => a - b))}
+                  options={hourOpts(midHours, lowHours)}
+                  style={{ width: '100%' }}
+                />
+              </Col>
+              <Col span={8}>
+                <div style={{ fontSize: 13, marginBottom: 6, color: 'var(--color-text-secondary, #666)' }}>
+                  出价系数
+                </div>
+                <InputNumber
+                  value={peakRatio}
+                  onChange={setPeakRatio}
+                  min={10} max={500} step={5}
+                  style={{ width: '100%' }}
+                  addonAfter="%"
+                />
+                <div style={{ fontSize: 11, color: '#EF9F27', marginTop: 4 }}>
+                  原价₽50 → ₽{Math.round(50 * peakRatio / 100)}
+                </div>
+              </Col>
+            </Row>
+          </Card>
+
+          {/* 次高峰时段 */}
+          <Card
+            size="small"
+            title="次高峰时段"
+            style={{ marginBottom: 12, borderLeft: '3px solid #faad14' }}
+          >
+            <Row gutter={16}>
+              <Col span={16}>
+                <div style={{ fontSize: 13, marginBottom: 6, color: 'var(--color-text-secondary, #666)' }}>
+                  时间范围
+                </div>
+                <Select
+                  mode="multiple"
+                  placeholder="选择小时"
+                  value={midHours}
+                  onChange={vs => setMidHours([...vs].sort((a, b) => a - b))}
+                  options={hourOpts(peakHours, lowHours)}
+                  style={{ width: '100%' }}
+                />
+              </Col>
+              <Col span={8}>
+                <div style={{ fontSize: 13, marginBottom: 6, color: 'var(--color-text-secondary, #666)' }}>
+                  出价系数
+                </div>
+                <InputNumber
+                  value={midRatio}
+                  onChange={setMidRatio}
+                  min={10} max={500} step={5}
+                  style={{ width: '100%' }}
+                  addonAfter="%"
+                />
+                <div style={{ fontSize: 11, color: '#378ADD', marginTop: 4 }}>
+                  原价₽50 → ₽{Math.round(50 * midRatio / 100)}
+                </div>
+              </Col>
+            </Row>
+          </Card>
+
+          {/* 低谷时段 */}
+          <Card
+            size="small"
+            title="低谷时段"
+            style={{ marginBottom: 12, borderLeft: '3px solid #1890ff' }}
+          >
+            <Row gutter={16}>
+              <Col span={16}>
+                <div style={{ fontSize: 13, marginBottom: 6, color: 'var(--color-text-secondary, #666)' }}>
+                  时间范围
+                </div>
+                <Select
+                  mode="multiple"
+                  placeholder="选择小时"
+                  value={lowHours}
+                  onChange={vs => setLowHours([...vs].sort((a, b) => a - b))}
+                  options={hourOpts(peakHours, midHours)}
+                  style={{ width: '100%' }}
+                />
+              </Col>
+              <Col span={8}>
+                <div style={{ fontSize: 13, marginBottom: 6, color: 'var(--color-text-secondary, #666)' }}>
+                  出价系数
+                </div>
+                <InputNumber
+                  value={lowRatio}
+                  onChange={setLowRatio}
+                  min={10} max={500} step={5}
+                  style={{ width: '100%' }}
+                  addonAfter="%"
+                />
+                <div style={{ fontSize: 11, color: '#E24B4A', marginTop: 4 }}>
+                  原价₽50 → ₽{Math.round(50 * lowRatio / 100)}
+                </div>
+              </Col>
+            </Row>
+          </Card>
 
           <div style={{
-            fontSize: 11,
+            fontSize: 12,
             color: 'var(--color-text-tertiary, #999)',
             marginBottom: 12,
           }}>
-            每小时05分自动执行 · 仅处理投放中的广告活动 · 差值小于₽1不调用API
+            三档时段必须覆盖全 24 小时（0-23）且不重叠 · 每小时05分莫斯科时间自动执行 · 差值小于₽1不调用API
           </div>
 
           <Space>
