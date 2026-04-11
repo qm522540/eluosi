@@ -376,8 +376,12 @@ const AdsOverview = ({ shopId, platform, shops, searched }) => {
     if (!editingBid || newBidValue === null || !detailData) return
     setBidUpdating(true)
     try {
-      const apiBid = newBidValue * 1000000
-      await updateCampaignBid(detailData.id, { sku: editingBid.sku, bid: String(apiBid) })
+      // Ozon：bid 字段传 micro-rubles 字符串（历史约定）
+      // WB：bid 字段传卢布字符串（后端会转戈比，同时改 search+recommendations）
+      const apiBid = detailData.platform === 'ozon'
+        ? String(newBidValue * 1000000)
+        : String(newBidValue)
+      await updateCampaignBid(detailData.id, { sku: editingBid.sku, bid: apiBid })
       message.success('出价修改成功')
       setEditingBid(null)
       setNewBidValue(null)
@@ -973,7 +977,7 @@ const AdsOverview = ({ shopId, platform, shops, searched }) => {
                     <Text type="secondary">
                       {detailData.platform === 'ozon'
                         ? '以下是该活动关联的商品及出价，点击出价可修改。'
-                        : 'WB活动按搜索 / 推荐两个广告位分别定价，下表展示每个 SKU 的当前 CPM。当前为只读视图。'}
+                        : 'WB活动按搜索 / 推荐两个广告位分别定价，点击「修改」可同时设置两个广告位的 CPM（与 WB 后台一致）。如果活动未启动或 placement 未启用，修改会被 WB 拒绝。'}
                     </Text>
                   </div>
                   {campaignProducts.length > 0 ? (
@@ -1021,15 +1025,55 @@ const AdsOverview = ({ shopId, platform, shops, searched }) => {
                       />
                     ) : (
                       // WB 平台：per-SKU 出价表格（搜索 / 推荐双 CPM）
+                      // 一个输入框同时改两个广告位（对齐 WB 后台 UI 行为）
                       <Table size="small" dataSource={campaignProducts} rowKey="sku" loading={productsLoading} pagination={false}
                         columns={[
                           { title: 'SKU (nm_id)', dataIndex: 'sku', key: 'sku', width: 140 },
-                          { title: '类目', dataIndex: 'subject_name', key: 'subject_name', width: 180,
+                          { title: '类目', dataIndex: 'subject_name', key: 'subject_name', width: 160,
                             render: v => v || '-' },
-                          { title: '搜索 CPM (₽)', dataIndex: 'bid_search', key: 'bid_search', width: 140,
+                          { title: '搜索 CPM (₽)', dataIndex: 'bid_search', key: 'bid_search', width: 130,
                             render: v => `${Number(v || 0).toLocaleString()} ₽` },
-                          { title: '推荐 CPM (₽)', dataIndex: 'bid_recommendations', key: 'bid_recommendations', width: 140,
+                          { title: '推荐 CPM (₽)', dataIndex: 'bid_recommendations', key: 'bid_recommendations', width: 130,
                             render: v => `${Number(v || 0).toLocaleString()} ₽` },
+                          {
+                            title: '修改 CPM', key: 'edit', width: 260,
+                            render: (_, record) => {
+                              if (editingBid?.sku === record.sku) {
+                                return (
+                                  <Space>
+                                    <InputNumber
+                                      size="small"
+                                      value={newBidValue}
+                                      onChange={setNewBidValue}
+                                      min={1} step={1}
+                                      style={{ width: 90 }}
+                                      addonAfter="₽"
+                                      autoFocus
+                                    />
+                                    <Button size="small" type="primary" loading={bidUpdating} onClick={handleUpdateBid}>
+                                      保存
+                                    </Button>
+                                    <Button size="small" onClick={() => setEditingBid(null)}>取消</Button>
+                                  </Space>
+                                )
+                              }
+                              return (
+                                <Tooltip title="同时修改搜索和推荐 CPM（与 WB 后台一致）">
+                                  <Button
+                                    size="small"
+                                    type="link"
+                                    onClick={() => {
+                                      setEditingBid(record)
+                                      // 用 search 值作为初始值（实测两个 placement 通常相同）
+                                      setNewBidValue(Number(record.bid_search || 0))
+                                    }}
+                                  >
+                                    修改
+                                  </Button>
+                                </Tooltip>
+                              )
+                            },
+                          },
                         ]}
                       />
                     )

@@ -630,6 +630,25 @@ async def update_campaign_bid(
             return error(50003, f"出价修改失败: {api_result.get('error', '未知错误')}")
         finally:
             await client.close()
+    elif camp.platform == "wb":
+        # WB：bid 字段约定传卢布（float 字符串），内部转戈比，同时改 search+recommendations
+        try:
+            bid_rub = float(new_bid)
+        except (ValueError, TypeError):
+            return error(10003, "WB 出价必须是有效数字（卢布）")
+        from app.services.platform.wb import WBClient
+        client = WBClient(shop_id=shop.id, api_key=shop.api_key)
+        try:
+            api_result = await client.update_campaign_cpm(
+                advert_id=camp.platform_campaign_id,
+                nm_id=int(sku),
+                cpm_rub=bid_rub,
+            )
+            if api_result["ok"]:
+                return success(msg="出价修改成功")
+            return error(50003, f"出价修改失败: {api_result.get('error', '未知错误')}")
+        finally:
+            await client.close()
     else:
         return error(10002, "该平台暂不支持出价修改")
 

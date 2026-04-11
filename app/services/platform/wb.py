@@ -461,6 +461,75 @@ class WBClient(BasePlatformClient):
 
     # ==================== 广告活动商品 ====================
 
+    async def update_campaign_cpm(
+        self, advert_id: str, nm_id: int, cpm_rub: float,
+        placements: Optional[list] = None,
+    ) -> dict:
+        """修改 WB 广告活动中某个 SKU 的 CPM 出价
+
+        调 PATCH /api/advert/v1/bids 接口，同时更新 search 和 recommendations
+        两个广告位（对齐 WB 后台 UI 行为：一个输入框同时影响两个位置）。
+
+        Args:
+            advert_id: WB advertId
+            nm_id:     WB nmId (SKU)
+            cpm_rub:   新出价，卢布单位（内部转戈比）
+            placements: 要修改的 placement 列表，默认 ['search', 'recommendations']
+
+        Returns:
+            {"ok": bool, "error": str|None}
+        """
+        if placements is None:
+            placements = ["search", "recommendations"]
+
+        bid_kopecks = int(round(float(cpm_rub) * 100))
+        if bid_kopecks <= 0:
+            return {"ok": False, "error": "出价必须大于 0"}
+
+        url = f"{WB_ADVERT_API}/api/advert/v1/bids"
+        payload = {
+            "bids": [
+                {
+                    "advert_id": int(advert_id),
+                    "nm_bids": [
+                        {
+                            "nm_id": int(nm_id),
+                            "bid_kopecks": bid_kopecks,
+                            "placement": p,
+                        }
+                        for p in placements
+                    ],
+                }
+            ],
+        }
+
+        # 不走 _request（它会在 4xx 抛异常），这里要读取错误 body 返回给前端
+        try:
+            await self._rate_limit()
+            client = await self._get_client()
+            r = await client.request("PATCH", url, json=payload)
+        except Exception as e:
+            logger.error(
+                f"WB 修改 CPM 失败 shop_id={self.shop_id} "
+                f"advert_id={advert_id} nm_id={nm_id}: {e}"
+            )
+            return {"ok": False, "error": str(e)}
+
+        if r.status_code < 400:
+            return {"ok": True, "error": None}
+
+        # 4xx / 5xx：尝试解析 WB 标准错误 body
+        try:
+            err_body = r.json()
+            detail = err_body.get("detail") or err_body.get("title") or r.text[:300]
+        except Exception:
+            detail = r.text[:300]
+        logger.warning(
+            f"WB 修改 CPM 响应 {r.status_code} "
+            f"advert_id={advert_id} nm_id={nm_id}: {detail}"
+        )
+        return {"ok": False, "error": f"HTTP {r.status_code}: {detail}"}
+
     async def fetch_campaign_products(self, advert_id: str) -> list:
         """拉取 WB 广告活动下的商品列表及出价
 
