@@ -710,13 +710,8 @@ const AdsOverview = ({ shopId, platform, shops, searched }) => {
       .map(k => ({ key: k, ...ALL_COLUMNS[k] })),
     {
       title: <ColumnSelector platform={platform} allColumns={ALL_COLUMNS} visibleColumns={visibleColumns} defaultColumns={PLATFORM_DEFAULT_COLS} onChange={handleColumnChange} />,
-      key: 'actions', fixed: 'right', width: 120,
-      render: (_, record) => (
-        <Space size={4}>
-          <Button type="link" size="small" icon={<EyeOutlined />} onClick={() => handleDetail(record.id)}>详情</Button>
-          <Button type="link" size="small" icon={<EditOutlined />} onClick={() => handleEdit(record)}>编辑</Button>
-        </Space>
-      ),
+      key: 'actions', fixed: 'right', width: 50,
+      render: () => null,
     },
   ]
 
