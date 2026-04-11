@@ -133,6 +133,11 @@ def get_dashboard_info(db, shop_id: int, tenant_id: int) -> dict:
             elif period == "low":
                 period_name = "低谷期"
                 ratio = row.low_ratio
+            else:
+                # 4 档语义：未匹配 = 平谷期，保持原价不动
+                period = "base"
+                period_name = "平谷期"
+                ratio = 100
             last_executed_at = _iso(row.time_last)
             last_execute_result = row.time_result
             last_execute_status = "success" if row.time_last else None

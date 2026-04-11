@@ -67,8 +67,12 @@ async def execute(db, shop_id: int, tenant_id: int = None) -> dict:
 
     period = get_current_period(rule)
     if not period:
-        logger.warning(f"shop_id={shop_id} 时段判断失败 hour={moscow_hour()}")
-        _save_result(db, shop_id, counters, "时段判断失败")
+        # 平谷期：当前小时不在 peak/mid/low 任一档里 → 保持原价不动，整个店铺跳过
+        logger.info(
+            f"shop_id={shop_id} 当前莫斯科{moscow_hour()}点为平谷期，本次不调价"
+        )
+        counters["period"] = "base"
+        _save_result(db, shop_id, tenant_id, counters, f"平谷期({moscow_hour()}:00) 不调价")
         return counters
 
     ratio = {"peak": rule.peak_ratio, "mid": rule.mid_ratio, "low": rule.low_ratio}[period]
@@ -244,25 +248,34 @@ async def _process_sku(db, client, campaign, sku: str, sku_name: str,
 def update_rule(db, tenant_id: int, shop_id: int, data: dict) -> dict:
     """更新分时调价规则（PUT /time-pricing/{shop_id}）
 
-    校验：24小时全覆盖 + 两两不相交 + ratio∈[10,500]
-    多租户：tenant_id 来自路由层 get_owned_shop 校验后的 Shop.tenant_id
+    4 档时段语义（用户对齐 2026-04-11，违反老林规范 §2.2 24小时全覆盖约束）：
+      - 高峰 / 次高峰 / 低谷：用户配置的小时，按对应 ratio 调价
+      - 平谷期：未配置的小时，保持原价不动（ratio=100% 隐式）
+    校验：三档之间不重叠 + 每个小时在 [0,23] + ratio∈[10,500]
     """
     import json
 
     peak = data.get("peak_hours") or []
     mid = data.get("mid_hours") or []
     low = data.get("low_hours") or []
-    peak_ratio = int(data.get("peak_ratio") or 120)
-    mid_ratio = int(data.get("mid_ratio") or 100)
-    low_ratio = int(data.get("low_ratio") or 60)
+    peak_ratio = int(data.get("peak_ratio") or 130)
+    mid_ratio = int(data.get("mid_ratio") or 120)
+    low_ratio = int(data.get("low_ratio") or 50)
 
-    # 校验1：24小时全覆盖
+    # 校验1：每个小时在 [0,23] 范围
+    for arr_name, arr in [("peak", peak), ("mid", mid), ("low", low)]:
+        for h in arr:
+            if not isinstance(h, int) or not 0 <= h <= 23:
+                return {"code": ErrorCode.BID_INVALID_HOURS_CONFIG,
+                        "msg": f"{arr_name}_hours 包含非法小时值: {h}"}
+
+    # 校验2：三档之间两两不相交
+    total = len(peak) + len(mid) + len(low)
     union = set(peak) | set(mid) | set(low)
-    if union != set(range(24)):
-        return {"code": ErrorCode.BID_INVALID_HOURS_CONFIG, "msg": "时段必须覆盖0-23全部24小时"}
-    # 校验2：两两不相交
-    if len(peak) + len(mid) + len(low) != 24:
-        return {"code": ErrorCode.BID_INVALID_HOURS_CONFIG, "msg": "时段不能重叠"}
+    if total != len(union):
+        return {"code": ErrorCode.BID_INVALID_HOURS_CONFIG,
+                "msg": "时段不能重叠（同一小时不能同时属于多档）"}
+
     # 校验3：ratio 范围
     for r in (peak_ratio, mid_ratio, low_ratio):
         if not 10 <= r <= 500:

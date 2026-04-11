@@ -22,9 +22,13 @@ import {
 // 常量配置
 // ==========================================
 const HOURS = Array.from({ length: 24 }, (_, i) => i)
-const DEFAULT_PEAK_HOURS = [10, 11, 12, 13, 19, 20, 21, 22]
-const DEFAULT_MID_HOURS = [7, 8, 9, 14, 15, 16, 17, 18]
-const DEFAULT_LOW_HOURS = [0, 1, 2, 3, 4, 5, 6, 23]
+// 4档时段语义：高峰/次高峰/低谷 + 未配置=平谷期(保持原价不动)
+const DEFAULT_PEAK_HOURS = [19, 20, 21]
+const DEFAULT_MID_HOURS = [22]
+const DEFAULT_LOW_HOURS = [2, 3, 4, 5, 6]
+const DEFAULT_PEAK_RATIO = 130
+const DEFAULT_MID_RATIO = 120
+const DEFAULT_LOW_RATIO = 50
 
 const TEMPLATE_DEFAULTS = {
   conservative: {
@@ -84,12 +88,12 @@ const StatusBar = ({ shopId }) => {
 
   if (!data) return null
 
-  // 把 ISO 8601 时间字符串截成 HH:mm:ss
-  // 例：2026-04-11T11:30:48.791109+03:00 → 11:30:48
+  // 把 ISO 8601 时间字符串截成 YYYY-MM-DD HH:mm:ss
+  // 例：2026-04-11T11:30:48.791109+03:00 → 2026-04-11 11:30:48
   const formatTime = (iso) => {
     if (!iso) return '-'
-    const m = iso.match(/T(\d{2}:\d{2}:\d{2})/)
-    return m ? m[1] : iso
+    const m = iso.match(/^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2}:\d{2})/)
+    return m ? `${m[1]} ${m[2]}` : iso
   }
 
   const items = [
@@ -393,9 +397,9 @@ const TimePricingConfig = ({ shopId, onSaved }) => {
   const [peakHours, setPeakHours] = useState(DEFAULT_PEAK_HOURS)
   const [midHours, setMidHours] = useState(DEFAULT_MID_HOURS)
   const [lowHours, setLowHours] = useState(DEFAULT_LOW_HOURS)
-  const [peakRatio, setPeakRatio] = useState(120)
-  const [midRatio, setMidRatio] = useState(100)
-  const [lowRatio, setLowRatio] = useState(60)
+  const [peakRatio, setPeakRatio] = useState(DEFAULT_PEAK_RATIO)
+  const [midRatio, setMidRatio] = useState(DEFAULT_MID_RATIO)
+  const [lowRatio, setLowRatio] = useState(DEFAULT_LOW_RATIO)
   const [saving, setSaving] = useState(false)
   const [statusData, setStatusData] = useState([])
 
@@ -440,12 +444,18 @@ const TimePricingConfig = ({ shopId, onSaved }) => {
     }))
   }
 
-  // #16 修复：保存前本地校验 24 小时全覆盖 + 不重叠
+  // 4 档时段语义：三档不重叠即可，未配置的小时归为平谷期(保持原价不动)
   const validateHoursLocal = () => {
     const all = [...peakHours, ...midHours, ...lowHours]
-    if (all.length !== 24 || new Set(all).size !== 24) {
-      message.error('时段必须覆盖 0-23 全部 24 小时且不重叠')
+    if (all.length !== new Set(all).size) {
+      message.error('同一小时不能同时属于多个时段')
       return false
+    }
+    for (const h of all) {
+      if (h < 0 || h > 23) {
+        message.error('小时必须在 0-23 之间')
+        return false
+      }
     }
     for (const r of [peakRatio, midRatio, lowRatio]) {
       if (r < 10 || r > 500) {
@@ -600,7 +610,7 @@ const TimePricingConfig = ({ shopId, onSaved }) => {
       <Collapse defaultActiveKey={['config']} style={{ marginBottom: 10 }}>
         <Collapse.Panel key="config" header="规则条件">
           <Alert
-            message="根据莫斯科时间自动调整出价，高峰加价抢流量，低谷降价省预算"
+            message="根据莫斯科时间自动调整出价：高峰加价抢流量，低谷降价省预算，未配置的时段为平谷期保持原价不动"
             type="info"
             showIcon
             style={{ marginBottom: 16 }}
@@ -725,7 +735,7 @@ const TimePricingConfig = ({ shopId, onSaved }) => {
             color: 'var(--color-text-tertiary, #999)',
             marginBottom: 12,
           }}>
-            三档时段必须覆盖全 24 小时（0-23）且不重叠 · 每小时05分莫斯科时间自动执行 · 差值小于₽1不调用API
+            三档时段不能重叠 · 未配置的小时为平谷期，保持原价不动 · 每小时05分莫斯科时间自动执行 · 差值小于₽1不调用API
           </div>
 
           <Space>
