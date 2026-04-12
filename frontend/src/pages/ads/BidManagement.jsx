@@ -1314,44 +1314,6 @@ const AIPricingConfig = ({ shopId, platform, onSaved }) => {
         </Collapse.Panel>
       </Collapse>
 
-      {/* AI 调价开关 */}
-      <div style={{
-        background: 'var(--color-background-primary, #fff)',
-        border: '0.5px solid var(--color-border-tertiary, #e8e8e8)',
-        borderRadius: 8,
-        padding: 14,
-        marginBottom: 10,
-        display: 'flex', alignItems: 'center', gap: 10,
-      }}>
-        <Switch
-          checked={aiEnabled}
-          loading={saving}
-          onChange={async (checked) => {
-            if (checked) {
-              await handleEnableAI()
-            } else {
-              try {
-                await disableAIPricing(shopId)
-                setAiEnabled(false)
-                message.success('AI调价已关闭')
-                onSaved()
-              } catch (e) {
-                message.error(e?.message || '关闭失败')
-              }
-            }
-          }}
-        />
-        <span style={{ fontSize: 14, fontWeight: 500 }}>AI 智能调价</span>
-        <span style={{ fontSize: 12, color: aiEnabled ? '#389e0d' : 'var(--color-text-secondary, #999)' }}>
-          {aiEnabled ? '已开启' : '已关闭'}
-        </span>
-        {aiEnabled && (
-          <span style={{ fontSize: 11, color: 'var(--color-text-tertiary, #999)' }}>
-            AI生成建议，点击下方「分析」后手动确认执行
-          </span>
-        )}
-      </div>
-
       {/* 数据源管理（可折叠） */}
       <Collapse style={{ marginBottom: 12 }}>
         <Collapse.Panel key="data" header="数据源管理">
@@ -1439,6 +1401,44 @@ const AIPricingConfig = ({ shopId, platform, onSaved }) => {
           </div>
         </Collapse.Panel>
       </Collapse>
+
+      {/* AI 调价开关 */}
+      <div style={{
+        background: 'var(--color-background-primary, #fff)',
+        border: '0.5px solid var(--color-border-tertiary, #e8e8e8)',
+        borderRadius: 8,
+        padding: 14,
+        marginBottom: 10,
+        display: 'flex', alignItems: 'center', gap: 10,
+      }}>
+        <Switch
+          checked={aiEnabled}
+          loading={saving}
+          onChange={async (checked) => {
+            if (checked) {
+              await handleEnableAI()
+            } else {
+              try {
+                await disableAIPricing(shopId)
+                setAiEnabled(false)
+                message.success('AI调价已关闭')
+                onSaved()
+              } catch (e) {
+                message.error(e?.message || '关闭失败')
+              }
+            }
+          }}
+        />
+        <span style={{ fontSize: 14, fontWeight: 500 }}>AI 智能调价</span>
+        <span style={{ fontSize: 12, color: aiEnabled ? '#389e0d' : 'var(--color-text-secondary, #999)' }}>
+          {aiEnabled ? '已开启' : '已关闭'}
+        </span>
+        {aiEnabled && (
+          <span style={{ fontSize: 11, color: 'var(--color-text-tertiary, #999)' }}>
+            AI生成建议，点击下方「分析」后手动确认执行
+          </span>
+        )}
+      </div>
 
       {/* 立即分析栏 */}
       <div style={{
