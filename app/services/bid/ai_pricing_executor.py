@@ -687,6 +687,8 @@ def _query_sku_history(db, shop_id: int, tenant_id: int, platform: str) -> dict:
         revenue = float(r.revenue or 0)
         ctr = round(clicks / impressions * 100, 2) if impressions > 0 else 0
         roas = round(revenue / spend, 2) if spend > 0 else 0
+        cpc = round(spend / clicks, 2) if clicks > 0 else 0
+        cr = round(orders / clicks * 100, 2) if clicks > 0 else 0
 
         key = f"{r.campaign_id}_{r.sku_id}"
         result[key] = {
@@ -696,6 +698,8 @@ def _query_sku_history(db, shop_id: int, tenant_id: int, platform: str) -> dict:
             "orders": orders,
             "revenue": round(revenue, 2),
             "ctr": ctr,
+            "cpc": cpc,
+            "cr": cr,
             "roas": roas,
             "days": int(r.days),
         }
@@ -893,24 +897,32 @@ async def _call_ai(template: dict, campaigns: list, products_by_campaign: dict,
 - orders: 订单数
 - revenue: 收入（卢布）
 - ctr: 点击率(%)
+- cpc: 单次点击成本（卢布），spend/clicks
+- cr: 转化率(%)，orders/clicks
 - roas: 广告回报率（收入/花费）
 - days: 有数据的天数
 
 请基于历史数据判断商品阶段和调价方向：
-- ROAS > 目标ROAS 且 orders 增长 → growing，可适当加价扩量
+- ROAS > 目标ROAS 且 cr 稳定 → growing，可适当加价扩量
 - ROAS < 最低ROAS 且 spend 持续 → declining，应降价止损
-- 有展示无订单、数据天数少 → cold_start 或 testing
+- cpc 过高但 cr 尚可 → 出价偏高，适当降价控成本
+- 有展示无点击（ctr极低） → 素材/相关性问题，不建议加价
+- 有点击无订单（cr=0）且数据天数少 → cold_start 或 testing
 - 无 stats_7d 的商品按 cold_start_baseline 处理
 """
+
+    daily_budget = template.get('daily_budget', 0)
+    daily_budget_text = f"{daily_budget}卢布" if daily_budget else "不限"
 
     prompt = f"""你是{platform_label}广告优化专家。基于商品的历史表现数据和当前出价，给出CPM出价调整建议。
 
 【策略模板】
-- 目标ROAS: {template.get('target_roas')}
-- 最低ROAS: {template.get('min_roas')}
-- 最高出价: {template.get('max_bid')}卢布
-- 单次最大调幅: {template.get('max_adjust_pct')}%
-- 毛利率: {template.get('gross_margin')}
+- 目标ROAS: {template.get('target_roas')}（广告回报率目标，ROAS高于此值的商品可加价扩量）
+- 最低ROAS: {template.get('min_roas')}（止损线，ROAS低于此值必须降价或暂停）
+- 最高出价: {template.get('max_bid')}卢布（硬上限，suggested_bid 绝不能超过此值）
+- 日预算: {daily_budget_text}（每日广告花费上限，0=不限；预算紧张时优先保高ROAS商品）
+- 单次最大调幅: {template.get('max_adjust_pct')}%（单次调整幅度不得超过此百分比）
+- 毛利率: {template.get('gross_margin')}（用于计算盈亏平衡ROAS = 1/毛利率）
 {history_section}
 【活动和商品数据（出价单位：卢布）】
 {json.dumps(prompt_data, ensure_ascii=False)}
