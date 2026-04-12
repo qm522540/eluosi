@@ -748,16 +748,13 @@ async def _execute_bid_update(client, platform: str, campaign_id, sku, suggested
 # ==================== 模板默认值 ====================
 
 _DEFAULT_CONSERVATIVE = {
-    "target_roas": 2.0, "min_roas": 1.5, "max_bid": 100,
-    "daily_budget": 500, "max_adjust_pct": 15, "gross_margin": 0.5,
+    "target_roas": 2.0, "min_roas": 1.5, "max_bid": 100, "max_adjust_pct": 15,
 }
 _DEFAULT_DEFAULT = {
-    "target_roas": 3.0, "min_roas": 1.8, "max_bid": 180,
-    "daily_budget": 2000, "max_adjust_pct": 30, "gross_margin": 0.5,
+    "target_roas": 3.0, "min_roas": 1.8, "max_bid": 180, "max_adjust_pct": 30,
 }
 _DEFAULT_AGGRESSIVE = {
-    "target_roas": 4.0, "min_roas": 2.5, "max_bid": 300,
-    "daily_budget": 0, "max_adjust_pct": 25, "gross_margin": 0.5,
+    "target_roas": 4.0, "min_roas": 2.5, "max_bid": 300, "max_adjust_pct": 25,
 }
 
 
@@ -772,12 +769,8 @@ def _validate_template_json(t: dict) -> Optional[str]:
             return "min_roas 必须 < target_roas"
         if not (3 <= float(t.get("max_bid", 0)) <= 10000):
             return "max_bid 范围 [3, 10000]"
-        if not (0 <= float(t.get("daily_budget", 0)) <= 1000000):
-            return "daily_budget 范围 [0, 1000000]"
         if not (0 < float(t.get("max_adjust_pct", 0)) <= 100):
             return "max_adjust_pct 范围 (0, 100]"
-        if not (0 < float(t.get("gross_margin", 0)) < 1):
-            return "gross_margin 范围 (0, 1)"
     except (KeyError, TypeError, ValueError) as e:
         return f"字段缺失或类型错误: {e}"
     return None
@@ -911,18 +904,13 @@ async def _call_ai(template: dict, campaigns: list, products_by_campaign: dict,
 - 无 stats_7d 的商品按 cold_start_baseline 处理
 """
 
-    daily_budget = template.get('daily_budget', 0)
-    daily_budget_text = f"{daily_budget}卢布" if daily_budget else "不限"
-
     prompt = f"""你是{platform_label}广告优化专家。基于商品的历史表现数据和当前出价，给出CPM出价调整建议。
 
 【策略模板】
 - 目标ROAS: {template.get('target_roas')}（广告回报率目标，ROAS高于此值的商品可加价扩量）
 - 最低ROAS: {template.get('min_roas')}（止损线，ROAS低于此值必须降价或暂停）
 - 最高出价: {template.get('max_bid')}卢布（硬上限，suggested_bid 绝不能超过此值）
-- 日预算: {daily_budget_text}（每日广告花费上限，0=不限；预算紧张时优先保高ROAS商品）
 - 单次最大调幅: {template.get('max_adjust_pct')}%（单次调整幅度不得超过此百分比）
-- 毛利率: {template.get('gross_margin')}（用于计算盈亏平衡ROAS = 1/毛利率）
 {history_section}
 【活动和商品数据（出价单位：卢布）】
 {json.dumps(prompt_data, ensure_ascii=False)}

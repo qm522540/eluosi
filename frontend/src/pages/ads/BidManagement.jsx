@@ -34,18 +34,15 @@ const DEFAULT_LOW_RATIO = 60
 const TEMPLATE_DEFAULTS = {
   conservative: {
     target_roas: 2.0, min_roas: 1.5,
-    max_bid: 100, daily_budget: 500,
-    max_adjust_pct: 15, gross_margin: 0.5,
+    max_bid: 100, max_adjust_pct: 15,
   },
   default: {
     target_roas: 3.0, min_roas: 1.8,
-    max_bid: 180, daily_budget: 2000,
-    max_adjust_pct: 30, gross_margin: 0.5,
+    max_bid: 180, max_adjust_pct: 30,
   },
   aggressive: {
     target_roas: 4.0, min_roas: 2.5,
-    max_bid: 300, daily_budget: 0,
-    max_adjust_pct: 25, gross_margin: 0.5,
+    max_bid: 300, max_adjust_pct: 25,
   },
 }
 
@@ -1298,7 +1295,6 @@ const AIPricingConfig = ({ shopId, platform, onSaved }) => {
             目标ROAS {currentTemplate.target_roas}x ·
             最低ROAS {currentTemplate.min_roas}x ·
             最高出价 ₽{currentTemplate.max_bid} ·
-            日预算 {currentTemplate.daily_budget === 0 ? '不限' : `₽${currentTemplate.daily_budget}`} ·
             最大调幅 {currentTemplate.max_adjust_pct}%
           </div>
           {/* 自动执行功能后端保留，UI 暂不暴露。默认建议模式：AI 生成建议，用户手动确认执行 */}
@@ -1371,7 +1367,7 @@ const AIPricingConfig = ({ shopId, platform, onSaved }) => {
             marginBottom: 10,
           }}>
             {[
-              { title: '广告效果', items: ['CPM出价', '曝光量', '点击量/CTR', '订单数/CR', '收入/ROAS', '花费/日预算'] },
+              { title: '广告效果', items: ['CPM出价', '曝光量', '点击量/CTR', '订单数/CR', '收入/ROAS', '花费'] },
               { title: '时段分布', items: ['各小时花费', '各小时点击', '各小时转化'] },
               { title: '数据粒度', items: ['按活动维度', '按SKU维度', '按天汇总', '保留3个月'] },
             ].map(group => (
@@ -1573,14 +1569,7 @@ const AIPricingConfig = ({ shopId, platform, onSaved }) => {
             { key: 'target_roas', label: '目标ROAS', unit: 'x', step: 0.1, hint: '高于此值可加价' },
             { key: 'min_roas', label: '最低ROAS', unit: 'x', step: 0.1, hint: '低于此值触发降价' },
             { key: 'max_bid', label: '最高出价', unit: '₽', step: 10, hint: '单次出价上限' },
-            { key: 'daily_budget', label: '日预算上限', unit: '₽', step: 100, hint: '0=不限制' },
             { key: 'max_adjust_pct', label: '最大单次调幅', unit: '%', step: 5, hint: '防止出价剧烈波动' },
-            {
-              key: 'gross_margin', label: '毛利率', unit: '%', step: 0.05,
-              hint: 'AI计算利润的基础',
-              transform: v => v * 100,
-              reverse: v => v / 100,
-            },
           ].map(field => (
             <div key={field.key}>
               <div style={{
