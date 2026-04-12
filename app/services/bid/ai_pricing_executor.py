@@ -310,6 +310,9 @@ async def _analyze_now_inner(db, tenant_id: int, shop_id: int,
           AND DATE(generated_at) < :today
     """), {"shop_id": shop_id, "tenant_id": tenant_id, "today": moscow_today()})
 
+    # 查 SKU 历史数据天数（用于写入 data_days，不依赖 AI 返回）
+    sku_stats = _query_sku_history(db, shop_id, tenant_id, platform)
+
     # 写入新建议
     saved = []
     for raw in suggestions_raw:
@@ -367,7 +370,7 @@ async def _analyze_now_inner(db, tenant_id: int, shop_id: int,
             "basis": raw.get("decision_basis") or "shop_benchmark",
             "current_roas": raw.get("current_roas"),
             "expected_roas": raw.get("expected_roas"),
-            "data_days": raw.get("data_days") or 0,
+            "data_days": sku_stats.get(f"{camp_id}_{sku}", {}).get("days", 0),
             "reason": (raw.get("reason") or "")[:500],
         })
         saved.append({
