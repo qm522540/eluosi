@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
+import { useAuthStore } from '../../stores/authStore'
 import {
   Button, Modal, message, Switch,
   Table, Tag, Tooltip, Space,
@@ -1031,7 +1032,7 @@ const AIPricingConfig = ({ shopId, platform, onSaved }) => {
     setStreamOpen(true)
 
     try {
-      const token = localStorage.getItem('token')
+      const token = useAuthStore.getState().token
       const resp = await fetch(`/api/v1/bid-management/ai-pricing/${shopId}/analyze-stream`, {
         headers: { Authorization: `Bearer ${token}` },
       })
@@ -1503,70 +1504,83 @@ const AIPricingConfig = ({ shopId, platform, onSaved }) => {
         </Button>
       </div>
 
-      {/* AI 分析过程面板 */}
-      {streamOpen && (
+      {/* AI 分析过程弹窗 */}
+      <Modal
+        title={null}
+        open={streamOpen}
+        footer={null}
+        closable={!analyzing}
+        maskClosable={false}
+        onCancel={() => setStreamOpen(false)}
+        width={680}
+        styles={{
+          body: { padding: 0 },
+          mask: { background: 'rgba(0,0,0,0.65)' },
+        }}
+      >
         <div style={{
-          background: '#1a1a2e',
+          background: 'linear-gradient(135deg, #1a1a2e 0%, #16213e 100%)',
           borderRadius: 8,
-          padding: 16,
-          marginBottom: 14,
-          position: 'relative',
+          padding: 20,
         }}>
           <div style={{
             display: 'flex',
-            justifyContent: 'space-between',
             alignItems: 'center',
-            marginBottom: 10,
+            gap: 10,
+            marginBottom: 16,
           }}>
-            <span style={{
-              fontSize: 12,
-              color: analyzing ? '#7c6cf0' : '#52c41a',
-              display: 'flex',
-              alignItems: 'center',
-              gap: 6,
+            <div style={{
+              width: 32, height: 32, borderRadius: '50%',
+              background: 'linear-gradient(135deg, #7c6cf0, #534AB7)',
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              fontSize: 16,
             }}>
-              {analyzing && (
-                <span style={{
-                  width: 6, height: 6, borderRadius: '50%',
-                  background: '#7c6cf0',
-                  animation: 'pulse 1.5s infinite',
-                }} />
-              )}
-              {streamPhase}
-            </span>
-            {!analyzing && (
-              <Button
-                size="small"
-                type="text"
-                style={{ color: '#999', fontSize: 11 }}
-                onClick={() => setStreamOpen(false)}
-              >
-                收起
-              </Button>
-            )}
+              AI
+            </div>
+            <div>
+              <div style={{ color: '#fff', fontSize: 14, fontWeight: 500 }}>
+                DeepSeek 智能分析
+              </div>
+              <div style={{
+                fontSize: 12,
+                color: analyzing ? '#7c6cf0' : '#52c41a',
+                display: 'flex',
+                alignItems: 'center',
+                gap: 6,
+              }}>
+                {analyzing && (
+                  <span style={{
+                    width: 6, height: 6, borderRadius: '50%',
+                    background: '#7c6cf0',
+                    animation: 'pulse 1.5s infinite',
+                  }} />
+                )}
+                {streamPhase}
+              </div>
+            </div>
           </div>
           <div style={{
-            background: '#0d0d1a',
-            borderRadius: 6,
-            padding: 12,
-            maxHeight: 320,
+            background: 'rgba(0,0,0,0.3)',
+            borderRadius: 8,
+            padding: 16,
+            height: 380,
             overflowY: 'auto',
-            fontSize: 12,
+            fontSize: 13,
             lineHeight: 1.8,
-            color: '#d4d4d4',
-            fontFamily: 'Consolas, Monaco, monospace',
+            color: '#e0e0e0',
+            fontFamily: '-apple-system, "Segoe UI", Roboto, monospace',
             whiteSpace: 'pre-wrap',
             wordBreak: 'break-all',
           }}>
             {streamText || (analyzing ? '等待 AI 响应...' : '')}
-            {analyzing && <span style={{ animation: 'blink 1s infinite' }}>|</span>}
+            {analyzing && <span style={{ color: '#7c6cf0', animation: 'blink 1s infinite', fontWeight: 'bold' }}>|</span>}
           </div>
           <style>{`
             @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.3; } }
             @keyframes blink { 0%,100% { opacity: 1; } 50% { opacity: 0; } }
           `}</style>
         </div>
-      )}
+      </Modal>
 
       {/* 建议列表 */}
       <div style={{
