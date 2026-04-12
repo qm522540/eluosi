@@ -607,6 +607,33 @@ const TimePricingConfig = ({ shopId, activeMode, onSaved }) => {
 
   return (
     <div>
+      {/* 使用说明（可折叠） */}
+      <Collapse style={{ marginBottom: 10 }}>
+        <Collapse.Panel key="guide" header="使用说明（点击展开）">
+          <div style={{ fontSize: 13, lineHeight: 1.8, color: 'var(--color-text-primary, #333)' }}>
+            <div style={{ fontWeight: 500, marginBottom: 4 }}>开启后的运行规则</div>
+            <ul style={{ paddingLeft: 20, margin: '0 0 12px' }}>
+              <li>系统<b>每小时</b>自动检查一次（莫斯科时间每小时第 5 分钟执行）</li>
+              <li>只调整当前店铺 <b>Ozon 平台</b>的<b>活跃广告活动</b>中的商品</li>
+              <li>出价公式：<b>商品原始出价 × 当前时段的出价系数</b>（最低不低于 ₽3）</li>
+              <li>首次执行时系统会自动记录每个商品的「原始出价」作为基准，后续都按原始出价乘以系数</li>
+            </ul>
+            <div style={{ fontWeight: 500, marginBottom: 4 }}>以下商品会被跳过，不调价</div>
+            <ul style={{ paddingLeft: 20, margin: '0 0 12px' }}>
+              <li>标记为「用户管理」的商品 —— 您在下方执行状态表中可以手动标记或恢复</li>
+              <li>有人在 Ozon 后台手动改过出价的商品 —— 系统检测到出价被人为修改后会自动标记为用户管理并跳过</li>
+              <li>调整后出价与当前出价差值小于 ₽1 的商品 —— 变化太小，不执行</li>
+              <li>当前时间不在任何时段（高峰/次高峰/低谷）内的小时为「平谷期」 —— 保持原价不动</li>
+            </ul>
+            <div style={{ fontWeight: 500, marginBottom: 4 }}>关闭分时调价后</div>
+            <ul style={{ paddingLeft: 20, margin: 0 }}>
+              <li>系统会自动将所有已被调过的商品出价<b>恢复到开启前的原始出价</b></li>
+              <li>如有个别商品恢复失败（Ozon API 异常），会在弹窗中提示，您可在「当前执行状态」表中手动点「恢复原价」重试</li>
+            </ul>
+          </div>
+        </Collapse.Panel>
+      </Collapse>
+
       {/* 时段配置（可折叠） */}
       <Collapse defaultActiveKey={['config']} style={{ marginBottom: 10 }}>
         <Collapse.Panel key="config" header="规则条件">
@@ -744,38 +771,57 @@ const TimePricingConfig = ({ shopId, activeMode, onSaved }) => {
               <Button
                 danger
                 loading={saving}
-                onClick={async () => {
-                  setSaving(true)
-                  try {
-                    const res = await disableTimePricing(shopId)
-                    const { restored = 0, failed = 0, errors = [] } = res?.data || {}
-                    if (failed > 0) {
-                      Modal.warning({
-                        title: '分时调价已关闭，部分 SKU 回弹失败',
-                        content: (
-                          <div>
-                            <p>成功恢复 {restored} 个 SKU，失败 {failed} 个</p>
-                            <p style={{ marginTop: 8, color: '#999', fontSize: 12 }}>
-                              失败的 SKU 仍保留在「当前执行状态」中，可手动点「恢复原价」重试：
-                            </p>
-                            <ul style={{ marginTop: 8, fontSize: 12, color: '#666' }}>
-                              {errors.map((e, i) => <li key={i}>{e}</li>)}
-                            </ul>
-                          </div>
-                        ),
-                        okText: '我知道了',
-                      })
-                    } else if (restored > 0) {
-                      message.success(`分时调价已关闭，已回弹 ${restored} 个 SKU 到原价`)
-                    } else {
-                      message.success('分时调价已关闭')
-                    }
-                    onSaved()
-                  } catch (e) {
-                    message.error(e?.message || '关闭失败')
-                  } finally {
-                    setSaving(false)
-                  }
+                onClick={() => {
+                  Modal.confirm({
+                    title: '确认关闭分时调价？',
+                    content: (
+                      <div style={{ fontSize: 13, lineHeight: 1.8 }}>
+                        <p>关闭后系统会执行以下操作：</p>
+                        <ul style={{ paddingLeft: 20, margin: '4px 0' }}>
+                          <li>所有已被分时调价的商品将<b>自动恢复到开启前的原始出价</b></li>
+                          <li>恢复过程需逐个调用 Ozon API，可能需要几秒钟</li>
+                          <li>如有个别商品恢复失败，会在弹窗中提示，可手动重试</li>
+                        </ul>
+                        <p style={{ color: '#999', marginTop: 8 }}>分时调价的规则配置不会被删除，下次开启仍可使用。</p>
+                      </div>
+                    ),
+                    okText: '确认关闭',
+                    okButtonProps: { danger: true },
+                    cancelText: '取消',
+                    onOk: async () => {
+                      setSaving(true)
+                      try {
+                        const res = await disableTimePricing(shopId)
+                        const { restored = 0, failed = 0, errors = [] } = res?.data || {}
+                        if (failed > 0) {
+                          Modal.warning({
+                            title: '分时调价已关闭，部分 SKU 回弹失败',
+                            content: (
+                              <div>
+                                <p>成功恢复 {restored} 个 SKU，失败 {failed} 个</p>
+                                <p style={{ marginTop: 8, color: '#999', fontSize: 12 }}>
+                                  失败的 SKU 仍保留在「当前执行状态」中，可手动点「恢复原价」重试：
+                                </p>
+                                <ul style={{ marginTop: 8, fontSize: 12, color: '#666' }}>
+                                  {errors.map((e, i) => <li key={i}>{e}</li>)}
+                                </ul>
+                              </div>
+                            ),
+                            okText: '我知道了',
+                          })
+                        } else if (restored > 0) {
+                          message.success(`分时调价已关闭，已回弹 ${restored} 个 SKU 到原价`)
+                        } else {
+                          message.success('分时调价已关闭')
+                        }
+                        onSaved()
+                      } catch (e) {
+                        message.error(e?.message || '关闭失败')
+                      } finally {
+                        setSaving(false)
+                      }
+                    },
+                  })
                 }}
               >
                 关闭分时调价
