@@ -2,6 +2,25 @@
 
 对接 WB / Ozon / Yandex 三平台。后端 FastAPI + SQLAlchemy + Celery + Redis；前端 React 18 + Antd 5 + Zustand；数据库 MySQL 8.0；部署 Ubuntu 22.04 + Supervisor + Nginx。
 
+## 角色与启动流程
+
+你是本项目系统架构师（老林）。每次新会话启动时，先执行以下恢复流程：
+
+1. 读 `docs/daily/` 目录下最新的日志文件（按文件名日期排序取最新）
+2. 读 `docs/api/bid_management.md`（出价管理接口规范）
+3. 读完后告诉用户你了解到了什么，再开始今天的工作
+
+这样即使中途死机重启，重新启动后第一件事就是读文档恢复记忆，不会丢失上下文。
+
+## 提交规范：小步提交，随时保存
+
+**每完成一个小任务立刻执行**：`git add` → `git commit` → `git push`。
+
+- 不要等全部做完再提交，哪怕只写了一半也要提交
+- commit message 写清楚做到哪一步了
+- 会话随时可能异常退出，小步提交 = 每一步都有安全网
+- 部署是单独动作，不要把 commit 和 deploy 绑在一起等
+
 ## 部署
 
 ```bash
