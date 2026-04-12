@@ -1279,7 +1279,20 @@ const AIPricingConfig = ({ shopId, platform, onSaved }) => {
                 type={templateName === t ? 'primary' : 'default'}
                 size="small"
                 style={templateName === t ? { background: '#534AB7', borderColor: '#534AB7' } : {}}
-                onClick={() => setTemplateName(t)}
+                onClick={async () => {
+                  setTemplateName(t)
+                  try {
+                    await updateAIPricing(shopId, {
+                      template_name: t,
+                      conservative_config: templates.conservative,
+                      default_config: templates.default,
+                      aggressive_config: templates.aggressive,
+                    })
+                    message.success('策略模板已保存')
+                  } catch {
+                    message.error('保存失败')
+                  }
+                }}
               >
                 {t === 'conservative' ? '保守测试' : t === 'default' ? '默认标准' : '激进冲量'}
               </Button>
@@ -1550,10 +1563,21 @@ const AIPricingConfig = ({ shopId, platform, onSaved }) => {
           : templateName === 'default' ? '默认标准' : '激进冲量'}`}
         open={editModalOpen}
         onCancel={() => setEditModalOpen(false)}
-        onOk={() => {
-          setTemplates(prev => ({ ...prev, [templateName]: editingTemplate }))
+        onOk={async () => {
+          const updated = { ...templates, [templateName]: editingTemplate }
+          setTemplates(updated)
           setEditModalOpen(false)
-          message.success('模板已更新，保存开启后生效')
+          try {
+            await updateAIPricing(shopId, {
+              template_name: templateName,
+              conservative_config: updated.conservative,
+              default_config: updated.default,
+              aggressive_config: updated.aggressive,
+            })
+            message.success('模板参数已保存')
+          } catch {
+            message.error('保存失败')
+          }
         }}
         okText="确认"
       >
