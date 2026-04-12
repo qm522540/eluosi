@@ -291,6 +291,23 @@ async def manual_analyze(
     })
 
 
+@router.get("/ai-pricing/{shop_id}/analyze-stream")
+async def analyze_stream_sse(
+    shop: Shop = Depends(get_owned_shop),
+    db: Session = Depends(get_db),
+):
+    """流式 AI 分析（SSE），前端实时展示分析过程"""
+    from app.services.bid.ai_pricing_executor import analyze_stream
+    return StreamingResponse(
+        analyze_stream(db, shop.tenant_id, shop.id),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
 # ==================== §4 建议列表 ====================
 
 @router.get("/suggestions/{shop_id}")

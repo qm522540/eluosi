@@ -20,7 +20,7 @@
 import json
 import re
 from datetime import datetime, timezone
-from typing import Optional
+from typing import AsyncGenerator, Optional
 
 from sqlalchemy import bindparam, text
 
@@ -947,6 +947,287 @@ async def _call_ai(template: dict, campaigns: list, products_by_campaign: dict,
 
     parsed = _parse_ai_response(content)
     return parsed.get("suggestions") or []
+
+
+async def analyze_stream(db, tenant_id: int, shop_id: int,
+                         campaign_ids: Optional[list] = None) -> AsyncGenerator[str, None]:
+    """流式 AI 分析：yield SSE 事件字符串，前端实时展示分析过程
+
+    事件类型：
+      - phase: 阶段提示（准备数据 / 调用AI / 解析结果）
+      - token: AI 输出的文本片段
+      - done:  完成，附带建议数量
+      - error: 出错
+    """
+    from app.services.ai.deepseek import DeepSeekClient
+    settings = get_settings()
+
+    def _sse(event: str, data: str) -> str:
+        return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+
+    try:
+        yield _sse("phase", "正在读取配置和商品数据...")
+
+        cfg = db.execute(text("""
+            SELECT id, tenant_id, shop_id, is_active, auto_execute, template_name,
+                   conservative_config, default_config, aggressive_config
+            FROM ai_pricing_configs
+            WHERE shop_id = :shop_id AND tenant_id = :tenant_id
+            LIMIT 1
+        """), {"shop_id": shop_id, "tenant_id": tenant_id}).fetchone()
+
+        if not cfg:
+            yield _sse("error", "AI配置不存在")
+            return
+
+        template = _read_template(cfg)
+        if not template:
+            yield _sse("error", "模板配置缺失")
+            return
+
+        from app.models.shop import Shop
+        shop = db.query(Shop).filter(Shop.id == shop_id, Shop.tenant_id == tenant_id).first()
+        if not shop or shop.platform not in ("ozon", "wb"):
+            yield _sse("error", "该平台暂不支持AI调价")
+            return
+
+        platform = shop.platform
+
+        from app.models.ad import AdCampaign
+        q = db.query(AdCampaign).filter(
+            AdCampaign.tenant_id == tenant_id,
+            AdCampaign.shop_id == shop_id,
+            AdCampaign.platform == platform,
+            AdCampaign.status == "active",
+        )
+        if campaign_ids:
+            q = q.filter(AdCampaign.id.in_(campaign_ids))
+        campaigns = q.all()
+
+        if not campaigns:
+            yield _sse("error", "无活跃活动")
+            return
+
+        yield _sse("phase", f"正在从{platform.upper()}拉取{len(campaigns)}个活动的商品出价...")
+
+        client = _create_platform_client(shop)
+        products_by_campaign = {}
+        try:
+            for camp in campaigns:
+                try:
+                    products = await client.fetch_campaign_products(camp.platform_campaign_id)
+                except Exception:
+                    products = []
+                products_by_campaign[camp.id] = products
+        finally:
+            await client.close()
+
+        total_products = sum(len(v) for v in products_by_campaign.values())
+        if not total_products:
+            yield _sse("error", "活跃活动下无商品")
+            return
+
+        yield _sse("phase", f"共{total_products}个商品，正在查询历史数据...")
+
+        # 构建 prompt（复用 _call_ai 的逻辑）
+        sku_stats = _query_sku_history(db, shop_id, tenant_id, platform)
+
+        prompt_data = []
+        for camp in campaigns:
+            products = products_by_campaign.get(camp.id) or []
+            items = []
+            for p in products[:50]:
+                sku = str(p.get("sku") or "")
+                if platform == "ozon":
+                    bid_raw = p.get("bid", "0")
+                    try:
+                        bid_rub = float(int(bid_raw)) / 1_000_000
+                    except (ValueError, TypeError):
+                        bid_rub = 0
+                    name = (p.get("title") or "")[:80]
+                else:
+                    bid_rub = float(p.get("bid_search") or 0)
+                    name = (p.get("subject_name") or "")[:80]
+                if bid_rub <= 0:
+                    continue
+                item = {"sku": sku, "name": name, "bid": round(bid_rub, 2)}
+                stats_key = f"{camp.id}_{sku}"
+                if stats_key in sku_stats:
+                    item["stats_7d"] = sku_stats[stats_key]
+                items.append(item)
+            if items:
+                prompt_data.append({
+                    "campaign_id": camp.id,
+                    "campaign_name": camp.name,
+                    "products": items,
+                })
+
+        if not prompt_data:
+            yield _sse("error", "无有效商品数据")
+            return
+
+        platform_label = "Wildberries" if platform == "wb" else "Ozon"
+        has_history = any(
+            "stats_7d" in item
+            for camp_data in prompt_data
+            for item in camp_data["products"]
+        )
+
+        history_section = ""
+        if has_history:
+            history_section = """
+每个商品的 stats_7d 字段是最近7天汇总数据：
+- impressions: 展示次数
+- clicks: 点击次数
+- spend: 花费（卢布）
+- orders: 订单数
+- revenue: 收入（卢布）
+- ctr: 点击率(%)
+- cpc: 单次点击成本（卢布），spend/clicks
+- cr: 转化率(%)，orders/clicks
+- roas: 广告回报率（收入/花费）
+- days: 有数据的天数
+
+请基于历史数据判断商品阶段和调价方向：
+- ROAS > 目标ROAS 且 cr 稳定 → growing，可适当加价扩量
+- ROAS < 最低ROAS 且 spend 持续 → declining，应降价止损
+- cpc 过高但 cr 尚可 → 出价偏高，适当降价控成本
+- 有展示无点击（ctr极低） → 素材/相关性问题，不建议加价
+- 有点击无订单（cr=0）且数据天数少 → cold_start 或 testing
+- 无 stats_7d 的商品按 cold_start_baseline 处理
+"""
+
+        prompt = f"""你是{platform_label}广告优化专家。基于商品的历史表现数据和当前出价，给出CPM出价调整建议。
+
+【策略模板】
+- 目标ROAS: {template.get('target_roas')}（广告回报率目标，ROAS高于此值的商品可加价扩量）
+- 最低ROAS: {template.get('min_roas')}（止损线，ROAS低于此值必须降价或暂停）
+- 最高出价: {template.get('max_bid')}卢布（硬上限，suggested_bid 绝不能超过此值）
+- 单次最大调幅: {template.get('max_adjust_pct')}%（单次调整幅度不得超过此百分比）
+{history_section}
+【活动和商品数据（出价单位：卢布）】
+{json.dumps(prompt_data, ensure_ascii=False)}
+
+请为有调整空间的商品输出建议。无需调整的商品不要返回。
+返回纯JSON：
+{{
+  "suggestions": [
+    {{
+      "campaign_id": <活动ID>,
+      "platform_sku_id": "<SKU>",
+      "sku_name": "<商品名>",
+      "current_bid": <当前出价数值>,
+      "suggested_bid": <建议出价整数>,
+      "current_roas": <当前7天ROAS，无数据填null>,
+      "product_stage": "growing|testing|cold_start|declining|unknown",
+      "decision_basis": "history_data|shop_benchmark|cold_start_baseline",
+      "reason": "<简短理由，引用具体数据>"
+    }}
+  ]
+}}
+"""
+
+        yield _sse("phase", "AI 正在分析...")
+
+        # 流式调用 DeepSeek
+        api_key = getattr(settings, "DEEPSEEK_API_KEY", "")
+        if not api_key:
+            yield _sse("error", "DEEPSEEK_API_KEY 未配置")
+            return
+
+        ai_client = DeepSeekClient(api_key=api_key)
+        full_content = ""
+        async for chunk in ai_client.chat_stream(
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.3,
+            max_tokens=4000,
+        ):
+            full_content += chunk
+            yield _sse("token", chunk)
+
+        yield _sse("phase", "分析完成，正在保存建议...")
+
+        # 解析并写入建议
+        parsed = _parse_ai_response(full_content)
+        suggestions_raw = parsed.get("suggestions") or []
+
+        # 过期旧建议
+        from app.utils.moscow_time import moscow_today
+        db.execute(text("""
+            UPDATE ai_pricing_suggestions
+            SET status = 'rejected'
+            WHERE shop_id = :shop_id AND tenant_id = :tenant_id
+              AND status = 'pending' AND DATE(generated_at) < :today
+        """), {"shop_id": shop_id, "tenant_id": tenant_id, "today": moscow_today()})
+
+        saved_count = 0
+        for raw in suggestions_raw:
+            camp_id = raw.get("campaign_id")
+            sku = str(raw.get("platform_sku_id") or "")
+            if not camp_id or not sku:
+                continue
+            current_bid = float(raw.get("current_bid") or 0)
+            suggested_bid = float(raw.get("suggested_bid") or 0)
+
+            max_bid = float(template.get("max_bid", 999))
+            max_pct = float(template.get("max_adjust_pct", 30))
+            suggested_bid = max(suggested_bid, MIN_BID)
+            suggested_bid = min(suggested_bid, max_bid)
+            if current_bid > 0:
+                change_pct = abs(suggested_bid - current_bid) / current_bid * 100
+                if change_pct > max_pct:
+                    if suggested_bid > current_bid:
+                        suggested_bid = round(current_bid * (1 + max_pct / 100))
+                    else:
+                        suggested_bid = round(current_bid * (1 - max_pct / 100))
+            suggested_bid = round(suggested_bid)
+            if abs(suggested_bid - current_bid) < MIN_DIFF:
+                continue
+
+            adjust_pct = round((suggested_bid - current_bid) / current_bid * 100, 2) if current_bid > 0 else 0
+
+            db.execute(text("""
+                INSERT INTO ai_pricing_suggestions (
+                    tenant_id, shop_id, campaign_id,
+                    platform_sku_id, sku_name,
+                    current_bid, suggested_bid, adjust_pct,
+                    product_stage, decision_basis,
+                    current_roas, expected_roas,
+                    data_days, reason, status, generated_at
+                ) VALUES (
+                    :tenant_id, :shop_id, :campaign_id,
+                    :sku, :sku_name,
+                    :current_bid, :suggested_bid, :adjust_pct,
+                    :stage, :basis,
+                    :current_roas, :expected_roas,
+                    :data_days, :reason, 'pending', NOW()
+                )
+            """), {
+                "tenant_id": tenant_id,
+                "shop_id": shop_id,
+                "campaign_id": camp_id,
+                "sku": sku,
+                "sku_name": (raw.get("sku_name") or "")[:300],
+                "current_bid": current_bid,
+                "suggested_bid": suggested_bid,
+                "adjust_pct": adjust_pct,
+                "stage": raw.get("product_stage") or "unknown",
+                "basis": raw.get("decision_basis") or "shop_benchmark",
+                "current_roas": raw.get("current_roas"),
+                "expected_roas": raw.get("expected_roas"),
+                "data_days": sku_stats.get(f"{camp_id}_{sku}", {}).get("days", 0),
+                "reason": (raw.get("reason") or "")[:500],
+            })
+            saved_count += 1
+
+        db.commit()
+        _update_status(db, tenant_id, shop_id, "success", f"生成{saved_count}条建议")
+
+        yield _sse("done", f"分析完成，生成 {saved_count} 条调价建议")
+
+    except Exception as e:
+        logger.error(f"流式分析异常 shop_id={shop_id}: {e}")
+        yield _sse("error", f"分析失败: {str(e)[:200]}")
 
 
 def _parse_ai_response(content: str) -> dict:

@@ -929,6 +929,9 @@ const AIPricingConfig = ({ shopId, platform, onSaved }) => {
   const [editingTemplate, setEditingTemplate] = useState({})
   const [suggestions, setSuggestions] = useState([])
   const [analyzing, setAnalyzing] = useState(false)
+  const [streamText, setStreamText] = useState('')
+  const [streamPhase, setStreamPhase] = useState('')
+  const [streamOpen, setStreamOpen] = useState(false)
   const [selected, setSelected] = useState([])
   const [dataStatus, setDataStatus] = useState(null)
   const [syncing, setSyncing] = useState(false)
@@ -1023,12 +1026,53 @@ const AIPricingConfig = ({ shopId, platform, onSaved }) => {
 
   const handleAnalyze = async () => {
     setAnalyzing(true)
+    setStreamText('')
+    setStreamPhase('正在连接...')
+    setStreamOpen(true)
+
     try {
-      await manualAnalyze(shopId)
-      await loadSuggestions()
-      message.success('分析完成')
-    } catch {
-      message.error('分析失败，请稍后重试')
+      const token = localStorage.getItem('token')
+      const resp = await fetch(`/api/v1/bid-management/ai-pricing/${shopId}/analyze-stream`, {
+        headers: { Authorization: `Bearer ${token}` },
+      })
+
+      if (!resp.ok) {
+        throw new Error(`HTTP ${resp.status}`)
+      }
+
+      const reader = resp.body.getReader()
+      const decoder = new TextDecoder()
+      let buffer = ''
+
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+        buffer += decoder.decode(value, { stream: true })
+
+        const lines = buffer.split('\n')
+        buffer = lines.pop() || ''
+
+        let eventType = ''
+        for (const line of lines) {
+          if (line.startsWith('event: ')) {
+            eventType = line.slice(7).trim()
+          } else if (line.startsWith('data: ')) {
+            const data = JSON.parse(line.slice(6))
+            if (eventType === 'phase') {
+              setStreamPhase(data)
+            } else if (eventType === 'token') {
+              setStreamText(prev => prev + data)
+            } else if (eventType === 'done') {
+              setStreamPhase(data)
+              await loadSuggestions()
+            } else if (eventType === 'error') {
+              setStreamPhase(`❌ ${data}`)
+            }
+          }
+        }
+      }
+    } catch (e) {
+      setStreamPhase(`❌ 连接失败: ${e.message}`)
     } finally {
       setAnalyzing(false)
     }
@@ -1458,6 +1502,71 @@ const AIPricingConfig = ({ shopId, platform, onSaved }) => {
           立即分析
         </Button>
       </div>
+
+      {/* AI 分析过程面板 */}
+      {streamOpen && (
+        <div style={{
+          background: '#1a1a2e',
+          borderRadius: 8,
+          padding: 16,
+          marginBottom: 14,
+          position: 'relative',
+        }}>
+          <div style={{
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+            marginBottom: 10,
+          }}>
+            <span style={{
+              fontSize: 12,
+              color: analyzing ? '#7c6cf0' : '#52c41a',
+              display: 'flex',
+              alignItems: 'center',
+              gap: 6,
+            }}>
+              {analyzing && (
+                <span style={{
+                  width: 6, height: 6, borderRadius: '50%',
+                  background: '#7c6cf0',
+                  animation: 'pulse 1.5s infinite',
+                }} />
+              )}
+              {streamPhase}
+            </span>
+            {!analyzing && (
+              <Button
+                size="small"
+                type="text"
+                style={{ color: '#999', fontSize: 11 }}
+                onClick={() => setStreamOpen(false)}
+              >
+                收起
+              </Button>
+            )}
+          </div>
+          <div style={{
+            background: '#0d0d1a',
+            borderRadius: 6,
+            padding: 12,
+            maxHeight: 320,
+            overflowY: 'auto',
+            fontSize: 12,
+            lineHeight: 1.8,
+            color: '#d4d4d4',
+            fontFamily: 'Consolas, Monaco, monospace',
+            whiteSpace: 'pre-wrap',
+            wordBreak: 'break-all',
+          }}>
+            {streamText || (analyzing ? '等待 AI 响应...' : '')}
+            {analyzing && <span style={{ animation: 'blink 1s infinite' }}>|</span>}
+          </div>
+          <style>{`
+            @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.3; } }
+            @keyframes blink { 0%,100% { opacity: 1; } 50% { opacity: 0; } }
+          `}</style>
+        </div>
+      )}
 
       {/* 建议列表 */}
       <div style={{

@@ -1,8 +1,9 @@
 """AI模型客户端基类"""
 
+import json
 import time
 from abc import ABC, abstractmethod
-from typing import Optional
+from typing import AsyncGenerator, Optional
 
 import httpx
 
@@ -101,3 +102,45 @@ class BaseAIClient(ABC):
         except Exception as e:
             logger.error(f"AI调用异常: model={self.model_name}: {e}")
             raise
+
+    async def chat_stream(
+        self,
+        messages: list[dict],
+        temperature: float = 0.7,
+        max_tokens: int = 2000,
+        system_prompt: Optional[str] = None,
+    ) -> AsyncGenerator[str, None]:
+        """流式聊天接口，逐块 yield 文本片段"""
+        if system_prompt:
+            messages = [{"role": "system", "content": system_prompt}] + messages
+
+        payload = {
+            "model": self.model_name,
+            "messages": messages,
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+            "stream": True,
+        }
+
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
+            async with client.stream(
+                "POST",
+                self._get_chat_url(),
+                headers=self._get_headers(),
+                json=payload,
+            ) as resp:
+                resp.raise_for_status()
+                async for line in resp.aiter_lines():
+                    if not line.startswith("data: "):
+                        continue
+                    data = line[6:]
+                    if data == "[DONE]":
+                        break
+                    try:
+                        chunk = json.loads(data)
+                        delta = chunk["choices"][0].get("delta", {})
+                        text = delta.get("content", "")
+                        if text:
+                            yield text
+                    except (json.JSONDecodeError, KeyError, IndexError):
+                        continue
