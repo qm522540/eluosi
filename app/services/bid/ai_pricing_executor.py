@@ -291,7 +291,10 @@ async def _analyze_now_inner(db, tenant_id: int, shop_id: int,
 
     suggestions_raw = []
     try:
-        suggestions_raw = await _call_ai(template, campaigns, products_by_campaign, platform)
+        suggestions_raw = await _call_ai(
+            template, campaigns, products_by_campaign, platform,
+            db=db, shop_id=shop_id, tenant_id=tenant_id,
+        )
     except Exception as e:
         logger.error(f"DeepSeek 调用失败 shop_id={shop_id}: {e}")
         _update_status(db, tenant_id, shop_id, "failed", f"DeepSeek调用失败: {e}", retry=True)
@@ -613,6 +616,94 @@ def reject_batch(db, tenant_id: int, ids: list) -> dict:
 
 # ==================== 内部工具 ====================
 
+# ==================== SKU 历史数据查询 ====================
+
+def _query_sku_history(db, shop_id: int, tenant_id: int, platform: str) -> dict:
+    """查询最近 7 天每个 SKU 的汇总数据
+
+    WB: ad_group_id = nm_id（SKU 级）
+    Ozon: ad_group_id 可能为 NULL（活动级），key 用 campaign_id_0
+
+    Returns:
+        {"campaign_id_sku": {impressions, clicks, spend, orders, revenue, ctr, roas, days}, ...}
+    """
+    from datetime import date, timedelta
+    cutoff = date.today() - timedelta(days=7)
+
+    if platform == "wb":
+        # WB 有 SKU 级数据（ad_group_id = nm_id）
+        rows = db.execute(text("""
+            SELECT
+                s.campaign_id,
+                s.ad_group_id AS sku_id,
+                SUM(s.impressions) AS impressions,
+                SUM(s.clicks) AS clicks,
+                SUM(s.spend) AS spend,
+                SUM(s.orders) AS orders,
+                SUM(s.revenue) AS revenue,
+                COUNT(DISTINCT s.stat_date) AS days
+            FROM ad_stats s
+            JOIN ad_campaigns c ON s.campaign_id = c.id
+            WHERE c.shop_id = :shop_id
+              AND c.tenant_id = :tenant_id
+              AND s.platform = :platform
+              AND s.stat_date >= :cutoff
+              AND s.ad_group_id IS NOT NULL
+            GROUP BY s.campaign_id, s.ad_group_id
+        """), {
+            "shop_id": shop_id, "tenant_id": tenant_id,
+            "platform": platform, "cutoff": cutoff,
+        }).fetchall()
+    else:
+        # Ozon 目前只有活动级数据，key 用 campaign_id + "0"
+        rows = db.execute(text("""
+            SELECT
+                s.campaign_id,
+                0 AS sku_id,
+                SUM(s.impressions) AS impressions,
+                SUM(s.clicks) AS clicks,
+                SUM(s.spend) AS spend,
+                SUM(s.orders) AS orders,
+                SUM(s.revenue) AS revenue,
+                COUNT(DISTINCT s.stat_date) AS days
+            FROM ad_stats s
+            JOIN ad_campaigns c ON s.campaign_id = c.id
+            WHERE c.shop_id = :shop_id
+              AND c.tenant_id = :tenant_id
+              AND s.platform = :platform
+              AND s.stat_date >= :cutoff
+            GROUP BY s.campaign_id
+        """), {
+            "shop_id": shop_id, "tenant_id": tenant_id,
+            "platform": platform, "cutoff": cutoff,
+        }).fetchall()
+
+    result = {}
+    for r in rows:
+        impressions = int(r.impressions or 0)
+        clicks = int(r.clicks or 0)
+        spend = float(r.spend or 0)
+        orders = int(r.orders or 0)
+        revenue = float(r.revenue or 0)
+        ctr = round(clicks / impressions * 100, 2) if impressions > 0 else 0
+        roas = round(revenue / spend, 2) if spend > 0 else 0
+
+        key = f"{r.campaign_id}_{r.sku_id}"
+        result[key] = {
+            "impressions": impressions,
+            "clicks": clicks,
+            "spend": round(spend, 2),
+            "orders": orders,
+            "revenue": round(revenue, 2),
+            "ctr": ctr,
+            "roas": roas,
+            "days": int(r.days),
+        }
+
+    logger.info(f"shop_id={shop_id} SKU 历史数据: {len(result)} 条 (platform={platform})")
+    return result
+
+
 # ==================== 平台抽象 ====================
 
 def _create_platform_client(shop):
@@ -731,13 +822,19 @@ def _release_analyze_lock(shop_id: int):
 # ==================== AI 调用 + 解析 ====================
 
 async def _call_ai(template: dict, campaigns: list, products_by_campaign: dict,
-                   platform: str = "ozon") -> list:
-    """调 DeepSeek 生成调价建议（支持 Ozon / WB）"""
+                   platform: str = "ozon", db=None, shop_id: int = None,
+                   tenant_id: int = None) -> list:
+    """调 DeepSeek 生成调价建议（支持 Ozon / WB，含历史数据）"""
     from app.services.ai.deepseek import DeepSeekClient
 
     api_key = getattr(settings, "DEEPSEEK_API_KEY", "")
     if not api_key:
         raise RuntimeError("DEEPSEEK_API_KEY 未配置")
+
+    # 查询 SKU 最近 7 天历史数据（如果有 db）
+    sku_stats = {}
+    if db and shop_id and tenant_id:
+        sku_stats = _query_sku_history(db, shop_id, tenant_id, platform)
 
     prompt_data = []
     for camp in campaigns:
@@ -753,16 +850,22 @@ async def _call_ai(template: dict, campaigns: list, products_by_campaign: dict,
                     bid_rub = 0
                 name = (p.get("title") or "")[:80]
             else:
-                # WB: fetch_campaign_products 返回的 bid_search 已经是卢布
                 bid_rub = float(p.get("bid_search") or 0)
                 name = (p.get("subject_name") or "")[:80]
             if bid_rub <= 0:
                 continue
-            items.append({
+
+            item = {
                 "sku": sku,
                 "name": name,
                 "bid": round(bid_rub, 2),
-            })
+            }
+            # 附加历史数据（按 campaign_id + sku 查，WB 用 ad_group_id=nm_id）
+            stats_key = f"{camp.id}_{sku}"
+            if stats_key in sku_stats:
+                item["stats_7d"] = sku_stats[stats_key]
+
+            items.append(item)
         if items:
             prompt_data.append({
                 "campaign_id": camp.id,
@@ -774,7 +877,33 @@ async def _call_ai(template: dict, campaigns: list, products_by_campaign: dict,
         return []
 
     platform_label = "Wildberries" if platform == "wb" else "Ozon"
-    prompt = f"""你是{platform_label}广告优化专家。对每个商品给出CPM出价建议。
+    has_history = any(
+        "stats_7d" in item
+        for camp_data in prompt_data
+        for item in camp_data["products"]
+    )
+
+    history_section = ""
+    if has_history:
+        history_section = """
+每个商品的 stats_7d 字段是最近7天汇总数据：
+- impressions: 展示次数
+- clicks: 点击次数
+- spend: 花费（卢布）
+- orders: 订单数
+- revenue: 收入（卢布）
+- ctr: 点击率(%)
+- roas: 广告回报率（收入/花费）
+- days: 有数据的天数
+
+请基于历史数据判断商品阶段和调价方向：
+- ROAS > 目标ROAS 且 orders 增长 → growing，可适当加价扩量
+- ROAS < 最低ROAS 且 spend 持续 → declining，应降价止损
+- 有展示无订单、数据天数少 → cold_start 或 testing
+- 无 stats_7d 的商品按 cold_start_baseline 处理
+"""
+
+    prompt = f"""你是{platform_label}广告优化专家。基于商品的历史表现数据和当前出价，给出CPM出价调整建议。
 
 【策略模板】
 - 目标ROAS: {template.get('target_roas')}
@@ -782,8 +911,8 @@ async def _call_ai(template: dict, campaigns: list, products_by_campaign: dict,
 - 最高出价: {template.get('max_bid')}卢布
 - 单次最大调幅: {template.get('max_adjust_pct')}%
 - 毛利率: {template.get('gross_margin')}
-
-【活动和商品当前出价（单位：卢布）】
+{history_section}
+【活动和商品数据（出价单位：卢布）】
 {json.dumps(prompt_data, ensure_ascii=False)}
 
 请为有调整空间的商品输出建议。无需调整的商品不要返回。
@@ -796,9 +925,10 @@ async def _call_ai(template: dict, campaigns: list, products_by_campaign: dict,
       "sku_name": "<商品名>",
       "current_bid": <当前出价数值>,
       "suggested_bid": <建议出价整数>,
+      "current_roas": <当前7天ROAS，无数据填null>,
       "product_stage": "growing|testing|cold_start|declining|unknown",
       "decision_basis": "history_data|shop_benchmark|cold_start_baseline",
-      "reason": "<简短理由>"
+      "reason": "<简短理由，引用具体数据>"
     }}
   ]
 }}
