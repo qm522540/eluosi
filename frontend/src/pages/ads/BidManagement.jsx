@@ -55,6 +55,34 @@ const STAGE_CONFIG = {
   unknown:    { color: 'default', label: '数据不足', tip: '历史数据不足' },
 }
 
+// WB 商品图片 URL（公开 CDN，从 nm_id 计算路径）
+const getWbImageUrl = (nmId) => {
+  const id = Number(nmId)
+  if (!id) return null
+  const vol = Math.floor(id / 100000)
+  const part = Math.floor(id / 1000)
+  let basket = '01'
+  if (vol >= 0 && vol <= 143) basket = '01'
+  else if (vol <= 287) basket = '02'
+  else if (vol <= 431) basket = '03'
+  else if (vol <= 719) basket = '04'
+  else if (vol <= 1007) basket = '05'
+  else if (vol <= 1061) basket = '06'
+  else if (vol <= 1115) basket = '07'
+  else if (vol <= 1169) basket = '08'
+  else if (vol <= 1313) basket = '09'
+  else if (vol <= 1601) basket = '10'
+  else if (vol <= 1655) basket = '11'
+  else if (vol <= 1919) basket = '12'
+  else if (vol <= 2045) basket = '13'
+  else if (vol <= 2189) basket = '14'
+  else if (vol <= 2405) basket = '15'
+  else if (vol <= 2621) basket = '16'
+  else if (vol <= 2837) basket = '17'
+  else basket = '18'
+  return `https://basket-${basket}.wbbasket.ru/vol${vol}/part${part}/${id}/images/big/1.webp`
+}
+
 const BASIS_CONFIG = {
   history_data:        { color: 'blue', label: '历史数据' },
   shop_benchmark:      { color: 'purple', label: '店铺基准' },
@@ -1211,22 +1239,36 @@ const AIPricingConfig = ({ shopId, platform, onSaved }) => {
           </span>
         </span>
       ) : (
-        <div style={{ paddingLeft: 20 }}>
-          <Tooltip title={r.sku_name}>
-            <div style={{
-              fontSize: 12,
-              color: 'var(--color-text-secondary, #666)',
-              maxWidth: 160,
-              overflow: 'hidden',
-              textOverflow: 'ellipsis',
-              whiteSpace: 'nowrap',
-              cursor: 'help',
-            }}>
-              {r.sku_name}
+        <div style={{ paddingLeft: 20, display: 'flex', alignItems: 'center', gap: 8 }}>
+          {platform === 'wb' && (
+            <img
+              src={getWbImageUrl(r.platform_sku_id)}
+              alt=""
+              style={{
+                width: 36, height: 36, borderRadius: 4,
+                objectFit: 'cover', flexShrink: 0,
+                background: '#f5f5f5',
+              }}
+              onError={e => { e.target.style.display = 'none' }}
+            />
+          )}
+          <div>
+            <Tooltip title={r.sku_name}>
+              <div style={{
+                fontSize: 12,
+                color: 'var(--color-text-secondary, #666)',
+                maxWidth: 160,
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
+                cursor: 'help',
+              }}>
+                {r.sku_name}
+              </div>
+            </Tooltip>
+            <div style={{ fontSize: 10, color: 'var(--color-text-tertiary, #999)' }}>
+              {r.platform_sku_id}
             </div>
-          </Tooltip>
-          <div style={{ fontSize: 10, color: 'var(--color-text-tertiary, #999)' }}>
-            {r.platform_sku_id}
           </div>
         </div>
       ),
