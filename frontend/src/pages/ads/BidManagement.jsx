@@ -930,9 +930,11 @@ const AIPricingConfig = ({ shopId, platform, onSaved }) => {
   const [editingTemplate, setEditingTemplate] = useState({})
   const [suggestions, setSuggestions] = useState([])
   const [analyzing, setAnalyzing] = useState(false)
-  const [streamText, setStreamText] = useState('')
+  const [streamRaw, setStreamRaw] = useState('')
   const [streamPhase, setStreamPhase] = useState('')
   const [streamOpen, setStreamOpen] = useState(false)
+  const [streamItems, setStreamItems] = useState([])
+  const lastParsedRef = useRef(0)
   const [selected, setSelected] = useState([])
   const [dataStatus, setDataStatus] = useState(null)
   const [syncing, setSyncing] = useState(false)
@@ -1025,11 +1027,32 @@ const AIPricingConfig = ({ shopId, platform, onSaved }) => {
     }
   }
 
+  // 从不完整的 JSON 流中提取已完成的 suggestion 对象
+  const extractSuggestions = (raw) => {
+    const items = []
+    // 匹配每个完整的 {...} 对象（含 reason 字段说明是建议）
+    const regex = /\{[^{}]*?"reason"\s*:\s*"[^"]*?"[^{}]*?\}/g
+    let m
+    while ((m = regex.exec(raw)) !== null) {
+      try {
+        const obj = JSON.parse(m[0])
+        if (obj.platform_sku_id && obj.reason) {
+          items.push(obj)
+        }
+      } catch { /* incomplete */ }
+    }
+    return items
+  }
+
   const handleAnalyze = async () => {
     setAnalyzing(true)
-    setStreamText('')
+    setStreamRaw('')
     setStreamPhase('正在连接...')
+    setStreamItems([])
+    lastParsedRef.current = 0
     setStreamOpen(true)
+
+    let fullText = ''
 
     try {
       const token = useAuthStore.getState().token
@@ -1058,22 +1081,31 @@ const AIPricingConfig = ({ shopId, platform, onSaved }) => {
           if (line.startsWith('event: ')) {
             eventType = line.slice(7).trim()
           } else if (line.startsWith('data: ')) {
-            const data = JSON.parse(line.slice(6))
-            if (eventType === 'phase') {
-              setStreamPhase(data)
-            } else if (eventType === 'token') {
-              setStreamText(prev => prev + data)
-            } else if (eventType === 'done') {
-              setStreamPhase(data)
-              await loadSuggestions()
-            } else if (eventType === 'error') {
-              setStreamPhase(`❌ ${data}`)
-            }
+            try {
+              const data = JSON.parse(line.slice(6))
+              if (eventType === 'phase') {
+                setStreamPhase(data)
+              } else if (eventType === 'token') {
+                fullText += data
+                setStreamRaw(fullText)
+                // 尝试提取新的建议
+                const parsed = extractSuggestions(fullText)
+                if (parsed.length > lastParsedRef.current) {
+                  lastParsedRef.current = parsed.length
+                  setStreamItems([...parsed])
+                }
+              } else if (eventType === 'done') {
+                setStreamPhase(data)
+                await loadSuggestions()
+              } else if (eventType === 'error') {
+                setStreamPhase(`${data}`)
+              }
+            } catch { /* parse error */ }
           }
         }
       }
     } catch (e) {
-      setStreamPhase(`❌ 连接失败: ${e.message}`)
+      setStreamPhase(`连接失败: ${e.message}`)
     } finally {
       setAnalyzing(false)
     }
@@ -1506,80 +1538,108 @@ const AIPricingConfig = ({ shopId, platform, onSaved }) => {
 
       {/* AI 分析过程弹窗 */}
       <Modal
-        title={null}
+        title={
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <div style={{
+              width: 28, height: 28, borderRadius: '50%',
+              background: 'linear-gradient(135deg, #7c6cf0, #534AB7)',
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              color: '#fff', fontSize: 12, fontWeight: 600,
+            }}>AI</div>
+            <span>DeepSeek 智能分析</span>
+          </div>
+        }
         open={streamOpen}
-        footer={null}
+        footer={!analyzing ? (
+          <Button type="primary" onClick={() => setStreamOpen(false)}>
+            查看建议列表
+          </Button>
+        ) : null}
         closable={!analyzing}
         maskClosable={false}
         onCancel={() => setStreamOpen(false)}
-        width={680}
-        styles={{
-          body: { padding: 0 },
-          mask: { background: 'rgba(0,0,0,0.65)' },
-        }}
+        width={620}
       >
+        {/* 状态提示 */}
         <div style={{
-          background: 'linear-gradient(135deg, #1a1a2e 0%, #16213e 100%)',
-          borderRadius: 8,
-          padding: 20,
+          display: 'flex', alignItems: 'center', gap: 8,
+          padding: '8px 12px', marginBottom: 12,
+          background: analyzing ? '#f0ecff' : '#f6ffed',
+          borderRadius: 6, fontSize: 13,
+          color: analyzing ? '#534AB7' : '#389e0d',
         }}>
-          <div style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: 10,
-            marginBottom: 16,
-          }}>
-            <div style={{
-              width: 32, height: 32, borderRadius: '50%',
-              background: 'linear-gradient(135deg, #7c6cf0, #534AB7)',
-              display: 'flex', alignItems: 'center', justifyContent: 'center',
-              fontSize: 16,
-            }}>
-              AI
-            </div>
-            <div>
-              <div style={{ color: '#fff', fontSize: 14, fontWeight: 500 }}>
-                DeepSeek 智能分析
-              </div>
-              <div style={{
-                fontSize: 12,
-                color: analyzing ? '#7c6cf0' : '#52c41a',
-                display: 'flex',
-                alignItems: 'center',
-                gap: 6,
-              }}>
-                {analyzing && (
-                  <span style={{
-                    width: 6, height: 6, borderRadius: '50%',
-                    background: '#7c6cf0',
-                    animation: 'pulse 1.5s infinite',
-                  }} />
-                )}
-                {streamPhase}
-              </div>
-            </div>
-          </div>
-          <div style={{
-            background: 'rgba(0,0,0,0.3)',
-            borderRadius: 8,
-            padding: 16,
-            height: 380,
-            overflowY: 'auto',
-            fontSize: 13,
-            lineHeight: 1.8,
-            color: '#e0e0e0',
-            fontFamily: '-apple-system, "Segoe UI", Roboto, monospace',
-            whiteSpace: 'pre-wrap',
-            wordBreak: 'break-all',
-          }}>
-            {streamText || (analyzing ? '等待 AI 响应...' : '')}
-            {analyzing && <span style={{ color: '#7c6cf0', animation: 'blink 1s infinite', fontWeight: 'bold' }}>|</span>}
-          </div>
-          <style>{`
-            @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.3; } }
-            @keyframes blink { 0%,100% { opacity: 1; } 50% { opacity: 0; } }
-          `}</style>
+          {analyzing && <Spin size="small" />}
+          {!analyzing && <span style={{ fontSize: 16 }}>&#10003;</span>}
+          {streamPhase}
         </div>
+
+        {/* 建议卡片列表 */}
+        <div style={{ maxHeight: 420, overflowY: 'auto' }}>
+          {streamItems.length === 0 && analyzing && (
+            <div style={{ textAlign: 'center', padding: '40px 0', color: '#999', fontSize: 13 }}>
+              AI 正在分析商品数据，建议将逐条出现...
+            </div>
+          )}
+          {streamItems.map((item, idx) => {
+            const isUp = item.suggested_bid > item.current_bid
+            return (
+              <div key={idx} style={{
+                border: '1px solid #f0f0f0',
+                borderRadius: 8,
+                padding: '12px 14px',
+                marginBottom: 8,
+                animation: 'fadeSlideIn 0.3s ease-out',
+                background: '#fafafa',
+              }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+                  <span style={{ fontSize: 13, fontWeight: 500, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {item.sku_name || item.platform_sku_id}
+                  </span>
+                  <Tag color={
+                    item.product_stage === 'growing' ? 'green'
+                    : item.product_stage === 'declining' ? 'red'
+                    : item.product_stage === 'testing' ? 'orange'
+                    : item.product_stage === 'cold_start' ? 'blue' : 'default'
+                  } style={{ marginLeft: 8 }}>
+                    {item.product_stage === 'growing' ? '放量期'
+                    : item.product_stage === 'declining' ? '衰退期'
+                    : item.product_stage === 'testing' ? '测试期'
+                    : item.product_stage === 'cold_start' ? '冷启动' : '数据不足'}
+                  </Tag>
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, marginBottom: 6 }}>
+                  <span style={{ color: '#999' }}>出价</span>
+                  <span style={{ fontWeight: 500 }}>₽{item.current_bid}</span>
+                  <span style={{ color: isUp ? '#cf1322' : '#389e0d', fontSize: 16 }}>
+                    {isUp ? '↑' : '↓'}
+                  </span>
+                  <span style={{ fontWeight: 600, color: isUp ? '#cf1322' : '#389e0d', fontSize: 15 }}>
+                    ₽{item.suggested_bid}
+                  </span>
+                  {item.current_roas != null && (
+                    <span style={{ color: '#999', marginLeft: 8, fontSize: 12 }}>
+                      ROAS {item.current_roas}x
+                    </span>
+                  )}
+                </div>
+                <div style={{ fontSize: 12, color: '#666', lineHeight: 1.6 }}>
+                  {item.reason}
+                </div>
+              </div>
+            )
+          })}
+          {!analyzing && streamItems.length > 0 && (
+            <div style={{ textAlign: 'center', padding: '10px 0', color: '#999', fontSize: 12 }}>
+              共 {streamItems.length} 条建议
+            </div>
+          )}
+        </div>
+        <style>{`
+          @keyframes fadeSlideIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+          }
+        `}</style>
       </Modal>
 
       {/* 建议列表 */}
