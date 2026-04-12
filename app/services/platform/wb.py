@@ -592,17 +592,20 @@ class WBClient(BasePlatformClient):
                     f"{result.get('detail')}"
                 )
                 remaining = []  # 跳出内循环
-                last_error = f"HTTP {result['status']}: {result.get('detail')}"
+                last_error = result.get("detail") or f"HTTP {result['status']}"
                 break
 
         # 所有候选都失败了
+        # 优先展示具体错误（如 "wrong bid value: 5600; min: 8000"），
+        # 而非笼统的 "广告位未启用"
+        error_msg = locals().get("last_error", "")
+        if not error_msg and skipped:
+            error_msg = f"该活动所有广告位均未启用（已尝试：{', '.join(skipped)}）"
+        elif not error_msg:
+            error_msg = "未知错误"
         return {
             "ok": False,
-            "error": (
-                f"该活动所有广告位均未启用（已尝试：{', '.join(skipped) or 'combined'}）"
-                if skipped
-                else locals().get("last_error", "未知错误")
-            ),
+            "error": error_msg,
             "updated": [],
             "skipped": skipped,
         }

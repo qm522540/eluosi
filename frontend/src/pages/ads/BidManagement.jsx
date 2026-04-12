@@ -55,28 +55,71 @@ const STAGE_CONFIG = {
   unknown:    { color: 'default', label: '数据不足', tip: '历史数据不足' },
 }
 
-// WB 商品图片 URL（公开 CDN，从 nm_id 计算 basket+路径）
-const getWbImageUrl = (nmId) => {
+// WB 商品图片：basket 编号不确定，用 onError 自动尝试相邻 basket
+const _wbImgCache = {}
+const getWbImageInfo = (nmId) => {
   const id = Number(nmId)
   if (!id) return null
   const vol = Math.floor(id / 100000)
   const part = Math.floor(id / 1000)
-  // 已验证的 basket 上界映射（vol <= threshold → basket）
-  const thresholds = [
-    143,287,431,719,1007,1061,1115,1169,1313,1601,
-    1655,1919,2045,2189,2405,2621,2837,3053,3269,3485,
-    3701,3917,4133,4349,4565,4781,4997,5213,5429,5645,
-    5861,6077,6293,6509,6725,6941,7157,7373,7589,7805,
-    8021,8237,8453,8669,8885,9101,9317,9533,9749,9965,
-    10181,10397,10613,10829,11045,11261,11477,11693,11909,12125,
-    12341,12557,12773,12989,13205,
-  ]
-  let basket = thresholds.length + 1
+  return { id, vol, part }
+}
+const buildWbImgUrl = (vol, part, id, basket) =>
+  `https://basket-${String(basket).padStart(2,'0')}.wbbasket.ru/vol${vol}/part${part}/${id}/images/c246x328/1.webp`
+
+// 根据 vol 估算起始 basket（每216个vol约一个basket）
+const guessBasket = (vol) => {
+  const thresholds = [143,287,431,719,1007,1061,1115,1169,1313,1601,1655,1919,2045,2189,2405,2621,2837,3053,3269,3485,3701,3917,4133,4349,4565,4781,4997,5213,5429,5645,5861,6077,6293,6509,6725,6941,7157,7373,7589,7805,8021,8237,8453,8669,8885,9101,9317,9533,9749,9965]
   for (let i = 0; i < thresholds.length; i++) {
-    if (vol <= thresholds[i]) { basket = i + 1; break }
+    if (vol <= thresholds[i]) return i + 1
   }
-  const b = String(basket).padStart(2, '0')
-  return `https://basket-${b}.wbbasket.ru/vol${vol}/part${part}/${id}/images/c246x328/1.webp`
+  return Math.min(Math.floor(vol / 200) + 1, 60)
+}
+
+// 自动探测组件：从估算 basket 开始，失败自动 ±1 ±2 尝试
+const WbProductImg = ({ nmId, style }) => {
+  const [src, setSrc] = useState(null)
+  const [hidden, setHidden] = useState(false)
+  const triedRef = useRef(0)
+  const infoRef = useRef(null)
+
+  useEffect(() => {
+    const info = getWbImageInfo(nmId)
+    if (!info) { setHidden(true); return }
+    infoRef.current = info
+    triedRef.current = 0
+    setHidden(false)
+    // 检查缓存
+    if (_wbImgCache[nmId]) {
+      setSrc(_wbImgCache[nmId])
+    } else {
+      const b = guessBasket(info.vol)
+      setSrc(buildWbImgUrl(info.vol, info.part, info.id, b))
+    }
+  }, [nmId])
+
+  if (hidden || !src) return null
+
+  return (
+    <img
+      src={src}
+      alt=""
+      style={style}
+      onError={() => {
+        triedRef.current++
+        const info = infoRef.current
+        if (!info) { setHidden(true); return }
+        const base = guessBasket(info.vol)
+        // 尝试序列：base, base-1, base+1, base-2, base+2, base-3, base+3
+        const offsets = [0, -1, 1, -2, 2, -3, 3, -4, 4]
+        if (triedRef.current >= offsets.length) { setHidden(true); return }
+        const next = base + offsets[triedRef.current]
+        if (next < 1 || next > 65) { setHidden(true); return }
+        setSrc(buildWbImgUrl(info.vol, info.part, info.id, next))
+      }}
+      onLoad={() => { _wbImgCache[nmId] = src }}
+    />
+  )
 }
 
 const BASIS_CONFIG = {
@@ -1237,15 +1280,13 @@ const AIPricingConfig = ({ shopId, platform, onSaved }) => {
             style={{ flexShrink: 0 }}
           />
           {platform === 'wb' && (
-            <img
-              src={getWbImageUrl(r.platform_sku_id)}
-              alt=""
+            <WbProductImg
+              nmId={r.platform_sku_id}
               style={{
                 width: 36, height: 36, borderRadius: 4,
                 objectFit: 'cover', flexShrink: 0,
                 background: '#f5f5f5',
               }}
-              onError={e => { e.target.style.display = 'none' }}
             />
           )}
           <div>
