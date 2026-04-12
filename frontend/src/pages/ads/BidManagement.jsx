@@ -55,32 +55,28 @@ const STAGE_CONFIG = {
   unknown:    { color: 'default', label: '数据不足', tip: '历史数据不足' },
 }
 
-// WB 商品图片 URL（公开 CDN，从 nm_id 计算路径）
+// WB 商品图片 URL（公开 CDN，从 nm_id 计算 basket+路径）
 const getWbImageUrl = (nmId) => {
   const id = Number(nmId)
   if (!id) return null
   const vol = Math.floor(id / 100000)
   const part = Math.floor(id / 1000)
-  // basket 编号由 vol 范围决定（WB CDN 分桶规则，持续扩展）
-  const ranges = [
-    [143,'01'],[287,'02'],[431,'03'],[719,'04'],[1007,'05'],
-    [1061,'06'],[1115,'07'],[1169,'08'],[1313,'09'],[1601,'10'],
-    [1655,'11'],[1919,'12'],[2045,'13'],[2189,'14'],[2405,'15'],
-    [2621,'16'],[2837,'17'],[3053,'18'],[3269,'19'],[3485,'20'],
-    [3701,'21'],[3917,'22'],[4133,'23'],[4349,'24'],[4565,'25'],
-    [4781,'26'],[4997,'27'],[5213,'28'],[5429,'29'],[5645,'30'],
-    [5861,'31'],[6077,'32'],[6293,'33'],[6509,'34'],[6725,'35'],
-    [6941,'36'],[7157,'37'],[7373,'38'],[7589,'39'],[7805,'40'],
-    [8021,'41'],[8237,'42'],[8453,'43'],[8669,'44'],[8885,'45'],
-    [9101,'46'],[9317,'47'],[9533,'48'],[9749,'49'],[9965,'50'],
-    [10181,'51'],[10397,'52'],[10613,'53'],[10829,'54'],[11045,'55'],
-    [11261,'56'],[11477,'57'],[11693,'58'],[11909,'59'],[12125,'60'],
+  // 已验证的 basket 上界映射（vol <= threshold → basket）
+  const thresholds = [
+    143,287,431,719,1007,1061,1115,1169,1313,1601,
+    1655,1919,2045,2189,2405,2621,2837,3053,3269,3485,
+    3701,3917,4133,4349,4565,4781,4997,5213,5429,5645,
+    5861,6077,6293,6509,6725,6941,7157,7373,7589,7805,
+    8021,8237,8453,8669,8885,9101,9317,9533,9749,9965,
+    10181,10397,10613,10829,11045,11261,11477,11693,11909,12125,
+    12341,12557,12773,12989,13205,
   ]
-  let basket = '61'
-  for (const [maxVol, b] of ranges) {
-    if (vol <= maxVol) { basket = b; break }
+  let basket = thresholds.length + 1
+  for (let i = 0; i < thresholds.length; i++) {
+    if (vol <= thresholds[i]) { basket = i + 1; break }
   }
-  return `https://basket-${basket}.wbbasket.ru/vol${vol}/part${part}/${id}/images/big/1.webp`
+  const b = String(basket).padStart(2, '0')
+  return `https://basket-${b}.wbbasket.ru/vol${vol}/part${part}/${id}/images/c246x328/1.webp`
 }
 
 const BASIS_CONFIG = {
@@ -1278,12 +1274,38 @@ const AIPricingConfig = ({ shopId, platform, onSaved }) => {
       render: (v, r) => r.isGroup ? null : `₽${v}`,
     },
     {
-      title: '建议出价', dataIndex: 'suggested_bid', width: 90,
+      title: '建议出价', dataIndex: 'suggested_bid', width: 100,
       render: (v, r) => {
         if (r.isGroup) return null
-        const up = r.adjust_pct > 0
+        const up = v > r.current_bid
         return (
-          <span style={{ fontWeight: 500, color: up ? '#3B6D11' : '#A32D2D' }}>₽{v}</span>
+          <InputNumber
+            size="small"
+            min={1}
+            value={v}
+            prefix="₽"
+            controls={false}
+            style={{
+              width: 80,
+              fontWeight: 500,
+              color: up ? '#3B6D11' : '#A32D2D',
+            }}
+            onChange={val => {
+              if (val == null) return
+              setSuggestions(prev => prev.map(camp => ({
+                ...camp,
+                suggestions: (camp.suggestions || []).map(s =>
+                  s.id === r.id ? {
+                    ...s,
+                    suggested_bid: val,
+                    adjust_pct: r.current_bid > 0
+                      ? Math.round((val - r.current_bid) / r.current_bid * 10000) / 100
+                      : 0,
+                  } : s
+                ),
+              })))
+            }}
+          />
         )
       },
     },
