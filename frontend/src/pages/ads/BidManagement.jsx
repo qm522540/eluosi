@@ -1039,11 +1039,21 @@ const AIPricingConfig = ({ shopId, platform, onSaved }) => {
 
   const handleSync = async () => {
     setSyncing(true)
+    const hide = message.loading('正在从平台拉取数据，请稍候...', 0)
     try {
-      await syncData(shopId)
+      const res = await syncData(shopId)
+      hide()
       await loadDataStatus()
-      message.success('数据源同步完成')
+      const d = res?.data || {}
+      if (d.already_latest) {
+        message.success('数据已是最新，无需更新')
+      } else {
+        message.success(
+          `更新完成：${d.date_from} ~ ${d.date_to}，写入 ${d.synced || 0} 条数据`
+        )
+      }
     } catch (e) {
+      hide()
       message.error(e?.message || '同步失败')
     } finally {
       setSyncing(false)
@@ -1350,7 +1360,7 @@ const AIPricingConfig = ({ shopId, platform, onSaved }) => {
               数据范围：{dataStatus?.data_days || 0}天
             </span>
             <Button type="primary" size="small" loading={syncing} onClick={handleSync}>
-              更新数据源
+              {syncing ? '更新中...' : '更新数据源'}
             </Button>
           </div>
 

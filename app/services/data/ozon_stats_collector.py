@@ -23,7 +23,7 @@ from app.utils.logger import setup_logger
 
 logger = setup_logger("data.ozon_collector")
 
-INIT_DAYS = 30       # 无数据时拉最近 30 天
+SYNC_DAYS = 7        # 每次最多拉 7 天
 MAX_KEEP_DAYS = 90   # 超过 90 天的旧数据清理
 
 
@@ -58,10 +58,9 @@ async def smart_sync(db: Session, shop_id: int, tenant_id: int) -> dict:
 
     # 2. 决定拉取范围
     if not latest_date:
-        # 无数据 → 拉最近 INIT_DAYS 天
-        date_from = yesterday - timedelta(days=INIT_DAYS - 1)
+        date_from = yesterday - timedelta(days=SYNC_DAYS - 1)
         date_to = yesterday
-        logger.info(f"shop_id={shop_id} 无历史数据，初始化拉取 {date_from}~{date_to}")
+        logger.info(f"shop_id={shop_id} 无历史数据，拉取最近{SYNC_DAYS}天 {date_from}~{date_to}")
     elif latest_date >= yesterday:
         # 数据已是最新
         cleaned = _clean_old_data(db, shop_id, tenant_id)
@@ -76,9 +75,10 @@ async def smart_sync(db: Session, shop_id: int, tenant_id: int) -> dict:
             "data_days": data_days,
         }
     else:
-        # 有数据但不是最新 → 拉 latest_date+1 到 yesterday
         date_from = latest_date + timedelta(days=1)
         date_to = yesterday
+        if (date_to - date_from).days >= SYNC_DAYS:
+            date_from = date_to - timedelta(days=SYNC_DAYS - 1)
         logger.info(f"shop_id={shop_id} 增量同步 {date_from}~{date_to}")
 
     # 3. 拉取数据
