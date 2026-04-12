@@ -1,7 +1,7 @@
 """认证业务逻辑"""
 
 import re
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy.orm import Session
 
@@ -39,7 +39,7 @@ def authenticate_user(db: Session, email: str, password: str) -> dict:
         access_token = create_access_token(token_data)
 
         # 更新最后登录时间
-        user.last_login_at = datetime.utcnow()
+        user.last_login_at = datetime.now(timezone.utc)
         db.commit()
 
         logger.info(f"用户登录成功: user_id={user.id} tenant_id={user.tenant_id}")
@@ -80,7 +80,7 @@ def register_user(db: Session, username: str, email: str, password: str, tenant_
         slug = re.sub(r'[^a-zA-Z0-9]', '-', tenant_name.lower()).strip('-')
         existing_tenant = db.query(Tenant).filter(Tenant.slug == slug).first()
         if existing_tenant:
-            slug = f"{slug}-{int(datetime.utcnow().timestamp())}"
+            slug = f"{slug}-{int(datetime.now(timezone.utc).timestamp())}"
 
         # 创建租户
         tenant = Tenant(

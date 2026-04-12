@@ -11,7 +11,7 @@
 4. 异常告警汇总
 """
 
-from datetime import datetime, date, timedelta
+from datetime import datetime, date, timedelta, timezone
 from decimal import Decimal
 
 from sqlalchemy import func
@@ -45,7 +45,7 @@ def generate_daily_report(self):
             task_name="generate_daily_report",
             celery_task_id=self.request.id,
             status="running",
-            started_at=datetime.utcnow(),
+            started_at=datetime.now(timezone.utc),
         )
         db.add(task_log)
         db.commit()
@@ -74,7 +74,7 @@ def generate_daily_report(self):
                         title=f"运营日报 {yesterday.isoformat()}",
                         content=_format_report_text(report, yesterday),
                         channel="both",
-                        sent_at=datetime.utcnow(),
+                        sent_at=datetime.now(timezone.utc),
                     )
                     db.add(notification)
                     reports_generated += 1
@@ -93,7 +93,7 @@ def generate_daily_report(self):
 
         task_log.status = "success"
         task_log.result = result
-        task_log.finished_at = datetime.utcnow()
+        task_log.finished_at = datetime.now(timezone.utc)
         if task_log.started_at:
             task_log.duration_ms = int(
                 (task_log.finished_at - task_log.started_at).total_seconds() * 1000
@@ -110,7 +110,7 @@ def generate_daily_report(self):
             if tl:
                 tl.status = "failed"
                 tl.error_message = str(e)[:2000]
-                tl.finished_at = datetime.utcnow()
+                tl.finished_at = datetime.now(timezone.utc)
                 db.commit()
         db.rollback()
         raise self.retry(exc=e)

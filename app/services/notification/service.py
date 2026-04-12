@@ -1,7 +1,7 @@
 """企业微信通知服务"""
 
 import httpx
-from datetime import datetime
+from datetime import datetime, timezone
 from sqlalchemy.orm import Session
 
 from app.models.notification import Notification
@@ -113,7 +113,7 @@ async def process_pending_notifications(db: Session) -> dict:
             sent = await send_wechat_work_bot(msg, msg_type="markdown")
 
             if sent:
-                notif.sent_at = datetime.utcnow()
+                notif.sent_at = datetime.now(timezone.utc)
                 success_count += 1
             else:
                 failed_count += 1
@@ -185,7 +185,7 @@ def mark_notification_read(db: Session, notification_id: int, tenant_id: int) ->
             return {"code": ErrorCode.NOT_FOUND, "msg": "通知不存在"}
 
         notif.is_read = 1
-        notif.read_at = datetime.utcnow()
+        notif.read_at = datetime.now(timezone.utc)
         db.commit()
 
         return {"code": ErrorCode.SUCCESS, "data": None}

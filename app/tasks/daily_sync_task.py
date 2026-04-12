@@ -4,7 +4,7 @@
 """
 
 import asyncio
-from datetime import datetime
+from datetime import datetime, timezone
 
 from app.tasks.celery_app import celery_app
 from app.database import SessionLocal
@@ -40,7 +40,7 @@ def daily_sync_all_shops(self):
             task_name="daily_sync_all_shops",
             celery_task_id=self.request.id,
             status="running",
-            started_at=datetime.utcnow(),
+            started_at=datetime.now(timezone.utc),
         )
         db.add(task_log)
         db.commit()
@@ -55,7 +55,7 @@ def daily_sync_all_shops(self):
             logger.info("无active的Ozon店铺，跳过每日同步")
             task_log.status = "success"
             task_log.result = {"msg": "no_shops"}
-            task_log.finished_at = datetime.utcnow()
+            task_log.finished_at = datetime.now(timezone.utc)
             db.commit()
             return
 
@@ -81,7 +81,7 @@ def daily_sync_all_shops(self):
 
         task_log.status = "success"
         task_log.result = {"shops": len(shops), "details": results}
-        task_log.finished_at = datetime.utcnow()
+        task_log.finished_at = datetime.now(timezone.utc)
         if task_log.started_at:
             delta = task_log.finished_at - task_log.started_at
             task_log.duration_ms = int(delta.total_seconds() * 1000)

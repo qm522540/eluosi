@@ -2,7 +2,7 @@
 
 import csv
 import io
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from sqlalchemy.orm import Session
 from sqlalchemy import func, case, desc
 
@@ -1403,7 +1403,7 @@ async def _execute_single_rule(db: Session, tenant_id: int, rule: AdAutomationRu
             logger.info(f"规则[{rule.name}] 库存联动检查 活动{campaign.id} min={min_stock} resume={resume_stock}")
 
     if triggered:
-        rule.last_triggered_at = datetime.utcnow()
+        rule.last_triggered_at = datetime.now(timezone.utc)
         rule.trigger_count += 1
         db.commit()
 

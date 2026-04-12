@@ -36,7 +36,7 @@ def _log_task_start(db, task_name: str, celery_task_id: str, params: dict = None
         celery_task_id=celery_task_id,
         params=params,
         status="running",
-        started_at=datetime.utcnow(),
+        started_at=datetime.now(timezone.utc),
     )
     db.add(task_log)
     db.commit()
@@ -51,7 +51,7 @@ def _log_task_end(db, log_id: int, status: str, result: dict = None, error: str 
         task_log.status = status
         task_log.result = result
         task_log.error_message = error[:2000] if error else None
-        task_log.finished_at = datetime.utcnow()
+        task_log.finished_at = datetime.now(timezone.utc)
         if task_log.started_at:
             delta = task_log.finished_at - task_log.started_at
             task_log.duration_ms = int(delta.total_seconds() * 1000)

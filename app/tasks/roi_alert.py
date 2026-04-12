@@ -10,7 +10,7 @@
 - 花费 > 日预算80% 且 ROAS < 1.5 → 严重
 """
 
-from datetime import datetime, date, timedelta
+from datetime import datetime, date, timedelta, timezone
 from decimal import Decimal
 
 from app.tasks.celery_app import celery_app
@@ -53,7 +53,7 @@ def check_roi_anomaly(self):
             task_name="check_roi_anomaly",
             celery_task_id=self.request.id,
             status="running",
-            started_at=datetime.utcnow(),
+            started_at=datetime.now(timezone.utc),
         )
         db.add(task_log)
         db.commit()
@@ -142,7 +142,7 @@ def check_roi_anomaly(self):
                         title=f"ROI异常: {campaign.name}",
                         content=alert_content,
                         channel="both",
-                        sent_at=datetime.utcnow(),
+                        sent_at=datetime.now(timezone.utc),
                     )
                     db.add(notification)
                     alerts_generated += 1
@@ -162,7 +162,7 @@ def check_roi_anomaly(self):
 
         task_log.status = "success"
         task_log.result = result
-        task_log.finished_at = datetime.utcnow()
+        task_log.finished_at = datetime.now(timezone.utc)
         if task_log.started_at:
             task_log.duration_ms = int(
                 (task_log.finished_at - task_log.started_at).total_seconds() * 1000
@@ -179,7 +179,7 @@ def check_roi_anomaly(self):
             if task_log:
                 task_log.status = "failed"
                 task_log.error_message = str(e)[:2000]
-                task_log.finished_at = datetime.utcnow()
+                task_log.finished_at = datetime.now(timezone.utc)
                 db.commit()
         db.rollback()
         raise self.retry(exc=e)
