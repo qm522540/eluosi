@@ -899,12 +899,17 @@ async def _call_ai(template: dict, campaigns: list, products_by_campaign: dict,
 - days: 有数据的天数
 
 请基于历史数据判断商品阶段和调价方向：
-- ROAS > 目标ROAS 且 cr 稳定 → growing，可适当加价扩量
-- ROAS < 最低ROAS 且 spend 持续 → declining，应降价止损
+
+ROAS 三档决策：
+- ROAS >= 目标ROAS → growing，效果好，适当加价扩量抢更多流量
+- 最低ROAS <= ROAS < 目标ROAS → testing，效果一般，小幅降价控成本，向目标靠拢
+- ROAS < 最低ROAS → declining，亏损状态，大幅降价止损（建议降到更低价格）
+
+其他判断维度：
 - cpc 过高但 cr 尚可 → 出价偏高，适当降价控成本
 - 有展示无点击（ctr极低） → 素材/相关性问题，不建议加价
-- 有点击无订单（cr=0）且数据天数少 → cold_start 或 testing
-- 无 stats_7d 的商品按 cold_start_baseline 处理
+- 有点击无订单（cr=0）且数据天数少 → cold_start，保持观望或小幅试探
+- 无 stats_7d 的商品按 cold_start_baseline 处理，给一个保守出价
 """
 
     prompt = f"""你是{platform_label}广告优化专家。基于商品的历史表现数据和当前出价，给出CPM出价调整建议。
@@ -1089,12 +1094,17 @@ async def analyze_stream(db, tenant_id: int, shop_id: int,
 - days: 有数据的天数
 
 请基于历史数据判断商品阶段和调价方向：
-- ROAS > 目标ROAS 且 cr 稳定 → growing，可适当加价扩量
-- ROAS < 最低ROAS 且 spend 持续 → declining，应降价止损
+
+ROAS 三档决策：
+- ROAS >= 目标ROAS → growing，效果好，适当加价扩量抢更多流量
+- 最低ROAS <= ROAS < 目标ROAS → testing，效果一般，小幅降价控成本，向目标靠拢
+- ROAS < 最低ROAS → declining，亏损状态，大幅降价止损（建议降到更低价格）
+
+其他判断维度：
 - cpc 过高但 cr 尚可 → 出价偏高，适当降价控成本
 - 有展示无点击（ctr极低） → 素材/相关性问题，不建议加价
-- 有点击无订单（cr=0）且数据天数少 → cold_start 或 testing
-- 无 stats_7d 的商品按 cold_start_baseline 处理
+- 有点击无订单（cr=0）且数据天数少 → cold_start，保持观望或小幅试探
+- 无 stats_7d 的商品按 cold_start_baseline 处理，给一个保守出价
 """
 
         prompt = f"""你是{platform_label}广告优化专家。基于商品的历史表现数据和当前出价，给出CPM出价调整建议。
