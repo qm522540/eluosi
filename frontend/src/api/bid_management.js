@@ -76,7 +76,7 @@ export const getDataStatus = (shopId) =>
   request.get(`${BASE}/data-status/${shopId}`)
 
 export const syncData = (shopId) =>
-  request.post(`${BASE}/data-sync/${shopId}`)
+  request.post(`${BASE}/data-sync/${shopId}`, null, { timeout: 300000 })
 
 export const downloadData = (shopId, days) =>
   request.get(`${BASE}/data-download/${shopId}`, {
