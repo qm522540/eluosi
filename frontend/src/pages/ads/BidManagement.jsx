@@ -494,6 +494,28 @@ const TimePricingConfig = ({ shopId, activeMode, onSaved }) => {
     await doSaveAndEnable()
   }
 
+  /** 计算莫斯科当前小时（UTC+3） */
+  const getMoscowHour = () => {
+    const now = new Date()
+    const utcH = now.getUTCHours()
+    return (utcH + 3) % 24
+  }
+
+  /** 根据用户配置的时段，找下一个非平谷期的小时和对应时段名 */
+  const getNextActiveSlot = (currentMoscowHour) => {
+    const allConfigured = [
+      ...peakHours.map(h => ({ h, label: '高峰', ratio: peakRatio })),
+      ...midHours.map(h => ({ h, label: '次高峰', ratio: midRatio })),
+      ...lowHours.map(h => ({ h, label: '低谷', ratio: lowRatio })),
+    ].sort((a, b) => a.h - b.h)
+    if (allConfigured.length === 0) return null
+    // 找当前小时之后最近的
+    const after = allConfigured.find(s => s.h > currentMoscowHour)
+    if (after) return { ...after, tomorrow: false }
+    // 没有 → wrap 到明天第一个
+    return { ...allConfigured[0], tomorrow: true }
+  }
+
   const doSaveAndEnable = async () => {
     setSaving(true)
     try {
@@ -506,7 +528,31 @@ const TimePricingConfig = ({ shopId, activeMode, onSaved }) => {
         low_ratio: lowRatio,
       })
       await enableTimePricing(shopId)
-      message.success('分时调价已开启')
+
+      // 检测当前是否为平谷期
+      const moscowH = getMoscowHour()
+      const allHours = new Set([...peakHours, ...midHours, ...lowHours])
+      if (!allHours.has(moscowH)) {
+        const next = getNextActiveSlot(moscowH)
+        if (next) {
+          const dayStr = next.tomorrow ? '明天' : '今天'
+          const hourStr = String(next.h).padStart(2, '0')
+          Modal.info({
+            title: '分时调价已开启',
+            content: (
+              <div style={{ lineHeight: 1.8 }}>
+                <p>当前莫斯科时间 {String(moscowH).padStart(2, '0')}:00 处于<b>平谷期</b>，系统暂不调整出价。</p>
+                <p>下次自动调价将在莫斯科时间 <b>{dayStr} {hourStr}:05</b> 执行（{next.label}时段，出价系数 {next.ratio}%）。</p>
+              </div>
+            ),
+            okText: '我知道了',
+          })
+        } else {
+          message.success('分时调价已开启')
+        }
+      } else {
+        message.success('分时调价已开启，将在本小时第 5 分钟首次执行')
+      }
       onSaved()
     } catch (e) {
       message.error(e?.message || '保存失败')
@@ -1643,8 +1689,8 @@ const BidManagement = ({ shopId, platform }) => {
 
   if (loading) return <Spin />
 
-  // 只对Ozon平台显示完整功能
-  if (platform !== 'ozon') {
+  // Ozon + WB 支持出价管理，其他平台占位
+  if (platform !== 'ozon' && platform !== 'wb') {
     return (
       <div style={{
         textAlign: 'center',
@@ -1653,11 +1699,9 @@ const BidManagement = ({ shopId, platform }) => {
       }}>
         <div style={{ fontSize: 48, marginBottom: 16 }}>🚧</div>
         <div style={{ fontSize: 16, fontWeight: 500 }}>
-          {platform === 'wb' ? 'WB平台出价管理开发中' : 'Yandex Market出价管理即将上线'}
+          Yandex Market出价管理即将上线
         </div>
-        <div style={{ fontSize: 13, marginTop: 8 }}>
-          {platform === 'wb' ? '正在排查WB广告API能力，完成后上线' : '敬请期待'}
-        </div>
+        <div style={{ fontSize: 13, marginTop: 8 }}>敬请期待</div>
       </div>
     )
   }
