@@ -566,26 +566,25 @@ async def sync_data(
     shop: Shop = Depends(get_owned_shop),
     db: Session = Depends(get_db),
 ):
-    """手动触发数据同步：清理90天前数据 + 同步昨日"""
-    from app.services.data.ozon_stats_collector import sync_yesterday_stats
-
-    db.execute(text("""
-        DELETE s FROM ad_stats s
-        JOIN ad_campaigns c ON s.campaign_id = c.id
-        WHERE c.shop_id = :shop_id
-          AND c.tenant_id = :tenant_id
-          AND s.stat_date < DATE_SUB(CURDATE(), INTERVAL 90 DAY)
-    """), {"shop_id": shop.id, "tenant_id": shop.tenant_id})
-    db.commit()
+    """智能数据同步：无数据拉30天，有数据增量补齐，清理90天前旧数据"""
+    from app.services.data.ozon_stats_collector import smart_sync
 
     try:
-        result = await sync_yesterday_stats(db, shop.id)
+        result = await smart_sync(db, shop.id, shop.tenant_id)
+        if result.get("already_latest"):
+            return success({
+                "shop_id": shop.id,
+                "msg": "数据已是最新，无需更新",
+                **result,
+            })
         return success({
             "shop_id": shop.id,
-            "task_id": "sync-immediate",
-            "msg": "数据同步完成",
-            **(result if isinstance(result, dict) else {}),
+            "msg": f"同步完成：拉取 {result['date_from']}~{result['date_to']}，"
+                   f"写入 {result['synced']} 条，清理 {result['cleaned']} 条过期数据",
+            **result,
         })
+    except ValueError as e:
+        return error(ErrorCode.AD_STATS_FETCH_FAILED, str(e))
     except Exception as e:
         logger.error(f"数据同步失败 shop_id={shop.id}: {e}")
         return error(ErrorCode.AD_STATS_FETCH_FAILED, f"同步失败: {e}")
