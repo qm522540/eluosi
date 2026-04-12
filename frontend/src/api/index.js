@@ -24,6 +24,10 @@ request.interceptors.request.use(
 // 响应拦截器：统一处理错误
 request.interceptors.response.use(
   (response) => {
+    // blob 响应（文件下载）直接返回，不走 code 校验
+    if (response.config.responseType === 'blob') {
+      return response.data
+    }
     const res = response.data
     // 后端统一响应格式: {code, msg, data, timestamp}
     if (res.code !== 0) {
