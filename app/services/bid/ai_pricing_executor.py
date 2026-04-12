@@ -472,10 +472,12 @@ async def _auto_execute(db, tenant_id: int, shop, suggestions: list) -> int:
 
 # ==================== 单条 / 批量 approve ====================
 
-async def approve_suggestion(db, tenant_id: int, suggestion_id: int) -> dict:
+async def approve_suggestion(db, tenant_id: int, suggestion_id: int,
+                             override_bid: Optional[float] = None) -> dict:
     """单条 approve（POST /suggestions/{id}/approve）
 
     多租户隔离：必须 WHERE s.tenant_id = :tenant_id
+    override_bid: 用户手动修改后的出价，覆盖 AI 原始建议
     """
     row = db.execute(text("""
         SELECT
@@ -504,11 +506,14 @@ async def approve_suggestion(db, tenant_id: int, suggestion_id: int) -> dict:
     if not shop:
         return {"code": ErrorCode.SHOP_NOT_FOUND, "msg": "店铺不存在"}
 
+    # 使用用户修改后的出价或 AI 原始建议
+    final_bid = override_bid if override_bid is not None else float(row.suggested_bid)
+
     client = _create_platform_client(shop)
     try:
         api_result = await _execute_bid_update(
             client, shop.platform, row.platform_campaign_id,
-            row.platform_sku_id, float(row.suggested_bid),
+            row.platform_sku_id, final_bid,
         )
     finally:
         await client.close()
@@ -529,7 +534,8 @@ async def approve_suggestion(db, tenant_id: int, suggestion_id: int) -> dict:
     campaign = db.query(AdCampaign).filter(
         AdCampaign.id == row.campaign_id, AdCampaign.tenant_id == tenant_id
     ).first()
-    _upsert_group_last_auto(db, campaign, row.platform_sku_id, row.sku_name or "", float(row.suggested_bid))
+    final_adjust_pct = round((final_bid - float(row.current_bid)) / float(row.current_bid) * 100, 2) if float(row.current_bid) > 0 else 0
+    _upsert_group_last_auto(db, campaign, row.platform_sku_id, row.sku_name or "", final_bid)
 
     _write_bidlog(
         db, campaign,
@@ -537,8 +543,8 @@ async def approve_suggestion(db, tenant_id: int, suggestion_id: int) -> dict:
             "platform_sku_id": row.platform_sku_id,
             "sku_name": row.sku_name,
             "current_bid": float(row.current_bid),
-            "suggested_bid": float(row.suggested_bid),
-            "adjust_pct": float(row.adjust_pct),
+            "suggested_bid": final_bid,
+            "adjust_pct": final_adjust_pct,
             "product_stage": row.product_stage,
         },
         "ai_manual", success=True

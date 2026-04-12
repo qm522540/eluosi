@@ -1417,7 +1417,7 @@ const AIPricingConfig = ({ shopId, platform, onSaved }) => {
             type="primary"
             onClick={async () => {
               try {
-                await approveSuggestion(r.id)
+                await approveSuggestion(r.id, r.suggested_bid)
                 message.success('执行成功')
                 loadSuggestions()
               } catch (e) {

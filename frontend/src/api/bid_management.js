@@ -49,8 +49,8 @@ export const manualAnalyze = (shopId) =>
 export const getSuggestions = (shopId) =>
   request.get(`${BASE}/suggestions/${shopId}`)
 
-export const approveSuggestion = (id) =>
-  request.post(`${BASE}/suggestions/${id}/approve`)
+export const approveSuggestion = (id, suggestedBid) =>
+  request.post(`${BASE}/suggestions/${id}/approve`, suggestedBid != null ? { suggested_bid: suggestedBid } : null)
 
 export const rejectSuggestion = (id) =>
   request.post(`${BASE}/suggestions/${id}/reject`)

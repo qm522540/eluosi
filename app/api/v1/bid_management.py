@@ -378,15 +378,22 @@ def get_suggestions(
     })
 
 
+class ApproveRequest(BaseModel):
+    suggested_bid: Optional[float] = None
+
+
 @router.post("/suggestions/{suggestion_id}/approve")
 async def approve_suggestion(
     suggestion_id: int,
+    req: ApproveRequest = None,
     db: Session = Depends(get_db),
     tenant_id: int = Depends(get_tenant_id),
 ):
-    """注：按建议ID操作，不带 shop_id；service 层用 tenant_id 校验"""
+    """注：按建议ID操作，不带 shop_id；service 层用 tenant_id 校验
+    可选 suggested_bid：用户手动修改后的出价，覆盖 AI 建议值"""
     from app.services.bid.ai_pricing_executor import approve_suggestion as approve_fn
-    result = await approve_fn(db, tenant_id, suggestion_id)
+    override_bid = req.suggested_bid if req else None
+    result = await approve_fn(db, tenant_id, suggestion_id, override_bid=override_bid)
     if result.get("code") != 0:
         return error(result["code"], result.get("msg") or "")
     return success(result.get("data") or {})
