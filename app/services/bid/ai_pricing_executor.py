@@ -307,8 +307,7 @@ async def _analyze_now_inner(db, tenant_id: int, shop_id: int,
         WHERE shop_id = :shop_id
           AND tenant_id = :tenant_id
           AND status = 'pending'
-          AND DATE(generated_at) < :today
-    """), {"shop_id": shop_id, "tenant_id": tenant_id, "today": moscow_today()})
+    """), {"shop_id": shop_id, "tenant_id": tenant_id})
 
     # 查 SKU 历史数据天数（用于写入 data_days，不依赖 AI 返回）
     sku_stats = _query_sku_history(db, shop_id, tenant_id, platform)
