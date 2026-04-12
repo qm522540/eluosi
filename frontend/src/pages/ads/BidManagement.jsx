@@ -61,25 +61,25 @@ const getWbImageUrl = (nmId) => {
   if (!id) return null
   const vol = Math.floor(id / 100000)
   const part = Math.floor(id / 1000)
-  let basket = '01'
-  if (vol >= 0 && vol <= 143) basket = '01'
-  else if (vol <= 287) basket = '02'
-  else if (vol <= 431) basket = '03'
-  else if (vol <= 719) basket = '04'
-  else if (vol <= 1007) basket = '05'
-  else if (vol <= 1061) basket = '06'
-  else if (vol <= 1115) basket = '07'
-  else if (vol <= 1169) basket = '08'
-  else if (vol <= 1313) basket = '09'
-  else if (vol <= 1601) basket = '10'
-  else if (vol <= 1655) basket = '11'
-  else if (vol <= 1919) basket = '12'
-  else if (vol <= 2045) basket = '13'
-  else if (vol <= 2189) basket = '14'
-  else if (vol <= 2405) basket = '15'
-  else if (vol <= 2621) basket = '16'
-  else if (vol <= 2837) basket = '17'
-  else basket = '18'
+  // basket 编号由 vol 范围决定（WB CDN 分桶规则，持续扩展）
+  const ranges = [
+    [143,'01'],[287,'02'],[431,'03'],[719,'04'],[1007,'05'],
+    [1061,'06'],[1115,'07'],[1169,'08'],[1313,'09'],[1601,'10'],
+    [1655,'11'],[1919,'12'],[2045,'13'],[2189,'14'],[2405,'15'],
+    [2621,'16'],[2837,'17'],[3053,'18'],[3269,'19'],[3485,'20'],
+    [3701,'21'],[3917,'22'],[4133,'23'],[4349,'24'],[4565,'25'],
+    [4781,'26'],[4997,'27'],[5213,'28'],[5429,'29'],[5645,'30'],
+    [5861,'31'],[6077,'32'],[6293,'33'],[6509,'34'],[6725,'35'],
+    [6941,'36'],[7157,'37'],[7373,'38'],[7589,'39'],[7805,'40'],
+    [8021,'41'],[8237,'42'],[8453,'43'],[8669,'44'],[8885,'45'],
+    [9101,'46'],[9317,'47'],[9533,'48'],[9749,'49'],[9965,'50'],
+    [10181,'51'],[10397,'52'],[10613,'53'],[10829,'54'],[11045,'55'],
+    [11261,'56'],[11477,'57'],[11693,'58'],[11909,'59'],[12125,'60'],
+  ]
+  let basket = '61'
+  for (const [maxVol, b] of ranges) {
+    if (vol <= maxVol) { basket = b; break }
+  }
   return `https://basket-${basket}.wbbasket.ru/vol${vol}/part${part}/${id}/images/big/1.webp`
 }
 
