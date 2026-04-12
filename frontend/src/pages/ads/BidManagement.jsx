@@ -1287,7 +1287,7 @@ const AIPricingConfig = ({ shopId, platform, onSaved }) => {
               }
             }}
           >
-            执行
+            手动执行
           </Button>
         )
       },
@@ -1610,7 +1610,7 @@ const AIPricingConfig = ({ shopId, platform, onSaved }) => {
               }
             }}
           >
-            批量执行({selected.length})
+            批量手动执行({selected.length})
           </Button>
         </Space>
       </div>
