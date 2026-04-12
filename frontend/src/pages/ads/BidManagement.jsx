@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import {
-  Button, Modal, message,
+  Button, Modal, message, Switch,
   Table, Tag, Tooltip, Space,
   InputNumber, Collapse, Spin, Badge,
   Card, Row, Col, Select, Alert,
@@ -926,6 +926,7 @@ const TimePricingConfig = ({ shopId, platform, activeMode, onSaved }) => {
 const AIPricingConfig = ({ shopId, platform, onSaved }) => {
   const [templateName, setTemplateName] = useState('default')
   const [autoExecute, setAutoExecute] = useState(false)
+  const [aiEnabled, setAiEnabled] = useState(false)
   const [templates, setTemplates] = useState(TEMPLATE_DEFAULTS)
   const [editModalOpen, setEditModalOpen] = useState(false)
   const [editingTemplate, setEditingTemplate] = useState({})
@@ -949,6 +950,7 @@ const AIPricingConfig = ({ shopId, platform, onSaved }) => {
       const d = res.data || {}
       setTemplateName(d.template_name || 'default')
       setAutoExecute(d.auto_execute || false)
+      setAiEnabled(d.is_active || false)
       if (d.conservative_config) {
         setTemplates({
           conservative: typeof d.conservative_config === 'string'
@@ -1030,6 +1032,7 @@ const AIPricingConfig = ({ shopId, platform, onSaved }) => {
         aggressive_config: templates.aggressive,
       })
       await enableAIPricing(shopId, autoExecute)
+      setAiEnabled(true)
       message.success(autoExecute ? 'AI调价自动执行已开启' : 'AI调价建议模式已开启')
       onSaved()
     } catch (e) {
@@ -1309,7 +1312,7 @@ const AIPricingConfig = ({ shopId, platform, onSaved }) => {
         </Collapse.Panel>
       </Collapse>
 
-      {/* 执行模式 */}
+      {/* 开关与执行模式 */}
       <div style={{
         background: 'var(--color-background-primary, #fff)',
         border: '0.5px solid var(--color-border-tertiary, #e8e8e8)',
@@ -1317,49 +1320,51 @@ const AIPricingConfig = ({ shopId, platform, onSaved }) => {
         padding: 14,
         marginBottom: 10,
       }}>
-        <div style={{ fontSize: 13, fontWeight: 500, marginBottom: 10 }}>
-          执行模式
-        </div>
-        <Space>
-          <Button
-            type={!autoExecute ? 'primary' : 'default'}
-            style={!autoExecute ? { background: '#534AB7', borderColor: '#534AB7' } : {}}
-            onClick={() => setAutoExecute(false)}
-          >
-            建议模式
-          </Button>
-          <Button
-            type={autoExecute ? 'primary' : 'default'}
-            style={autoExecute ? { background: '#534AB7', borderColor: '#534AB7' } : {}}
-            onClick={() => setAutoExecute(true)}
-          >
-            自动执行
-          </Button>
-          <span style={{ fontSize: 12, color: 'var(--color-text-secondary, #666)' }}>
-            {autoExecute
-              ? 'AI直接调用API修改出价 · 每小时05分自动执行'
-              : 'AI生成建议，需要你手动确认执行'}
-          </span>
-        </Space>
-        <div style={{ marginTop: 12 }}>
-          <Space>
-            <Button type="primary" loading={saving} onClick={handleEnableAI}>
-              保存并开启
-            </Button>
-            <Button
-              onClick={async () => {
+        {/* AI 调价总开关 */}
+        <div style={{
+          display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14,
+        }}>
+          <Switch
+            checked={aiEnabled}
+            loading={saving}
+            onChange={async (checked) => {
+              if (checked) {
+                await handleEnableAI()
+              } else {
                 try {
                   await disableAIPricing(shopId)
+                  setAiEnabled(false)
                   message.success('AI调价已关闭')
                   onSaved()
                 } catch (e) {
                   message.error(e?.message || '关闭失败')
                 }
-              }}
-            >
-              关闭AI调价
-            </Button>
-          </Space>
+              }
+            }}
+          />
+          <span style={{ fontSize: 14, fontWeight: 500 }}>
+            AI 智能调价
+          </span>
+          <span style={{ fontSize: 12, color: aiEnabled ? '#389e0d' : 'var(--color-text-secondary, #999)' }}>
+            {aiEnabled ? '运行中' : '已关闭'}
+          </span>
+        </div>
+
+        {/* 执行模式切换 */}
+        <div style={{
+          display: 'flex', alignItems: 'center', gap: 10,
+        }}>
+          <Switch
+            checked={autoExecute}
+            checkedChildren="自动执行"
+            unCheckedChildren="建议模式"
+            onChange={(checked) => setAutoExecute(checked)}
+          />
+          <span style={{ fontSize: 12, color: 'var(--color-text-secondary, #666)' }}>
+            {autoExecute
+              ? 'AI直接调用API修改出价 · 每小时05分自动执行'
+              : 'AI生成建议，需要你手动确认执行'}
+          </span>
         </div>
       </div>
 
