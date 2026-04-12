@@ -23,12 +23,13 @@ import {
 // ==========================================
 const HOURS = Array.from({ length: 24 }, (_, i) => i)
 // 4档时段语义：高峰/次高峰/低谷 + 未配置=平谷期(保持原价不动)
-const DEFAULT_PEAK_HOURS = [19, 20, 21]
-const DEFAULT_MID_HOURS = [22]
-const DEFAULT_LOW_HOURS = [2, 3, 4, 5, 6]
-const DEFAULT_PEAK_RATIO = 130
-const DEFAULT_MID_RATIO = 120
-const DEFAULT_LOW_RATIO = 50
+// 默认值与后端 GET /time-pricing/{shop_id} 无规则时返回的一致
+const DEFAULT_PEAK_HOURS = [10, 11, 12, 13, 19, 20, 21, 22]
+const DEFAULT_MID_HOURS = [7, 8, 9, 14, 15, 16, 17, 18]
+const DEFAULT_LOW_HOURS = [0, 1, 2, 3, 4, 5, 6, 23]
+const DEFAULT_PEAK_RATIO = 120
+const DEFAULT_MID_RATIO = 100
+const DEFAULT_LOW_RATIO = 60
 
 const TEMPLATE_DEFAULTS = {
   conservative: {
@@ -393,7 +394,8 @@ const BidLogs = ({ shopId }) => {
 // ==========================================
 // 分时调价配置组件
 // ==========================================
-const TimePricingConfig = ({ shopId, activeMode, onSaved }) => {
+const TimePricingConfig = ({ shopId, platform, activeMode, onSaved }) => {
+  const platformLabel = platform === 'wb' ? 'WB' : 'Ozon'
   const isEnabled = activeMode === 'time_pricing'
   const [peakHours, setPeakHours] = useState(DEFAULT_PEAK_HOURS)
   const [midHours, setMidHours] = useState(DEFAULT_MID_HOURS)
@@ -660,21 +662,21 @@ const TimePricingConfig = ({ shopId, activeMode, onSaved }) => {
             <div style={{ fontWeight: 500, marginBottom: 4 }}>开启后的运行规则</div>
             <ul style={{ paddingLeft: 20, margin: '0 0 12px' }}>
               <li>系统<b>每小时</b>自动检查一次（莫斯科时间每小时第 5 分钟执行）</li>
-              <li>只调整当前店铺<b>活跃广告活动</b>中的商品（支持 Ozon 和 WB 平台）</li>
+              <li>只调整当前店铺 <b>{platformLabel}</b> 平台的<b>活跃广告活动</b>中的商品</li>
               <li>出价公式：<b>商品原始出价 × 当前时段的出价系数</b>（最低不低于 ₽3）</li>
               <li>首次执行时系统会自动记录每个商品的「原始出价」作为基准，后续都按原始出价乘以系数</li>
             </ul>
             <div style={{ fontWeight: 500, marginBottom: 4 }}>以下商品会被跳过，不调价</div>
             <ul style={{ paddingLeft: 20, margin: '0 0 12px' }}>
               <li>标记为「用户管理」的商品 —— 您在下方执行状态表中可以手动标记或恢复</li>
-              <li>有人在 Ozon 后台手动改过出价的商品 —— 系统检测到出价被人为修改后会自动标记为用户管理并跳过</li>
+              <li>有人在 {platformLabel} 后台手动改过出价的商品 —— 系统检测到出价被人为修改后会自动标记为用户管理并跳过</li>
               <li>调整后出价与当前出价差值小于 ₽1 的商品 —— 变化太小，不执行</li>
               <li>当前时间不在任何时段（高峰/次高峰/低谷）内的小时为「平谷期」 —— 保持原价不动</li>
             </ul>
             <div style={{ fontWeight: 500, marginBottom: 4 }}>关闭分时调价后</div>
             <ul style={{ paddingLeft: 20, margin: 0 }}>
               <li>系统会自动将所有已被调过的商品出价<b>恢复到开启前的原始出价</b></li>
-              <li>如有个别商品恢复失败（Ozon API 异常），会在弹窗中提示，您可在「当前执行状态」表中手动点「恢复原价」重试</li>
+              <li>如有个别商品恢复失败（{platformLabel} API 异常），会在弹窗中提示，您可在「当前执行状态」表中手动点「恢复原价」重试</li>
             </ul>
           </div>
         </Collapse.Panel>
@@ -825,7 +827,7 @@ const TimePricingConfig = ({ shopId, activeMode, onSaved }) => {
                         <p>关闭后系统会执行以下操作：</p>
                         <ul style={{ paddingLeft: 20, margin: '4px 0' }}>
                           <li>所有已被分时调价的商品将<b>自动恢复到开启前的原始出价</b></li>
-                          <li>恢复过程需逐个调用 Ozon API，可能需要几秒钟</li>
+                          <li>恢复过程需逐个调用 {platformLabel} API，可能需要几秒钟</li>
                           <li>如有个别商品恢复失败，会在弹窗中提示，可手动重试</li>
                         </ul>
                         <p style={{ color: '#999', marginTop: 8 }}>分时调价的规则配置不会被删除，下次开启仍可使用。</p>
@@ -921,7 +923,7 @@ const TimePricingConfig = ({ shopId, activeMode, onSaved }) => {
 // ==========================================
 // AI调价配置组件
 // ==========================================
-const AIPricingConfig = ({ shopId, onSaved }) => {
+const AIPricingConfig = ({ shopId, platform, onSaved }) => {
   const [templateName, setTemplateName] = useState('default')
   const [autoExecute, setAutoExecute] = useState(false)
   const [templates, setTemplates] = useState(TEMPLATE_DEFAULTS)
@@ -986,7 +988,7 @@ const AIPricingConfig = ({ shopId, onSaved }) => {
     if (autoExecute) {
       Modal.confirm({
         title: '确认开启AI自动调价',
-        content: '开启后AI将每小时05分自动调用Ozon API修改出价，无需人工确认。请确保策略模板参数设置正确。是否确认开启？',
+        content: `开启后AI将每小时05分自动调用${platform === 'wb' ? 'WB' : 'Ozon'} API修改出价，无需人工确认。请确保策略模板参数设置正确。是否确认开启？`,
         okText: '确认开启',
         cancelText: '取消',
         onOk: doEnableAI,
@@ -1069,7 +1071,7 @@ const AIPricingConfig = ({ shopId, onSaved }) => {
       const url = URL.createObjectURL(new Blob([res]))
       const a = document.createElement('a')
       a.href = url
-      a.download = `ozon_data_${days}days.xlsx`
+      a.download = `${platform || 'ads'}_data_${days}days.xlsx`
       a.click()
       URL.revokeObjectURL(url)
     } catch {
@@ -1720,14 +1722,14 @@ const BidManagement = ({ shopId, platform }) => {
         marginBottom: 14,
       }}>
         <span style={{
-          background: '#005BFF',
+          background: platform === 'wb' ? '#CB11AB' : '#005BFF',
           color: '#fff',
           fontSize: 12,
           fontWeight: 500,
           padding: '3px 10px',
           borderRadius: 20,
         }}>
-          Ozon
+          {platform === 'wb' ? 'Wildberries' : 'Ozon'}
         </span>
         <span style={{ fontSize: 12, color: 'var(--color-text-secondary, #666)' }}>
           商品级别出价 · 店铺级别配置
@@ -1760,9 +1762,9 @@ const BidManagement = ({ shopId, platform }) => {
 
       {/* 根据选择展示对应配置 */}
       {selectedMode === 'time_pricing' ? (
-        <TimePricingConfig shopId={shopId} activeMode={activeMode} onSaved={loadActiveMode} />
+        <TimePricingConfig shopId={shopId} platform={platform} activeMode={activeMode} onSaved={loadActiveMode} />
       ) : (
-        <AIPricingConfig shopId={shopId} onSaved={loadActiveMode} />
+        <AIPricingConfig shopId={shopId} platform={platform} onSaved={loadActiveMode} />
       )}
     </div>
   )
