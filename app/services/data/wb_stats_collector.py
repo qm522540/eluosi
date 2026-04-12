@@ -95,6 +95,7 @@ async def smart_sync(db: Session, shop_id: int, tenant_id: int) -> dict:
                 await asyncio.sleep(0.3)
             except Exception as e:
                 logger.error(f"WB 活动 {campaign.name}(id={campaign.id}) 数据拉取失败: {e}")
+                db.rollback()
     finally:
         await client.close()
 

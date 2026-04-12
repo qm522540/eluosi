@@ -442,6 +442,7 @@ class WBClient(BasePlatformClient):
                 acos = (spend / revenue * 100) if revenue > 0 else 0
                 roas = (revenue / spend) if spend > 0 else 0
 
+                # DB 列是 DECIMAL(8,4)，极端值截断避免溢出
                 results.append({
                     "campaign_id": campaign_id,
                     "platform": "wb",
@@ -454,10 +455,10 @@ class WBClient(BasePlatformClient):
                     "spend": round(spend, 2),
                     "orders": orders,
                     "revenue": round(revenue, 2),
-                    "ctr": round(ctr, 4),
-                    "cpc": round(cpc, 2),
-                    "acos": round(acos, 4),
-                    "roas": round(roas, 4),
+                    "ctr": round(min(ctr, 9999), 4),
+                    "cpc": round(min(cpc, 99999999), 2),
+                    "acos": round(min(acos, 9999), 4),
+                    "roas": round(min(roas, 9999), 4),
                 })
 
         return results if results else None
