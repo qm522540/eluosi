@@ -1309,25 +1309,7 @@ const AIPricingConfig = ({ shopId, platform, onSaved }) => {
             日预算 {currentTemplate.daily_budget === 0 ? '不限' : `₽${currentTemplate.daily_budget}`} ·
             最大调幅 {currentTemplate.max_adjust_pct}%
           </div>
-          <div style={{
-            display: 'flex', alignItems: 'center', gap: 8,
-            marginTop: 10, paddingTop: 10,
-            borderTop: '1px dashed var(--color-border-tertiary, #e8e8e8)',
-          }}>
-            <Switch
-              size="small"
-              checked={autoExecute}
-              onChange={(checked) => setAutoExecute(checked)}
-            />
-            <span style={{ fontSize: 12, color: 'var(--color-text-secondary, #666)' }}>
-              自动执行
-            </span>
-            <span style={{ fontSize: 11, color: 'var(--color-text-tertiary, #999)' }}>
-              {autoExecute
-                ? '开启后AI直接修改出价，无需手动确认'
-                : '关闭时AI仅生成建议，需手动确认后执行'}
-            </span>
-          </div>
+          {/* 自动执行功能后端保留，UI 暂不暴露。默认建议模式：AI 生成建议，用户手动确认执行 */}
         </Collapse.Panel>
       </Collapse>
 
@@ -1360,10 +1342,13 @@ const AIPricingConfig = ({ shopId, platform, onSaved }) => {
         />
         <span style={{ fontSize: 14, fontWeight: 500 }}>AI 智能调价</span>
         <span style={{ fontSize: 12, color: aiEnabled ? '#389e0d' : 'var(--color-text-secondary, #999)' }}>
-          {aiEnabled
-            ? (autoExecute ? '自动执行中' : '建议模式')
-            : '已关闭'}
+          {aiEnabled ? '已开启' : '已关闭'}
         </span>
+        {aiEnabled && (
+          <span style={{ fontSize: 11, color: 'var(--color-text-tertiary, #999)' }}>
+            AI生成建议，点击下方「分析」后手动确认执行
+          </span>
+        )}
       </div>
 
       {/* 数据源管理（可折叠） */}
