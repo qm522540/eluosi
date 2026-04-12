@@ -1201,30 +1201,21 @@ const AIPricingConfig = ({ shopId, platform, onSaved }) => {
 
   const suggestionColumns = [
     {
-      title: () => allSuggestionIds.length > 0 ? (
-        <input
-          type="checkbox"
-          checked={isAllSelected}
-          onChange={e => {
-            if (e.target.checked) setSelected(allSuggestionIds)
-            else setSelected([])
-          }}
-        />
-      ) : null,
-      width: 32,
-      render: (_, r) => r.isGroup ? null : (
-        <input
-          type="checkbox"
-          checked={selected.includes(r.id)}
-          onChange={e => {
-            if (e.target.checked) setSelected(prev => [...prev, r.id])
-            else setSelected(prev => prev.filter(x => x !== r.id))
-          }}
-        />
+      title: () => (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          {allSuggestionIds.length > 0 && (
+            <input
+              type="checkbox"
+              checked={isAllSelected}
+              onChange={e => {
+                if (e.target.checked) setSelected(allSuggestionIds)
+                else setSelected([])
+              }}
+            />
+          )}
+          <span>活动 / 商品</span>
+        </div>
       ),
-    },
-    {
-      title: '活动 / 商品',
       key: 'name',
       render: (_, r) => r.isGroup ? (
         <span style={{ fontWeight: 500 }}>
@@ -1239,7 +1230,16 @@ const AIPricingConfig = ({ shopId, platform, onSaved }) => {
           </span>
         </span>
       ) : (
-        <div style={{ paddingLeft: 20, display: 'flex', alignItems: 'center', gap: 8 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <input
+            type="checkbox"
+            checked={selected.includes(r.id)}
+            onChange={e => {
+              if (e.target.checked) setSelected(prev => [...prev, r.id])
+              else setSelected(prev => prev.filter(x => x !== r.id))
+            }}
+            style={{ flexShrink: 0 }}
+          />
           {platform === 'wb' && (
             <img
               src={getWbImageUrl(r.platform_sku_id)}
