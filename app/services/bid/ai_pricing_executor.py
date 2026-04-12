@@ -9,11 +9,12 @@
 数据流：
   ai_pricing_configs.is_active=1 触发执行
   → 读取当前 template_name 指向的 JSON 模板配置
-  → 遍历 ad_campaigns(status='active', platform='ozon')
+  → 遍历 ad_campaigns(status='active', platform=shop.platform)
     → 拉商品 + 当前出价
     → DeepSeek prompt → 解析建议
     → 写入 ai_pricing_suggestions
-    → 若 auto_execute=1，立即调 Ozon API 执行（跳过 user_managed=1 的 group）
+    → Ozon: auto_execute=1 时直接调 API 执行
+    → WB: 仅建议模式（auto_execute 强制关闭）
 """
 
 import json
@@ -249,14 +250,16 @@ async def _analyze_now_inner(db, tenant_id: int, shop_id: int,
     shop = db.query(Shop).filter(
         Shop.id == shop_id, Shop.tenant_id == tenant_id
     ).first()
-    if not shop or shop.platform != "ozon":
-        return {"status": "failed", "message": "非Ozon店铺", "analyzed_count": 0, "suggestion_count": 0, "auto_executed_count": 0}
+    if not shop or shop.platform not in ("ozon", "wb"):
+        return {"status": "failed", "message": "该平台暂不支持AI调价", "analyzed_count": 0, "suggestion_count": 0, "auto_executed_count": 0}
+
+    platform = shop.platform
 
     from app.models.ad import AdCampaign
     q = db.query(AdCampaign).filter(
         AdCampaign.tenant_id == tenant_id,
         AdCampaign.shop_id == shop_id,
-        AdCampaign.platform == "ozon",
+        AdCampaign.platform == platform,
         AdCampaign.status == "active",
     )
     if campaign_ids:
@@ -267,13 +270,8 @@ async def _analyze_now_inner(db, tenant_id: int, shop_id: int,
         _update_status(db, tenant_id, shop_id, "success", "无活跃活动")
         return {"status": "success", "message": "无活跃活动", "analyzed_count": 0, "suggestion_count": 0, "auto_executed_count": 0}
 
-    # 拉商品出价
-    from app.services.platform.ozon import OzonClient
-    client = OzonClient(
-        shop_id=shop.id, api_key=shop.api_key, client_id=shop.client_id,
-        perf_client_id=shop.perf_client_id or "",
-        perf_client_secret=shop.perf_client_secret or "",
-    )
+    # 拉商品出价（平台分流）
+    client = _create_platform_client(shop)
 
     products_by_campaign = {}
     try:
@@ -293,7 +291,7 @@ async def _analyze_now_inner(db, tenant_id: int, shop_id: int,
 
     suggestions_raw = []
     try:
-        suggestions_raw = await _call_ai(template, campaigns, products_by_campaign)
+        suggestions_raw = await _call_ai(template, campaigns, products_by_campaign, platform)
     except Exception as e:
         logger.error(f"DeepSeek 调用失败 shop_id={shop_id}: {e}")
         _update_status(db, tenant_id, shop_id, "failed", f"DeepSeek调用失败: {e}", retry=True)
@@ -386,7 +384,8 @@ async def _analyze_now_inner(db, tenant_id: int, shop_id: int,
     db.commit()
 
     auto_executed = 0
-    if cfg.auto_execute and saved:
+    if cfg.auto_execute and saved and platform == "ozon":
+        # WB 仅建议模式，不自动执行（WB API 无法保证幂等性，需人工确认）
         auto_executed = await _auto_execute(db, tenant_id, shop, saved)
 
     elapsed = int((_utc_now() - start).total_seconds() * 1000)
@@ -406,15 +405,10 @@ async def _analyze_now_inner(db, tenant_id: int, shop_id: int,
 
 
 async def _auto_execute(db, tenant_id: int, shop, suggestions: list) -> int:
-    """auto_execute=1 模式：直接执行所有建议"""
-    from app.services.platform.ozon import OzonClient
+    """auto_execute=1 模式：直接执行所有建议（仅 Ozon，WB 走建议模式不会进这里）"""
     from app.models.ad import AdCampaign
 
-    client = OzonClient(
-        shop_id=shop.id, api_key=shop.api_key, client_id=shop.client_id,
-        perf_client_id=shop.perf_client_id or "",
-        perf_client_secret=shop.perf_client_secret or "",
-    )
+    client = _create_platform_client(shop)
 
     executed = 0
     try:
@@ -442,9 +436,9 @@ async def _auto_execute(db, tenant_id: int, shop, suggestions: list) -> int:
                 continue
 
             try:
-                api_result = await client.update_campaign_bid(
-                    campaign.platform_campaign_id, s["platform_sku_id"],
-                    str(int(s["suggested_bid"] * 1_000_000))
+                api_result = await _execute_bid_update(
+                    client, shop.platform, campaign.platform_campaign_id,
+                    s["platform_sku_id"], s["suggested_bid"],
                 )
                 if not api_result.get("ok"):
                     _write_bidlog(db, campaign, s, "ai_auto", success=False, error=api_result.get("error"))
@@ -498,7 +492,6 @@ async def approve_suggestion(db, tenant_id: int, suggestion_id: int) -> dict:
         return {"code": ErrorCode.BID_SUGGESTION_EXPIRED, "msg": "建议已过期"}
 
     from app.models.shop import Shop
-    from app.services.platform.ozon import OzonClient
 
     shop = db.query(Shop).filter(
         Shop.id == row.shop_id, Shop.tenant_id == tenant_id
@@ -506,22 +499,18 @@ async def approve_suggestion(db, tenant_id: int, suggestion_id: int) -> dict:
     if not shop:
         return {"code": ErrorCode.SHOP_NOT_FOUND, "msg": "店铺不存在"}
 
-    client = OzonClient(
-        shop_id=shop.id, api_key=shop.api_key, client_id=shop.client_id,
-        perf_client_id=shop.perf_client_id or "",
-        perf_client_secret=shop.perf_client_secret or "",
-    )
+    client = _create_platform_client(shop)
     try:
-        api_result = await client.update_campaign_bid(
-            row.platform_campaign_id, row.platform_sku_id,
-            str(int(float(row.suggested_bid) * 1_000_000))
+        api_result = await _execute_bid_update(
+            client, shop.platform, row.platform_campaign_id,
+            row.platform_sku_id, float(row.suggested_bid),
         )
     finally:
         await client.close()
 
     if not api_result.get("ok"):
         return {"code": ErrorCode.BID_EXECUTION_FAILED,
-                "msg": api_result.get("error") or "Ozon API失败"}
+                "msg": api_result.get("error") or "平台API失败"}
 
     # #12 修复：UTC now（naive 用于存数据库）
     now_utc = _utc_now().replace(tzinfo=None)
@@ -624,6 +613,45 @@ def reject_batch(db, tenant_id: int, ids: list) -> dict:
 
 # ==================== 内部工具 ====================
 
+# ==================== 平台抽象 ====================
+
+def _create_platform_client(shop):
+    """根据 shop.platform 创建对应的 API client"""
+    if shop.platform == "ozon":
+        from app.services.platform.ozon import OzonClient
+        return OzonClient(
+            shop_id=shop.id, api_key=shop.api_key, client_id=shop.client_id,
+            perf_client_id=shop.perf_client_id or "",
+            perf_client_secret=shop.perf_client_secret or "",
+        )
+    elif shop.platform == "wb":
+        from app.services.platform.wb import WBClient
+        return WBClient(shop_id=shop.id, api_key=shop.api_key)
+    else:
+        raise ValueError(f"不支持的平台: {shop.platform}")
+
+
+async def _execute_bid_update(client, platform: str, campaign_id, sku, suggested_bid_rub: float) -> dict:
+    """调平台 API 修改出价，屏蔽 Ozon/WB 的单位和接口差异。
+
+    suggested_bid_rub 统一用卢布。
+    Ozon: 需转 micro-rubles (×1_000_000)，调 update_campaign_bid
+    WB: 直接传卢布，调 update_campaign_cpm
+    """
+    if platform == "ozon":
+        return await client.update_campaign_bid(
+            campaign_id, str(sku), str(int(suggested_bid_rub * 1_000_000))
+        )
+    elif platform == "wb":
+        return await client.update_campaign_cpm(
+            advert_id=str(campaign_id), nm_id=int(sku), cpm_rub=suggested_bid_rub,
+        )
+    else:
+        return {"ok": False, "error": f"不支持的平台: {platform}"}
+
+
+# ==================== 模板默认值 ====================
+
 _DEFAULT_CONSERVATIVE = {
     "target_roas": 2.0, "min_roas": 1.5, "max_bid": 100,
     "daily_budget": 500, "max_adjust_pct": 15, "gross_margin": 0.5,
@@ -702,8 +730,9 @@ def _release_analyze_lock(shop_id: int):
 
 # ==================== AI 调用 + 解析 ====================
 
-async def _call_ai(template: dict, campaigns: list, products_by_campaign: dict) -> list:
-    """调 DeepSeek 生成调价建议（简化版 prompt）"""
+async def _call_ai(template: dict, campaigns: list, products_by_campaign: dict,
+                   platform: str = "ozon") -> list:
+    """调 DeepSeek 生成调价建议（支持 Ozon / WB）"""
     from app.services.ai.deepseek import DeepSeekClient
 
     api_key = getattr(settings, "DEEPSEEK_API_KEY", "")
@@ -716,16 +745,22 @@ async def _call_ai(template: dict, campaigns: list, products_by_campaign: dict) 
         items = []
         for p in products[:50]:
             sku = str(p.get("sku") or "")
-            bid_raw = p.get("bid", "0")
-            try:
-                bid_rub = float(int(bid_raw)) / 1_000_000
-            except (ValueError, TypeError):
-                bid_rub = 0
+            if platform == "ozon":
+                bid_raw = p.get("bid", "0")
+                try:
+                    bid_rub = float(int(bid_raw)) / 1_000_000
+                except (ValueError, TypeError):
+                    bid_rub = 0
+                name = (p.get("title") or "")[:80]
+            else:
+                # WB: fetch_campaign_products 返回的 bid_search 已经是卢布
+                bid_rub = float(p.get("bid_search") or 0)
+                name = (p.get("subject_name") or "")[:80]
             if bid_rub <= 0:
                 continue
             items.append({
                 "sku": sku,
-                "name": (p.get("title") or "")[:80],
+                "name": name,
                 "bid": round(bid_rub, 2),
             })
         if items:
@@ -738,7 +773,8 @@ async def _call_ai(template: dict, campaigns: list, products_by_campaign: dict) 
     if not prompt_data:
         return []
 
-    prompt = f"""你是Ozon广告优化专家。对每个商品给出CPM出价建议。
+    platform_label = "Wildberries" if platform == "wb" else "Ozon"
+    prompt = f"""你是{platform_label}广告优化专家。对每个商品给出CPM出价建议。
 
 【策略模板】
 - 目标ROAS: {template.get('target_roas')}
@@ -747,7 +783,7 @@ async def _call_ai(template: dict, campaigns: list, products_by_campaign: dict) 
 - 单次最大调幅: {template.get('max_adjust_pct')}%
 - 毛利率: {template.get('gross_margin')}
 
-【活动和商品当前出价】
+【活动和商品当前出价（单位：卢布）】
 {json.dumps(prompt_data, ensure_ascii=False)}
 
 请为有调整空间的商品输出建议。无需调整的商品不要返回。
