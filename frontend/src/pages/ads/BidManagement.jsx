@@ -1002,6 +1002,8 @@ const AIPricingConfig = ({ shopId, platform, onSaved }) => {
   const [streamOpen, setStreamOpen] = useState(false)
   const [streamItems, setStreamItems] = useState([])
   const lastParsedRef = useRef(0)
+  // 用户手动修改的出价 { [suggestionId]: newBid }
+  const [editedBids, setEditedBids] = useState({})
   const [selected, setSelected] = useState([])
   const [dataStatus, setDataStatus] = useState(null)
   const [syncing, setSyncing] = useState(false)
@@ -1318,12 +1320,13 @@ const AIPricingConfig = ({ shopId, platform, onSaved }) => {
       title: '建议出价', dataIndex: 'suggested_bid', width: 100,
       render: (v, r) => {
         if (r.isGroup) return null
-        const up = v > r.current_bid
+        const bid = editedBids[r.id] ?? v
+        const up = bid > r.current_bid
         return (
           <InputNumber
             size="small"
             min={1}
-            value={v}
+            value={bid}
             prefix="₽"
             controls={false}
             style={{
@@ -1333,18 +1336,7 @@ const AIPricingConfig = ({ shopId, platform, onSaved }) => {
             }}
             onChange={val => {
               if (val == null) return
-              setSuggestions(prev => prev.map(camp => ({
-                ...camp,
-                suggestions: (camp.suggestions || []).map(s =>
-                  s.id === r.id ? {
-                    ...s,
-                    suggested_bid: val,
-                    adjust_pct: r.current_bid > 0
-                      ? Math.round((val - r.current_bid) / r.current_bid * 10000) / 100
-                      : 0,
-                  } : s
-                ),
-              })))
+              setEditedBids(prev => ({ ...prev, [r.id]: val }))
             }}
           />
         )
@@ -1417,7 +1409,7 @@ const AIPricingConfig = ({ shopId, platform, onSaved }) => {
             type="primary"
             onClick={async () => {
               try {
-                await approveSuggestion(r.id, r.suggested_bid)
+                await approveSuggestion(r.id, editedBids[r.id] ?? r.suggested_bid)
                 message.success('执行成功')
                 loadSuggestions()
               } catch (e) {

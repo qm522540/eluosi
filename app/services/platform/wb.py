@@ -585,6 +585,17 @@ class WBClient(BasePlatformClient):
                     )
                     continue
 
+                # 识别 "wrong bid value: X; min: Y" → 自动用 min 值重试
+                import re as _re
+                min_match = _re.search(r'min:\s*(\d+)', detail)
+                if min_match and 'wrong bid value' in detail:
+                    min_kopecks = int(min_match.group(1))
+                    logger.warning(
+                        f"WB 出价 {bid_kopecks} 低于最低 {min_kopecks}，自动用最低值重试"
+                    )
+                    bid_kopecks = min_kopecks
+                    continue
+
                 # 其它错误 → 这个候选列表彻底失败，跳出让外层换下一个候选
                 logger.warning(
                     f"WB 修改 CPM 响应 {result['status']} "
