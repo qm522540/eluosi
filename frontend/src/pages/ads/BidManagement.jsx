@@ -987,41 +987,6 @@ const AIPricingConfig = ({ shopId, platform, onSaved }) => {
   }
 
   const handleEnableAI = async () => {
-    if (autoExecute) {
-      Modal.confirm({
-        title: '确认开启AI自动调价',
-        content: `开启后AI将每小时05分自动调用${platform === 'wb' ? 'WB' : 'Ozon'} API修改出价，无需人工确认。请确保策略模板参数设置正确。是否确认开启？`,
-        okText: '确认开启',
-        cancelText: '取消',
-        onOk: doEnableAI,
-      })
-      return
-    }
-    await doEnableAI()
-  }
-
-  const doEnableAI = async () => {
-    if (autoExecute) {
-      try {
-        const conflictRes = await checkConflict(shopId, 'ai_auto')
-        if (conflictRes.data?.conflict) {
-          Modal.confirm({
-            title: '规则冲突',
-            content: conflictRes.data.message,
-            okText: '确认开启',
-            cancelText: '取消',
-            onOk: saveAndEnable,
-          })
-          return
-        }
-      } catch {
-        // 冲突检测失败仍继续
-      }
-    }
-    await saveAndEnable()
-  }
-
-  const saveAndEnable = async () => {
     setSaving(true)
     try {
       await updateAIPricing(shopId, {
@@ -1033,10 +998,27 @@ const AIPricingConfig = ({ shopId, platform, onSaved }) => {
       })
       await enableAIPricing(shopId, autoExecute)
       setAiEnabled(true)
-      message.success(autoExecute ? 'AI调价自动执行已开启' : 'AI调价建议模式已开启')
+      message.success('AI智能调价已开启')
       onSaved()
     } catch (e) {
-      message.error(e?.message || '保存失败')
+      const msg = e?.response?.data?.msg || e?.message || ''
+      // 冲突错误用 Modal 弹窗提示，和分时调价那边风格统一
+      if (msg.includes('分时调价') || msg.includes('互斥') || msg.includes('请先停用')) {
+        Modal.warning({
+          title: '规则冲突，无法开启',
+          content: (
+            <div>
+              <p>{msg}</p>
+              <p style={{ marginTop: 12, color: '#999', fontSize: 13 }}>
+                请先到分时调价 Tab 停用分时调价，然后再回来开启 AI 调价。
+              </p>
+            </div>
+          ),
+          okText: '我知道了',
+        })
+      } else {
+        message.error(msg || '保存失败')
+      }
     } finally {
       setSaving(false)
     }
