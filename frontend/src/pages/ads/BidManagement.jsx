@@ -1091,9 +1091,22 @@ const AIPricingConfig = ({ shopId, platform, onSaved }) => {
   })
 
   // 建议列表列
+  const allSuggestionIds = suggestionRows.filter(r => !r.isGroup).map(r => r.id)
+  const isAllSelected = allSuggestionIds.length > 0 && allSuggestionIds.every(id => selected.includes(id))
+
   const suggestionColumns = [
     {
-      title: '', width: 32,
+      title: () => allSuggestionIds.length > 0 ? (
+        <input
+          type="checkbox"
+          checked={isAllSelected}
+          onChange={e => {
+            if (e.target.checked) setSelected(allSuggestionIds)
+            else setSelected([])
+          }}
+        />
+      ) : null,
+      width: 32,
       render: (_, r) => r.isGroup ? null : (
         <input
           type="checkbox"
@@ -1217,36 +1230,21 @@ const AIPricingConfig = ({ shopId, platform, onSaved }) => {
       render: (_, r) => {
         if (r.isGroup) return null
         return (
-          <Space size={4}>
-            <Button
-              size="small"
-              type="primary"
-              onClick={async () => {
-                try {
-                  await approveSuggestion(r.id)
-                  message.success('执行成功')
-                  loadSuggestions()
-                } catch (e) {
-                  message.error(e?.message || '执行失败')
-                }
-              }}
-            >
-              执行
-            </Button>
-            <Button
-              size="small"
-              onClick={async () => {
-                try {
-                  await rejectSuggestion(r.id)
-                  loadSuggestions()
-                } catch (e) {
-                  message.error(e?.message || '操作失败')
-                }
-              }}
-            >
-              忽略
-            </Button>
-          </Space>
+          <Button
+            size="small"
+            type="primary"
+            onClick={async () => {
+              try {
+                await approveSuggestion(r.id)
+                message.success('执行成功')
+                loadSuggestions()
+              } catch (e) {
+                message.error(e?.message || '执行失败')
+              }
+            }}
+          >
+            执行
+          </Button>
         )
       },
     },
@@ -1490,6 +1488,7 @@ const AIPricingConfig = ({ shopId, platform, onSaved }) => {
         <Space>
           <Button
             size="small"
+            type="primary"
             disabled={selected.length === 0}
             onClick={async () => {
               try {
@@ -1503,21 +1502,6 @@ const AIPricingConfig = ({ shopId, platform, onSaved }) => {
             }}
           >
             批量执行({selected.length})
-          </Button>
-          <Button
-            size="small"
-            disabled={selected.length === 0}
-            onClick={async () => {
-              try {
-                await rejectBatch(selected)
-                setSelected([])
-                loadSuggestions()
-              } catch (e) {
-                message.error(e?.message || '操作失败')
-              }
-            }}
-          >
-            批量忽略({selected.length})
           </Button>
         </Space>
       </div>
