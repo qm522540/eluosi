@@ -386,26 +386,25 @@ class WBClient(BasePlatformClient):
 
         try:
             # v3返回格式可能不同，兼容处理
+            # _parse_daily_stat 现在返回 list（SKU 级别拆分），用 extend
             if isinstance(result, list):
                 for campaign_stats in result:
                     days = campaign_stats.get("days", [])
                     for day_data in days:
-                        stat = self._parse_daily_stat(campaign_id, day_data)
-                        if stat:
-                            stats.append(stat)
+                        sku_stats = self._parse_daily_stat(campaign_id, day_data)
+                        if sku_stats:
+                            stats.extend(sku_stats)
             elif isinstance(result, dict):
-                # v3可能直接返回 {"days": [...]} 或 {"bopiStats": [...]}
                 days = result.get("days", [])
                 if days:
                     for day_data in days:
-                        stat = self._parse_daily_stat(campaign_id, day_data)
-                        if stat:
-                            stats.append(stat)
-                # 也尝试解析顶层统计
+                        sku_stats = self._parse_daily_stat(campaign_id, day_data)
+                        if sku_stats:
+                            stats.extend(sku_stats)
                 elif result.get("views") or result.get("clicks"):
-                    stat = self._parse_daily_stat(campaign_id, result)
-                    if stat:
-                        stats.append(stat)
+                    sku_stats = self._parse_daily_stat(campaign_id, result)
+                    if sku_stats:
+                        stats.extend(sku_stats)
         except Exception as e:
             logger.error(
                 f"WB 解析广告统计失败，shop_id={self.shop_id}，"
@@ -415,49 +414,63 @@ class WBClient(BasePlatformClient):
 
         return stats
 
-    def _parse_daily_stat(self, campaign_id: str, day_data: dict) -> Optional[dict]:
-        """解析每日统计数据为标准格式"""
+    def _parse_daily_stat(self, campaign_id: str, day_data: dict) -> Optional[list]:
+        """解析每日统计数据为 SKU 级别的列表
+
+        WB fullstats 返回结构: days[] → apps[] → nm[]
+        每个 nm 就是一个商品（nm_id），包含独立的 views/clicks/spend/orders/revenue。
+        按 nm_id 逐条返回，存入 ad_stats 时 ad_group_id = nm_id。
+
+        Returns:
+            [{campaign_id, platform, stat_date, nm_id, impressions, clicks, ...}, ...]
+            如果该天无数据返回 None
+        """
         date_str = day_data.get("date", "")
         if not date_str:
             return None
 
-        # 聚合该天下所有app的数据
-        total_views = 0
-        total_clicks = 0
-        total_spend = 0.0
-        total_orders = 0
-        total_revenue = 0.0
-
+        results = []
         apps = day_data.get("apps", [])
         for app in apps:
             for nm in app.get("nm", []):
-                total_views += nm.get("views", 0)
-                total_clicks += nm.get("clicks", 0)
-                total_spend += nm.get("sum", 0.0)
-                total_orders += nm.get("orders", 0)
-                total_revenue += nm.get("ordersSumRub", 0.0)
+                nm_id = nm.get("nmId") or nm.get("nm_id")
+                if not nm_id:
+                    continue
 
-        # 计算衍生指标
-        ctr = (total_clicks / total_views * 100) if total_views > 0 else 0
-        cpc = (total_spend / total_clicks) if total_clicks > 0 else 0
-        acos = (total_spend / total_revenue * 100) if total_revenue > 0 else 0
-        roas = (total_revenue / total_spend) if total_spend > 0 else 0
+                views = nm.get("views", 0)
+                clicks = nm.get("clicks", 0)
+                spend = float(nm.get("sum", 0.0))
+                orders = nm.get("orders", 0)
+                revenue = float(nm.get("ordersSumRub", 0.0))
 
-        return {
-            "campaign_id": campaign_id,
-            "platform": "wb",
-            "stat_date": date_str[:10],
-            "stat_hour": None,  # 日级数据
-            "impressions": total_views,
-            "clicks": total_clicks,
-            "spend": round(total_spend, 2),
-            "orders": total_orders,
-            "revenue": round(total_revenue, 2),
-            "ctr": round(ctr, 4),
-            "cpc": round(cpc, 2),
-            "acos": round(acos, 4),
-            "roas": round(roas, 4),
-        }
+                # 跳过完全无数据的 SKU
+                if views == 0 and spend == 0:
+                    continue
+
+                ctr = (clicks / views * 100) if views > 0 else 0
+                cpc = (spend / clicks) if clicks > 0 else 0
+                acos = (spend / revenue * 100) if revenue > 0 else 0
+                roas = (revenue / spend) if spend > 0 else 0
+
+                results.append({
+                    "campaign_id": campaign_id,
+                    "platform": "wb",
+                    "stat_date": date_str[:10],
+                    "stat_hour": None,
+                    "nm_id": int(nm_id),
+                    "nm_name": nm.get("name", ""),
+                    "impressions": views,
+                    "clicks": clicks,
+                    "spend": round(spend, 2),
+                    "orders": orders,
+                    "revenue": round(revenue, 2),
+                    "ctr": round(ctr, 4),
+                    "cpc": round(cpc, 2),
+                    "acos": round(acos, 4),
+                    "roas": round(roas, 4),
+                })
+
+        return results if results else None
 
     # ==================== 广告活动商品 ====================
 

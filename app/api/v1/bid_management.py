@@ -566,8 +566,11 @@ async def sync_data(
     shop: Shop = Depends(get_owned_shop),
     db: Session = Depends(get_db),
 ):
-    """智能数据同步：无数据拉30天，有数据增量补齐，清理90天前旧数据"""
-    from app.services.data.ozon_stats_collector import smart_sync
+    """智能数据同步：无数据拉30天，有数据增量补齐，清理90天前旧数据（按平台分流）"""
+    if shop.platform == "wb":
+        from app.services.data.wb_stats_collector import smart_sync
+    else:
+        from app.services.data.ozon_stats_collector import smart_sync
 
     try:
         result = await smart_sync(db, shop.id, shop.tenant_id)
