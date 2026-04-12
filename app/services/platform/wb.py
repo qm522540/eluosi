@@ -352,30 +352,17 @@ class WBClient(BasePlatformClient):
         stats = []
         result = None
 
-        # 方式1: GET /adv/v3/fullstats (新版接口)
+        # GET /adv/v3/fullstats（参数: ids, beginDate, endDate，最多31天）
         try:
             url = f"{WB_ADVERT_API}/adv/v3/fullstats"
             result = await self._request(
                 "GET", url,
-                params={"id": int(campaign_id), "from": date_from, "to": date_to}
+                params={"ids": str(campaign_id), "beginDate": date_from, "endDate": date_to}
             )
             if result and result != {}:
                 logger.info(f"WB v3/fullstats 命中 campaign_id={campaign_id}")
         except Exception:
             result = None
-
-        # 方式2: POST /adv/v2/fullstats (旧版)
-        if not result or result == {}:
-            payload = [{"id": int(campaign_id), "dates": [date_from, date_to]}]
-            for ver in ["v2", "v1"]:
-                try:
-                    url = f"{WB_ADVERT_API}/adv/{ver}/fullstats"
-                    result = await self._request("POST", url, json=payload)
-                    if result:
-                        logger.info(f"WB {ver}/fullstats 命中 campaign_id={campaign_id}")
-                        break
-                except Exception:
-                    continue
 
         if not result or result == {}:
             logger.warning(
@@ -432,7 +419,9 @@ class WBClient(BasePlatformClient):
         results = []
         apps = day_data.get("apps", [])
         for app in apps:
-            for nm in app.get("nm", []):
+            # v3 API 返回 "nms"（复数），兼容旧版 "nm"
+            nms = app.get("nms") or app.get("nm") or []
+            for nm in nms:
                 nm_id = nm.get("nmId") or nm.get("nm_id")
                 if not nm_id:
                     continue
@@ -441,7 +430,8 @@ class WBClient(BasePlatformClient):
                 clicks = nm.get("clicks", 0)
                 spend = float(nm.get("sum", 0.0))
                 orders = nm.get("orders", 0)
-                revenue = float(nm.get("ordersSumRub", 0.0))
+                # v3 用 sum_price，旧版用 ordersSumRub
+                revenue = float(nm.get("sum_price") or nm.get("ordersSumRub") or 0.0)
 
                 # 跳过完全无数据的 SKU
                 if views == 0 and spend == 0:
