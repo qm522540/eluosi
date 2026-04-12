@@ -614,7 +614,7 @@ const TimePricingConfig = ({ shopId, activeMode, onSaved }) => {
             <div style={{ fontWeight: 500, marginBottom: 4 }}>开启后的运行规则</div>
             <ul style={{ paddingLeft: 20, margin: '0 0 12px' }}>
               <li>系统<b>每小时</b>自动检查一次（莫斯科时间每小时第 5 分钟执行）</li>
-              <li>只调整当前店铺 <b>Ozon 平台</b>的<b>活跃广告活动</b>中的商品</li>
+              <li>只调整当前店铺<b>活跃广告活动</b>中的商品（支持 Ozon 和 WB 平台）</li>
               <li>出价公式：<b>商品原始出价 × 当前时段的出价系数</b>（最低不低于 ₽3）</li>
               <li>首次执行时系统会自动记录每个商品的「原始出价」作为基准，后续都按原始出价乘以系数</li>
             </ul>

@@ -2,18 +2,19 @@
 
 数据流：
   time_pricing_rules.is_active=1 触发执行
-  → 遍历 ad_campaigns(status='active', platform='ozon')
-    → 遍历 ad_groups（platform_group_id 当作 Ozon SKU 字符串使用）
+  → 遍历 ad_campaigns(status='active', platform=shop.platform)
+    → 遍历商品/SKU
       → 跳过 user_managed=1
       → first run：original_bid 为空时写入当前价
       → new_bid = original_bid * ratio / 100
-      → 调 Ozon update_campaign_bid → 写 bid_adjustment_logs(execute_type='time_pricing')
+      → 调平台 API 改价 → 写 bid_adjustment_logs(execute_type='time_pricing')
       → 更新 last_auto_bid
 
+支持平台：Ozon（自动执行）、WB（自动执行）
 约束：
   - 项目用 sync SessionLocal，db.execute/commit 不带 await
-  - OzonClient 是统一客户端
-  - 出价 Ozon Performance API: micro 字符串(int × 1_000_000)
+  - 平台 client 通过 _create_platform_client 统一创建
+  - 出价单位统一用卢布，_execute_bid_update 内部处理 Ozon micro / WB kopecks 换算
   - 互斥校验用 SELECT ... FOR UPDATE
 """
 
@@ -82,8 +83,10 @@ async def execute(db, shop_id: int, tenant_id: int = None) -> dict:
     shop = db.query(Shop).filter(
         Shop.id == shop_id, Shop.tenant_id == tenant_id
     ).first()
-    if not shop or shop.platform != "ozon":
+    if not shop or shop.platform not in ("ozon", "wb"):
         return counters
+
+    platform = shop.platform
 
     logger.info(
         f"shop={shop.name} 分时调价 莫斯科{moscow_hour()}点 时段={period} 系数={ratio}%"
@@ -93,7 +96,7 @@ async def execute(db, shop_id: int, tenant_id: int = None) -> dict:
     campaigns = db.query(AdCampaign).filter(
         AdCampaign.tenant_id == tenant_id,
         AdCampaign.shop_id == shop_id,
-        AdCampaign.platform == "ozon",
+        AdCampaign.platform == platform,
         AdCampaign.status == "active",
     ).all()
 
@@ -101,12 +104,8 @@ async def execute(db, shop_id: int, tenant_id: int = None) -> dict:
         _save_result(db, shop_id, tenant_id, counters, "无active活动")
         return counters
 
-    from app.services.platform.ozon import OzonClient
-    client = OzonClient(
-        shop_id=shop.id, api_key=shop.api_key, client_id=shop.client_id,
-        perf_client_id=shop.perf_client_id or "",
-        perf_client_secret=shop.perf_client_secret or "",
-    )
+    from app.services.bid.ai_pricing_executor import _create_platform_client
+    client = _create_platform_client(shop)
 
     try:
         for camp in campaigns:
@@ -136,16 +135,22 @@ async def _process_campaign(db, client, campaign, period: str, ratio: int, count
         counters["errors"] += 1
         return
 
+    platform = campaign.platform
     for product in products or []:
         sku = str(product.get("sku") or "")
         if not sku:
             continue
-        bid_raw = product.get("bid", "0")
-        try:
-            current_bid = float(int(bid_raw)) / 1_000_000
-        except (ValueError, TypeError):
-            current_bid = 0.0
-        sku_name = (product.get("title") or "")[:300]
+        if platform == "ozon":
+            bid_raw = product.get("bid", "0")
+            try:
+                current_bid = float(int(bid_raw)) / 1_000_000
+            except (ValueError, TypeError):
+                current_bid = 0.0
+            sku_name = (product.get("title") or "")[:300]
+        else:
+            # WB: bid_search 已经是卢布
+            current_bid = float(product.get("bid_search") or 0)
+            sku_name = (product.get("subject_name") or "")[:300]
 
         counters["checked"] += 1
         try:
@@ -211,9 +216,10 @@ async def _process_sku(db, client, campaign, sku: str, sku_name: str,
             _upsert_group(db, campaign, sku, sku_name, base_bid=base, last_auto=current_bid)
         return "skipped"
 
-    # 6. 调用 Ozon API
-    api_result = await client.update_campaign_bid(
-        campaign.platform_campaign_id, sku, str(int(target * 1_000_000))
+    # 6. 调用平台 API（Ozon / WB 自动适配）
+    from app.services.bid.ai_pricing_executor import _execute_bid_update
+    api_result = await _execute_bid_update(
+        client, campaign.platform, campaign.platform_campaign_id, sku, target,
     )
     if not api_result.get("ok"):
         err = api_result.get("error") or "unknown"
@@ -366,7 +372,7 @@ async def disable(db, tenant_id: int, shop_id: int) -> dict:
     Returns: {code, data: {restored, failed, errors[]}}
     """
     from app.models.shop import Shop
-    from app.services.platform.ozon import OzonClient
+    from app.services.bid.ai_pricing_executor import _create_platform_client, _execute_bid_update
 
     # 1. 先停 executor（避免回弹途中被并发执行覆盖）
     db.execute(text("""
@@ -375,34 +381,31 @@ async def disable(db, tenant_id: int, shop_id: int) -> dict:
     """), {"shop_id": shop_id, "tenant_id": tenant_id})
     db.commit()
 
-    # 2. 找出所有需要回弹的 SKU
-    rows = db.execute(text("""
-        SELECT
-            ag.id, ag.platform_group_id, ag.original_bid, ag.last_auto_bid,
-            c.id AS campaign_id, c.platform_campaign_id, c.name AS campaign_name
-        FROM ad_groups ag
-        JOIN ad_campaigns c ON ag.campaign_id = c.id
-        WHERE c.shop_id = :shop_id
-          AND c.tenant_id = :tenant_id
-          AND c.platform = 'ozon'
-          AND ag.last_auto_bid IS NOT NULL
-          AND ag.original_bid IS NOT NULL
-    """), {"shop_id": shop_id, "tenant_id": tenant_id}).fetchall()
-
-    if not rows:
-        return {"code": 0, "data": {"restored": 0, "failed": 0, "errors": []}}
-
     shop = db.query(Shop).filter(
         Shop.id == shop_id, Shop.tenant_id == tenant_id
     ).first()
     if not shop:
         return {"code": ErrorCode.SHOP_NOT_FOUND, "msg": "店铺不存在"}
 
-    client = OzonClient(
-        shop_id=shop.id, api_key=shop.api_key, client_id=shop.client_id,
-        perf_client_id=shop.perf_client_id or "",
-        perf_client_secret=shop.perf_client_secret or "",
-    )
+    # 2. 找出所有需要回弹的 SKU（不限平台）
+    rows = db.execute(text("""
+        SELECT
+            ag.id, ag.platform_group_id, ag.original_bid, ag.last_auto_bid,
+            c.id AS campaign_id, c.platform_campaign_id, c.platform,
+            c.name AS campaign_name
+        FROM ad_groups ag
+        JOIN ad_campaigns c ON ag.campaign_id = c.id
+        WHERE c.shop_id = :shop_id
+          AND c.tenant_id = :tenant_id
+          AND c.platform = :platform
+          AND ag.last_auto_bid IS NOT NULL
+          AND ag.original_bid IS NOT NULL
+    """), {"shop_id": shop_id, "tenant_id": tenant_id, "platform": shop.platform}).fetchall()
+
+    if not rows:
+        return {"code": 0, "data": {"restored": 0, "failed": 0, "errors": []}}
+
+    client = _create_platform_client(shop)
 
     restored = 0
     failed = 0
@@ -412,10 +415,9 @@ async def disable(db, tenant_id: int, shop_id: int) -> dict:
         for row in rows:
             target_bid = max(round(float(row.original_bid)), int(MIN_BID))
             try:
-                api_result = await client.update_campaign_bid(
-                    row.platform_campaign_id,
-                    row.platform_group_id,
-                    str(int(target_bid * 1_000_000)),
+                api_result = await _execute_bid_update(
+                    client, row.platform, row.platform_campaign_id,
+                    row.platform_group_id, target_bid,
                 )
             except Exception as e:
                 logger.warning(
@@ -514,12 +516,8 @@ async def restore_sku(db, tenant_id: int, shop_id: int, sku: str) -> dict:
     if not shop:
         return {"code": ErrorCode.SHOP_NOT_FOUND, "msg": "店铺不存在"}
 
-    from app.services.platform.ozon import OzonClient
-    client = OzonClient(
-        shop_id=shop.id, api_key=shop.api_key, client_id=shop.client_id,
-        perf_client_id=shop.perf_client_id or "",
-        perf_client_secret=shop.perf_client_secret or "",
-    )
+    from app.services.bid.ai_pricing_executor import _create_platform_client, _execute_bid_update
+    client = _create_platform_client(shop)
 
     restored_count = 0
     last_target = 0
@@ -530,9 +528,9 @@ async def restore_sku(db, tenant_id: int, shop_id: int, sku: str) -> dict:
         for row in rows:
             target = max(round(float(row.original_bid)), 3)
             try:
-                api_result = await client.update_campaign_bid(
-                    row.platform_campaign_id, row.platform_group_id,
-                    str(int(target * 1_000_000))
+                api_result = await _execute_bid_update(
+                    client, shop.platform, row.platform_campaign_id,
+                    row.platform_group_id, target,
                 )
             except Exception as e:
                 logger.warning(f"恢复 sku={sku} 活动={row.campaign_id} 失败: {e}")
@@ -609,7 +607,7 @@ def _query_status_rows(db, tenant_id, shop_id, campaign_id, keyword):
     where = [
         "c.shop_id = :shop_id",
         "c.tenant_id = :tenant_id",
-        "c.platform = 'ozon'",
+        "c.platform IN ('ozon', 'wb')",
         "ag.last_auto_bid IS NOT NULL",
     ]
     params = {"shop_id": shop_id, "tenant_id": tenant_id}
