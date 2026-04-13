@@ -1443,31 +1443,73 @@ const AIPricingConfig = ({ shopId, platform, onSaved }) => {
       },
     },
     {
-      title: '操作', width: 100,
+      title: '操作', width: 160,
       render: (_, r) => {
         if (r.isGroup) return null
+        const showDelete = r.product_stage === 'declining' && r.data_days >= 7 && (r.current_roas == null || r.current_roas < (currentTemplate.min_roas || 1.8))
         return (
-          <Button
-            size="small"
-            type="primary"
-            onClick={async () => {
-              try {
-                const res = await approveSuggestion(r.id, editedBids[r.id] ?? r.suggested_bid)
-                const d = res?.data || {}
-                if (d.min_bid_limited) {
-                  message.warning(`执行成功，但受限于平台最低出价 ₽${d.new_bid}（建议 ₽${d.suggested_bid}）`)
-                } else {
-                  message.success('执行成功')
+          <Space size={4}>
+            <Button
+              size="small"
+              type="primary"
+              onClick={async () => {
+                try {
+                  const res = await approveSuggestion(r.id, editedBids[r.id] ?? r.suggested_bid)
+                  const d = res?.data || {}
+                  if (d.min_bid_limited) {
+                    message.warning(`执行成功，但受限于平台最低出价 ₽${d.new_bid}（建议 ₽${d.suggested_bid}）`)
+                  } else {
+                    message.success('执行成功')
+                  }
+                  loadSuggestions()
+                  setLogsRefreshKey(k => k + 1)
+                } catch (e) {
+                  message.error(e?.response?.data?.msg || e?.message || '执行失败')
                 }
-                loadSuggestions()
-                setLogsRefreshKey(k => k + 1)
-              } catch (e) {
-                message.error(e?.response?.data?.msg || e?.message || '执行失败')
-              }
-            }}
-          >
-            手动执行
-          </Button>
+              }}
+            >
+              手动执行
+            </Button>
+            {showDelete && (
+              <Button
+                size="small"
+                danger
+                onClick={() => {
+                  Modal.confirm({
+                    title: '建议删除此商品出价',
+                    content: (
+                      <div style={{ lineHeight: 1.8 }}>
+                        <p><b>{r.sku_name || r.platform_sku_id}</b></p>
+                        <p>连续 {r.data_days} 天数据显示：</p>
+                        <ul style={{ paddingLeft: 20 }}>
+                          <li>ROAS: {r.current_roas != null ? `${r.current_roas}x` : '无转化'}</li>
+                          <li>商品阶段: 衰退预警</li>
+                          <li>低于最低ROAS {currentTemplate.min_roas || 1.8}x</li>
+                        </ul>
+                        <p style={{ color: '#999', marginTop: 8 }}>
+                          确认后将从该活动中移除此商品的广告出价，停止为其投放广告。
+                        </p>
+                      </div>
+                    ),
+                    okText: '确认删除',
+                    okButtonProps: { danger: true },
+                    cancelText: '取消',
+                    onOk: async () => {
+                      try {
+                        await rejectSuggestion(r.id)
+                        message.success('已标记删除，请到平台后台移除该商品')
+                        loadSuggestions()
+                      } catch (e) {
+                        message.error(e?.message || '操作失败')
+                      }
+                    },
+                  })
+                }}
+              >
+                建议删除
+              </Button>
+            )}
+          </Space>
         )
       },
     },
