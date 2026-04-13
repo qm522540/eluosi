@@ -650,10 +650,10 @@ def _query_sku_history(db, shop_id: int, tenant_id: int, platform: str) -> dict:
     from datetime import date, timedelta
     today = date.today()
 
-    # 分段边界
+    # 分段边界（前5天 vs 后5天 + 周级历史）
     boundaries = {
-        "last3":  (today - timedelta(days=3), today),
-        "prev4":  (today - timedelta(days=7), today - timedelta(days=3)),
+        "last5":  (today - timedelta(days=5), today),
+        "prev5":  (today - timedelta(days=10), today - timedelta(days=5)),
         "week2":  (today - timedelta(days=14), today - timedelta(days=7)),
         "week3":  (today - timedelta(days=21), today - timedelta(days=14)),
         "week4":  (today - timedelta(days=28), today - timedelta(days=21)),
@@ -671,8 +671,8 @@ def _query_sku_history(db, shop_id: int, tenant_id: int, platform: str) -> dict:
             s.campaign_id,
             {sku_col} AS sku_id,
             CASE
-                WHEN s.stat_date >= :last3_from THEN 'last3'
-                WHEN s.stat_date >= :prev4_from THEN 'prev4'
+                WHEN s.stat_date >= :last5_from THEN 'last5'
+                WHEN s.stat_date >= :prev5_from THEN 'prev5'
                 WHEN s.stat_date >= :week2_from THEN 'week2'
                 WHEN s.stat_date >= :week3_from THEN 'week3'
                 WHEN s.stat_date >= :week4_from THEN 'week4'
@@ -695,8 +695,8 @@ def _query_sku_history(db, shop_id: int, tenant_id: int, platform: str) -> dict:
     """
     rows = db.execute(text(sql), {
         "shop_id": shop_id, "tenant_id": tenant_id, "platform": platform,
-        "last3_from": boundaries["last3"][0],
-        "prev4_from": boundaries["prev4"][0],
+        "last5_from": boundaries["last5"][0],
+        "prev5_from": boundaries["prev5"][0],
         "week2_from": boundaries["week2"][0],
         "week3_from": boundaries["week3"][0],
         "week4_from": boundaries["week4"][0],
@@ -715,30 +715,30 @@ def _query_sku_history(db, shop_id: int, tenant_id: int, platform: str) -> dict:
     # 组装结果
     result = {}
     for key, periods in raw.items():
-        l3 = periods.get("last3") or _empty_metrics()
-        p4 = periods.get("prev4") or _empty_metrics()
+        l5 = periods.get("last5") or _empty_metrics()
+        p5 = periods.get("prev5") or _empty_metrics()
         w2 = periods.get("week2") or _empty_metrics()
         w3 = periods.get("week3") or _empty_metrics()
         w4 = periods.get("week4") or _empty_metrics()
 
-        week1 = _merge_metrics(p4, l3)
+        total = _merge_metrics(p5, l5)
 
-        # 趋势判断（last3 vs prev4）
-        if p4["days"] == 0 and l3["days"] == 0:
+        # 趋势判断（last5 vs prev5，对半比较更稳定）
+        if p5["days"] == 0 and l5["days"] == 0:
             trend = "new"
-        elif p4["days"] == 0:
+        elif p5["days"] < 3:
             trend = "new"
-        elif l3["roas"] > p4["roas"] * 1.05:
+        elif l5["roas"] > p5["roas"] * 1.05:
             trend = "up"
-        elif l3["roas"] < p4["roas"] * 0.95:
+        elif l5["roas"] < p5["roas"] * 0.95:
             trend = "down"
         else:
             trend = "stable"
 
         result[key] = {
-            **week1,  # 兼容旧代码直接取 total 字段
-            "last3": l3,
-            "prev4": p4,
+            **total,  # 兼容旧代码直接取 total 字段
+            "last5": l5,
+            "prev5": p5,
             "week2": w2 if w2["days"] > 0 else None,
             "week3": w3 if w3["days"] > 0 else None,
             "week4": w4 if w4["days"] > 0 else None,
@@ -943,15 +943,15 @@ async def _call_ai(template: dict, campaigns: list, products_by_campaign: dict,
                 "name": name,
                 "bid": round(bid_rub, 2),
             }
-            # 附加历史数据（多周分段 + 趋势）
+            # 附加历史数据（前5后5 + 周级历史 + 趋势）
             stats_key = f"{camp.id}_{sku}"
             if stats_key in sku_stats:
                 s = sku_stats[stats_key]
-                item["week1"] = {k: s[k] for k in
+                item["total_10d"] = {k: s[k] for k in
                     ["impressions","clicks","spend","orders","revenue","ctr","cpc","cr","roas","days"]
                     if k in s}
-                item["last3"] = s.get("last3")
-                item["prev4"] = s.get("prev4")
+                item["last5"] = s.get("last5")
+                item["prev5"] = s.get("prev5")
                 if s.get("week2"): item["week2"] = s["week2"]
                 if s.get("week3"): item["week3"] = s["week3"]
                 if s.get("week4"): item["week4"] = s["week4"]
@@ -979,16 +979,16 @@ async def _call_ai(template: dict, campaigns: list, products_by_campaign: dict,
     if has_history:
         history_section = """
 每个商品有多段历史数据（权重从高到低）：
-- week1: 最近7天汇总（impressions, clicks, spend, orders, revenue, ctr, cpc, cr, roas, days）— 权重最高
-- last3: week1中的后3天 — 反映最新状态
-- prev4: week1中的前4天 — 短期对比基准
-- week2: 8-14天前汇总 — 中期参考，权重低于week1
+- total_10d: 最近10天汇总（impressions, clicks, spend, orders, revenue, ctr, cpc, cr, roas, days）
+- last5: 后5天（最新状态）
+- prev5: 前5天（对比基准）
+- week2: 8-14天前汇总 — 中期参考（如有）
 - week3: 15-21天前汇总 — 长期参考（如有）
 - week4: 22-28天前汇总 — 长期基线（如有）
-- trend: "up"=最近3天ROAS上升 / "down"=下降 / "stable"=持平 / "new"=数据不足
+- trend: "up"=后5天ROAS高于前5天 / "down"=低于 / "stable"=持平 / "new"=数据不足
 
-数据权重原则：越近的数据参考价值越高。week1是决策核心，week2-4用于判断长期趋势和基线水平。
-例如：week1 ROAS=3 但 week2-4 ROAS都在5以上 → 可能是短期波动不必急于降价。
+数据权重原则：越近的数据参考价值越高。total_10d是决策核心，week2-4用于判断长期基线。
+重要：数据不足10天（days<10）时不做任何调价决策，标记为cold_start。
 
 **核心目标：ROAS 最大化**（不是达到目标就好，而是让 ROAS 尽可能大）
 
@@ -1191,16 +1191,16 @@ async def analyze_stream(db, tenant_id: int, shop_id: int,
         if has_history:
             history_section = """
 每个商品有多段历史数据（权重从高到低）：
-- week1: 最近7天汇总（impressions, clicks, spend, orders, revenue, ctr, cpc, cr, roas, days）— 权重最高
-- last3: week1中的后3天 — 反映最新状态
-- prev4: week1中的前4天 — 短期对比基准
-- week2: 8-14天前汇总 — 中期参考，权重低于week1
+- total_10d: 最近10天汇总（impressions, clicks, spend, orders, revenue, ctr, cpc, cr, roas, days）
+- last5: 后5天（最新状态）
+- prev5: 前5天（对比基准）
+- week2: 8-14天前汇总 — 中期参考（如有）
 - week3: 15-21天前汇总 — 长期参考（如有）
 - week4: 22-28天前汇总 — 长期基线（如有）
-- trend: "up"=最近3天ROAS上升 / "down"=下降 / "stable"=持平 / "new"=数据不足
+- trend: "up"=后5天ROAS高于前5天 / "down"=低于 / "stable"=持平 / "new"=数据不足
 
-数据权重原则：越近的数据参考价值越高。week1是决策核心，week2-4用于判断长期趋势和基线水平。
-例如：week1 ROAS=3 但 week2-4 ROAS都在5以上 → 可能是短期波动不必急于降价。
+数据权重原则：越近的数据参考价值越高。total_10d是决策核心，week2-4用于判断长期基线。
+重要：数据不足10天（days<10）时不做任何调价决策，标记为cold_start。
 
 **核心目标：ROAS 最大化**（不是达到目标就好，而是让 ROAS 尽可能大）
 
