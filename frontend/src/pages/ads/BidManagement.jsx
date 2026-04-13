@@ -67,13 +67,20 @@ const getWbImageInfo = (nmId) => {
 const buildWbImgUrl = (vol, part, id, basket) =>
   `https://basket-${String(basket).padStart(2,'0')}.wbbasket.ru/vol${vol}/part${part}/${id}/images/c246x328/1.webp`
 
-// 根据 vol 估算起始 basket（每216个vol约一个basket）
+// 根据 vol 估算起始 basket（实测校准的映射表）
 const guessBasket = (vol) => {
-  const thresholds = [143,287,431,719,1007,1061,1115,1169,1313,1601,1655,1919,2045,2189,2405,2621,2837,3053,3269,3485,3701,3917,4133,4349,4565,4781,4997,5213,5429,5645,5861,6077,6293,6509,6725,6941,7157,7373,7589,7805,8021,8237,8453,8669,8885,9101,9317,9533,9749,9965]
+  // 低段（vol 0-2837）用密集映射，高段用实测稀疏映射
+  const thresholds = [
+    143,287,431,719,1007,1061,1115,1169,1313,1601,  // 1-10
+    1655,1919,2045,2189,2405,2621,2837,              // 11-17
+  ]
   for (let i = 0; i < thresholds.length; i++) {
     if (vol <= thresholds[i]) return i + 1
   }
-  return Math.min(Math.floor(vol / 200) + 1, 60)
+  // 高段（vol > 2837）：实测每 ~350 vol 一个 basket，从 basket 18 开始
+  // 校准点：vol 5207→28, vol 4826→26, vol 7678→35, vol 8951→39, vol 9237→40
+  const highBasket = 18 + Math.floor((vol - 2838) / 350)
+  return Math.min(highBasket, 60)
 }
 
 // WB 商品图片组件：从估算 basket 开始，失败自动探测相邻 basket
@@ -111,7 +118,7 @@ const WbProductImg = ({ nmId, style }) => {
         const info = infoRef.current
         if (!info) { setFailed(true); return }
         const base = guessBasket(info.vol)
-        const offsets = [0, -1, 1, -2, 2, -3, 3, -4, 4, -5, 5, -6, 6]
+        const offsets = [0, -1, 1, -2, 2, -3, 3, -4, 4, -5, 5, -6, 6, -7, 7, -8, 8]
         if (triedRef.current >= offsets.length) { setFailed(true); return }
         const next = base + offsets[triedRef.current]
         if (next < 1 || next > 65) { setFailed(true); return }
