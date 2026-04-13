@@ -48,20 +48,38 @@ const Ads = () => {
     }).catch(() => {})
   }, [])
 
-  // 已确认店铺后获取上次同步时间
+  // 已确认店铺后获取上次同步时间，超过30分钟自动同步
   useEffect(() => {
-    if (committedShopId) {
+    if (committedShopId && committedPlatform) {
       getLastSyncTime(committedShopId).then(res => {
         if (res.data?.last_sync_at) {
-          setLastSyncTime(new Date(res.data.last_sync_at))
+          const syncTime = new Date(res.data.last_sync_at)
+          setLastSyncTime(syncTime)
+          // 超过30分钟自动触发同步
+          const diffMin = (Date.now() - syncTime.getTime()) / 60000
+          if (diffMin > 30) {
+            setSyncing(true)
+            syncAdsByPlatform(committedPlatform).then(() => {
+              setLastSyncTime(new Date())
+              message.info('数据已超过30分钟，已自动同步')
+              if (searched) refreshCurrentTab()
+            }).catch(() => {}).finally(() => setSyncing(false))
+          }
         } else {
           setLastSyncTime(null)
+          // 从未同步过，自动触发一次
+          setSyncing(true)
+          syncAdsByPlatform(committedPlatform).then(() => {
+            setLastSyncTime(new Date())
+            message.info('首次进入，已自动同步数据')
+            if (searched) refreshCurrentTab()
+          }).catch(() => {}).finally(() => setSyncing(false))
         }
       }).catch(() => {})
     } else {
       setLastSyncTime(null)
     }
-  }, [committedShopId])
+  }, [committedShopId, committedPlatform])
 
   const canSearch = filterPlatform && filterShopId
 
