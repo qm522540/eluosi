@@ -135,7 +135,7 @@ const AdsOverview = ({ shopId, platform, shops, searched, syncing, lastSyncTime,
   const [createForm] = Form.useForm()
 
   // 同步状态
-  const [syncing, setSyncing] = useState(false)
+  // syncing 从 props 传入（父组件管理同步状态）
 
   // 详情抽屉
   const [detailVisible, setDetailVisible] = useState(false)
@@ -257,22 +257,7 @@ const AdsOverview = ({ shopId, platform, shops, searched, syncing, lastSyncTime,
     if (searched) fetchStats()
   }, [dateRange])
 
-  // ==================== 同步 ====================
-
-  const handleSync = async () => {
-    setSyncing(true)
-    try {
-      await syncAds()
-      message.success('同步任务已提交，数据将在1-2分钟内更新')
-      if (searched) {
-        setTimeout(() => { fetchCampaigns(); fetchSummary(); fetchStats() }, 10000)
-      }
-    } catch (err) {
-      message.error(err.message || '同步失败')
-    } finally {
-      setSyncing(false)
-    }
-  }
+  // 同步由父组件管理（onSync prop）
 
   // ==================== 活动 创建/编辑/删除 ====================
 
