@@ -601,14 +601,12 @@ async def get_sku_status(db, tenant_id: int, shop_id: int,
 
 
 def _query_status_rows(db, tenant_id, shop_id, campaign_id, keyword):
-    """只查 last_auto_bid IS NOT NULL 的行 → 仅返回真正被分时调价处理过的 SKU。
-    使用 INNER JOIN：未被处理过的活动不会出现在结果里。
-    """
+    """查询所有 active 活动的 SKU 状态（含未被处理过的活动）"""
     where = [
         "c.shop_id = :shop_id",
         "c.tenant_id = :tenant_id",
         "c.platform IN ('ozon', 'wb')",
-        "ag.last_auto_bid IS NOT NULL",
+        "c.status = 'active'",
     ]
     params = {"shop_id": shop_id, "tenant_id": tenant_id}
     if campaign_id:
@@ -626,7 +624,7 @@ def _query_status_rows(db, tenant_id, shop_id, campaign_id, keyword):
             ag.original_bid, ag.bid AS current_bid, ag.last_auto_bid,
             ag.user_managed, ag.user_managed_at, ag.updated_at
         FROM ad_campaigns c
-        JOIN ad_groups ag ON ag.campaign_id = c.id
+        LEFT JOIN ad_groups ag ON ag.campaign_id = c.id
             AND ag.platform_group_id IS NOT NULL
         WHERE {where_sql}
         ORDER BY c.name, ag.platform_group_id
