@@ -81,7 +81,7 @@ async def smart_sync(db: Session, shop_id: int, tenant_id: int) -> dict:
             date_from = date_to - timedelta(days=SYNC_DAYS - 1)
         logger.info(f"shop_id={shop_id} 增量同步 {date_from}~{date_to}")
 
-    # 3. 拉取数据
+    # 3. 拉取数据（一次性传所有活动ID，减少API调用次数）
     campaigns = db.query(AdCampaign).filter(
         AdCampaign.shop_id == shop_id,
         AdCampaign.tenant_id == tenant_id,
@@ -91,19 +91,29 @@ async def smart_sync(db: Session, shop_id: int, tenant_id: int) -> dict:
     if not campaigns:
         raise ValueError("无Ozon广告活动，请先同步广告活动列表")
 
+    # 建立 platform_campaign_id → 内部campaign 的映射
+    camp_map = {str(c.platform_campaign_id): c for c in campaigns}
+
     ozon_client = _build_ozon_client(shop)
     total_synced = 0
 
     try:
-        for campaign in campaigns:
-            try:
-                synced = await _fetch_and_save_stats(
-                    db, ozon_client, campaign, date_from, date_to,
-                )
-                total_synced += synced
-                await asyncio.sleep(0.3)
-            except Exception as e:
-                logger.error(f"活动 {campaign.name}(id={campaign.id}) 数据拉取失败: {e}")
+        # 一次性拉所有活动的统计数据
+        all_platform_ids = list(camp_map.keys())
+        stats = await ozon_client.fetch_ad_stats(
+            campaign_id=all_platform_ids,
+            date_from=date_from.strftime("%Y-%m-%d"),
+            date_to=date_to.strftime("%Y-%m-%d"),
+        )
+        # 写入数据库
+        for stat in stats:
+            platform_cid = str(stat.get("campaign_id", ""))
+            campaign = camp_map.get(platform_cid)
+            if not campaign:
+                continue
+            total_synced += _save_one_stat(db, campaign, stat)
+    except Exception as e:
+        logger.error(f"Ozon 数据拉取失败 shop_id={shop_id}: {e}")
     finally:
         await ozon_client.close()
 
@@ -181,72 +191,51 @@ def _update_init_status(db: Session, shop_id: int, tenant_id: int,
     db.commit()
 
 
-async def _fetch_and_save_stats(
-    db: Session,
-    ozon_client: OzonClient,
-    campaign: AdCampaign,
-    start_date: date,
-    end_date: date,
-) -> int:
-    """从Ozon API拉取数据并写入ad_stats表"""
-    try:
-        stats = await ozon_client.fetch_ad_stats(
-            campaign_id=campaign.platform_campaign_id,
-            date_from=start_date.strftime("%Y-%m-%d"),
-            date_to=end_date.strftime("%Y-%m-%d"),
+def _save_one_stat(db: Session, campaign: AdCampaign, day_stat: dict) -> int:
+    """将一条统计数据写入 ad_stats 表，返回 0 或 1"""
+    stat_date = day_stat.get("stat_date", "")
+    if not stat_date:
+        return 0
+
+    spend = float(day_stat.get("spend", 0))
+    impressions = int(day_stat.get("impressions", 0))
+    if spend == 0 and impressions == 0:
+        return 0
+
+    existing = db.query(AdStat).filter(
+        AdStat.campaign_id == campaign.id,
+        AdStat.stat_date == stat_date,
+        AdStat.platform == "ozon",
+    ).first()
+
+    stat_data = {
+        "impressions": impressions,
+        "clicks": int(day_stat.get("clicks", 0)),
+        "spend": spend,
+        "orders": int(day_stat.get("orders", 0)),
+        "revenue": float(day_stat.get("revenue", 0)),
+        "ctr": float(day_stat.get("ctr", 0)),
+        "cpc": float(day_stat.get("cpc", 0)),
+        "acos": float(day_stat.get("acos", 0)),
+        "roas": float(day_stat.get("roas", 0)),
+    }
+
+    if existing:
+        for k, v in stat_data.items():
+            setattr(existing, k, v)
+        db.commit()
+        return 0
+    else:
+        new_stat = AdStat(
+            tenant_id=campaign.tenant_id,
+            campaign_id=campaign.id,
+            platform="ozon",
+            stat_date=stat_date,
+            **stat_data,
         )
-    except Exception as e:
-        logger.error(f"Ozon API调用失败 campaign={campaign.platform_campaign_id}: {e}")
-        return 0
-
-    if not stats:
-        return 0
-
-    inserted = 0
-    for day_stat in stats:
-        stat_date = day_stat.get("stat_date", "")
-        if not stat_date:
-            continue
-
-        spend = float(day_stat.get("spend", 0))
-        impressions = int(day_stat.get("impressions", 0))
-        if spend == 0 and impressions == 0:
-            continue
-
-        existing = db.query(AdStat).filter(
-            AdStat.campaign_id == campaign.id,
-            AdStat.stat_date == stat_date,
-            AdStat.platform == "ozon",
-        ).first()
-
-        stat_data = {
-            "impressions": impressions,
-            "clicks": int(day_stat.get("clicks", 0)),
-            "spend": spend,
-            "orders": int(day_stat.get("orders", 0)),
-            "revenue": float(day_stat.get("revenue", 0)),
-            "ctr": float(day_stat.get("ctr", 0)),
-            "cpc": float(day_stat.get("cpc", 0)),
-            "acos": float(day_stat.get("acos", 0)),
-            "roas": float(day_stat.get("roas", 0)),
-        }
-
-        if existing:
-            for k, v in stat_data.items():
-                setattr(existing, k, v)
-        else:
-            new_stat = AdStat(
-                tenant_id=campaign.tenant_id,
-                campaign_id=campaign.id,
-                platform="ozon",
-                stat_date=stat_date,
-                **stat_data,
-            )
-            db.add(new_stat)
-            inserted += 1
-
-    db.commit()
-    return inserted
+        db.add(new_stat)
+        db.commit()
+        return 1
 
 
 def _build_ozon_client(shop: Shop) -> OzonClient:

@@ -315,36 +315,47 @@ class OzonClient(BasePlatformClient):
     # ==================== 广告统计 ====================
 
     async def fetch_ad_stats(
-        self, campaign_id: str, date_from: str, date_to: str
+        self, campaign_id, date_from: str, date_to: str
     ) -> list:
         """拉取广告活动统计数据（Performance API 异步统计流程）
 
-        流程：
-        1. POST /api/client/statistics → 得到 UUID
-        2. GET /api/client/statistics/{UUID} → 轮询直到 state=OK
-        3. 解析 rows 返回标准格式
+        Args:
+            campaign_id: 单个活动ID (str) 或多个活动ID列表 (list[str])
+            date_from: 起始日期 YYYY-MM-DD
+            date_to: 结束日期 YYYY-MM-DD
 
-        注：Seller API 被 Ozon WAF 拦截（服务器IP问题），全部走 Performance API。
+        流程：
+        1. POST /api/client/statistics → 提交异步任务得到 UUID
+        2. GET /api/client/statistics/{UUID} → 轮询直到 state=OK（最多60秒）
+        3. 解析 rows 返回标准格式（每行含 campaignId 用于区分活动）
+
+        注：Seller API 被 Ozon WAF 拦截，全部走 Performance API。
         """
         import asyncio as _asyncio
 
+        # 支持传单个ID或列表
+        if isinstance(campaign_id, list):
+            campaign_ids = [str(c) for c in campaign_id]
+        else:
+            campaign_ids = [str(campaign_id)]
+
         await self._ensure_perf_token()
 
-        # Step 1: 提交异步统计请求
+        # Step 1: 提交异步统计请求（一次性传所有活动ID）
         try:
             submit = await self._request(
                 "POST",
                 f"{OZON_PERFORMANCE_API}/api/client/statistics",
                 use_perf=True,
                 json={
-                    "campaigns": [str(campaign_id)],
+                    "campaigns": campaign_ids,
                     "dateFrom": date_from,
                     "dateTo": date_to,
                     "groupBy": "DATE",
                 },
             )
         except Exception as e:
-            logger.error(f"Ozon 统计提交失败 shop_id={self.shop_id} campaign={campaign_id}: {e}")
+            logger.error(f"Ozon 统计提交失败 shop_id={self.shop_id}: {e}")
             return []
 
         uuid = submit.get("UUID")
@@ -352,10 +363,10 @@ class OzonClient(BasePlatformClient):
             logger.warning(f"Ozon 统计接口未返回 UUID: {submit}")
             return []
 
-        # Step 2: 轮询结果（最多等 30 秒）
+        # Step 2: 轮询结果（最多等 60 秒）
         result = None
-        for attempt in range(10):
-            await _asyncio.sleep(3)
+        for attempt in range(12):
+            await _asyncio.sleep(5)
             try:
                 data = await self._request(
                     "GET",
@@ -373,23 +384,22 @@ class OzonClient(BasePlatformClient):
             elif state in ("ERROR", "FAILED"):
                 logger.error(f"Ozon 统计任务失败 UUID={uuid}: {data}")
                 return []
-            # NOT_STARTED / IN_PROGRESS → 继续等
 
         if not result:
-            logger.warning(f"Ozon 统计超时 UUID={uuid} shop_id={self.shop_id} campaign={campaign_id}")
+            logger.warning(f"Ozon 统计超时 UUID={uuid} shop_id={self.shop_id}")
             return []
 
         # Step 3: 解析结果
         stats = []
         rows = result.get("rows") or []
         for row in rows:
-            stat = self._parse_daily_stat(campaign_id, row)
+            # 每行有 campaignId 字段区分来源活动
+            cid = str(row.get("campaignId") or campaign_ids[0])
+            stat = self._parse_daily_stat(cid, row)
             if stat:
                 stats.append(stat)
 
-        if stats:
-            logger.info(f"Ozon 统计成功 campaign={campaign_id}: {len(stats)} 天数据")
-
+        logger.info(f"Ozon 统计完成: {len(campaign_ids)}个活动 → {len(stats)}条数据")
         return stats
 
     def _parse_daily_stat(self, campaign_id: str, row: dict) -> Optional[dict]:
