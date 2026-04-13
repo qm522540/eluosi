@@ -317,68 +317,78 @@ class OzonClient(BasePlatformClient):
     async def fetch_ad_stats(
         self, campaign_id: str, date_from: str, date_to: str
     ) -> list:
-        """拉取广告活动统计数据
+        """拉取广告活动统计数据（Performance API 异步统计流程）
 
-        依次尝试多个统计端点：
-        1. Seller API: POST /api/client/statistics/daily
-        2. Seller API: POST /api/client/statistics
-        3. Performance API: POST /api/client/statistics/daily（旧版独立域名）
+        流程：
+        1. POST /api/client/statistics → 得到 UUID
+        2. GET /api/client/statistics/{UUID} → 轮询直到 state=OK
+        3. 解析 rows 返回标准格式
+
+        注：Seller API 被 Ozon WAF 拦截（服务器IP问题），全部走 Performance API。
         """
-        stats = []
+        import asyncio as _asyncio
 
-        # 统计接口的请求体格式
-        payloads = [
-            # 格式1: campaigns传字符串数组
-            {"campaigns": [str(campaign_id)], "dateFrom": date_from, "dateTo": date_to},
-            # 格式2: campaignId传单个ID + 日期区间
-            {"campaignId": str(campaign_id), "dateFrom": date_from, "dateTo": date_to},
-        ]
+        await self._ensure_perf_token()
 
-        # 依次尝试多个端点
-        endpoints = [
-            (f"{OZON_SELLER_API}/api/client/statistics/daily", False),
-            (f"{OZON_SELLER_API}/api/client/statistics", False),
-            (f"{OZON_PERFORMANCE_API}/api/client/statistics/daily", True),
-            (f"{OZON_PERFORMANCE_API}/api/client/statistics", True),
-        ]
-
-        result = None
-        for url, use_perf in endpoints:
-            for payload in payloads:
-                try:
-                    result = await self._request(
-                        "POST", url, use_perf=use_perf, json=payload
-                    )
-                    if result and (result.get("rows") or result.get("data") or result.get("items")):
-                        logger.info(f"Ozon 统计接口命中: {url}")
-                        break
-                    result = None
-                except Exception:
-                    continue
-            if result:
-                break
-
-        if not result:
-            logger.warning(
-                f"Ozon 所有统计接口均不可用，shop_id={self.shop_id}，"
-                f"campaign_id={campaign_id}"
+        # Step 1: 提交异步统计请求
+        try:
+            submit = await self._request(
+                "POST",
+                f"{OZON_PERFORMANCE_API}/api/client/statistics",
+                use_perf=True,
+                json={
+                    "campaigns": [str(campaign_id)],
+                    "dateFrom": date_from,
+                    "dateTo": date_to,
+                    "groupBy": "DATE",
+                },
             )
+        except Exception as e:
+            logger.error(f"Ozon 统计提交失败 shop_id={self.shop_id} campaign={campaign_id}: {e}")
             return []
 
-        try:
-            # 兼容多种响应格式
-            rows = result.get("rows") or result.get("data") or result.get("items") or []
-            if isinstance(rows, list):
-                for row in rows:
-                    stat = self._parse_daily_stat(campaign_id, row)
-                    if stat:
-                        stats.append(stat)
-        except Exception as e:
-            logger.error(
-                f"Ozon 解析广告统计失败，shop_id={self.shop_id}，"
-                f"campaign_id={campaign_id}: {e}"
-            )
-            raise
+        uuid = submit.get("UUID")
+        if not uuid:
+            logger.warning(f"Ozon 统计接口未返回 UUID: {submit}")
+            return []
+
+        # Step 2: 轮询结果（最多等 30 秒）
+        result = None
+        for attempt in range(10):
+            await _asyncio.sleep(3)
+            try:
+                data = await self._request(
+                    "GET",
+                    f"{OZON_PERFORMANCE_API}/api/client/statistics/{uuid}",
+                    use_perf=True,
+                )
+            except Exception as e:
+                logger.warning(f"Ozon 统计轮询失败 attempt={attempt+1}: {e}")
+                continue
+
+            state = data.get("state", "")
+            if state == "OK":
+                result = data
+                break
+            elif state in ("ERROR", "FAILED"):
+                logger.error(f"Ozon 统计任务失败 UUID={uuid}: {data}")
+                return []
+            # NOT_STARTED / IN_PROGRESS → 继续等
+
+        if not result:
+            logger.warning(f"Ozon 统计超时 UUID={uuid} shop_id={self.shop_id} campaign={campaign_id}")
+            return []
+
+        # Step 3: 解析结果
+        stats = []
+        rows = result.get("rows") or []
+        for row in rows:
+            stat = self._parse_daily_stat(campaign_id, row)
+            if stat:
+                stats.append(stat)
+
+        if stats:
+            logger.info(f"Ozon 统计成功 campaign={campaign_id}: {len(stats)} 天数据")
 
         return stats
 
