@@ -1,15 +1,16 @@
-"""Ozon广告数据采集服务
+"""Ozon 数据采集服务
 
-智能同步逻辑（2026-04-12 重构）：
+智能同步逻辑（2026-04-13 重构）：
   点击"更新数据源" → smart_sync()
-    ├─ 服务器无数据 → 拉最近 30 天
+    ├─ 服务器无数据 → 拉最近 7 天
     ├─ 服务器有数据，最新日期 D → 拉 D+1 到昨天（D=昨天则提示已最新）
     └─ 清理超过 90 天的旧数据
 
-不再有"首次进入自动触发"的逻辑。
+数据来源：Seller API /v1/analytics/data（SKU级运营数据：收入/订单/流量/转化）
+Performance API 的广告统计接口被WAF拦截或无数据，改用 Seller API 获取历史数据。
 """
 
-import asyncio
+import httpx
 from datetime import datetime, timedelta, date, timezone
 
 from sqlalchemy import text
@@ -18,31 +19,23 @@ from sqlalchemy.orm import Session
 from app.models.ad import AdCampaign, AdStat
 from app.models.shop import Shop
 from app.models.shop_data_init import ShopDataInitStatus
-from app.services.platform.ozon import OzonClient
 from app.utils.logger import setup_logger
 
 logger = setup_logger("data.ozon_collector")
 
 SYNC_DAYS = 7        # 每次最多拉 7 天
 MAX_KEEP_DAYS = 90   # 超过 90 天的旧数据清理
+SELLER_API = "https://api-seller.ozon.ru"
 
 
 async def smart_sync(db: Session, shop_id: int, tenant_id: int) -> dict:
-    """智能数据同步（"更新数据源"按钮唯一入口）
-
-    Returns:
-        {
-          "synced": int,       # 本次写入/更新的记录数
-          "date_from": str,    # 本次拉取起始日期
-          "date_to": str,      # 本次拉取截止日期
-          "cleaned": int,      # 清理的过期记录数
-          "already_latest": bool,  # 是否已是最新（无需拉取）
-          "data_days": int,    # 同步后服务器有多少天数据
-        }
-    """
+    """智能数据同步（"更新数据源"按钮唯一入口）"""
     shop = db.query(Shop).filter(Shop.id == shop_id, Shop.tenant_id == tenant_id).first()
     if not shop:
         raise ValueError("店铺不存在")
+
+    if not shop.client_id or not shop.api_key:
+        raise ValueError("Ozon Seller API 凭证未配置（需要 Client-Id 和 Api-Key）")
 
     yesterday = date.today() - timedelta(days=1)
 
@@ -62,7 +55,6 @@ async def smart_sync(db: Session, shop_id: int, tenant_id: int) -> dict:
         date_to = yesterday
         logger.info(f"shop_id={shop_id} 无历史数据，拉取最近{SYNC_DAYS}天 {date_from}~{date_to}")
     elif latest_date >= yesterday:
-        # 数据已是最新
         cleaned = _clean_old_data(db, shop_id, tenant_id)
         data_days = _count_data_days(db, shop_id, tenant_id)
         _update_init_status(db, shop_id, tenant_id, yesterday, data_days)
@@ -81,41 +73,10 @@ async def smart_sync(db: Session, shop_id: int, tenant_id: int) -> dict:
             date_from = date_to - timedelta(days=SYNC_DAYS - 1)
         logger.info(f"shop_id={shop_id} 增量同步 {date_from}~{date_to}")
 
-    # 3. 拉取数据（一次性传所有活动ID，减少API调用次数）
-    campaigns = db.query(AdCampaign).filter(
-        AdCampaign.shop_id == shop_id,
-        AdCampaign.tenant_id == tenant_id,
-        AdCampaign.platform == "ozon",
-    ).all()
-
-    if not campaigns:
-        raise ValueError("无Ozon广告活动，请先同步广告活动列表")
-
-    # 建立 platform_campaign_id → 内部campaign 的映射
-    camp_map = {str(c.platform_campaign_id): c for c in campaigns}
-
-    ozon_client = _build_ozon_client(shop)
-    total_synced = 0
-
-    try:
-        # 一次性拉所有活动的统计数据
-        all_platform_ids = list(camp_map.keys())
-        stats = await ozon_client.fetch_ad_stats(
-            campaign_id=all_platform_ids,
-            date_from=date_from.strftime("%Y-%m-%d"),
-            date_to=date_to.strftime("%Y-%m-%d"),
-        )
-        # 写入数据库
-        for stat in stats:
-            platform_cid = str(stat.get("campaign_id", ""))
-            campaign = camp_map.get(platform_cid)
-            if not campaign:
-                continue
-            total_synced += _save_one_stat(db, campaign, stat)
-    except Exception as e:
-        logger.error(f"Ozon 数据拉取失败 shop_id={shop_id}: {e}")
-    finally:
-        await ozon_client.close()
+    # 3. 用 Seller API 拉 SKU 级运营数据
+    total_synced = await _fetch_seller_analytics(
+        db, shop, date_from, date_to, tenant_id,
+    )
 
     # 4. 清理 90 天前的旧数据
     cleaned = _clean_old_data(db, shop_id, tenant_id)
@@ -138,8 +99,166 @@ async def smart_sync(db: Session, shop_id: int, tenant_id: int) -> dict:
     }
 
 
+async def _fetch_seller_analytics(
+    db: Session, shop: Shop,
+    date_from: date, date_to: date,
+    tenant_id: int,
+) -> int:
+    """通过 Seller API /v1/analytics/data 拉取 SKU 级运营数据
+
+    指标：revenue（收入）、ordered_units（订单量）、hits_view（商品页浏览）、session_view（会话数）
+    维度：sku + day
+    """
+    headers = {
+        "Client-Id": shop.client_id,
+        "Api-Key": shop.api_key,
+        "Content-Type": "application/json",
+    }
+
+    # 构建虚拟 campaign 用于存储（Ozon 运营数据不区分活动，挂到第一个活动下）
+    campaign = db.query(AdCampaign).filter(
+        AdCampaign.shop_id == shop.id,
+        AdCampaign.tenant_id == tenant_id,
+        AdCampaign.platform == "ozon",
+    ).first()
+
+    if not campaign:
+        logger.warning(f"shop_id={shop.id} 无 Ozon 活动，跳过")
+        return 0
+
+    total_synced = 0
+    offset = 0
+    limit = 100
+
+    async with httpx.AsyncClient(timeout=60) as client:
+        while True:
+            try:
+                resp = await client.post(
+                    f"{SELLER_API}/v1/analytics/data",
+                    headers=headers,
+                    json={
+                        "date_from": date_from.strftime("%Y-%m-%d"),
+                        "date_to": date_to.strftime("%Y-%m-%d"),
+                        "metrics": [
+                            "revenue",
+                            "ordered_units",
+                            "hits_view",
+                            "session_view",
+                        ],
+                        "dimension": ["sku", "day"],
+                        "limit": limit,
+                        "offset": offset,
+                    },
+                )
+
+                if resp.status_code == 429:
+                    logger.warning("Ozon Seller API 限速，等待3秒")
+                    import asyncio
+                    await asyncio.sleep(3)
+                    continue
+
+                resp.raise_for_status()
+                data = resp.json()
+            except Exception as e:
+                logger.error(f"Ozon Seller API 调用失败: {e}")
+                break
+
+            rows = data.get("result", {}).get("data", [])
+            if not rows:
+                break
+
+            for row in rows:
+                dims = row.get("dimensions", [])
+                metrics = row.get("metrics", [])
+                if len(dims) < 2 or len(metrics) < 2:
+                    continue
+
+                sku_id = dims[0].get("id", "")
+                sku_name = dims[0].get("name", "")
+                stat_date = dims[1].get("id", "")[:10]
+                if not stat_date or not sku_id:
+                    continue
+
+                revenue = float(metrics[0]) if metrics[0] else 0
+                orders = int(metrics[1]) if metrics[1] else 0
+                impressions = int(metrics[2]) if len(metrics) > 2 and metrics[2] else 0
+                clicks = int(metrics[3]) if len(metrics) > 3 and metrics[3] else 0
+
+                if revenue == 0 and orders == 0 and impressions == 0:
+                    continue
+
+                # 计算衍生指标
+                spend = 0  # 运营数据无广告花费，spend=0
+                ctr = round(clicks / impressions * 100, 4) if impressions > 0 else 0
+                cpc = 0
+                roas = 0
+                acos = 0
+
+                existing = db.execute(text("""
+                    SELECT id FROM ad_stats
+                    WHERE campaign_id = :cid AND stat_date = :sd
+                      AND platform = 'ozon' AND ad_group_id = :sku
+                """), {"cid": campaign.id, "sd": stat_date, "sku": sku_id}).fetchone()
+
+                if existing:
+                    db.execute(text("""
+                        UPDATE ad_stats SET
+                            impressions = :impressions, clicks = :clicks,
+                            orders = :orders, revenue = :revenue,
+                            ctr = :ctr, updated_at = NOW()
+                        WHERE id = :id
+                    """), {
+                        "id": existing.id,
+                        "impressions": impressions,
+                        "clicks": clicks,
+                        "orders": orders,
+                        "revenue": round(revenue, 2),
+                        "ctr": ctr,
+                    })
+                else:
+                    db.execute(text("""
+                        INSERT INTO ad_stats (
+                            tenant_id, campaign_id, ad_group_id,
+                            platform, stat_date,
+                            impressions, clicks, spend,
+                            orders, revenue, ctr, cpc, acos, roas,
+                            created_at, updated_at
+                        ) VALUES (
+                            :tenant_id, :cid, :sku,
+                            'ozon', :sd,
+                            :impressions, :clicks, :spend,
+                            :orders, :revenue, :ctr, :cpc, :acos, :roas,
+                            NOW(), NOW()
+                        )
+                    """), {
+                        "tenant_id": tenant_id,
+                        "cid": campaign.id,
+                        "sku": sku_id,
+                        "sd": stat_date,
+                        "impressions": impressions,
+                        "clicks": clicks,
+                        "spend": spend,
+                        "orders": orders,
+                        "revenue": round(revenue, 2),
+                        "ctr": ctr,
+                        "cpc": cpc,
+                        "acos": acos,
+                        "roas": roas,
+                    })
+                    total_synced += 1
+
+            db.commit()
+
+            if len(rows) < limit:
+                break
+            offset += limit
+            logger.info(f"shop_id={shop.id} 已拉取 {offset} 条，继续...")
+
+    logger.info(f"shop_id={shop.id} Seller API 拉取完成: {total_synced} 条新数据")
+    return total_synced
+
+
 def _clean_old_data(db: Session, shop_id: int, tenant_id: int) -> int:
-    """清理超过 MAX_KEEP_DAYS 天的旧数据"""
     cutoff = date.today() - timedelta(days=MAX_KEEP_DAYS)
     result = db.execute(text("""
         DELETE s FROM ad_stats s
@@ -154,7 +273,6 @@ def _clean_old_data(db: Session, shop_id: int, tenant_id: int) -> int:
 
 
 def _count_data_days(db: Session, shop_id: int, tenant_id: int) -> int:
-    """统计服务器有多少天数据"""
     row = db.execute(text("""
         SELECT COUNT(DISTINCT s.stat_date) AS cnt
         FROM ad_stats s
@@ -166,7 +284,6 @@ def _count_data_days(db: Session, shop_id: int, tenant_id: int) -> int:
 
 def _update_init_status(db: Session, shop_id: int, tenant_id: int,
                         last_sync_date: date, data_days: int):
-    """更新 shop_data_init_status"""
     now = datetime.now(timezone.utc)
     status = db.query(ShopDataInitStatus).filter(
         ShopDataInitStatus.shop_id == shop_id,
@@ -189,60 +306,3 @@ def _update_init_status(db: Session, shop_id: int, tenant_id: int,
         )
         db.add(status)
     db.commit()
-
-
-def _save_one_stat(db: Session, campaign: AdCampaign, day_stat: dict) -> int:
-    """将一条统计数据写入 ad_stats 表，返回 0 或 1"""
-    stat_date = day_stat.get("stat_date", "")
-    if not stat_date:
-        return 0
-
-    spend = float(day_stat.get("spend", 0))
-    impressions = int(day_stat.get("impressions", 0))
-    if spend == 0 and impressions == 0:
-        return 0
-
-    existing = db.query(AdStat).filter(
-        AdStat.campaign_id == campaign.id,
-        AdStat.stat_date == stat_date,
-        AdStat.platform == "ozon",
-    ).first()
-
-    stat_data = {
-        "impressions": impressions,
-        "clicks": int(day_stat.get("clicks", 0)),
-        "spend": spend,
-        "orders": int(day_stat.get("orders", 0)),
-        "revenue": float(day_stat.get("revenue", 0)),
-        "ctr": float(day_stat.get("ctr", 0)),
-        "cpc": float(day_stat.get("cpc", 0)),
-        "acos": float(day_stat.get("acos", 0)),
-        "roas": float(day_stat.get("roas", 0)),
-    }
-
-    if existing:
-        for k, v in stat_data.items():
-            setattr(existing, k, v)
-        db.commit()
-        return 0
-    else:
-        new_stat = AdStat(
-            tenant_id=campaign.tenant_id,
-            campaign_id=campaign.id,
-            platform="ozon",
-            stat_date=stat_date,
-            **stat_data,
-        )
-        db.add(new_stat)
-        db.commit()
-        return 1
-
-
-def _build_ozon_client(shop: Shop) -> OzonClient:
-    return OzonClient(
-        shop_id=shop.id,
-        api_key=shop.api_key,
-        client_id=shop.client_id,
-        perf_client_id=getattr(shop, 'perf_client_id', None) or '',
-        perf_client_secret=getattr(shop, 'perf_client_secret', None) or '',
-    )
