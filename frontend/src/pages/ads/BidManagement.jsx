@@ -323,7 +323,7 @@ const ModeSelector = ({ activeMode, onSelect }) => {
 // ==========================================
 // 调价历史组件（分时+AI合并）
 // ==========================================
-const BidLogs = ({ shopId }) => {
+const BidLogs = ({ shopId, refreshKey }) => {
   const [logs, setLogs] = useState([])
   const [total, setTotal] = useState(0)
   const [page, setPage] = useState(1)
@@ -332,7 +332,7 @@ const BidLogs = ({ shopId }) => {
   useEffect(() => {
     loadLogs()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [shopId, page])
+  }, [shopId, page, refreshKey])
 
   const loadLogs = async () => {
     setLoading(true)
@@ -1008,6 +1008,7 @@ const AIPricingConfig = ({ shopId, platform, onSaved }) => {
   const [dataStatus, setDataStatus] = useState(null)
   const [syncing, setSyncing] = useState(false)
   const [saving, setSaving] = useState(false)
+  const [logsRefreshKey, setLogsRefreshKey] = useState(0)
 
   useEffect(() => {
     loadConfig()
@@ -1412,6 +1413,7 @@ const AIPricingConfig = ({ shopId, platform, onSaved }) => {
                 await approveSuggestion(r.id, editedBids[r.id] ?? r.suggested_bid)
                 message.success('执行成功')
                 loadSuggestions()
+                setLogsRefreshKey(k => k + 1)
               } catch (e) {
                 message.error(e?.message || '执行失败')
               }
@@ -1776,6 +1778,7 @@ const AIPricingConfig = ({ shopId, platform, onSaved }) => {
                 message.success('批量执行完成')
                 setSelected([])
                 loadSuggestions()
+                setLogsRefreshKey(k => k + 1)
               } catch (e) {
                 message.error(e?.message || '操作失败')
               }
@@ -1819,7 +1822,7 @@ const AIPricingConfig = ({ shopId, platform, onSaved }) => {
       )}
 
       {/* 调价历史 */}
-      <BidLogs shopId={shopId} />
+      <BidLogs shopId={shopId} refreshKey={logsRefreshKey} />
 
       {/* 编辑模板弹窗 */}
       <Modal
