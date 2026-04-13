@@ -240,16 +240,25 @@ async def _process_sku(db, client, campaign, sku: str, sku_name: str,
     # 7. 更新 ad_groups（用实际出价）
     _upsert_group(db, campaign, sku, sku_name, base_bid=base, last_auto=actual_bid)
 
-    # 8. 写日志（用实际出价）
+    # 8. 调前调后相同 → 不写日志（没有实际变化）
+    if abs(actual_bid - current_bid) < MIN_DIFF:
+        logger.info(f"SKU {sku} 出价未变 {current_bid:.0f}→{actual_bid:.0f}（平台最低限制）")
+        return "skipped"
+
+    # 9. 被 min bid 限制（目标和实际不同）→ 日志标注
+    was_limited = abs(actual_bid - target) >= MIN_DIFF
+    error_msg = f"受限于平台最低出价₽{actual_bid:.0f}（目标₽{target:.0f}）" if was_limited else None
+
     _write_log(
         db, campaign, sku, sku_name,
         old_bid=current_bid, new_bid=actual_bid,
         execute_type="time_pricing", time_period=period, period_ratio=ratio,
-        success=True,
+        success=True, error_msg=error_msg,
     )
 
     logger.info(
         f"SKU {sku} 调价 {current_bid:.0f}→{actual_bid:.0f}卢布 ({period}{ratio}%)"
+        + (f" [受限于平台最低]" if was_limited else "")
     )
     return "adjusted"
 
