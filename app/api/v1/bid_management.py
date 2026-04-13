@@ -633,7 +633,7 @@ async def sync_data(
 
     return success({
         "shop_id": shop.id,
-        "msg": f"{platform_label} 数据同步已在后台启动，预计1-2分钟完成。请稍后刷新查看。",
+        "msg": f"{platform_label} 数据同步已在后台启动，预计10-20分钟完成。请稍后刷新查看。",
         "synced": 0,
         "already_latest": False,
         "background": True,
