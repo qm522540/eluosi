@@ -597,8 +597,8 @@ const TimePricingConfig = ({ shopId, platform, activeMode, onSaved }) => {
       await enableTimePricing(shopId)
       message.success('分时调价已开启')
       // 启用时后端已立即执行一次，刷新SKU状态（不刷新页面）
+      await loadConfig()
       await loadStatus()
-      onSaved()
     } catch (e) {
       message.error(e?.message || '保存失败')
     } finally {
