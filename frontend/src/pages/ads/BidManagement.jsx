@@ -349,10 +349,11 @@ const BidLogs = ({ shopId, refreshKey }) => {
   }
 
   const TYPE_CONFIG = {
-    time_pricing: { color: 'blue', label: '分时调价' },
-    ai_auto:      { color: 'purple', label: 'AI自动' },
-    ai_manual:    { color: 'geekblue', label: 'AI建议确认' },
-    user_manual:  { color: 'default', label: '用户手动' },
+    time_pricing:  { color: 'blue', label: '分时调价' },
+    time_restore:  { color: 'cyan', label: '分时恢复' },
+    ai_auto:       { color: 'purple', label: 'AI自动' },
+    ai_manual:     { color: 'geekblue', label: 'AI建议确认' },
+    user_manual:   { color: 'default', label: '用户手动' },
   }
 
   const columns = [

@@ -441,7 +441,7 @@ async def disable(db, tenant_id: int, shop_id: int) -> dict:
                 errors.append(f"SKU {row.platform_group_id}: {err_msg}")
                 continue
 
-            # 写调价日志（execute_type='user_manual'，复用现有枚举）
+            # 写调价日志（关闭分时调价恢复原价）
             previous = float(row.last_auto_bid)
             pct = round((target_bid - previous) / previous * 100, 2) if previous > 0 else 0.0
             db.execute(text("""
@@ -453,7 +453,7 @@ async def disable(db, tenant_id: int, shop_id: int) -> dict:
                 ) VALUES (
                     :tenant_id, :shop_id, :campaign_id, :campaign_name,
                     :sku, NULL, :old_bid, :new_bid, :pct,
-                    'user_manual', 1, NOW()
+                    'time_restore', 1, NOW()
                 )
             """), {
                 "tenant_id": tenant_id,
