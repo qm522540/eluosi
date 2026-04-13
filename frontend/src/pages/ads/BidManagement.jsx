@@ -599,12 +599,11 @@ const TimePricingConfig = ({ shopId, platform, activeMode, onSaved }) => {
         mid_ratio: midRatio,
         low_ratio: lowRatio,
       })
-      await enableTimePricing(shopId)
       setLocalEnabled(true)
-      message.success('分时调价已开启')
+      const res = await enableTimePricing(shopId)
       // 启用时后端已立即执行一次，刷新SKU状态（不刷新页面）
-      await loadConfig()
       await loadStatus()
+      message.success('分时调价已开启')
     } catch (e) {
       message.error(e?.message || '保存失败')
     } finally {
@@ -911,7 +910,7 @@ const TimePricingConfig = ({ shopId, platform, activeMode, onSaved }) => {
                         } else {
                           message.success('分时调价已关闭')
                         }
-                        onSaved()
+                        setLocalEnabled(false)
                       } catch (e) {
                         message.error(e?.message || '关闭失败')
                       } finally {
