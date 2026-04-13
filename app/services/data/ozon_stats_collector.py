@@ -106,7 +106,8 @@ async def _fetch_seller_analytics(
 ) -> int:
     """通过 Seller API /v1/analytics/data 拉取 SKU 级运营数据
 
-    指标：revenue（收入）、ordered_units（订单量）、hits_view（商品页浏览）、session_view（会话数）
+    指标：revenue（收入）、ordered_units（订单量）
+    注：hits_view/session_view/adv_* 等流量和广告指标已被Ozon废弃(deprecated)
     维度：sku + day
     """
     headers = {
@@ -115,7 +116,7 @@ async def _fetch_seller_analytics(
         "Content-Type": "application/json",
     }
 
-    # 构建虚拟 campaign 用于存储（Ozon 运营数据不区分活动，挂到第一个活动下）
+    # Ozon 运营数据不区分活动，挂到第一个活动下
     campaign = db.query(AdCampaign).filter(
         AdCampaign.shop_id == shop.id,
         AdCampaign.tenant_id == tenant_id,
@@ -139,12 +140,7 @@ async def _fetch_seller_analytics(
                     json={
                         "date_from": date_from.strftime("%Y-%m-%d"),
                         "date_to": date_to.strftime("%Y-%m-%d"),
-                        "metrics": [
-                            "revenue",
-                            "ordered_units",
-                            "hits_view",
-                            "session_view",
-                        ],
+                        "metrics": ["revenue", "ordered_units"],
                         "dimension": ["sku", "day"],
                         "limit": limit,
                         "offset": offset,
@@ -169,27 +165,26 @@ async def _fetch_seller_analytics(
 
             for row in rows:
                 dims = row.get("dimensions", [])
-                metrics = row.get("metrics", [])
-                if len(dims) < 2 or len(metrics) < 2:
+                metrics_val = row.get("metrics", [])
+                if len(dims) < 2 or len(metrics_val) < 2:
                     continue
 
                 sku_id = dims[0].get("id", "")
-                sku_name = dims[0].get("name", "")
                 stat_date = dims[1].get("id", "")[:10]
                 if not stat_date or not sku_id:
                     continue
 
-                revenue = float(metrics[0]) if metrics[0] else 0
-                orders = int(metrics[1]) if metrics[1] else 0
-                impressions = int(metrics[2]) if len(metrics) > 2 and metrics[2] else 0
-                clicks = int(metrics[3]) if len(metrics) > 3 and metrics[3] else 0
+                revenue = float(metrics_val[0]) if metrics_val[0] else 0
+                orders = int(metrics_val[1]) if metrics_val[1] else 0
 
-                if revenue == 0 and orders == 0 and impressions == 0:
+                if revenue == 0 and orders == 0:
                     continue
 
-                # 计算衍生指标
-                spend = 0  # 运营数据无广告花费，spend=0
-                ctr = round(clicks / impressions * 100, 4) if impressions > 0 else 0
+                # 广告指标暂不可用（Ozon API 已废弃流量指标，等活动恢复投放后走 Performance API）
+                impressions = 0
+                clicks = 0
+                spend = 0
+                ctr = 0
                 cpc = 0
                 roas = 0
                 acos = 0
