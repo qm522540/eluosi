@@ -111,7 +111,7 @@ const TodaySummaryCards = ({ shopId }) => {
 
 // ==================== 主组件 ====================
 
-const AdsOverview = ({ shopId, platform, shops, searched }) => {
+const AdsOverview = ({ shopId, platform, shops, searched, syncing, lastSyncTime, onSync }) => {
   // 汇总数据
   const [summary, setSummary] = useState(null)
   const [summaryLoading, setSummaryLoading] = useState(false)
@@ -850,7 +850,35 @@ const AdsOverview = ({ shopId, platform, shops, searched }) => {
       <TodaySummaryCards shopId={shopId} />
 
       {/* 活动列表 */}
-      <Card title="活动列表" size="small" style={{ marginBottom: 24 }}>
+      <Card
+        title="活动列表"
+        size="small"
+        style={{ marginBottom: 24 }}
+        extra={
+          <Space size={8} style={{ alignItems: 'center' }}>
+            {lastSyncTime && !syncing && (
+              <span style={{ fontSize: 12, color: '#999' }}>
+                {(() => {
+                  const diff = Math.round((Date.now() - new Date(lastSyncTime).getTime()) / 60000)
+                  if (diff < 1) return '刚刚同步'
+                  if (diff < 60) return `${diff}分钟前同步`
+                  return `${Math.round(diff / 60)}小时前同步`
+                })()}
+              </span>
+            )}
+            <Tooltip title={lastSyncTime ? `上次同步：${new Date(lastSyncTime).toLocaleString()}` : '从平台拉取最新活动列表'}>
+              <Button
+                size="small"
+                icon={<SyncOutlined spin={syncing} />}
+                onClick={onSync}
+                loading={syncing}
+              >
+                {syncing ? '同步中' : '同步数据'}
+              </Button>
+            </Tooltip>
+          </Space>
+        }
+      >
         <Table columns={tableColumns} dataSource={campaigns} rowKey="id" loading={listLoading}
           scroll={{ x: 'max-content' }}
           pagination={{

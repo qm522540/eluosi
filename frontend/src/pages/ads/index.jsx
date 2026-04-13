@@ -112,39 +112,7 @@ const Ads = () => {
     }
   }
 
-  // Tab栏右侧额外内容：同步按钮（跟随已确认的店铺）
-  const tabBarExtra = (committedPlatform && committedShopId) ? (
-    <Space size={8} style={{ paddingRight: 4, alignItems: 'center' }}>
-      {lastSyncTime && !syncing && (
-        <span style={{ fontSize: 12, color: 'var(--color-text-secondary, #999)', whiteSpace: 'nowrap' }}>
-          {dayjs(lastSyncTime).fromNow()}同步
-        </span>
-      )}
-      <Tooltip
-        title={
-          lastSyncTime
-            ? `上次同步：${dayjs(lastSyncTime).format('MM-DD HH:mm')}`
-            : '从平台拉取最新活动列表和状态'
-        }
-        placement="bottomRight"
-      >
-        <Button
-          size="small"
-          icon={<SyncOutlined spin={syncing} />}
-          onClick={handleSync}
-          loading={syncing}
-          style={{
-            fontSize: 13,
-            color: 'var(--color-text-secondary, #999)',
-            border: '1px solid var(--color-border-tertiary, #e8e8e8)',
-            background: 'transparent',
-          }}
-        >
-          {syncing ? '同步中' : '同步数据'}
-        </Button>
-      </Tooltip>
-    </Space>
-  ) : null
+  const tabBarExtra = null
 
   return (
     <div>
@@ -186,7 +154,7 @@ const Ads = () => {
           {
             key: 'overview',
             label: '概览',
-            children: <AdsOverview shopId={committedShopId} platform={committedPlatform} shops={shops} searched={searched} />,
+            children: <AdsOverview shopId={committedShopId} platform={committedPlatform} shops={shops} searched={searched} syncing={syncing} lastSyncTime={lastSyncTime} onSync={handleSync} />,
           },
           {
             key: 'rules',
