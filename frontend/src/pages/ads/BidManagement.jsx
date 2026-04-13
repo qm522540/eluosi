@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { useAuthStore } from '../../stores/authStore'
 import {
-  Button, Modal, message, Switch,
+  Button, Modal, message, Switch, Empty,
   Table, Tag, Tooltip, Space,
   InputNumber, Collapse, Spin, Badge,
   Card, Row, Col, Select, Alert,
@@ -2029,15 +2029,7 @@ const BidManagement = ({ shopId, platform }) => {
   }
 
   if (!shopId) {
-    return (
-      <div style={{
-        textAlign: 'center',
-        padding: '60px 0',
-        color: 'var(--color-text-secondary, #666)',
-      }}>
-        请选择平台和店铺后点击确定
-      </div>
-    )
+    return <Card><Empty description="请选择平台和店铺后点击确定" /></Card>
   }
 
   if (loading) return <Spin />
