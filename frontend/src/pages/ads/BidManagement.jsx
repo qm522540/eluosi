@@ -595,31 +595,10 @@ const TimePricingConfig = ({ shopId, platform, activeMode, onSaved }) => {
         low_ratio: lowRatio,
       })
       await enableTimePricing(shopId)
-
-      // 检测当前是否为平谷期
-      const moscowH = getMoscowHour()
-      const allHours = new Set([...peakHours, ...midHours, ...lowHours])
-      if (!allHours.has(moscowH)) {
-        const next = getNextActiveSlot(moscowH)
-        if (next) {
-          const dayStr = next.tomorrow ? '明天' : '今天'
-          const hourStr = String(next.h).padStart(2, '0')
-          Modal.info({
-            title: '分时调价已开启',
-            content: (
-              <div style={{ lineHeight: 1.8 }}>
-                <p>当前莫斯科时间 {String(moscowH).padStart(2, '0')}:00 处于<b>平谷期</b>，系统暂不调整出价。</p>
-                <p>下次自动调价将在莫斯科时间 <b>{dayStr} {hourStr}:05</b> 执行（{next.label}时段，出价系数 {next.ratio}%）。</p>
-              </div>
-            ),
-            okText: '我知道了',
-          })
-        } else {
-          message.success('分时调价已开启')
-        }
-      } else {
-        message.success('分时调价已开启，将在本小时第 5 分钟首次执行')
-      }
+      setEnabled(true)
+      message.success('分时调价已开启')
+      // 启用时后端已立即执行一次，刷新SKU状态（不刷新页面）
+      await loadStatus()
       onSaved()
     } catch (e) {
       message.error(e?.message || '保存失败')

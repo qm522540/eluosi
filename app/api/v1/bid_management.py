@@ -140,14 +140,20 @@ def update_time_pricing(
 
 
 @router.post("/time-pricing/{shop_id}/enable")
-def enable_time_pricing(
+async def enable_time_pricing(
     shop: Shop = Depends(get_owned_shop),
     db: Session = Depends(get_db),
 ):
-    from app.services.bid.time_pricing_executor import enable
+    from app.services.bid.time_pricing_executor import enable, execute
     result = enable(db, shop.tenant_id, shop.id)
     if result.get("code") != 0:
         return error(result["code"], result.get("msg") or "")
+    # 启用后立即执行一次（填充 ad_groups + original_bid）
+    try:
+        exec_result = await execute(db, shop.id, shop.tenant_id)
+        logger.info(f"分时调价启用后立即执行: {exec_result}")
+    except Exception as e:
+        logger.warning(f"分时调价启用后执行失败（不影响启用）: {e}")
     return success({"shop_id": shop.id, "is_active": True, "next_execute_at": _next_execute_str()})
 
 
