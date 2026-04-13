@@ -628,93 +628,138 @@ def reject_batch(db, tenant_id: int, ids: list) -> dict:
 # ==================== SKU 历史数据查询 ====================
 
 def _query_sku_history(db, shop_id: int, tenant_id: int, platform: str) -> dict:
-    """查询最近 7 天每个 SKU 的汇总数据
-
-    WB: ad_group_id = nm_id（SKU 级）
-    Ozon: ad_group_id 可能为 NULL（活动级），key 用 campaign_id_0
+    """查询最近 7 天每个 SKU 的数据，拆成前4天和后3天两段 + 7天汇总
 
     Returns:
-        {"campaign_id_sku": {impressions, clicks, spend, orders, revenue, ctr, roas, days}, ...}
+        {"campaign_id_sku": {
+            "total": {impressions, clicks, spend, orders, revenue, ctr, cpc, cr, roas, days},
+            "prev4": {同上，前4天},
+            "last3": {同上，后3天},
+            "trend": "up" | "down" | "stable" | "new"  # ROAS趋势
+        }, ...}
     """
     from datetime import date, timedelta
-    cutoff = date.today() - timedelta(days=7)
+    today = date.today()
+    cutoff_7 = today - timedelta(days=7)
+    cutoff_3 = today - timedelta(days=3)  # 后3天 = cutoff_3 ~ yesterday
 
+    # 根据平台选择 group by 字段
     if platform == "wb":
-        # WB 有 SKU 级数据（ad_group_id = nm_id）
-        rows = db.execute(text("""
-            SELECT
-                s.campaign_id,
-                s.ad_group_id AS sku_id,
-                SUM(s.impressions) AS impressions,
-                SUM(s.clicks) AS clicks,
-                SUM(s.spend) AS spend,
-                SUM(s.orders) AS orders,
-                SUM(s.revenue) AS revenue,
-                COUNT(DISTINCT s.stat_date) AS days
-            FROM ad_stats s
-            JOIN ad_campaigns c ON s.campaign_id = c.id
-            WHERE c.shop_id = :shop_id
-              AND c.tenant_id = :tenant_id
-              AND s.platform = :platform
-              AND s.stat_date >= :cutoff
-              AND s.ad_group_id IS NOT NULL
-            GROUP BY s.campaign_id, s.ad_group_id
-        """), {
-            "shop_id": shop_id, "tenant_id": tenant_id,
-            "platform": platform, "cutoff": cutoff,
-        }).fetchall()
+        sku_col = "s.ad_group_id"
+        sku_filter = "AND s.ad_group_id IS NOT NULL"
     else:
-        # Ozon 目前只有活动级数据，key 用 campaign_id + "0"
-        rows = db.execute(text("""
-            SELECT
-                s.campaign_id,
-                0 AS sku_id,
-                SUM(s.impressions) AS impressions,
-                SUM(s.clicks) AS clicks,
-                SUM(s.spend) AS spend,
-                SUM(s.orders) AS orders,
-                SUM(s.revenue) AS revenue,
-                COUNT(DISTINCT s.stat_date) AS days
-            FROM ad_stats s
-            JOIN ad_campaigns c ON s.campaign_id = c.id
-            WHERE c.shop_id = :shop_id
-              AND c.tenant_id = :tenant_id
-              AND s.platform = :platform
-              AND s.stat_date >= :cutoff
-            GROUP BY s.campaign_id
-        """), {
-            "shop_id": shop_id, "tenant_id": tenant_id,
-            "platform": platform, "cutoff": cutoff,
-        }).fetchall()
+        sku_col = "COALESCE(s.ad_group_id, 0)"
+        sku_filter = ""
 
-    result = {}
+    # 一次查出所有7天数据，按日期分段聚合
+    sql = f"""
+        SELECT
+            s.campaign_id,
+            {sku_col} AS sku_id,
+            CASE WHEN s.stat_date >= :cutoff_3 THEN 'last3' ELSE 'prev4' END AS period,
+            SUM(s.impressions) AS impressions,
+            SUM(s.clicks) AS clicks,
+            SUM(s.spend) AS spend,
+            SUM(s.orders) AS orders,
+            SUM(s.revenue) AS revenue,
+            COUNT(DISTINCT s.stat_date) AS days
+        FROM ad_stats s
+        JOIN ad_campaigns c ON s.campaign_id = c.id
+        WHERE c.shop_id = :shop_id
+          AND c.tenant_id = :tenant_id
+          AND s.platform = :platform
+          AND s.stat_date >= :cutoff_7
+          {sku_filter}
+        GROUP BY s.campaign_id, {sku_col}, period
+    """
+    rows = db.execute(text(sql), {
+        "shop_id": shop_id, "tenant_id": tenant_id,
+        "platform": platform, "cutoff_7": cutoff_7, "cutoff_3": cutoff_3,
+    }).fetchall()
+
+    # 按 key 聚合
+    raw = {}
     for r in rows:
-        impressions = int(r.impressions or 0)
-        clicks = int(r.clicks or 0)
-        spend = float(r.spend or 0)
-        orders = int(r.orders or 0)
-        revenue = float(r.revenue or 0)
-        ctr = round(clicks / impressions * 100, 2) if impressions > 0 else 0
-        roas = round(revenue / spend, 2) if spend > 0 else 0
-        cpc = round(spend / clicks, 2) if clicks > 0 else 0
-        cr = round(orders / clicks * 100, 2) if clicks > 0 else 0
-
         key = f"{r.campaign_id}_{r.sku_id}"
+        if key not in raw:
+            raw[key] = {"prev4": None, "last3": None}
+        raw[key][r.period] = _calc_metrics(r)
+
+    # 组装结果
+    result = {}
+    for key, periods in raw.items():
+        p4 = periods["prev4"] or _empty_metrics()
+        l3 = periods["last3"] or _empty_metrics()
+
+        # 7天汇总
+        total = _merge_metrics(p4, l3)
+
+        # 趋势判断
+        if p4["days"] == 0 and l3["days"] == 0:
+            trend = "new"
+        elif p4["days"] == 0:
+            trend = "new"
+        elif l3["roas"] > p4["roas"] * 1.05:
+            trend = "up"
+        elif l3["roas"] < p4["roas"] * 0.95:
+            trend = "down"
+        else:
+            trend = "stable"
+
         result[key] = {
-            "impressions": impressions,
-            "clicks": clicks,
-            "spend": round(spend, 2),
-            "orders": orders,
-            "revenue": round(revenue, 2),
-            "ctr": ctr,
-            "cpc": cpc,
-            "cr": cr,
-            "roas": roas,
-            "days": int(r.days),
+            **total,  # 兼容旧代码直接取 total 字段
+            "prev4": p4,
+            "last3": l3,
+            "trend": trend,
         }
 
     logger.info(f"shop_id={shop_id} SKU 历史数据: {len(result)} 条 (platform={platform})")
     return result
+
+
+def _calc_metrics(r) -> dict:
+    impressions = int(r.impressions or 0)
+    clicks = int(r.clicks or 0)
+    spend = float(r.spend or 0)
+    orders = int(r.orders or 0)
+    revenue = float(r.revenue or 0)
+    return {
+        "impressions": impressions,
+        "clicks": clicks,
+        "spend": round(spend, 2),
+        "orders": orders,
+        "revenue": round(revenue, 2),
+        "ctr": round(clicks / impressions * 100, 2) if impressions > 0 else 0,
+        "cpc": round(spend / clicks, 2) if clicks > 0 else 0,
+        "cr": round(orders / clicks * 100, 2) if clicks > 0 else 0,
+        "roas": round(revenue / spend, 2) if spend > 0 else 0,
+        "days": int(r.days),
+    }
+
+
+def _empty_metrics() -> dict:
+    return {"impressions": 0, "clicks": 0, "spend": 0, "orders": 0,
+            "revenue": 0, "ctr": 0, "cpc": 0, "cr": 0, "roas": 0, "days": 0}
+
+
+def _merge_metrics(a: dict, b: dict) -> dict:
+    impressions = a["impressions"] + b["impressions"]
+    clicks = a["clicks"] + b["clicks"]
+    spend = round(a["spend"] + b["spend"], 2)
+    orders = a["orders"] + b["orders"]
+    revenue = round(a["revenue"] + b["revenue"], 2)
+    return {
+        "impressions": impressions,
+        "clicks": clicks,
+        "spend": spend,
+        "orders": orders,
+        "revenue": revenue,
+        "ctr": round(clicks / impressions * 100, 2) if impressions > 0 else 0,
+        "cpc": round(spend / clicks, 2) if clicks > 0 else 0,
+        "cr": round(orders / clicks * 100, 2) if clicks > 0 else 0,
+        "roas": round(revenue / spend, 2) if spend > 0 else 0,
+        "days": a["days"] + b["days"],
+    }
 
 
 # ==================== 平台抽象 ====================
@@ -866,10 +911,16 @@ async def _call_ai(template: dict, campaigns: list, products_by_campaign: dict,
                 "name": name,
                 "bid": round(bid_rub, 2),
             }
-            # 附加历史数据（按 campaign_id + sku 查，WB 用 ad_group_id=nm_id）
+            # 附加历史数据（含趋势：prev4/last3/trend）
             stats_key = f"{camp.id}_{sku}"
             if stats_key in sku_stats:
-                item["stats_7d"] = sku_stats[stats_key]
+                s = sku_stats[stats_key]
+                item["stats_7d"] = {k: s[k] for k in
+                    ["impressions","clicks","spend","orders","revenue","ctr","cpc","cr","roas","days"]
+                    if k in s}
+                item["prev4"] = s.get("prev4")
+                item["last3"] = s.get("last3")
+                item["trend"] = s.get("trend", "new")
 
             items.append(item)
         if items:
@@ -892,30 +943,30 @@ async def _call_ai(template: dict, campaigns: list, products_by_campaign: dict,
     history_section = ""
     if has_history:
         history_section = """
-每个商品的 stats_7d 字段是最近7天汇总数据：
-- impressions: 展示次数
-- clicks: 点击次数
-- spend: 花费（卢布）
-- orders: 订单数
-- revenue: 收入（卢布）
-- ctr: 点击率(%)
-- cpc: 单次点击成本（卢布），spend/clicks
-- cr: 转化率(%)，orders/clicks
-- roas: 广告回报率（收入/花费）
-- days: 有数据的天数
+每个商品有三段数据（stats_7d / prev4 / last3）：
+- stats_7d: 最近7天汇总（impressions, clicks, spend, orders, revenue, ctr, cpc, cr, roas, days）
+- prev4: 前4天汇总（同上字段）
+- last3: 后3天汇总（同上字段）
+- trend: "up"=ROAS上升 / "down"=ROAS下降 / "stable"=持平 / "new"=数据不足
 
-请基于历史数据判断商品阶段和调价方向：
+**核心目标：ROAS 最大化**（不是达到目标就好，而是让 ROAS 尽可能大）
 
-ROAS 三档决策：
-- ROAS >= 目标ROAS → growing，效果好，适当加价扩量抢更多流量
-- 最低ROAS <= ROAS < 目标ROAS → testing，效果一般，小幅降价控成本，向目标靠拢
-- ROAS < 最低ROAS → declining，亏损状态，大幅降价止损（建议降到更低价格）
+决策逻辑（按优先级）：
 
-其他判断维度：
-- cpc 过高但 cr 尚可 → 出价偏高，适当降价控成本
-- 有展示无点击（ctr极低） → 素材/相关性问题，不建议加价
-- 有点击无订单（cr=0）且数据天数少 → cold_start，保持观望或小幅试探
-- 无 stats_7d 的商品按 cold_start_baseline 处理，给一个保守出价
+1. **冷启动**（days < 3 或 trend="new"）→ 保持当前出价不动，数据太少不做判断
+2. **ROAS < 最低ROAS + 趋势下降或持平** → 大幅降价止损，降到当前出价的70%
+3. **ROAS < 最低ROAS + 趋势上升** → 小幅降价或不动，正在恢复中
+4. **ROAS 在目标附近 + 趋势稳定** → 不动，保持当前最优状态
+5. **ROAS > 目标 + 趋势稳定或上升** → 小幅加价试探（5-15%），争取更多流量
+6. **ROAS > 目标 + 趋势下降**（说明上次加价过了）→ 降回去，之前的出价更好
+7. **有点击无订单（cr=0）+ 花费持续** → 降价，不适合继续高投入
+8. **有展示无点击（ctr极低）** → 不建议加价，素材/相关性问题
+
+关键原则：
+- 加价后 ROAS 变小 = 浪费资金，应回撤到之前的出价
+- 每次调整幅度要小（5-15%），观察效果后再决定
+- min_roas 是硬止损线
+- 无 stats_7d 的商品按 cold_start 处理
 """
 
     prompt = f"""你是{platform_label}广告优化专家。基于商品的历史表现数据和当前出价，给出CPM出价调整建议。
@@ -1088,30 +1139,30 @@ async def analyze_stream(db, tenant_id: int, shop_id: int,
         history_section = ""
         if has_history:
             history_section = """
-每个商品的 stats_7d 字段是最近7天汇总数据：
-- impressions: 展示次数
-- clicks: 点击次数
-- spend: 花费（卢布）
-- orders: 订单数
-- revenue: 收入（卢布）
-- ctr: 点击率(%)
-- cpc: 单次点击成本（卢布），spend/clicks
-- cr: 转化率(%)，orders/clicks
-- roas: 广告回报率（收入/花费）
-- days: 有数据的天数
+每个商品有三段数据（stats_7d / prev4 / last3）：
+- stats_7d: 最近7天汇总（impressions, clicks, spend, orders, revenue, ctr, cpc, cr, roas, days）
+- prev4: 前4天汇总（同上字段）
+- last3: 后3天汇总（同上字段）
+- trend: "up"=ROAS上升 / "down"=ROAS下降 / "stable"=持平 / "new"=数据不足
 
-请基于历史数据判断商品阶段和调价方向：
+**核心目标：ROAS 最大化**（不是达到目标就好，而是让 ROAS 尽可能大）
 
-ROAS 三档决策：
-- ROAS >= 目标ROAS → growing，效果好，适当加价扩量抢更多流量
-- 最低ROAS <= ROAS < 目标ROAS → testing，效果一般，小幅降价控成本，向目标靠拢
-- ROAS < 最低ROAS → declining，亏损状态，大幅降价止损（建议降到更低价格）
+决策逻辑（按优先级）：
 
-其他判断维度：
-- cpc 过高但 cr 尚可 → 出价偏高，适当降价控成本
-- 有展示无点击（ctr极低） → 素材/相关性问题，不建议加价
-- 有点击无订单（cr=0）且数据天数少 → cold_start，保持观望或小幅试探
-- 无 stats_7d 的商品按 cold_start_baseline 处理，给一个保守出价
+1. **冷启动**（days < 3 或 trend="new"）→ 保持当前出价不动，数据太少不做判断
+2. **ROAS < 最低ROAS + 趋势下降或持平** → 大幅降价止损，降到当前出价的70%
+3. **ROAS < 最低ROAS + 趋势上升** → 小幅降价或不动，正在恢复中
+4. **ROAS 在目标附近 + 趋势稳定** → 不动，保持当前最优状态
+5. **ROAS > 目标 + 趋势稳定或上升** → 小幅加价试探（5-15%），争取更多流量
+6. **ROAS > 目标 + 趋势下降**（说明上次加价过了）→ 降回去，之前的出价更好
+7. **有点击无订单（cr=0）+ 花费持续** → 降价，不适合继续高投入
+8. **有展示无点击（ctr极低）** → 不建议加价，素材/相关性问题
+
+关键原则：
+- 加价后 ROAS 变小 = 浪费资金，应回撤到之前的出价
+- 每次调整幅度要小（5-15%），观察效果后再决定
+- min_roas 是硬止损线
+- 无 stats_7d 的商品按 cold_start 处理
 """
 
         prompt = f"""你是{platform_label}广告优化专家。基于商品的历史表现数据和当前出价，给出CPM出价调整建议。
