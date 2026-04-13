@@ -462,7 +462,11 @@ const BidLogs = ({ shopId, refreshKey }) => {
 // ==========================================
 const TimePricingConfig = ({ shopId, platform, activeMode, onSaved }) => {
   const platformLabel = platform === 'wb' ? 'WB' : 'Ozon'
-  const isEnabled = activeMode === 'time_pricing'
+  const [localEnabled, setLocalEnabled] = useState(null)
+  const isEnabled = localEnabled !== null ? localEnabled : activeMode === 'time_pricing'
+
+  // 父组件 activeMode 变化时同步
+  useEffect(() => { setLocalEnabled(null) }, [activeMode])
   const [peakHours, setPeakHours] = useState(DEFAULT_PEAK_HOURS)
   const [midHours, setMidHours] = useState(DEFAULT_MID_HOURS)
   const [lowHours, setLowHours] = useState(DEFAULT_LOW_HOURS)
@@ -596,6 +600,7 @@ const TimePricingConfig = ({ shopId, platform, activeMode, onSaved }) => {
         low_ratio: lowRatio,
       })
       await enableTimePricing(shopId)
+      setLocalEnabled(true)
       message.success('分时调价已开启')
       // 启用时后端已立即执行一次，刷新SKU状态（不刷新页面）
       await loadConfig()
