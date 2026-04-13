@@ -68,12 +68,17 @@ async def execute(db, shop_id: int, tenant_id: int = None) -> dict:
 
     period = get_current_period(rule)
     if not period:
-        # 平谷期：当前小时不在 peak/mid/low 任一档里 → ratio=100 保持原价，但仍遍历商品填充 ad_groups
-        period = "base"
-        ratio = 100
-        logger.info(f"shop_id={shop_id} 当前莫斯科{moscow_hour()}点为平谷期，ratio=100%")
-    else:
-        ratio = {"peak": rule.peak_ratio, "mid": rule.mid_ratio, "low": rule.low_ratio}[period]
+        # 平谷期：不调价、不遍历商品、不记日志
+        mh = moscow_hour()
+        # 找下一个有配置的时段
+        next_info = _find_next_period(rule, mh)
+        counters["period"] = "base"
+        counters["next_period"] = next_info
+        logger.info(f"shop_id={shop_id} 莫斯科{mh}点平谷期，不调价")
+        _save_result(db, shop_id, tenant_id, counters, f"平谷期({mh}:00)")
+        return counters
+
+    ratio = {"peak": rule.peak_ratio, "mid": rule.mid_ratio, "low": rule.low_ratio}[period]
     counters["period"] = period
 
     from app.models.shop import Shop
@@ -724,6 +729,39 @@ def _write_log(db, campaign, sku: str, sku_name: str,
         "success": 1 if success else 0,
         "error_msg": (error_msg or "")[:500] if error_msg else None,
     })
+
+
+def _find_next_period(rule, current_hour: int) -> dict:
+    """从当前小时往后找下一个有配置的时段"""
+    peak_hours = _parse_hours(rule.peak_hours)
+    mid_hours = _parse_hours(rule.mid_hours)
+    low_hours = _parse_hours(rule.low_hours)
+    labels = {"peak": "高峰期", "mid": "次高峰期", "low": "低谷期"}
+    ratios = {"peak": rule.peak_ratio, "mid": rule.mid_ratio, "low": rule.low_ratio}
+
+    for offset in range(1, 25):
+        h = (current_hour + offset) % 24
+        for period, hours in [("peak", peak_hours), ("mid", mid_hours), ("low", low_hours)]:
+            if h in hours:
+                return {
+                    "hour": h,
+                    "period": period,
+                    "label": labels[period],
+                    "ratio": ratios[period],
+                    "tomorrow": (current_hour + offset) >= 24,
+                }
+    return None
+
+
+def _parse_hours(val):
+    """兼容 JSON 字符串或列表"""
+    if isinstance(val, str):
+        import json
+        try:
+            return set(json.loads(val))
+        except (ValueError, TypeError):
+            return set()
+    return set(val or [])
 
 
 def _save_result(db, shop_id: int, tenant_id: int, counters: dict, summary: str):

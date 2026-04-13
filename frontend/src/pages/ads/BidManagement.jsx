@@ -959,7 +959,38 @@ const TimePricingConfig = ({ shopId, platform, activeMode, onSaved }) => {
       </Modal>
 
       {/* 执行状态 - 仅在分时调价开启时显示 */}
-      {isEnabled && (
+      {isEnabled && (() => {
+        const moscowH = getMoscowHour()
+        const allConfigured = new Set([...peakHours, ...midHours, ...lowHours])
+        const isBasePeriod = !allConfigured.has(moscowH)
+
+        if (isBasePeriod) {
+          // 找下一个时段
+          let nextInfo = null
+          for (let offset = 1; offset < 25; offset++) {
+            const h = (moscowH + offset) % 24
+            if (peakHours.includes(h)) { nextInfo = { h, label: '高峰期', ratio: peakRatio, tomorrow: moscowH + offset >= 24 }; break }
+            if (midHours.includes(h)) { nextInfo = { h, label: '次高峰期', ratio: midRatio, tomorrow: moscowH + offset >= 24 }; break }
+            if (lowHours.includes(h)) { nextInfo = { h, label: '低谷期', ratio: lowRatio, tomorrow: moscowH + offset >= 24 }; break }
+          }
+          return (
+            <div style={{
+              background: '#fafafa', border: '0.5px solid #e8e8e8',
+              borderRadius: 8, padding: '24px 14px', marginBottom: 10, textAlign: 'center',
+            }}>
+              <div style={{ fontSize: 14, fontWeight: 500, color: '#666', marginBottom: 8 }}>
+                当前莫斯科时间 {String(moscowH).padStart(2, '0')}:00 为平谷期，暂不调价
+              </div>
+              {nextInfo && (
+                <div style={{ fontSize: 13, color: '#999' }}>
+                  下次调价：{nextInfo.tomorrow ? '明天' : '今天'} {String(nextInfo.h).padStart(2, '0')}:05（{nextInfo.label}，系数 {nextInfo.ratio}%）
+                </div>
+              )}
+            </div>
+          )
+        }
+
+        return (
         <div style={{
           background: 'var(--color-background-primary, #fff)',
           border: '0.5px solid var(--color-border-tertiary, #e8e8e8)',
@@ -987,7 +1018,8 @@ const TimePricingConfig = ({ shopId, platform, activeMode, onSaved }) => {
             rowClassName={r => (r.isGroup ? 'campaign-group-row' : '')}
           />
         </div>
-      )}
+        )
+      })()}
 
       {/* 调价历史 */}
       <BidLogs shopId={shopId} />
