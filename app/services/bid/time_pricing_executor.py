@@ -648,8 +648,8 @@ def _rows_to_groups(rows) -> dict:
             groups[cid]["skus"].append({
                 "platform_sku_id": r.sku,
                 "sku_name": r.sku_name,
-                "original_bid": float(r.original_bid or 0),
-                "current_bid": float(r.current_bid or 0),
+                "original_bid": float(r.original_bid or r.last_auto_bid or r.current_bid or 0),
+                "current_bid": float(r.last_auto_bid or r.current_bid or r.original_bid or 0),
                 "last_auto_bid": float(r.last_auto_bid or 0),
                 "period": None,
                 "ratio": None,
