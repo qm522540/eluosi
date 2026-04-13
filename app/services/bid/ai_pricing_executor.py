@@ -325,7 +325,8 @@ async def _analyze_now_inner(db, tenant_id: int, shop_id: int,
         # 安全护栏
         max_bid = float(template.get("max_bid", 999))
         max_pct = float(template.get("max_adjust_pct", 30))
-        suggested_bid = max(suggested_bid, MIN_BID)
+        min_floor = max(MIN_BID, current_bid * 0.6) if current_bid > 0 else MIN_BID
+        suggested_bid = max(suggested_bid, min_floor)
         suggested_bid = min(suggested_bid, max_bid)
         if current_bid > 0:
             change_pct = abs(suggested_bid - current_bid) / current_bid * 100
@@ -924,6 +925,7 @@ ROAS 三档决策：
 - 最低ROAS: {template.get('min_roas')}（止损线，ROAS低于此值必须降价或暂停）
 - 最高出价: {template.get('max_bid')}卢布（硬上限，suggested_bid 绝不能超过此值）
 - 单次最大调幅: {template.get('max_adjust_pct')}%（单次调整幅度不得超过此百分比）
+- 最低出价限制: 平台对每个活动有最低出价限制（通常₽50-100），suggested_bid 不要低于当前出价的60%，避免因低于平台限额而执行失败
 {history_section}
 【活动和商品数据（出价单位：卢布）】
 {json.dumps(prompt_data, ensure_ascii=False)}
@@ -1119,6 +1121,7 @@ ROAS 三档决策：
 - 最低ROAS: {template.get('min_roas')}（止损线，ROAS低于此值必须降价或暂停）
 - 最高出价: {template.get('max_bid')}卢布（硬上限，suggested_bid 绝不能超过此值）
 - 单次最大调幅: {template.get('max_adjust_pct')}%（单次调整幅度不得超过此百分比）
+- 最低出价限制: 平台对每个活动有最低出价限制（通常₽50-100），suggested_bid 不要低于当前出价的60%，避免因低于平台限额而执行失败
 {history_section}
 【活动和商品数据（出价单位：卢布）】
 {json.dumps(prompt_data, ensure_ascii=False)}
