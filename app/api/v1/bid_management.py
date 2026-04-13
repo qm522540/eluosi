@@ -418,6 +418,55 @@ def reject_suggestion(
     return success(result.get("data") or {})
 
 
+@router.post("/suggestions/{suggestion_id}/remove-product")
+async def remove_product_from_campaign(
+    suggestion_id: int,
+    db: Session = Depends(get_db),
+    tenant_id: int = Depends(get_tenant_id),
+):
+    """从平台活动中移除商品（建议删除）"""
+    row = db.execute(text("""
+        SELECT s.id, s.shop_id, s.campaign_id, s.platform_sku_id, s.sku_name,
+               c.platform_campaign_id, c.name AS campaign_name
+        FROM ai_pricing_suggestions s
+        JOIN ad_campaigns c ON s.campaign_id = c.id
+        WHERE s.id = :id AND s.tenant_id = :tenant_id
+    """), {"id": suggestion_id, "tenant_id": tenant_id}).fetchone()
+
+    if not row:
+        return error(ErrorCode.BID_SUGGESTION_NOT_FOUND, "建议不存在")
+
+    from app.models.shop import Shop
+    shop = db.query(Shop).filter(Shop.id == row.shop_id, Shop.tenant_id == tenant_id).first()
+    if not shop:
+        return error(ErrorCode.SHOP_NOT_FOUND, "店铺不存在")
+
+    from app.services.bid.ai_pricing_executor import _create_platform_client
+    client = _create_platform_client(shop)
+    try:
+        result = await client.remove_campaign_product(
+            str(row.platform_campaign_id), str(row.platform_sku_id)
+        )
+    finally:
+        await client.close()
+
+    if not result.get("ok"):
+        return error(ErrorCode.BID_EXECUTION_FAILED, result.get("error") or "移除失败")
+
+    # 标记建议为 rejected
+    db.execute(text("""
+        UPDATE ai_pricing_suggestions SET status = 'rejected' WHERE id = :id AND tenant_id = :tid
+    """), {"id": suggestion_id, "tid": tenant_id})
+    # 删除 ad_groups 记录
+    db.execute(text("""
+        DELETE FROM ad_groups WHERE campaign_id = :cid AND platform_group_id = :sku AND tenant_id = :tid
+    """), {"cid": row.campaign_id, "sku": row.platform_sku_id, "tid": tenant_id})
+    db.commit()
+
+    logger.info(f"移除商品 campaign={row.campaign_name} sku={row.platform_sku_id}")
+    return success({"removed": True, "campaign": row.campaign_name, "sku": row.platform_sku_id})
+
+
 @router.post("/suggestions/approve-batch")
 async def approve_batch(
     req: BatchIdsRequest,

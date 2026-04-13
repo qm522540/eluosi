@@ -55,6 +55,9 @@ export const approveSuggestion = (id, suggestedBid) =>
 export const rejectSuggestion = (id) =>
   request.post(`${BASE}/suggestions/${id}/reject`)
 
+export const removeProduct = (id) =>
+  request.post(`${BASE}/suggestions/${id}/remove-product`)
+
 export const approveBatch = (ids) =>
   request.post(`${BASE}/suggestions/approve-batch`, { ids })
 

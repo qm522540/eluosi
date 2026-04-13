@@ -462,6 +462,22 @@ class OzonClient(BasePlatformClient):
             logger.error(f"Ozon 获取活动商品失败 campaign_id={campaign_id}: {e}")
             return []
 
+    async def remove_campaign_product(self, campaign_id: str, sku: str) -> dict:
+        """从 Ozon 广告活动中移除指定商品
+
+        Performance API: POST /api/client/campaign/{id}/products/delete
+        Body: {"skus": ["sku_id"]}
+        """
+        await self._ensure_perf_token()
+        try:
+            url = f"{OZON_PERFORMANCE_API}/api/client/campaign/{campaign_id}/products/delete"
+            await self._request("POST", url, use_perf=True, json={"skus": [str(sku)]})
+            logger.info(f"Ozon 移除商品成功 campaign={campaign_id} sku={sku}")
+            return {"ok": True}
+        except Exception as e:
+            logger.error(f"Ozon 移除商品失败 campaign={campaign_id} sku={sku}: {e}")
+            return {"ok": False, "error": str(e)}
+
     async def update_campaign_bid(self, campaign_id: str, sku: str, new_bid: str) -> dict:
         """修改广告活动中商品的出价
 

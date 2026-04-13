@@ -14,7 +14,7 @@ import {
   enableAIPricing, disableAIPricing,
   manualAnalyze, getSuggestions,
   approveSuggestion, rejectSuggestion,
-  approveBatch, rejectBatch,
+  approveBatch, rejectBatch, removeProduct,
   checkConflict, getBidLogs,
   getDataStatus, syncData, downloadData,
 } from '@/api/bid_management'
@@ -1496,11 +1496,12 @@ const AIPricingConfig = ({ shopId, platform, onSaved }) => {
                     cancelText: '取消',
                     onOk: async () => {
                       try {
-                        await rejectSuggestion(r.id)
-                        message.success('已标记删除，请到平台后台移除该商品')
+                        await removeProduct(r.id)
+                        message.success('已从活动中移除该商品出价')
                         loadSuggestions()
+                        setLogsRefreshKey(k => k + 1)
                       } catch (e) {
-                        message.error(e?.message || '操作失败')
+                        message.error(e?.response?.data?.msg || e?.message || '移除失败')
                       }
                     },
                   })

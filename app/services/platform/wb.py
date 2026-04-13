@@ -682,6 +682,24 @@ class WBClient(BasePlatformClient):
             logger.error(f"WB 拉取商品失败，shop_id={self.shop_id}: {e}")
             raise
 
+    async def remove_campaign_product(self, advert_id: str, nm_id: int) -> dict:
+        """从 WB 广告活动中移除指定商品
+
+        WB API: POST /adv/v0/nm-to-advert/delete
+        Body: {"advertId": int, "nms": [int]}
+        """
+        try:
+            await self._request(
+                "POST",
+                f"{WB_ADVERT_API}/adv/v0/nm-to-advert/delete",
+                json={"advertId": int(advert_id), "nms": [int(nm_id)]},
+            )
+            logger.info(f"WB 移除商品成功 shop_id={self.shop_id} advert={advert_id} nm={nm_id}")
+            return {"ok": True}
+        except Exception as e:
+            logger.error(f"WB 移除商品失败 advert={advert_id} nm={nm_id}: {e}")
+            return {"ok": False, "error": str(e)}
+
     # ==================== 订单 ====================
 
     async def fetch_orders(self, date_from: str, date_to: str) -> list:
