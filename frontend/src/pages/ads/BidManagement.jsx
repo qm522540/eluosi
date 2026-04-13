@@ -474,6 +474,7 @@ const TimePricingConfig = ({ shopId, platform, activeMode, onSaved }) => {
   const [midRatio, setMidRatio] = useState(DEFAULT_MID_RATIO)
   const [lowRatio, setLowRatio] = useState(DEFAULT_LOW_RATIO)
   const [saving, setSaving] = useState(false)
+  const [savingMsg, setSavingMsg] = useState('')
   const [statusData, setStatusData] = useState([])
 
   useEffect(() => {
@@ -590,6 +591,7 @@ const TimePricingConfig = ({ shopId, platform, activeMode, onSaved }) => {
 
   const doSaveAndEnable = async () => {
     setSaving(true)
+    setSavingMsg('正在保存配置...')
     try {
       await updateTimePricing(shopId, {
         peak_hours: peakHours,
@@ -599,15 +601,18 @@ const TimePricingConfig = ({ shopId, platform, activeMode, onSaved }) => {
         mid_ratio: midRatio,
         low_ratio: lowRatio,
       })
+      setSavingMsg('正在启用分时调价并执行首次调价...')
       setLocalEnabled(true)
-      const res = await enableTimePricing(shopId)
-      // 启用时后端已立即执行一次，刷新SKU状态（不刷新页面）
+      await enableTimePricing(shopId)
+      setSavingMsg('正在刷新执行状态...')
       await loadStatus()
       message.success('分时调价已开启')
     } catch (e) {
+      setLocalEnabled(false)
       message.error(e?.message || '保存失败')
     } finally {
       setSaving(false)
+      setSavingMsg('')
     }
   }
 
@@ -886,6 +891,7 @@ const TimePricingConfig = ({ shopId, platform, activeMode, onSaved }) => {
                     cancelText: '取消',
                     onOk: async () => {
                       setSaving(true)
+                      setSavingMsg('正在关闭分时调价，恢复所有商品到原始出价...')
                       try {
                         const res = await disableTimePricing(shopId)
                         const { restored = 0, failed = 0, errors = [] } = res?.data || {}
@@ -915,6 +921,7 @@ const TimePricingConfig = ({ shopId, platform, activeMode, onSaved }) => {
                         message.error(e?.message || '关闭失败')
                       } finally {
                         setSaving(false)
+                        setSavingMsg('')
                       }
                     },
                   })
@@ -930,6 +937,26 @@ const TimePricingConfig = ({ shopId, platform, activeMode, onSaved }) => {
           </Space>
         </Collapse.Panel>
       </Collapse>
+
+      {/* 操作进度遮罩 */}
+      <Modal
+        open={!!savingMsg}
+        footer={null}
+        closable={false}
+        maskClosable={false}
+        width={400}
+        styles={{ body: { padding: 0 } }}
+      >
+        <div style={{ textAlign: 'center', padding: '40px 20px' }}>
+          <Spin size="large" />
+          <div style={{ marginTop: 20, fontSize: 14, color: '#534AB7', fontWeight: 500 }}>
+            {savingMsg}
+          </div>
+          <div style={{ marginTop: 8, fontSize: 12, color: '#999' }}>
+            请勿关闭页面
+          </div>
+        </div>
+      </Modal>
 
       {/* 执行状态 - 仅在分时调价开启时显示 */}
       {isEnabled && (
