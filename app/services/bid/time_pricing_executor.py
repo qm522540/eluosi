@@ -68,15 +68,12 @@ async def execute(db, shop_id: int, tenant_id: int = None) -> dict:
 
     period = get_current_period(rule)
     if not period:
-        # 平谷期：当前小时不在 peak/mid/low 任一档里 → 保持原价不动，整个店铺跳过
-        logger.info(
-            f"shop_id={shop_id} 当前莫斯科{moscow_hour()}点为平谷期，本次不调价"
-        )
-        counters["period"] = "base"
-        _save_result(db, shop_id, tenant_id, counters, f"平谷期({moscow_hour()}:00) 不调价")
-        return counters
-
-    ratio = {"peak": rule.peak_ratio, "mid": rule.mid_ratio, "low": rule.low_ratio}[period]
+        # 平谷期：当前小时不在 peak/mid/low 任一档里 → ratio=100 保持原价，但仍遍历商品填充 ad_groups
+        period = "base"
+        ratio = 100
+        logger.info(f"shop_id={shop_id} 当前莫斯科{moscow_hour()}点为平谷期，ratio=100%")
+    else:
+        ratio = {"peak": rule.peak_ratio, "mid": rule.mid_ratio, "low": rule.low_ratio}[period]
     counters["period"] = period
 
     from app.models.shop import Shop
