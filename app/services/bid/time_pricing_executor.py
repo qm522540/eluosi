@@ -284,8 +284,8 @@ def update_rule(db, tenant_id: int, shop_id: int, data: dict) -> dict:
 
     # 校验3：ratio 范围
     for r in (peak_ratio, mid_ratio, low_ratio):
-        if not 10 <= r <= 500:
-            return {"code": ErrorCode.BID_INVALID_RATIO, "msg": "ratio 必须在 [10, 500] 范围"}
+        if not 0 <= r <= 200:
+            return {"code": ErrorCode.BID_INVALID_RATIO, "msg": "出价系数必须在 0-200 范围内"}
 
     # 先检查是否已有该 shop 的规则（必须 tenant_id 匹配，防 ON DUPLICATE 跨租户覆盖）
     existing = db.execute(text("""

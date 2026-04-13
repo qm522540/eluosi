@@ -783,8 +783,8 @@ const TimePricingConfig = ({ shopId, platform, activeMode, onSaved }) => {
                 </div>
                 <InputNumber
                   value={peakRatio}
-                  onChange={setPeakRatio}
-                  min={10} max={500} step={5}
+                  onChange={v => setPeakRatio(v ?? 0)}
+                  min={0} max={200} step={1} precision={0}
                   style={{ width: '100%' }}
                   addonAfter="%"
                 />
@@ -821,8 +821,8 @@ const TimePricingConfig = ({ shopId, platform, activeMode, onSaved }) => {
                 </div>
                 <InputNumber
                   value={midRatio}
-                  onChange={setMidRatio}
-                  min={10} max={500} step={5}
+                  onChange={v => setMidRatio(v ?? 0)}
+                  min={0} max={200} step={1} precision={0}
                   style={{ width: '100%' }}
                   addonAfter="%"
                 />
@@ -859,8 +859,8 @@ const TimePricingConfig = ({ shopId, platform, activeMode, onSaved }) => {
                 </div>
                 <InputNumber
                   value={lowRatio}
-                  onChange={setLowRatio}
-                  min={10} max={500} step={5}
+                  onChange={v => setLowRatio(v ?? 0)}
+                  min={0} max={200} step={1} precision={0}
                   style={{ width: '100%' }}
                   addonAfter="%"
                 />
