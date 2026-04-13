@@ -1007,6 +1007,8 @@ const AIPricingConfig = ({ shopId, platform, onSaved }) => {
   const [selected, setSelected] = useState([])
   const [dataStatus, setDataStatus] = useState(null)
   const [syncing, setSyncing] = useState(false)
+  const [syncResult, setSyncResult] = useState(null)
+  const [syncModalOpen, setSyncModalOpen] = useState(false)
   const [saving, setSaving] = useState(false)
   const [logsRefreshKey, setLogsRefreshKey] = useState(0)
 
@@ -1183,22 +1185,15 @@ const AIPricingConfig = ({ shopId, platform, onSaved }) => {
 
   const handleSync = async () => {
     setSyncing(true)
-    const hide = message.loading('正在从平台拉取数据，请稍候...', 0)
+    setSyncResult(null)
+    setSyncModalOpen(true)
     try {
       const res = await syncData(shopId)
-      hide()
       await loadDataStatus()
       const d = res?.data || {}
-      if (d.already_latest) {
-        message.success('数据已是最新，无需更新')
-      } else {
-        message.success(
-          `更新完成：${d.date_from} ~ ${d.date_to}，写入 ${d.synced || 0} 条数据`
-        )
-      }
+      setSyncResult(d)
     } catch (e) {
-      hide()
-      message.error(e?.message || '同步失败')
+      setSyncResult({ error: e?.response?.data?.msg || e?.message || '同步失败' })
     } finally {
       setSyncing(false)
     }
@@ -1823,6 +1818,53 @@ const AIPricingConfig = ({ shopId, platform, onSaved }) => {
 
       {/* 调价历史 */}
       <BidLogs shopId={shopId} refreshKey={logsRefreshKey} />
+
+      {/* 数据同步进度弹窗 */}
+      <Modal
+        title="更新数据源"
+        open={syncModalOpen}
+        footer={!syncing ? (
+          <Button type="primary" onClick={() => setSyncModalOpen(false)}>确定</Button>
+        ) : null}
+        closable={!syncing}
+        maskClosable={false}
+        onCancel={() => setSyncModalOpen(false)}
+        width={480}
+      >
+        {syncing ? (
+          <div style={{ textAlign: 'center', padding: '30px 0' }}>
+            <Spin size="large" />
+            <div style={{ marginTop: 16, fontSize: 14, color: '#534AB7' }}>
+              正在从{platform === 'wb' ? 'Wildberries' : 'Ozon'}平台拉取广告数据...
+            </div>
+            <div style={{ marginTop: 8, fontSize: 12, color: '#999' }}>
+              首次同步约需 30-60 秒，请勿关闭页面
+            </div>
+          </div>
+        ) : syncResult ? (
+          <div style={{ padding: '10px 0' }}>
+            {syncResult.error ? (
+              <Alert type="error" message="同步失败" description={syncResult.error} showIcon />
+            ) : syncResult.already_latest ? (
+              <Alert type="success" message="数据已是最新" description="无需更新" showIcon />
+            ) : (
+              <Alert
+                type="success"
+                showIcon
+                message="同步完成"
+                description={
+                  <div>
+                    <div>日期范围：{syncResult.date_from} ~ {syncResult.date_to}</div>
+                    <div>写入记录：{syncResult.synced || 0} 条</div>
+                    <div>清理过期：{syncResult.cleaned || 0} 条</div>
+                    <div>数据天数：{syncResult.data_days || 0} 天</div>
+                  </div>
+                }
+              />
+            )}
+          </div>
+        ) : null}
+      </Modal>
 
       {/* 编辑模板弹窗 */}
       <Modal
