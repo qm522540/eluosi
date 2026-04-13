@@ -14,10 +14,10 @@ export const updateTimePricing = (shopId, data) =>
   request.put(`${BASE}/time-pricing/${shopId}`, data)
 
 export const enableTimePricing = (shopId) =>
-  request.post(`${BASE}/time-pricing/${shopId}/enable`)
+  request.post(`${BASE}/time-pricing/${shopId}/enable`, null, { timeout: 120000 })
 
 export const disableTimePricing = (shopId) =>
-  request.post(`${BASE}/time-pricing/${shopId}/disable`)
+  request.post(`${BASE}/time-pricing/${shopId}/disable`, null, { timeout: 120000 })
 
 export const restoreSku = (shopId, skuId) =>
   request.post(`${BASE}/time-pricing/${shopId}/restore-sku`, {
