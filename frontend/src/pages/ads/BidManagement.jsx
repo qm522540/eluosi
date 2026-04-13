@@ -76,48 +76,48 @@ const guessBasket = (vol) => {
   return Math.min(Math.floor(vol / 200) + 1, 60)
 }
 
-// 自动探测组件：从估算 basket 开始，失败自动 ±1 ±2 尝试
+// WB 商品图片组件：从估算 basket 开始，失败自动探测相邻 basket
 const WbProductImg = ({ nmId, style }) => {
   const [src, setSrc] = useState(null)
-  const [hidden, setHidden] = useState(false)
+  const [loaded, setLoaded] = useState(false)
+  const [failed, setFailed] = useState(false)
   const triedRef = useRef(0)
   const infoRef = useRef(null)
 
   useEffect(() => {
     const info = getWbImageInfo(nmId)
-    if (!info) { setHidden(true); return }
+    if (!info) { setFailed(true); return }
     infoRef.current = info
     triedRef.current = 0
-    setHidden(false)
-    // 检查缓存
+    setLoaded(false)
+    setFailed(false)
     if (_wbImgCache[nmId]) {
       setSrc(_wbImgCache[nmId])
+      setLoaded(true)
     } else {
-      const b = guessBasket(info.vol)
-      setSrc(buildWbImgUrl(info.vol, info.part, info.id, b))
+      setSrc(buildWbImgUrl(info.vol, info.part, info.id, guessBasket(info.vol)))
     }
   }, [nmId])
 
-  if (hidden || !src) return null
+  if (failed || !src) return null
 
   return (
     <img
       src={src}
       alt=""
-      style={style}
+      style={{ ...style, display: loaded ? 'block' : 'none' }}
       onError={() => {
         triedRef.current++
         const info = infoRef.current
-        if (!info) { setHidden(true); return }
+        if (!info) { setFailed(true); return }
         const base = guessBasket(info.vol)
-        // 尝试序列：base, base-1, base+1, base-2, base+2, base-3, base+3
-        const offsets = [0, -1, 1, -2, 2, -3, 3, -4, 4]
-        if (triedRef.current >= offsets.length) { setHidden(true); return }
+        const offsets = [0, -1, 1, -2, 2, -3, 3, -4, 4, -5, 5, -6, 6]
+        if (triedRef.current >= offsets.length) { setFailed(true); return }
         const next = base + offsets[triedRef.current]
-        if (next < 1 || next > 65) { setHidden(true); return }
+        if (next < 1 || next > 65) { setFailed(true); return }
         setSrc(buildWbImgUrl(info.vol, info.part, info.id, next))
       }}
-      onLoad={() => { _wbImgCache[nmId] = src }}
+      onLoad={() => { setLoaded(true); _wbImgCache[nmId] = src }}
     />
   )
 }
