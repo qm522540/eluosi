@@ -598,22 +598,44 @@ async def sync_data(
     shop: Shop = Depends(get_owned_shop),
     db: Session = Depends(get_db),
 ):
-    """智能数据同步：后台执行，立即返回。
-
-    两个平台都可能因 API 限速（429）导致耗时超过 nginx 超时，
-    统一改为后台线程执行，前端立即拿到响应。
-    """
+    """智能数据同步：先检查是否已最新（秒回），需要拉取时后台执行。"""
     import asyncio as _asyncio
     import threading
+    from datetime import date as _date, timedelta as _td
 
     from app.database import SessionLocal
 
-    if shop.platform == "wb":
+    platform_label = "Wildberries" if shop.platform == "wb" else "Ozon"
+    platform_code = shop.platform
+
+    # 快速检查：是否已是最新（不需要调平台 API）
+    yesterday = _date.today() - _td(days=1)
+    latest_row = db.execute(text("""
+        SELECT MAX(s.stat_date) AS latest_date
+        FROM ad_stats s
+        JOIN ad_campaigns c ON s.campaign_id = c.id
+        WHERE c.shop_id = :shop_id AND c.tenant_id = :tenant_id AND s.platform = :platform
+    """), {"shop_id": shop.id, "tenant_id": shop.tenant_id, "platform": platform_code}).fetchone()
+
+    if latest_row and latest_row.latest_date and latest_row.latest_date >= yesterday:
+        return success({
+            "shop_id": shop.id,
+            "msg": "数据已是最新，无需更新",
+            "synced": 0,
+            "already_latest": True,
+            "data_days": db.execute(text("""
+                SELECT COUNT(DISTINCT s.stat_date) FROM ad_stats s
+                JOIN ad_campaigns c ON s.campaign_id = c.id
+                WHERE c.shop_id = :sid AND c.tenant_id = :tid AND s.platform = :p
+            """), {"sid": shop.id, "tid": shop.tenant_id, "p": platform_code}).scalar() or 0,
+        })
+
+    # 需要拉数据：后台执行
+    if platform_code == "wb":
         from app.services.data.wb_stats_collector import smart_sync
     else:
         from app.services.data.ozon_stats_collector import smart_sync
 
-    platform_label = "Wildberries" if shop.platform == "wb" else "Ozon"
     s_id, t_id = shop.id, shop.tenant_id
 
     def _run_sync():
