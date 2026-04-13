@@ -1281,14 +1281,13 @@ async def analyze_stream(db, tenant_id: int, shop_id: int,
         parsed = _parse_ai_response(full_content)
         suggestions_raw = parsed.get("suggestions") or []
 
-        # 过期旧建议
-        from app.utils.moscow_time import moscow_today
+        # 清掉所有旧 pending 建议（避免重复）
         db.execute(text("""
             UPDATE ai_pricing_suggestions
             SET status = 'rejected'
             WHERE shop_id = :shop_id AND tenant_id = :tenant_id
-              AND status = 'pending' AND DATE(generated_at) < :today
-        """), {"shop_id": shop_id, "tenant_id": tenant_id, "today": moscow_today()})
+              AND status = 'pending'
+        """), {"shop_id": shop_id, "tenant_id": tenant_id})
 
         saved_count = 0
         for raw in suggestions_raw:
