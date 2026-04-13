@@ -639,7 +639,13 @@ async def sync_data(
     s_id, t_id = shop.id, shop.tenant_id
 
     def _run_sync():
-        new_db = SessionLocal()
+        from sqlalchemy import create_engine
+        from sqlalchemy.orm import sessionmaker
+        from app.config import get_settings
+        settings = get_settings()
+        engine = create_engine(settings.DATABASE_URL, pool_pre_ping=True, pool_size=2)
+        Session = sessionmaker(bind=engine)
+        new_db = Session()
         loop = _asyncio.new_event_loop()
         try:
             result = loop.run_until_complete(smart_sync(new_db, s_id, t_id))
@@ -648,6 +654,7 @@ async def sync_data(
             logger.error(f"{platform_label} 后台同步失败 shop_id={s_id}: {e}")
         finally:
             new_db.close()
+            engine.dispose()
             loop.close()
 
     thread = threading.Thread(target=_run_sync, daemon=True)

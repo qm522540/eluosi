@@ -175,10 +175,16 @@ async def _fetch_seller_data(
 
 def _start_perf_background(shop: Shop, camp_map: dict,
                            date_from: date, date_to: date, tenant_id: int):
-    """在后台线程中拉广告数据"""
+    """在后台线程中拉广告数据（独立数据库连接，避免跨线程连接池冲突）"""
     def _run():
-        from app.database import SessionLocal
-        new_db = SessionLocal()
+        from sqlalchemy import create_engine
+        from sqlalchemy.orm import sessionmaker
+        from app.config import get_settings
+
+        settings = get_settings()
+        engine = create_engine(settings.DATABASE_URL, pool_pre_ping=True, pool_size=2)
+        Session = sessionmaker(bind=engine)
+        new_db = Session()
         loop = asyncio.new_event_loop()
         try:
             loop.run_until_complete(
@@ -188,6 +194,7 @@ def _start_perf_background(shop: Shop, camp_map: dict,
             logger.error(f"Performance API 后台拉取失败: {e}")
         finally:
             new_db.close()
+            engine.dispose()
             loop.close()
 
     thread = threading.Thread(target=_run, daemon=True)
