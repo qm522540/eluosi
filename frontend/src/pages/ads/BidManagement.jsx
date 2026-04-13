@@ -1847,6 +1847,8 @@ const AIPricingConfig = ({ shopId, platform, onSaved }) => {
               <Alert type="error" message="同步失败" description={syncResult.error} showIcon />
             ) : syncResult.already_latest ? (
               <Alert type="success" message="数据已是最新" description="无需更新" showIcon />
+            ) : syncResult.background ? (
+              <Alert type="info" message="后台同步中" description={syncResult.msg || '预计2-3分钟完成，请稍后刷新查看'} showIcon />
             ) : (
               <Alert
                 type="success"

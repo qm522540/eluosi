@@ -592,31 +592,57 @@ async def sync_data(
     shop: Shop = Depends(get_owned_shop),
     db: Session = Depends(get_db),
 ):
-    """智能数据同步：无数据拉30天，有数据增量补齐，清理90天前旧数据（按平台分流）"""
+    """智能数据同步：无数据拉7天，有数据增量补齐，清理90天前旧数据
+
+    Ozon 因 Performance API 异步轮询耗时长，在后台线程执行，立即返回。
+    WB 较快，同步执行。
+    """
     if shop.platform == "wb":
         from app.services.data.wb_stats_collector import smart_sync
-    else:
-        from app.services.data.ozon_stats_collector import smart_sync
-
-    try:
-        result = await smart_sync(db, shop.id, shop.tenant_id)
-        if result.get("already_latest"):
+        try:
+            result = await smart_sync(db, shop.id, shop.tenant_id)
+            if result.get("already_latest"):
+                return success({"shop_id": shop.id, "msg": "数据已是最新，无需更新", **result})
             return success({
                 "shop_id": shop.id,
-                "msg": "数据已是最新，无需更新",
+                "msg": f"同步完成：拉取 {result['date_from']}~{result['date_to']}，"
+                       f"写入 {result['synced']} 条，清理 {result['cleaned']} 条过期数据",
                 **result,
             })
+        except ValueError as e:
+            return error(ErrorCode.AD_STATS_FETCH_FAILED, str(e))
+        except Exception as e:
+            logger.error(f"WB数据同步失败 shop_id={shop.id}: {e}")
+            return error(ErrorCode.AD_STATS_FETCH_FAILED, f"同步失败: {e}")
+    else:
+        # Ozon: 后台异步执行（Performance API 轮询每个活动约50秒，同步会504）
+        import asyncio
+        import threading
+        from app.database import SessionLocal
+        from app.services.data.ozon_stats_collector import smart_sync
+
+        def _run_ozon_sync(s_id, t_id):
+            new_db = SessionLocal()
+            loop = asyncio.new_event_loop()
+            try:
+                result = loop.run_until_complete(smart_sync(new_db, s_id, t_id))
+                logger.info(f"Ozon 后台同步完成 shop_id={s_id}: {result}")
+            except Exception as e:
+                logger.error(f"Ozon 后台同步失败 shop_id={s_id}: {e}")
+            finally:
+                new_db.close()
+                loop.close()
+
+        thread = threading.Thread(target=_run_ozon_sync, args=(shop.id, shop.tenant_id), daemon=True)
+        thread.start()
+
         return success({
             "shop_id": shop.id,
-            "msg": f"同步完成：拉取 {result['date_from']}~{result['date_to']}，"
-                   f"写入 {result['synced']} 条，清理 {result['cleaned']} 条过期数据",
-            **result,
+            "msg": "Ozon 数据同步已在后台启动，预计2-3分钟完成。请稍后刷新页面查看数据状态。",
+            "synced": 0,
+            "already_latest": False,
+            "background": True,
         })
-    except ValueError as e:
-        return error(ErrorCode.AD_STATS_FETCH_FAILED, str(e))
-    except Exception as e:
-        logger.error(f"数据同步失败 shop_id={shop.id}: {e}")
-        return error(ErrorCode.AD_STATS_FETCH_FAILED, f"同步失败: {e}")
 
 
 @router.get("/data-download/{shop_id}")
