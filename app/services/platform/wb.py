@@ -568,6 +568,7 @@ class WBClient(BasePlatformClient):
                         "error": None,
                         "updated": remaining,
                         "skipped": skipped,
+                        "actual_bid_rub": bid_kopecks / 100,
                     }
 
                 detail = (result.get("detail") or "").lower()

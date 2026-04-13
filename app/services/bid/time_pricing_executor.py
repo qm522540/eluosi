@@ -232,19 +232,22 @@ async def _process_sku(db, client, campaign, sku: str, sku_name: str,
         )
         return "error"
 
-    # 7. 更新 ad_groups
-    _upsert_group(db, campaign, sku, sku_name, base_bid=base, last_auto=target)
+    # 实际执行的出价（可能被 min bid 自动调整）
+    actual_bid = api_result.get("actual_bid_rub", target)
 
-    # 8. 写日志
+    # 7. 更新 ad_groups（用实际出价）
+    _upsert_group(db, campaign, sku, sku_name, base_bid=base, last_auto=actual_bid)
+
+    # 8. 写日志（用实际出价）
     _write_log(
         db, campaign, sku, sku_name,
-        old_bid=current_bid, new_bid=target,
+        old_bid=current_bid, new_bid=actual_bid,
         execute_type="time_pricing", time_period=period, period_ratio=ratio,
         success=True,
     )
 
     logger.info(
-        f"SKU {sku} 调价 {current_bid:.0f}→{target:.0f}卢布 ({period}{ratio}%)"
+        f"SKU {sku} 调价 {current_bid:.0f}→{actual_bid:.0f}卢布 ({period}{ratio}%)"
     )
     return "adjusted"
 
