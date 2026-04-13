@@ -322,7 +322,7 @@ def get_suggestions(
     """按活动分组返回今日 status 状态的建议"""
     from app.utils.moscow_time import moscow_today
     today = moscow_today()
-    where = ["s.shop_id = :shop_id", "s.tenant_id = :tenant_id", "DATE(s.generated_at) = :today"]
+    where = ["s.shop_id = :shop_id", "s.tenant_id = :tenant_id", "DATE(s.generated_at) = :today", "c.status = 'active'"]
     params = {"shop_id": shop.id, "tenant_id": shop.tenant_id, "today": today}
     if status and status != "all":
         where.append("s.status = :status")
