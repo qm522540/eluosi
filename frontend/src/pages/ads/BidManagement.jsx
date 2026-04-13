@@ -1452,12 +1452,17 @@ const AIPricingConfig = ({ shopId, platform, onSaved }) => {
             type="primary"
             onClick={async () => {
               try {
-                await approveSuggestion(r.id, editedBids[r.id] ?? r.suggested_bid)
-                message.success('执行成功')
+                const res = await approveSuggestion(r.id, editedBids[r.id] ?? r.suggested_bid)
+                const d = res?.data || {}
+                if (d.min_bid_limited) {
+                  message.warning(`执行成功，但受限于平台最低出价 ₽${d.new_bid}（建议 ₽${d.suggested_bid}）`)
+                } else {
+                  message.success('执行成功')
+                }
                 loadSuggestions()
                 setLogsRefreshKey(k => k + 1)
               } catch (e) {
-                message.error(e?.message || '执行失败')
+                message.error(e?.response?.data?.msg || e?.message || '执行失败')
               }
             }}
           >

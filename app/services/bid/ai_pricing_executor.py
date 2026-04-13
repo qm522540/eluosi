@@ -552,6 +552,9 @@ async def approve_suggestion(db, tenant_id: int, suggestion_id: int,
     )
     db.commit()
 
+    was_limited = abs(final_bid - api_result.get("actual_bid_rub", final_bid)) >= 1
+    actual = api_result.get("actual_bid_rub", final_bid)
+
     return {
         "code": 0,
         "data": {
@@ -559,7 +562,9 @@ async def approve_suggestion(db, tenant_id: int, suggestion_id: int,
             "status": "approved",
             "executed_at": now_utc.isoformat() + "Z",
             "old_bid": float(row.current_bid),
-            "new_bid": float(row.suggested_bid),
+            "new_bid": actual,
+            "suggested_bid": final_bid,
+            "min_bid_limited": was_limited,
         }
     }
 
