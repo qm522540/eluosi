@@ -994,17 +994,21 @@ async def _call_ai(template: dict, campaigns: list, products_by_campaign: dict,
 
 决策逻辑（按优先级）：
 
-1. **冷启动**（days < 3 或 trend="new"）→ 保持当前出价不动，数据太少不做判断
-2. **ROAS < 最低ROAS + 趋势下降或持平** → 大幅降价止损，降到当前出价的70%
-3. **ROAS < 最低ROAS + 趋势上升** → 小幅降价或不动，正在恢复中
-4. **ROAS 在目标附近 + 趋势稳定** → 不动，保持当前最优状态
-5. **ROAS > 目标 + 趋势稳定或上升** → 小幅加价试探（5-15%），争取更多流量
-6. **ROAS > 目标 + 趋势下降**（说明上次加价过了）→ 降回去，之前的出价更好
-7. **有点击无订单（cr=0）+ 花费持续** → 降价，不适合继续高投入
-8. **有展示无点击（ctr极低）** → 不建议加价，素材/相关性问题
+1. **冷启动**（days < 3 或 trend="new"）→ product_stage="cold_start"，保持当前出价不动
+2. **ROAS >= 目标ROAS × 2**（远超目标，如目标3实际10+）→ product_stage="growing"，加价10-15%扩量，即使趋势下降也应加价（ROAS仍远超目标说明还有很大空间）
+3. **ROAS >= 目标ROAS + 趋势稳定或上升** → product_stage="growing"，小幅加价5-10%
+4. **ROAS >= 目标ROAS + 趋势下降但仍 > 目标×1.5** → product_stage="growing"，保持不动观察（ROAS虽降但仍很健康）
+5. **ROAS >= 目标ROAS + 趋势下降且接近目标** → product_stage="testing"，小幅降价5%回撤
+6. **最低ROAS <= ROAS < 目标ROAS** → product_stage="testing"，小幅降价5-10%控成本
+7. **ROAS < 最低ROAS + 趋势下降或持平** → product_stage="declining"，大幅降价到当前出价的70%
+8. **ROAS < 最低ROAS + 趋势上升** → product_stage="testing"，小幅降价或不动，正在恢复
+9. **有点击无订单（cr=0）+ 花费持续** → product_stage="declining"，降价
+10. **有展示无点击（ctr极低）** → product_stage="declining"，不建议加价
+
+**特别重要**：ROAS 绝对值优先于趋势。ROAS=30x 即使趋势下降，仍然是非常好的表现，应该标为 growing 并加价，绝对不能标为 declining。
 
 关键原则：
-- 加价后 ROAS 变小 = 浪费资金，应回撤到之前的出价
+- ROAS 绝对值 > 趋势方向（高 ROAS 下降 ≠ 衰退）
 - 每次调整幅度要小（5-15%），观察效果后再决定
 - min_roas 是硬止损线
 - 无 stats_7d 的商品按 cold_start 处理
@@ -1203,17 +1207,21 @@ async def analyze_stream(db, tenant_id: int, shop_id: int,
 
 决策逻辑（按优先级）：
 
-1. **冷启动**（days < 3 或 trend="new"）→ 保持当前出价不动，数据太少不做判断
-2. **ROAS < 最低ROAS + 趋势下降或持平** → 大幅降价止损，降到当前出价的70%
-3. **ROAS < 最低ROAS + 趋势上升** → 小幅降价或不动，正在恢复中
-4. **ROAS 在目标附近 + 趋势稳定** → 不动，保持当前最优状态
-5. **ROAS > 目标 + 趋势稳定或上升** → 小幅加价试探（5-15%），争取更多流量
-6. **ROAS > 目标 + 趋势下降**（说明上次加价过了）→ 降回去，之前的出价更好
-7. **有点击无订单（cr=0）+ 花费持续** → 降价，不适合继续高投入
-8. **有展示无点击（ctr极低）** → 不建议加价，素材/相关性问题
+1. **冷启动**（days < 3 或 trend="new"）→ product_stage="cold_start"，保持当前出价不动
+2. **ROAS >= 目标ROAS × 2**（远超目标，如目标3实际10+）→ product_stage="growing"，加价10-15%扩量，即使趋势下降也应加价（ROAS仍远超目标说明还有很大空间）
+3. **ROAS >= 目标ROAS + 趋势稳定或上升** → product_stage="growing"，小幅加价5-10%
+4. **ROAS >= 目标ROAS + 趋势下降但仍 > 目标×1.5** → product_stage="growing"，保持不动观察（ROAS虽降但仍很健康）
+5. **ROAS >= 目标ROAS + 趋势下降且接近目标** → product_stage="testing"，小幅降价5%回撤
+6. **最低ROAS <= ROAS < 目标ROAS** → product_stage="testing"，小幅降价5-10%控成本
+7. **ROAS < 最低ROAS + 趋势下降或持平** → product_stage="declining"，大幅降价到当前出价的70%
+8. **ROAS < 最低ROAS + 趋势上升** → product_stage="testing"，小幅降价或不动，正在恢复
+9. **有点击无订单（cr=0）+ 花费持续** → product_stage="declining"，降价
+10. **有展示无点击（ctr极低）** → product_stage="declining"，不建议加价
+
+**特别重要**：ROAS 绝对值优先于趋势。ROAS=30x 即使趋势下降，仍然是非常好的表现，应该标为 growing 并加价，绝对不能标为 declining。
 
 关键原则：
-- 加价后 ROAS 变小 = 浪费资金，应回撤到之前的出价
+- ROAS 绝对值 > 趋势方向（高 ROAS 下降 ≠ 衰退）
 - 每次调整幅度要小（5-15%），观察效果后再决定
 - min_roas 是硬止损线
 - 无 stats_7d 的商品按 cold_start 处理
