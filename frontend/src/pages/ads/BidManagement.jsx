@@ -595,7 +595,6 @@ const TimePricingConfig = ({ shopId, platform, activeMode, onSaved }) => {
         low_ratio: lowRatio,
       })
       await enableTimePricing(shopId)
-      setEnabled(true)
       message.success('分时调价已开启')
       // 启用时后端已立即执行一次，刷新SKU状态（不刷新页面）
       await loadStatus()
