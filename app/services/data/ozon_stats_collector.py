@@ -82,23 +82,26 @@ async def smart_sync(db: Session, shop_id: int, tenant_id: int) -> dict:
     camp_map = {str(c.platform_campaign_id): c for c in campaigns}
     total_synced = 0
 
-    # 逐活动拉取（Performance API 每次查一个活动返回 SKU 级明细）
+    # 一次性提交所有活动ID（减少API调用次数，避免429限速）
     ozon_client = _build_ozon_client(shop)
     try:
-        for platform_cid, campaign in camp_map.items():
-            try:
-                stats = await _fetch_perf_stats_json(
-                    ozon_client, platform_cid,
-                    date_from.strftime("%Y-%m-%d"),
-                    date_to.strftime("%Y-%m-%d"),
-                )
-                for stat in stats:
-                    total_synced += _save_one_stat(db, campaign, stat)
-                if stats:
-                    logger.info(f"活动 {campaign.name}(id={platform_cid}): {len(stats)} 条SKU数据")
-            except Exception as e:
-                logger.error(f"活动 {campaign.name}(id={platform_cid}) 拉取失败: {e}")
-            await asyncio.sleep(1)  # 避免429
+        all_platform_ids = list(camp_map.keys())
+        all_stats = await _fetch_perf_stats_json(
+            ozon_client, all_platform_ids,
+            date_from.strftime("%Y-%m-%d"),
+            date_to.strftime("%Y-%m-%d"),
+        )
+        for stat in all_stats:
+            # stat 里有 campaign_id（平台ID），找到对应的内部 campaign
+            platform_cid = str(stat.get("campaign_id", ""))
+            campaign = camp_map.get(platform_cid)
+            if not campaign:
+                # 如果没匹配到，挂到第一个活动下
+                campaign = campaigns[0]
+            total_synced += _save_one_stat(db, campaign, stat)
+        logger.info(f"shop_id={shop_id} 共 {len(all_stats)} 条SKU数据")
+    except Exception as e:
+        logger.error(f"Ozon 数据拉取失败 shop_id={shop_id}: {e}")
     finally:
         await ozon_client.close()
 
@@ -121,25 +124,28 @@ async def smart_sync(db: Session, shop_id: int, tenant_id: int) -> dict:
 
 
 async def _fetch_perf_stats_json(
-    client: OzonClient, campaign_id: str,
+    client: OzonClient, campaign_ids,
     date_from: str, date_to: str,
 ) -> list:
-    """通过 Performance API 拉取单个活动的 SKU 级广告统计
+    """通过 Performance API 拉取活动的 SKU 级广告统计（支持批量活动ID）
 
     流程：
-    1. POST /api/client/statistics/json → UUID
+    1. POST /api/client/statistics/json → UUID（一次传所有活动ID）
     2. 轮询 GET /api/client/statistics/{UUID} → state=OK 得到 link
-    3. GET /api/client/statistics/report?UUID= → JSON 报告（含 views/clicks/spend 等）
+    3. GET link → JSON 报告（按活动分组，含 views/clicks/spend 等）
     """
+    if isinstance(campaign_ids, str):
+        campaign_ids = [campaign_ids]
+
     await client._ensure_perf_token()
 
-    # Step 1: 提交
+    # Step 1: 提交（一次传所有活动ID）
     try:
         submit = await client._request("POST",
             f"{PERF_API}/api/client/statistics/json",
             use_perf=True,
             json={
-                "campaigns": [campaign_id],
+                "campaigns": campaign_ids,
                 "dateFrom": date_from,
                 "dateTo": date_to,
             },
@@ -189,6 +195,7 @@ async def _fetch_perf_stats_json(
         for row in rows:
             stat = _parse_perf_row(row)
             if stat:
+                stat["campaign_id"] = camp_id
                 stats.append(stat)
 
     return stats
