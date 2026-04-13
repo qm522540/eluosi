@@ -977,6 +977,13 @@ async def _call_ai(template: dict, campaigns: list, products_by_campaign: dict,
 - 最高出价: {template.get('max_bid')}卢布（硬上限，suggested_bid 绝不能超过此值）
 - 单次最大调幅: {template.get('max_adjust_pct')}%（单次调整幅度不得超过此百分比）
 - 最低出价限制: 平台对每个活动有最低出价限制（通常₽50-100），suggested_bid 不要低于当前出价的60%，避免因低于平台限额而执行失败
+
+【流量时段规律（莫斯科时间）】
+- 高峰期 19:00-21:00（流量最大，竞争激烈，CPC高，加价能获得更多曝光但成本高）
+- 次高峰 10:00-12:00, 22:00（流量较大）
+- 低谷期 01:00-07:00（流量最少，出价不用太高也能获得展示）
+- 平谷期 其余时间（正常流量）
+请结合商品的时段表现趋势综合判断出价方向。
 {history_section}
 【活动和商品数据（出价单位：卢布）】
 {json.dumps(prompt_data, ensure_ascii=False)}
@@ -1173,6 +1180,13 @@ async def analyze_stream(db, tenant_id: int, shop_id: int,
 - 最高出价: {template.get('max_bid')}卢布（硬上限，suggested_bid 绝不能超过此值）
 - 单次最大调幅: {template.get('max_adjust_pct')}%（单次调整幅度不得超过此百分比）
 - 最低出价限制: 平台对每个活动有最低出价限制（通常₽50-100），suggested_bid 不要低于当前出价的60%，避免因低于平台限额而执行失败
+
+【流量时段规律（莫斯科时间）】
+- 高峰期 19:00-21:00（流量最大，竞争激烈，CPC高，加价能获得更多曝光但成本高）
+- 次高峰 10:00-12:00, 22:00（流量较大）
+- 低谷期 01:00-07:00（流量最少，出价不用太高也能获得展示）
+- 平谷期 其余时间（正常流量）
+请结合商品的时段表现趋势综合判断出价方向。
 {history_section}
 【活动和商品数据（出价单位：卢布）】
 {json.dumps(prompt_data, ensure_ascii=False)}
