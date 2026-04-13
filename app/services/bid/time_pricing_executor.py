@@ -604,13 +604,23 @@ async def restore_sku(db, tenant_id: int, shop_id: int, sku: str) -> dict:
 
 async def get_sku_status(db, tenant_id: int, shop_id: int,
                          campaign_id: int = None, keyword: str = None) -> dict:
-    """获取分时调价当前各 SKU 状态（按活动分组），多租户隔离
+    """获取分时调价当前各 SKU 状态（按活动分组），多租户隔离"""
+    # 查当前时段和系数
+    rule = db.execute(text("""
+        SELECT peak_hours, peak_ratio, mid_hours, mid_ratio, low_hours, low_ratio
+        FROM time_pricing_rules
+        WHERE shop_id = :shop_id AND tenant_id = :tenant_id AND is_active = 1
+        LIMIT 1
+    """), {"shop_id": shop_id, "tenant_id": tenant_id}).fetchone()
 
-    语义：只返回真正被分时调价处理过的 SKU（last_auto_bid IS NOT NULL）。
-    平谷期 / 从未执行过 / 店铺无活动 → 返回空 campaigns 列表。
-    """
+    current_ratio = 100
+    if rule:
+        period = get_current_period(rule)
+        if period:
+            current_ratio = {"peak": rule.peak_ratio, "mid": rule.mid_ratio, "low": rule.low_ratio}[period]
+
     rows = _query_status_rows(db, tenant_id, shop_id, campaign_id, keyword)
-    groups = _rows_to_groups(rows)
+    groups = _rows_to_groups(rows, current_ratio)
     return {"campaigns": list(groups.values())}
 
 
@@ -645,7 +655,7 @@ def _query_status_rows(db, tenant_id, shop_id, campaign_id, keyword):
     """), params).fetchall()
 
 
-def _rows_to_groups(rows) -> dict:
+def _rows_to_groups(rows, current_ratio: int = 100) -> dict:
     groups = {}
     for r in rows:
         cid = r.campaign_id
@@ -657,15 +667,22 @@ def _rows_to_groups(rows) -> dict:
                 "skus": [],
             }
         if r.sku:
+            orig = float(r.original_bid or r.last_auto_bid or r.current_bid or 0)
+            curr = float(r.last_auto_bid or r.current_bid or r.original_bid or 0)
+            # 判断是否受限于平台最低出价
+            target_bid = round(orig * current_ratio / 100) if orig > 0 else 0
+            min_bid_limited = target_bid > 0 and curr > 0 and target_bid < curr and abs(orig - curr) < 1
+
             groups[cid]["skus"].append({
                 "platform_sku_id": r.sku,
                 "sku_name": r.sku_name,
-                "original_bid": float(r.original_bid or r.last_auto_bid or r.current_bid or 0),
-                "current_bid": float(r.last_auto_bid or r.current_bid or r.original_bid or 0),
+                "original_bid": orig,
+                "current_bid": curr,
                 "last_auto_bid": float(r.last_auto_bid or 0),
                 "period": None,
                 "ratio": None,
                 "user_managed": bool(r.user_managed),
+                "min_bid_limited": min_bid_limited,
                 "last_adjusted_at": r.updated_at.isoformat() if r.updated_at else None,
             })
     return groups

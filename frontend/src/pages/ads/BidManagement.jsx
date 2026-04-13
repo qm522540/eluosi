@@ -656,12 +656,12 @@ const TimePricingConfig = ({ shopId, platform, activeMode, onSaved }) => {
       render: (v, r) => r.isGroup ? null : `₽${v || 0}`,
     },
     {
-      title: '状态', width: 120,
+      title: '状态', width: 140,
       render: (_, r) => {
         if (r.isGroup) return null
-        return r.user_managed
-          ? <Badge status="warning" text="用户管理" />
-          : <Badge status="success" text="正常执行" />
+        if (r.user_managed) return <Badge status="warning" text="用户管理" />
+        if (r.min_bid_limited) return <Badge color="orange" text="受限于最低出价" />
+        return <Badge status="success" text="正常执行" />
       },
     },
     {
