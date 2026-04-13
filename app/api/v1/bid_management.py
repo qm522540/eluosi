@@ -598,46 +598,46 @@ async def sync_data(
     shop: Shop = Depends(get_owned_shop),
     db: Session = Depends(get_db),
 ):
-    """智能数据同步：无数据拉7天，有数据增量补齐，清理90天前旧数据
+    """智能数据同步：后台执行，立即返回。
 
-    Ozon 因 Performance API 异步轮询耗时长，在后台线程执行，立即返回。
-    WB 较快，同步执行。
+    两个平台都可能因 API 限速（429）导致耗时超过 nginx 超时，
+    统一改为后台线程执行，前端立即拿到响应。
     """
+    import asyncio as _asyncio
+    import threading
+
+    from app.database import SessionLocal
+
     if shop.platform == "wb":
         from app.services.data.wb_stats_collector import smart_sync
-        try:
-            result = await smart_sync(db, shop.id, shop.tenant_id)
-            if result.get("already_latest"):
-                return success({"shop_id": shop.id, "msg": "数据已是最新，无需更新", **result})
-            return success({
-                "shop_id": shop.id,
-                "msg": f"同步完成：拉取 {result['date_from']}~{result['date_to']}，"
-                       f"写入 {result['synced']} 条，清理 {result['cleaned']} 条过期数据",
-                **result,
-            })
-        except ValueError as e:
-            return error(ErrorCode.AD_STATS_FETCH_FAILED, str(e))
-        except Exception as e:
-            logger.error(f"WB数据同步失败 shop_id={shop.id}: {e}")
-            return error(ErrorCode.AD_STATS_FETCH_FAILED, f"同步失败: {e}")
     else:
-        # Ozon: Seller API 同步拉 revenue/orders（秒回），Performance API 后台补广告数据
         from app.services.data.ozon_stats_collector import smart_sync
+
+    platform_label = "Wildberries" if shop.platform == "wb" else "Ozon"
+    s_id, t_id = shop.id, shop.tenant_id
+
+    def _run_sync():
+        new_db = SessionLocal()
+        loop = _asyncio.new_event_loop()
         try:
-            result = await smart_sync(db, shop.id, shop.tenant_id)
-            if result.get("already_latest"):
-                return success({"shop_id": shop.id, "msg": "数据已是最新，无需更新", **result})
-            return success({
-                "shop_id": shop.id,
-                "msg": f"同步完成：拉取 {result['date_from']}~{result['date_to']}，"
-                       f"写入 {result['synced']} 条运营数据。广告数据（曝光/点击/花费）正在后台补充中。",
-                **result,
-            })
-        except ValueError as e:
-            return error(ErrorCode.AD_STATS_FETCH_FAILED, str(e))
+            result = loop.run_until_complete(smart_sync(new_db, s_id, t_id))
+            logger.info(f"{platform_label} 后台同步完成 shop_id={s_id}: {result}")
         except Exception as e:
-            logger.error(f"Ozon数据同步失败 shop_id={shop.id}: {e}")
-            return error(ErrorCode.AD_STATS_FETCH_FAILED, f"同步失败: {e}")
+            logger.error(f"{platform_label} 后台同步失败 shop_id={s_id}: {e}")
+        finally:
+            new_db.close()
+            loop.close()
+
+    thread = threading.Thread(target=_run_sync, daemon=True)
+    thread.start()
+
+    return success({
+        "shop_id": shop.id,
+        "msg": f"{platform_label} 数据同步已在后台启动，预计1-2分钟完成。请稍后刷新查看。",
+        "synced": 0,
+        "already_latest": False,
+        "background": True,
+    })
 
 
 @router.get("/data-download/{shop_id}")

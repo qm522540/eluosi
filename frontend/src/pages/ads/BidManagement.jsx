@@ -1199,9 +1199,14 @@ const AIPricingConfig = ({ shopId, platform, onSaved }) => {
     setSyncModalOpen(true)
     try {
       const res = await syncData(shopId)
-      await loadDataStatus()
       const d = res?.data || {}
       setSyncResult(d)
+      // 后台模式：延迟刷新数据状态
+      if (d.background) {
+        setTimeout(() => loadDataStatus(), 60000)
+      } else {
+        await loadDataStatus()
+      }
     } catch (e) {
       setSyncResult({ error: e?.response?.data?.msg || e?.message || '同步失败' })
     } finally {
