@@ -33,18 +33,22 @@ const DEFAULT_MID_RATIO = 100
 const DEFAULT_LOW_RATIO = 60
 
 const TEMPLATE_DEFAULTS = {
-  conservative: {
-    target_roas: 2.0, min_roas: 1.5,
-    max_bid: 100, max_adjust_pct: 15,
-  },
   default: {
-    target_roas: 3.0, min_roas: 1.8,
-    max_bid: 180, max_adjust_pct: 30,
+    gross_margin: 0.5,
   },
-  aggressive: {
-    target_roas: 4.0, min_roas: 2.5,
-    max_bid: 300, max_adjust_pct: 25,
-  },
+}
+
+// 前端推算展示用（与后端 _derive_template_from_margin 保持一致）
+const deriveFromMargin = (margin) => {
+  const m = margin > 0 && margin < 1 ? margin : 0.5
+  const breakeven = 1 / m
+  return {
+    gross_margin: Math.round(m * 10000) / 10000,
+    target_roas: Math.round(breakeven * 1.5 * 100) / 100,
+    min_roas: Math.round(breakeven * 1.2 * 100) / 100,
+    max_bid: 500,
+    max_adjust_pct: 30,
+  }
 }
 
 const STAGE_CONFIG = {
@@ -1285,7 +1289,14 @@ const AIPricingConfig = ({ shopId, platform, onSaved }) => {
     }
   }
 
-  const currentTemplate = templates[templateName] || {}
+  const currentTemplate = (() => {
+    const raw = templates[templateName] || {}
+    // 新模板只存 gross_margin，其他字段按毛利率推算
+    if (raw.gross_margin) {
+      return { ...raw, ...deriveFromMargin(Number(raw.gross_margin)) }
+    }
+    return raw
+  })()
 
   // 建议列表展开为表格行
   const suggestionRows = []
@@ -1553,7 +1564,7 @@ const AIPricingConfig = ({ shopId, platform, onSaved }) => {
               size="small"
               onClick={e => {
                 e.stopPropagation()
-                setEditingTemplate({ ...currentTemplate, name: templateName })
+                setEditingTemplate({ gross_margin: currentTemplate.gross_margin ?? 0.5 })
                 setEditModalOpen(true)
               }}
             >
@@ -1561,45 +1572,26 @@ const AIPricingConfig = ({ shopId, platform, onSaved }) => {
             </Button>
           }
         >
-          <Space style={{ marginBottom: 10 }}>
-            {['conservative', 'default', 'aggressive'].map(t => (
-              <Button
-                key={t}
-                type={templateName === t ? 'primary' : 'default'}
-                size="small"
-                style={templateName === t ? { background: '#534AB7', borderColor: '#534AB7' } : {}}
-                onClick={async () => {
-                  setTemplateName(t)
-                  try {
-                    await updateAIPricing(shopId, {
-                      template_name: t,
-                      conservative_config: templates.conservative,
-                      default_config: templates.default,
-                      aggressive_config: templates.aggressive,
-                    })
-                    message.success('策略模板已保存')
-                  } catch {
-                    message.error('保存失败')
-                  }
-                }}
-              >
-                {t === 'conservative' ? '保守测试' : t === 'default' ? '默认标准' : '激进冲量'}
-              </Button>
-            ))}
-          </Space>
-          <div style={{
-            fontSize: 12,
-            color: 'var(--color-text-secondary, #666)',
-            padding: '7px 10px',
-            background: 'var(--color-background-secondary, #fafafa)',
-            borderRadius: 6,
-          }}>
-            目标ROAS {currentTemplate.target_roas}x ·
-            最低ROAS {currentTemplate.min_roas}x ·
-            最高出价 ₽{currentTemplate.max_bid} ·
-            最大调幅 {currentTemplate.max_adjust_pct}%
-          </div>
-          {/* 自动执行功能后端保留，UI 暂不暴露。默认建议模式：AI 生成建议，用户手动确认执行 */}
+          {(() => {
+            const m = currentTemplate.gross_margin ?? 0.5
+            const d = deriveFromMargin(m)
+            return (
+              <div style={{
+                fontSize: 12,
+                color: 'var(--color-text-secondary, #666)',
+                padding: '9px 12px',
+                background: 'var(--color-background-secondary, #fafafa)',
+                borderRadius: 6,
+                lineHeight: 1.8,
+              }}>
+                <div>净毛利率：<b style={{ color: '#262626' }}>{Math.round(m * 100)}%</b></div>
+                <div style={{ fontSize: 11, color: 'var(--color-text-tertiary, #999)' }}>
+                  系统自动推算 → 目标ROAS {d.target_roas}x · 最低ROAS {d.min_roas}x ·
+                  最高出价 ₽{d.max_bid} · 最大调幅 {d.max_adjust_pct}%
+                </div>
+              </div>
+            )
+          })()}
         </Collapse.Panel>
       </Collapse>
 
@@ -2056,22 +2048,27 @@ const AIPricingConfig = ({ shopId, platform, onSaved }) => {
 
       {/* 编辑模板弹窗 */}
       <Modal
-        title={`编辑模板：${templateName === 'conservative' ? '保守测试'
-          : templateName === 'default' ? '默认标准' : '激进冲量'}`}
+        title="编辑策略模板"
         open={editModalOpen}
         onCancel={() => setEditModalOpen(false)}
         onOk={async () => {
-          const updated = { ...templates, [templateName]: editingTemplate }
-          setTemplates(updated)
+          const margin = Number(editingTemplate.gross_margin) || 0.5
+          if (margin <= 0 || margin >= 1) {
+            message.error('净毛利率必须在 0-100% 开区间')
+            return
+          }
+          const newTpl = { gross_margin: margin }
+          setTemplates({ default: newTpl })
           setEditModalOpen(false)
           try {
+            // 三份 config 字段写同一份 (后端已简化, 只读 default_config)
             await updateAIPricing(shopId, {
-              template_name: templateName,
-              conservative_config: updated.conservative,
-              default_config: updated.default,
-              aggressive_config: updated.aggressive,
+              template_name: 'default',
+              conservative_config: newTpl,
+              default_config: newTpl,
+              aggressive_config: newTpl,
             })
-            message.success('模板参数已保存')
+            message.success('模板已保存')
           } catch {
             message.error('保存失败')
           }
@@ -2079,60 +2076,54 @@ const AIPricingConfig = ({ shopId, platform, onSaved }) => {
         okText="确认"
       >
         <div style={{
-          fontSize: 12,
-          color: 'var(--color-text-secondary, #666)',
-          marginBottom: 14,
+          fontSize: 13,
+          color: 'var(--color-text-primary, #262626)',
+          marginBottom: 6,
+          fontWeight: 500,
         }}>
-          修改后仅影响此模板，其他模板不受影响
+          净毛利率
         </div>
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-          {[
-            { key: 'target_roas', label: '目标ROAS', unit: 'x', step: 0.1, hint: '高于此值可加价' },
-            { key: 'min_roas', label: '最低ROAS', unit: 'x', step: 0.1, hint: '低于此值触发降价' },
-            { key: 'max_bid', label: '最高出价', unit: '₽', step: 10, hint: '单次出价上限' },
-            { key: 'max_adjust_pct', label: '最大单次调幅', unit: '%', step: 5, hint: '防止出价剧烈波动' },
-          ].map(field => (
-            <div key={field.key}>
-              <div style={{
-                fontSize: 11,
-                color: 'var(--color-text-secondary, #666)',
-                marginBottom: 4,
-              }}>
-                {field.label}
-                <span style={{
-                  fontSize: 10,
-                  color: 'var(--color-text-tertiary, #999)',
-                  marginLeft: 4,
-                }}>
-                  {field.hint}
-                </span>
-              </div>
-              <Space>
-                <InputNumber
-                  value={field.transform
-                    ? field.transform(editingTemplate[field.key] || 0)
-                    : editingTemplate[field.key]}
-                  onChange={v => setEditingTemplate(prev => ({
-                    ...prev,
-                    [field.key]: field.reverse ? field.reverse(v) : v,
-                  }))}
-                  step={field.step}
-                  style={{ width: 90 }}
-                />
-                <span style={{ fontSize: 12, color: 'var(--color-text-secondary, #666)' }}>
-                  {field.unit}
-                </span>
-              </Space>
+        <div style={{
+          fontSize: 11,
+          color: 'var(--color-text-tertiary, #999)',
+          lineHeight: 1.6,
+          marginBottom: 10,
+        }}>
+          净毛利率（广义） = （售价 - 进货成本 - 平台佣金 - 物流 - 退货损耗） / 售价
+        </div>
+        <Space>
+          <InputNumber
+            value={Math.round((Number(editingTemplate.gross_margin) || 0) * 100)}
+            onChange={v => setEditingTemplate({ gross_margin: (Number(v) || 0) / 100 })}
+            min={1}
+            max={99}
+            step={1}
+            style={{ width: 100 }}
+            addonAfter="%"
+          />
+        </Space>
+        {(() => {
+          const m = Number(editingTemplate.gross_margin) || 0
+          if (m <= 0 || m >= 1) return null
+          const d = deriveFromMargin(m)
+          return (
+            <div style={{
+              marginTop: 14,
+              padding: '9px 12px',
+              background: 'var(--color-background-secondary, #fafafa)',
+              borderRadius: 6,
+              fontSize: 11,
+              lineHeight: 1.7,
+              color: 'var(--color-text-secondary, #666)',
+            }}>
+              <div style={{ fontWeight: 500, marginBottom: 4 }}>系统自动推算</div>
+              <div>• 保本 ROAS ≈ {Math.round(1 / m * 100) / 100}x（广告费刚好吃掉毛利）</div>
+              <div>• 目标 ROAS = {d.target_roas}x（保本 × 1.5，可加价）</div>
+              <div>• 最低 ROAS = {d.min_roas}x（保本 × 1.2，跌破则降价）</div>
+              <div>• 最高出价 ₽{d.max_bid} · 最大单次调幅 {d.max_adjust_pct}%</div>
             </div>
-          ))}
-        </div>
-        <Button
-          type="link"
-          style={{ paddingLeft: 0, marginTop: 12 }}
-          onClick={() => setEditingTemplate(TEMPLATE_DEFAULTS[templateName])}
-        >
-          恢复默认值
-        </Button>
+          )
+        })()}
       </Modal>
     </div>
   )

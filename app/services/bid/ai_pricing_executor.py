@@ -881,9 +881,39 @@ _DEFAULT_AGGRESSIVE = {
 }
 
 
+def _derive_template_from_margin(margin: float) -> dict:
+    """从净毛利率推算模板字段
+
+    保本 ROAS = 1 / 毛利率（广告费刚好吃掉毛利）
+    min_roas = 保本 × 1.2（止损线，留 20% 缓冲）
+    target_roas = 保本 × 1.5（目标, 能净赚 50% 毛利）
+    其他字段固定默认。
+    """
+    m = float(margin) if 0 < float(margin) < 1 else 0.5
+    breakeven = 1.0 / m
+    return {
+        "gross_margin": round(m, 4),
+        "target_roas": round(breakeven * 1.5, 2),
+        "min_roas": round(breakeven * 1.2, 2),
+        "max_bid": 500,
+        "max_adjust_pct": 30,
+        "daily_budget": 0,
+    }
+
+
 def _validate_template_json(t: dict) -> Optional[str]:
-    """校验模板字段范围"""
+    """校验模板字段范围
+
+    新模板只需 gross_margin，其他字段从毛利率自动推算。
+    兼容旧模板（含 target_roas 等显式字段）。
+    """
     try:
+        if "gross_margin" in t and t.get("gross_margin") is not None:
+            m = float(t["gross_margin"])
+            if not (0 < m < 1):
+                return "gross_margin 必须在 (0, 1) 开区间"
+            return None
+        # 旧模板兼容
         if not (0 < float(t.get("target_roas", 0)) <= 100):
             return "target_roas 范围 (0, 100]"
         if not (0 < float(t.get("min_roas", 0)) <= 100):
@@ -900,17 +930,27 @@ def _validate_template_json(t: dict) -> Optional[str]:
 
 
 def _read_template(cfg) -> dict:
-    """从 cfg 读取当前 template_name 指向的 JSON 模板"""
+    """从 cfg 读取当前 template_name 指向的 JSON 模板
+
+    如果模板里有 gross_margin，从毛利率自动推算 target_roas/min_roas 等。
+    没有则按旧字段直接返回（向后兼容）。
+    """
     name = cfg.template_name or "default"
     raw = getattr(cfg, f"{name}_config", None)
     if raw is None:
-        return {}
-    if isinstance(raw, dict):
-        return raw
-    try:
-        return json.loads(raw)
-    except (ValueError, TypeError):
-        return {}
+        raw = {}
+    elif isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except (ValueError, TypeError):
+            raw = {}
+    if not isinstance(raw, dict):
+        raw = {}
+
+    if raw.get("gross_margin"):
+        derived = _derive_template_from_margin(raw["gross_margin"])
+        return {**raw, **derived}  # 推算值覆盖, 保留其他自定义字段
+    return raw
 
 
 # ==================== Redis 锁（#18）====================
