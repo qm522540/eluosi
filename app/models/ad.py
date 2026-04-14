@@ -122,13 +122,8 @@ class AdStat(BaseMixin, Base):
         Enum("wb", "ozon", "yandex", name="stat_platform"), nullable=False
     )
     stat_date: Mapped[date] = mapped_column(Date, nullable=False)
-    stat_hour: Mapped[Optional[int]] = mapped_column(SmallInteger, nullable=True)
     impressions: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     clicks: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     spend: Mapped[float] = mapped_column(DECIMAL(10, 2), nullable=False, default=0)
     orders: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     revenue: Mapped[float] = mapped_column(DECIMAL(10, 2), nullable=False, default=0)
-    ctr: Mapped[Optional[float]] = mapped_column(DECIMAL(8, 4), nullable=True)
-    cpc: Mapped[Optional[float]] = mapped_column(DECIMAL(10, 2), nullable=True)
-    acos: Mapped[Optional[float]] = mapped_column(DECIMAL(8, 4), nullable=True)
-    roas: Mapped[Optional[float]] = mapped_column(DECIMAL(8, 4), nullable=True)
