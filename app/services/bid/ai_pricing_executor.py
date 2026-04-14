@@ -322,6 +322,20 @@ async def _analyze_now_inner(db, tenant_id: int, shop_id: int,
         current_bid = float(raw.get("current_bid") or 0)
         suggested_bid = float(raw.get("suggested_bid") or 0)
 
+        # 硬性安全护栏（兜底 AI 违规）：days<10 / trend=down 加价 / trend=new 全部丢弃
+        sku_stat = sku_stats.get(f"{camp_id}_{sku}", {})
+        days = int(sku_stat.get("days", 0) or 0)
+        trend = sku_stat.get("trend", "new")
+        if days < 10:
+            logger.info(f"[guardrail] 丢弃 sku={sku} days={days}<10 (AI建议{current_bid}->{suggested_bid})")
+            continue
+        if trend == "new":
+            logger.info(f"[guardrail] 丢弃 sku={sku} trend=new (AI建议{current_bid}->{suggested_bid})")
+            continue
+        if trend == "down" and suggested_bid > current_bid:
+            logger.info(f"[guardrail] 丢弃 sku={sku} trend=down 但AI建议加价 {current_bid}->{suggested_bid}")
+            continue
+
         # 安全护栏
         max_bid = float(template.get("max_bid", 999))
         max_pct = float(template.get("max_adjust_pct", 30))
@@ -988,27 +1002,35 @@ async def _call_ai(template: dict, campaigns: list, products_by_campaign: dict,
 - trend: "up"=后5天ROAS高于前5天 / "down"=低于 / "stable"=持平 / "new"=数据不足
 
 数据权重原则：越近的数据参考价值越高。total_10d是决策核心，week2-4用于判断长期基线。
-重要：数据不足10天（days<10）时不做任何调价决策，标记为cold_start。
+
+==========================================
+【⚠️ 强制硬规则 — 违反会被后端代码直接丢弃】
+==========================================
+规则A：total_10d.days < 10 的商品，**禁止给任何调价建议**（即不要把它放进 suggestions 数组）。
+       注意：days=7、days=8、days=9 都属于"不足10天"，必须丢弃。
+规则B：trend="down" 的商品，suggested_bid **不得高于** current_bid（禁止加价，只能维持或降价）。
+规则C：trend="new" 的商品，**禁止给任何调价建议**。
+违反以上任何一条的建议，会被代码层 100% 过滤掉，纯属浪费 token，请严格遵守。
+==========================================
 
 **核心目标：ROAS 最大化**（不是达到目标就好，而是让 ROAS 尽可能大）
 
-决策逻辑（按优先级）：
+决策逻辑（按优先级，所有规则都要先满足上面三条硬规则）：
 
-1. **数据不足**（days < 10 或 trend="new"）→ product_stage="cold_start"，保持当前出价不动，数据不够不做决策
-2. **ROAS >= 目标ROAS × 2 + 数据 < 10天** → product_stage="cold_start"，不动观察，等数据积累
-3. **ROAS >= 目标ROAS × 2 + 数据 >= 10天 + 趋势稳定或上升** → product_stage="growing"，小幅加价5-10%
-4. **ROAS >= 目标ROAS × 2 + 数据 >= 10天 + 趋势下降** → product_stage="growing"，不动观察（ROAS仍远超目标，下降可能是短期波动）
-5. **ROAS >= 目标ROAS + 数据 >= 10天 + 趋势稳定或上升** → product_stage="growing"，小幅加价5-10%
-6. **ROAS >= 目标ROAS + 数据 >= 10天 + 趋势下降且接近目标** → product_stage="testing"，小幅降价5%
-7. **最低ROAS <= ROAS < 目标ROAS + 数据 >= 10天** → product_stage="testing"，小幅降价5-10%
-8. **ROAS < 最低ROAS + 数据 >= 10天 + 趋势下降或持平** → product_stage="declining"，大幅降价到当前出价的70%
-9. **ROAS < 最低ROAS + 数据 >= 10天 + 趋势上升** → product_stage="testing"，不动，正在恢复
-10. **有点击无订单（cr=0）+ 花费持续 + 数据 >= 10天** → product_stage="declining"，降价
+1. **数据不足**（days < 10 或 trend="new"）→ 不要返回此商品（见硬规则A/C）
+2. **ROAS >= 目标ROAS × 2 + 数据 >= 10天 + 趋势稳定或上升** → product_stage="growing"，小幅加价5-10%
+3. **ROAS >= 目标ROAS × 2 + 数据 >= 10天 + 趋势下降** → 不要返回（见硬规则B，趋势下降禁加价；如要降价可按规则6处理）
+4. **ROAS >= 目标ROAS + 数据 >= 10天 + 趋势稳定或上升** → product_stage="growing"，小幅加价5-10%
+5. **ROAS >= 目标ROAS + 数据 >= 10天 + 趋势下降且接近目标** → product_stage="testing"，小幅降价5%
+6. **最低ROAS <= ROAS < 目标ROAS + 数据 >= 10天** → product_stage="testing"，小幅降价5-10%
+7. **ROAS < 最低ROAS + 数据 >= 10天 + 趋势下降或持平** → product_stage="declining"，大幅降价到当前出价的70%
+8. **ROAS < 最低ROAS + 数据 >= 10天 + 趋势上升** → product_stage="testing"，不动，正在恢复
+9. **有点击无订单（cr=0）+ 花费持续 + 数据 >= 10天** → product_stage="declining"，降价
 
 **核心原则**：
 - 数据不够（< 10天）就不动，宁可错过也不误判
 - ROAS 绝对值优先于趋势方向（高ROAS下降 ≠ 衰退，可能是订单随机波动）
-- ROAS 远超目标时趋势下降 → 先观察不急于行动
+- ROAS 远超目标时趋势下降 → 先观察不急于行动（不返回该商品）
 - 每次调整幅度要小（5-10%），小步试探
 - min_roas 是硬止损线
 """
@@ -1200,27 +1222,35 @@ async def analyze_stream(db, tenant_id: int, shop_id: int,
 - trend: "up"=后5天ROAS高于前5天 / "down"=低于 / "stable"=持平 / "new"=数据不足
 
 数据权重原则：越近的数据参考价值越高。total_10d是决策核心，week2-4用于判断长期基线。
-重要：数据不足10天（days<10）时不做任何调价决策，标记为cold_start。
+
+==========================================
+【⚠️ 强制硬规则 — 违反会被后端代码直接丢弃】
+==========================================
+规则A：total_10d.days < 10 的商品，**禁止给任何调价建议**（即不要把它放进 suggestions 数组）。
+       注意：days=7、days=8、days=9 都属于"不足10天"，必须丢弃。
+规则B：trend="down" 的商品，suggested_bid **不得高于** current_bid（禁止加价，只能维持或降价）。
+规则C：trend="new" 的商品，**禁止给任何调价建议**。
+违反以上任何一条的建议，会被代码层 100% 过滤掉，纯属浪费 token，请严格遵守。
+==========================================
 
 **核心目标：ROAS 最大化**（不是达到目标就好，而是让 ROAS 尽可能大）
 
-决策逻辑（按优先级）：
+决策逻辑（按优先级，所有规则都要先满足上面三条硬规则）：
 
-1. **数据不足**（days < 10 或 trend="new"）→ product_stage="cold_start"，保持当前出价不动，数据不够不做决策
-2. **ROAS >= 目标ROAS × 2 + 数据 < 10天** → product_stage="cold_start"，不动观察，等数据积累
-3. **ROAS >= 目标ROAS × 2 + 数据 >= 10天 + 趋势稳定或上升** → product_stage="growing"，小幅加价5-10%
-4. **ROAS >= 目标ROAS × 2 + 数据 >= 10天 + 趋势下降** → product_stage="growing"，不动观察（ROAS仍远超目标，下降可能是短期波动）
-5. **ROAS >= 目标ROAS + 数据 >= 10天 + 趋势稳定或上升** → product_stage="growing"，小幅加价5-10%
-6. **ROAS >= 目标ROAS + 数据 >= 10天 + 趋势下降且接近目标** → product_stage="testing"，小幅降价5%
-7. **最低ROAS <= ROAS < 目标ROAS + 数据 >= 10天** → product_stage="testing"，小幅降价5-10%
-8. **ROAS < 最低ROAS + 数据 >= 10天 + 趋势下降或持平** → product_stage="declining"，大幅降价到当前出价的70%
-9. **ROAS < 最低ROAS + 数据 >= 10天 + 趋势上升** → product_stage="testing"，不动，正在恢复
-10. **有点击无订单（cr=0）+ 花费持续 + 数据 >= 10天** → product_stage="declining"，降价
+1. **数据不足**（days < 10 或 trend="new"）→ 不要返回此商品（见硬规则A/C）
+2. **ROAS >= 目标ROAS × 2 + 数据 >= 10天 + 趋势稳定或上升** → product_stage="growing"，小幅加价5-10%
+3. **ROAS >= 目标ROAS × 2 + 数据 >= 10天 + 趋势下降** → 不要返回（见硬规则B，趋势下降禁加价；如要降价可按规则6处理）
+4. **ROAS >= 目标ROAS + 数据 >= 10天 + 趋势稳定或上升** → product_stage="growing"，小幅加价5-10%
+5. **ROAS >= 目标ROAS + 数据 >= 10天 + 趋势下降且接近目标** → product_stage="testing"，小幅降价5%
+6. **最低ROAS <= ROAS < 目标ROAS + 数据 >= 10天** → product_stage="testing"，小幅降价5-10%
+7. **ROAS < 最低ROAS + 数据 >= 10天 + 趋势下降或持平** → product_stage="declining"，大幅降价到当前出价的70%
+8. **ROAS < 最低ROAS + 数据 >= 10天 + 趋势上升** → product_stage="testing"，不动，正在恢复
+9. **有点击无订单（cr=0）+ 花费持续 + 数据 >= 10天** → product_stage="declining"，降价
 
 **核心原则**：
 - 数据不够（< 10天）就不动，宁可错过也不误判
 - ROAS 绝对值优先于趋势方向（高ROAS下降 ≠ 衰退，可能是订单随机波动）
-- ROAS 远超目标时趋势下降 → 先观察不急于行动
+- ROAS 远超目标时趋势下降 → 先观察不急于行动（不返回该商品）
 - 每次调整幅度要小（5-10%），小步试探
 - min_roas 是硬止损线
 """
@@ -1303,6 +1333,20 @@ async def analyze_stream(db, tenant_id: int, shop_id: int,
                 continue
             current_bid = float(raw.get("current_bid") or 0)
             suggested_bid = float(raw.get("suggested_bid") or 0)
+
+            # 硬性安全护栏（兜底 AI 违规）：days<10 / trend=down 加价 / trend=new 全部丢弃
+            sku_stat = sku_stats.get(f"{camp_id}_{sku}", {})
+            days = int(sku_stat.get("days", 0) or 0)
+            trend = sku_stat.get("trend", "new")
+            if days < 10:
+                logger.info(f"[guardrail] 丢弃 sku={sku} days={days}<10 (AI建议{current_bid}->{suggested_bid})")
+                continue
+            if trend == "new":
+                logger.info(f"[guardrail] 丢弃 sku={sku} trend=new (AI建议{current_bid}->{suggested_bid})")
+                continue
+            if trend == "down" and suggested_bid > current_bid:
+                logger.info(f"[guardrail] 丢弃 sku={sku} trend=down 但AI建议加价 {current_bid}->{suggested_bid}")
+                continue
 
             max_bid = float(template.get("max_bid", 999))
             max_pct = float(template.get("max_adjust_pct", 30))
