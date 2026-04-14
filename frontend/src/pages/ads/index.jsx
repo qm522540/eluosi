@@ -9,7 +9,8 @@ import dayjs from 'dayjs'
 import relativeTime from 'dayjs/plugin/relativeTime'
 import 'dayjs/locale/zh-cn'
 import { getShops } from '@/api/shops'
-import { syncAdsByPlatform, getLastSyncTime } from '@/api/ads'
+import { getLastSyncTime } from '@/api/ads'
+import { syncData } from '@/api/bid_management'
 import { useAuthStore } from '@/stores/authStore'
 import AdsOverview from './AdsOverview'
 import AdsRules from './AdsRules'
@@ -59,7 +60,7 @@ const Ads = () => {
           const diffMin = (Date.now() - syncTime.getTime()) / 60000
           if (diffMin > 30) {
             setSyncing(true)
-            syncAdsByPlatform(committedPlatform).then(() => {
+            syncData(committedShopId).then(() => {
               setLastSyncTime(new Date())
               message.info('数据已超过30分钟，已自动同步')
               if (searched) refreshCurrentTab()
@@ -69,7 +70,7 @@ const Ads = () => {
           setLastSyncTime(null)
           // 从未同步过，自动触发一次
           setSyncing(true)
-          syncAdsByPlatform(committedPlatform).then(() => {
+          syncData(committedShopId).then(() => {
             setLastSyncTime(new Date())
             message.info('首次进入，已自动同步数据')
             if (searched) refreshCurrentTab()
@@ -96,10 +97,10 @@ const Ads = () => {
   }, [])
 
   const handleSync = async () => {
-    if (!committedPlatform) return
+    if (!committedShopId) return
     setSyncing(true)
     try {
-      await syncAdsByPlatform(committedPlatform)
+      await syncData(committedShopId)
       setLastSyncTime(new Date())
       message.success('同步任务已提交，数据将在后台更新')
       if (searched) {

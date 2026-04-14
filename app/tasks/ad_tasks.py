@@ -260,19 +260,30 @@ def _upsert_campaign(db, tenant_id: int, shop_id: int, platform: str, data: dict
 
 
 def _upsert_stat(db, tenant_id: int, campaign_id: int, data: dict) -> int:
-    """写入广告统计：按 campaign_id + stat_date + stat_hour 去重"""
+    """写入广告统计：按 campaign_id + ad_group_id + stat_date + stat_hour 去重
+
+    ad_group_id 含义（按平台）：
+      - WB: nm_id（商品级 SKU）
+      - Ozon: 若数据源提供 sku 则写入，否则 None（Performance API 按日期分组无 SKU 维度）
+    """
     stat_date_str = data.get("stat_date", "")
     if not stat_date_str:
         return 0
 
     stat_date = date.fromisoformat(stat_date_str)
     stat_hour = data.get("stat_hour")
+    # 兼容多种字段命名：nm_id（WB）/ sku_id / ad_group_id
+    ad_group_id = data.get("nm_id") or data.get("sku_id") or data.get("ad_group_id")
+    ad_group_id = int(ad_group_id) if ad_group_id else None
 
-    # 检查是否已存在
     query = db.query(AdStat).filter(
         AdStat.campaign_id == campaign_id,
         AdStat.stat_date == stat_date,
     )
+    if ad_group_id is not None:
+        query = query.filter(AdStat.ad_group_id == ad_group_id)
+    else:
+        query = query.filter(AdStat.ad_group_id.is_(None))
     if stat_hour is not None:
         query = query.filter(AdStat.stat_hour == stat_hour)
     else:
@@ -283,7 +294,6 @@ def _upsert_stat(db, tenant_id: int, campaign_id: int, data: dict) -> int:
     platform = data.get("platform", "wb")
 
     if existing:
-        # 更新已有记录
         existing.impressions = data.get("impressions", 0)
         existing.clicks = data.get("clicks", 0)
         existing.spend = data.get("spend", 0)
@@ -293,11 +303,12 @@ def _upsert_stat(db, tenant_id: int, campaign_id: int, data: dict) -> int:
         existing.cpc = data.get("cpc")
         existing.acos = data.get("acos")
         existing.roas = data.get("roas")
-        return 0  # 更新不计新增数
+        return 0
     else:
         stat = AdStat(
             tenant_id=tenant_id,
             campaign_id=campaign_id,
+            ad_group_id=ad_group_id,
             platform=platform,
             stat_date=stat_date,
             stat_hour=stat_hour,

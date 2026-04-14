@@ -70,14 +70,45 @@ async def smart_sync(db: Session, shop_id: int, tenant_id: int) -> dict:
 
     logger.info(f"shop_id={shop_id} 同步 {date_from}~{date_to}")
 
-    # ① Seller API 同步拉 revenue + orders（秒回）
+    # ① 先同步活动列表（保证本地 ad_campaigns 是最新的）
+    from app.tasks.ad_tasks import _upsert_campaign
+    try:
+        ozon_client = OzonClient(
+            shop_id=shop.id, api_key=shop.api_key,
+            client_id=shop.client_id or '',
+            perf_client_id=getattr(shop, 'perf_client_id', None) or '',
+            perf_client_secret=getattr(shop, 'perf_client_secret', None) or '',
+        )
+        try:
+            campaigns_data = await ozon_client.fetch_ad_campaigns()
+            api_ids = set()
+            for camp_data in campaigns_data:
+                _upsert_campaign(db, tenant_id, shop_id, "ozon", camp_data)
+                api_ids.add(camp_data.get("platform_campaign_id", ""))
+            if api_ids:
+                for c in db.query(AdCampaign).filter(
+                    AdCampaign.shop_id == shop_id,
+                    AdCampaign.tenant_id == tenant_id,
+                    AdCampaign.platform == "ozon",
+                    AdCampaign.status.in_(["active", "paused", "draft"]),
+                    ~AdCampaign.platform_campaign_id.in_(api_ids),
+                ).all():
+                    c.status = "archived"
+            db.commit()
+        finally:
+            await ozon_client.close()
+    except Exception as e:
+        logger.warning(f"Ozon 活动列表同步失败，继续拉统计数据: {e}")
+        db.rollback()
+
+    # ② Seller API 同步拉 revenue + orders（秒回）
     campaigns = db.query(AdCampaign).filter(
         AdCampaign.shop_id == shop_id,
         AdCampaign.tenant_id == tenant_id,
         AdCampaign.platform == "ozon",
     ).all()
     if not campaigns:
-        raise ValueError("无Ozon广告活动，请先同步广告活动列表")
+        raise ValueError("无Ozon广告活动（API 返回为空）")
 
     default_campaign = campaigns[0]
     total_synced = await _fetch_seller_data(

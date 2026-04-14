@@ -72,20 +72,46 @@ async def smart_sync(db: Session, shop_id: int, tenant_id: int) -> dict:
             date_from = date_to - timedelta(days=SYNC_DAYS - 1)
         logger.info(f"shop_id={shop_id} WB 增量同步 {date_from}~{date_to}")
 
-    # 3. 拉取数据
-    campaigns = db.query(AdCampaign).filter(
-        AdCampaign.shop_id == shop_id,
-        AdCampaign.tenant_id == tenant_id,
-        AdCampaign.platform == "wb",
-    ).all()
-
-    if not campaigns:
-        raise ValueError("无WB广告活动，请先同步广告活动列表")
-
     client = WBClient(shop_id=shop.id, api_key=shop.api_key)
     total_synced = 0
+    campaigns_synced = 0
 
     try:
+        # 3a. 先同步活动列表（保证本地 ad_campaigns 是最新的）
+        from app.tasks.ad_tasks import _upsert_campaign
+        try:
+            campaigns_data = await client.fetch_ad_campaigns()
+            api_ids = set()
+            for camp_data in campaigns_data:
+                campaigns_synced += _upsert_campaign(
+                    db, tenant_id, shop_id, "wb", camp_data
+                )
+                api_ids.add(camp_data.get("platform_campaign_id", ""))
+            # 已删除的活动归档
+            if api_ids:
+                for c in db.query(AdCampaign).filter(
+                    AdCampaign.shop_id == shop_id,
+                    AdCampaign.tenant_id == tenant_id,
+                    AdCampaign.platform == "wb",
+                    AdCampaign.status.in_(["active", "paused", "draft"]),
+                    ~AdCampaign.platform_campaign_id.in_(api_ids),
+                ).all():
+                    c.status = "archived"
+            db.commit()
+        except Exception as e:
+            logger.warning(f"WB 活动列表同步失败，继续拉统计数据: {e}")
+            db.rollback()
+
+        # 3b. 拉统计数据
+        campaigns = db.query(AdCampaign).filter(
+            AdCampaign.shop_id == shop_id,
+            AdCampaign.tenant_id == tenant_id,
+            AdCampaign.platform == "wb",
+        ).all()
+
+        if not campaigns:
+            raise ValueError("无WB广告活动（API 返回为空）")
+
         for campaign in campaigns:
             try:
                 stats = await client.fetch_ad_stats(
