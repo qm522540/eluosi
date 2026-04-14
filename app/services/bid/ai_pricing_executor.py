@@ -327,13 +327,13 @@ async def _analyze_now_inner(db, tenant_id: int, shop_id: int,
         days = int(sku_stat.get("days", 0) or 0)
         trend = sku_stat.get("trend", "new")
         if days < 10:
-            logger.info(f"[guardrail] 丢弃 sku={sku} days={days}<10 (AI建议{current_bid}->{suggested_bid})")
+            logger.warning(f"[guardrail] 丢弃 sku={sku} days={days}<10 (AI建议{current_bid}->{suggested_bid})")
             continue
         if trend == "new":
-            logger.info(f"[guardrail] 丢弃 sku={sku} trend=new (AI建议{current_bid}->{suggested_bid})")
+            logger.warning(f"[guardrail] 丢弃 sku={sku} trend=new (AI建议{current_bid}->{suggested_bid})")
             continue
         if trend == "down" and suggested_bid > current_bid:
-            logger.info(f"[guardrail] 丢弃 sku={sku} trend=down 但AI建议加价 {current_bid}->{suggested_bid}")
+            logger.warning(f"[guardrail] 丢弃 sku={sku} trend=down 但AI建议加价 {current_bid}->{suggested_bid}")
             continue
 
         # 安全护栏
@@ -384,7 +384,7 @@ async def _analyze_now_inner(db, tenant_id: int, shop_id: int,
             "basis": raw.get("decision_basis") or "shop_benchmark",
             "current_roas": raw.get("current_roas"),
             "expected_roas": raw.get("expected_roas"),
-            "data_days": sku_stats.get(f"{camp_id}_{sku}", {}).get("days", 0),
+            "data_days": days,
             "reason": (raw.get("reason") or "")[:500],
         })
         saved.append({
@@ -1339,13 +1339,13 @@ async def analyze_stream(db, tenant_id: int, shop_id: int,
             days = int(sku_stat.get("days", 0) or 0)
             trend = sku_stat.get("trend", "new")
             if days < 10:
-                logger.info(f"[guardrail] 丢弃 sku={sku} days={days}<10 (AI建议{current_bid}->{suggested_bid})")
+                logger.warning(f"[guardrail] 丢弃 sku={sku} days={days}<10 (AI建议{current_bid}->{suggested_bid})")
                 continue
             if trend == "new":
-                logger.info(f"[guardrail] 丢弃 sku={sku} trend=new (AI建议{current_bid}->{suggested_bid})")
+                logger.warning(f"[guardrail] 丢弃 sku={sku} trend=new (AI建议{current_bid}->{suggested_bid})")
                 continue
             if trend == "down" and suggested_bid > current_bid:
-                logger.info(f"[guardrail] 丢弃 sku={sku} trend=down 但AI建议加价 {current_bid}->{suggested_bid}")
+                logger.warning(f"[guardrail] 丢弃 sku={sku} trend=down 但AI建议加价 {current_bid}->{suggested_bid}")
                 continue
 
             max_bid = float(template.get("max_bid", 999))
@@ -1394,7 +1394,7 @@ async def analyze_stream(db, tenant_id: int, shop_id: int,
                 "basis": raw.get("decision_basis") or "shop_benchmark",
                 "current_roas": raw.get("current_roas"),
                 "expected_roas": raw.get("expected_roas"),
-                "data_days": sku_stats.get(f"{camp_id}_{sku}", {}).get("days", 0),
+                "data_days": days,
                 "reason": (raw.get("reason") or "")[:500],
             })
             saved_count += 1
