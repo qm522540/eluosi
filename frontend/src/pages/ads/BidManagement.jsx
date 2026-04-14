@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import { useAuthStore } from '../../stores/authStore'
+import AdsAIPricing from './AdsAIPricing'
 import {
   Button, Modal, message, Switch, Empty,
   Table, Tag, Tooltip, Space,
@@ -2213,7 +2214,7 @@ const BidManagement = ({ shopId, platform }) => {
       {selectedMode === 'time_pricing' ? (
         <TimePricingConfig shopId={shopId} platform={platform} activeMode={activeMode} onSaved={loadActiveMode} />
       ) : (
-        <AIPricingConfig shopId={shopId} platform={platform} onSaved={loadActiveMode} />
+        <AdsAIPricing shopId={shopId} platform={platform} searched={true} />
       )}
     </div>
   )
