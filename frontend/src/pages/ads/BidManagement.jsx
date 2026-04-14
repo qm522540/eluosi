@@ -1163,6 +1163,7 @@ const AIPricingConfig = ({ shopId, platform, onSaved }) => {
   // 从不完整的 JSON 流中提取已完成的 suggestion 对象
   const extractSuggestions = (raw) => {
     const items = []
+    const seen = new Set()
     // 匹配每个完整的 {...} 对象（含 reason 字段说明是建议）
     const regex = /\{[^{}]*?"reason"\s*:\s*"[^"]*?"[^{}]*?\}/g
     let m
@@ -1170,6 +1171,10 @@ const AIPricingConfig = ({ shopId, platform, onSaved }) => {
       try {
         const obj = JSON.parse(m[0])
         if (obj.platform_sku_id && obj.reason) {
+          // AI 有时对同一 SKU 输出重复/修改版, 按 campaign_id+sku 去重
+          const key = `${obj.campaign_id || ''}_${obj.platform_sku_id}`
+          if (seen.has(key)) continue
+          seen.add(key)
           items.push(obj)
         }
       } catch { /* incomplete */ }
@@ -1802,7 +1807,7 @@ const AIPricingConfig = ({ shopId, platform, onSaved }) => {
               }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
                   <span style={{ fontSize: 13, fontWeight: 500, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                    {item.sku_name || item.platform_sku_id}
+                    {item.sku_name ? `${item.sku_name} · ${item.platform_sku_id}` : item.platform_sku_id}
                   </span>
                   <Tag color={
                     item.product_stage === 'growing' ? 'green'
