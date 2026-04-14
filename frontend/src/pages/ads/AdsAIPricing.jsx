@@ -438,7 +438,8 @@ const WBAIPricing = ({ shopId }) => {
 
 // ==================== Ozon全自动模式 ====================
 
-const OzonAIPricing = ({ shopId }) => {
+const OzonAIPricing = ({ shopId, platform = 'ozon' }) => {
+  const bidLabel = platform === 'wb' ? 'CPM' : 'CPC'
   const [configs, setConfigs] = useState([])
   const [configsLoading, setConfigsLoading] = useState(false)
   const [editingConfig, setEditingConfig] = useState(null)
@@ -675,7 +676,7 @@ const OzonAIPricing = ({ shopId }) => {
       render: v => `₽${Math.round(v)}`,
     },
     {
-      title: '建议出价', dataIndex: 'suggested_bid', width: 90, align: 'right',
+      title: `建议${bidLabel}`, dataIndex: 'suggested_bid', width: 90, align: 'right',
       render: (v, r) => (
         <Text style={{ color: v > r.current_bid ? '#52c41a' : '#ff4d4f', fontWeight: 600 }}>
           ₽{Math.round(v)}
@@ -1244,8 +1245,7 @@ const AdsAIPricing = ({ shopId, platform, searched }) => {
       <PromoStatusBar tenantId={tenantId} />
 
       {/* 根据platform渲染对应内容 */}
-      {platform === 'ozon' && <OzonAIPricing shopId={shopId} />}
-      {platform === 'wb' && <WBAIPricing shopId={shopId} />}
+      {(platform === 'ozon' || platform === 'wb') && <OzonAIPricing shopId={shopId} platform={platform} />}
       {platform === 'yandex' && <YandexComingSoon />}
 
       {/* 大促日历管理 */}
