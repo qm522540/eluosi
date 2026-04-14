@@ -41,3 +41,11 @@ htmlcov/
 
 # Claude Code 本地设置（用户/机器特定权限白名单，不入库）
 .claude/settings.local.json
+
+# 临时打包/上传文件（给 claude.ai 用的，不入库）
+core_code*.zip
+core_code*.tar.gz
+db_structure*.txt
+
+# 临时升级包暂存目录
+new/
