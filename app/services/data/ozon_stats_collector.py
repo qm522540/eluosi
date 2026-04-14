@@ -295,16 +295,11 @@ async def _fetch_perf_data(
                         orders = _parse_num(row.get("orders"), True)
                         revenue = _parse_num(row.get("ordersMoney"))
 
-                        ctr = round(clicks / views * 100, 4) if views > 0 else 0
-                        cpc = round(spend / clicks, 2) if clicks > 0 else 0
-                        roas = round(revenue / spend, 4) if spend > 0 else 0
-
                         # 更新已有记录的广告字段
                         db.execute(text("""
                             UPDATE ad_stats SET
                                 impressions = :views, clicks = :clicks,
-                                spend = :spend, ctr = :ctr, cpc = :cpc,
-                                roas = CASE WHEN :roas > 0 THEN :roas ELSE roas END,
+                                spend = :spend,
                                 orders = CASE WHEN :orders > 0 THEN :orders ELSE orders END,
                                 revenue = CASE WHEN :revenue > 0 THEN :revenue ELSE revenue END,
                                 updated_at = NOW()
@@ -313,7 +308,6 @@ async def _fetch_perf_data(
                         """), {
                             "cid": internal_cid, "sku": sku, "sd": stat_date,
                             "views": views, "clicks": clicks, "spend": spend,
-                            "ctr": ctr, "cpc": cpc, "roas": roas,
                             "orders": orders, "revenue": revenue,
                         })
 
@@ -324,18 +318,17 @@ async def _fetch_perf_data(
                                     tenant_id, campaign_id, ad_group_id,
                                     platform, stat_date,
                                     impressions, clicks, spend, orders, revenue,
-                                    ctr, cpc, acos, roas, created_at, updated_at
+                                    created_at, updated_at
                                 ) VALUES (
                                     :tid, :cid, :sku, 'ozon', :sd,
                                     :views, :clicks, :spend, :orders, :revenue,
-                                    :ctr, :cpc, 0, :roas, NOW(), NOW()
+                                    NOW(), NOW()
                                 )
                             """), {
                                 "tid": tenant_id, "cid": internal_cid, "sku": sku,
                                 "sd": stat_date,
                                 "views": views, "clicks": clicks, "spend": spend,
                                 "orders": orders, "revenue": revenue,
-                                "ctr": ctr, "cpc": cpc, "roas": roas,
                             })
                         updated += 1
 
@@ -388,11 +381,11 @@ def _upsert_stat(db: Session, campaign: AdCampaign, tenant_id: int,
             INSERT INTO ad_stats (
                 tenant_id, campaign_id, ad_group_id, platform, stat_date,
                 impressions, clicks, spend, orders, revenue,
-                ctr, cpc, acos, roas, created_at, updated_at
+                created_at, updated_at
             ) VALUES (
                 :tid, :cid, :sku, 'ozon', :sd,
                 0, 0, 0, :orders, :revenue,
-                0, 0, 0, 0, NOW(), NOW()
+                NOW(), NOW()
             )
         """), {
             "tid": tenant_id, "cid": campaign.id, "sku": sku_id, "sd": stat_date,

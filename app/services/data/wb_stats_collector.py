@@ -151,10 +151,6 @@ def _save_sku_stats(db: Session, campaign: AdCampaign, stats: list) -> int:
             "spend": s.get("spend", 0),
             "orders": s.get("orders", 0),
             "revenue": s.get("revenue", 0),
-            "ctr": s.get("ctr"),
-            "cpc": s.get("cpc"),
-            "acos": s.get("acos"),
-            "roas": s.get("roas"),
         }
 
         if existing:

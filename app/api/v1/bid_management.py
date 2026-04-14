@@ -812,21 +812,19 @@ def download_data(
 
     rows = db.execute(text("""
         SELECT
-            c.name AS campaign_name,
             c.platform_campaign_id,
             c.platform AS platform,
             s.ad_group_id AS sku_id,
-            s.stat_date, s.stat_hour,
-            s.impressions, s.clicks, s.ctr,
-            s.cpc, s.spend, s.orders,
-            s.revenue, s.acos, s.roas
+            s.stat_date,
+            s.impressions, s.clicks, s.spend,
+            s.orders, s.revenue
         FROM ad_stats s
         JOIN ad_campaigns c ON s.campaign_id = c.id
         WHERE c.shop_id = :shop_id
           AND c.tenant_id = :tenant_id
           AND c.platform = :platform
           AND s.stat_date >= DATE_SUB(CURDATE(), INTERVAL :days DAY)
-        ORDER BY c.name, s.stat_date DESC, s.ad_group_id
+        ORDER BY s.stat_date DESC, c.platform_campaign_id, s.ad_group_id
     """), {
         "shop_id": shop.id,
         "tenant_id": shop.tenant_id,
@@ -838,19 +836,17 @@ def download_data(
     ws = wb.active
     ws.title = "广告数据"
     ws.append([
-        "活动名称", "平台活动ID", "商品SKU", "日期", "小时",
-        "曝光", "点击", "CTR(%)",
-        "CPC(₽)", "花费(₽)", "订单数",
-        "收入(₽)", "ACOS(%)", "ROAS",
+        "平台活动ID", "商品SKU", "日期",
+        "曝光", "点击", "花费(₽)", "订单数", "收入(₽)",
     ])
     for r in rows:
         ws.append([
-            r.campaign_name, r.platform_campaign_id,
+            r.platform_campaign_id,
             r.sku_id or "",
-            r.stat_date.isoformat() if r.stat_date else "", r.stat_hour,
-            r.impressions or 0, r.clicks or 0, float(r.ctr or 0),
-            float(r.cpc or 0), float(r.spend or 0), r.orders or 0,
-            float(r.revenue or 0), float(r.acos or 0), float(r.roas or 0),
+            r.stat_date.isoformat() if r.stat_date else "",
+            r.impressions or 0, r.clicks or 0,
+            float(r.spend or 0), r.orders or 0,
+            float(r.revenue or 0),
         ])
 
     output = BytesIO()
