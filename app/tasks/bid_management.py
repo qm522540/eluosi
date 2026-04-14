@@ -45,12 +45,12 @@ def run_bid_management(self):
     db = SessionLocal()
     try:
         shops = db.query(Shop).filter(
-            Shop.platform == "ozon",
+            Shop.platform.in_(["ozon", "wb"]),
             Shop.status == "active",
         ).all()
 
         if not shops:
-            logger.info("出价管理：无active的Ozon店铺")
+            logger.info("出价管理：无active的Ozon/WB店铺")
             return {"shops": 0}
 
         logger.info(f"出价管理：开始执行 共{len(shops)}个店铺")
