@@ -657,6 +657,11 @@ async def sync_data(
     platform_label = "Wildberries" if shop.platform == "wb" else "Ozon"
     platform_code = shop.platform
 
+    # 记录本次同步请求时间（前端 /shops/{id} 读取此字段判断是否需要自动同步）
+    from datetime import datetime as _dt, timezone as _tz
+    shop.last_sync_at = _dt.now(_tz.utc)
+    db.commit()
+
     # 快速检查：是否已是最新（不需要调平台 API）
     yesterday = _date.today() - _td(days=1)
     latest_row = db.execute(text("""
