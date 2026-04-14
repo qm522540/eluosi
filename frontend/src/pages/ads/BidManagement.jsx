@@ -34,7 +34,7 @@ const DEFAULT_LOW_RATIO = 60
 
 const TEMPLATE_DEFAULTS = {
   default: {
-    gross_margin: 0.5,
+    gross_margin: 0.3,
   },
 }
 
@@ -1564,7 +1564,7 @@ const AIPricingConfig = ({ shopId, platform, onSaved }) => {
               size="small"
               onClick={e => {
                 e.stopPropagation()
-                setEditingTemplate({ gross_margin: currentTemplate.gross_margin ?? 0.5 })
+                setEditingTemplate({ gross_margin: currentTemplate.gross_margin ?? 0.3 })
                 setEditModalOpen(true)
               }}
             >
@@ -1573,8 +1573,7 @@ const AIPricingConfig = ({ shopId, platform, onSaved }) => {
           }
         >
           {(() => {
-            const m = currentTemplate.gross_margin ?? 0.5
-            const d = deriveFromMargin(m)
+            const m = currentTemplate.gross_margin ?? 0.3
             return (
               <div style={{
                 fontSize: 12,
@@ -1582,13 +1581,8 @@ const AIPricingConfig = ({ shopId, platform, onSaved }) => {
                 padding: '9px 12px',
                 background: 'var(--color-background-secondary, #fafafa)',
                 borderRadius: 6,
-                lineHeight: 1.8,
               }}>
-                <div>净毛利率：<b style={{ color: '#262626' }}>{Math.round(m * 100)}%</b></div>
-                <div style={{ fontSize: 11, color: 'var(--color-text-tertiary, #999)' }}>
-                  系统自动推算 → 目标ROAS {d.target_roas}x · 最低ROAS {d.min_roas}x ·
-                  最高出价 ₽{d.max_bid} · 最大调幅 {d.max_adjust_pct}%
-                </div>
+                净毛利率：<b style={{ color: '#262626' }}>{Math.round(m * 100)}%</b>
               </div>
             )
           })()}
@@ -2052,7 +2046,7 @@ const AIPricingConfig = ({ shopId, platform, onSaved }) => {
         open={editModalOpen}
         onCancel={() => setEditModalOpen(false)}
         onOk={async () => {
-          const margin = Number(editingTemplate.gross_margin) || 0.5
+          const margin = Number(editingTemplate.gross_margin) || 0.3
           if (margin <= 0 || margin >= 1) {
             message.error('净毛利率必须在 0-100% 开区间')
             return
@@ -2102,28 +2096,6 @@ const AIPricingConfig = ({ shopId, platform, onSaved }) => {
             addonAfter="%"
           />
         </Space>
-        {(() => {
-          const m = Number(editingTemplate.gross_margin) || 0
-          if (m <= 0 || m >= 1) return null
-          const d = deriveFromMargin(m)
-          return (
-            <div style={{
-              marginTop: 14,
-              padding: '9px 12px',
-              background: 'var(--color-background-secondary, #fafafa)',
-              borderRadius: 6,
-              fontSize: 11,
-              lineHeight: 1.7,
-              color: 'var(--color-text-secondary, #666)',
-            }}>
-              <div style={{ fontWeight: 500, marginBottom: 4 }}>系统自动推算</div>
-              <div>• 保本 ROAS ≈ {Math.round(1 / m * 100) / 100}x（广告费刚好吃掉毛利）</div>
-              <div>• 目标 ROAS = {d.target_roas}x（保本 × 1.5，可加价）</div>
-              <div>• 最低 ROAS = {d.min_roas}x（保本 × 1.2，跌破则降价）</div>
-              <div>• 最高出价 ₽{d.max_bid} · 最大单次调幅 {d.max_adjust_pct}%</div>
-            </div>
-          )
-        })()}
       </Modal>
     </div>
   )

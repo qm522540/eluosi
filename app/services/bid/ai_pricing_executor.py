@@ -889,7 +889,7 @@ def _derive_template_from_margin(margin: float) -> dict:
     target_roas = 保本 × 1.5（目标, 能净赚 50% 毛利）
     其他字段固定默认。
     """
-    m = float(margin) if 0 < float(margin) < 1 else 0.5
+    m = float(margin) if 0 < float(margin) < 1 else 0.3
     breakeven = 1.0 / m
     return {
         "gross_margin": round(m, 4),
