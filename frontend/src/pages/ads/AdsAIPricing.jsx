@@ -33,8 +33,8 @@ const PLATFORM_CONFIG = {
   wb: {
     label: 'Wildberries',
     color: '#CB11AB',
-    mode: 'suggest',
-    description: '活动级别出价·需手动到WB后台执行',
+    mode: 'full',
+    description: '商品级别CPM出价·支持自动执行',
   },
   yandex: {
     label: 'Yandex Market',
