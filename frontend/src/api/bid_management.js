@@ -45,6 +45,9 @@ export const disableAIPricing = (shopId) =>
 export const manualAnalyze = (shopId) =>
   request.post(`${BASE}/ai-pricing/${shopId}/analyze`, null, { timeout: 120000 })
 
+export const getDiagnostic = (shopId) =>
+  request.get(`${BASE}/ai-pricing/${shopId}/diagnostic`)
+
 // ==================== 建议列表 ====================
 export const getSuggestions = (shopId) =>
   request.get(`${BASE}/suggestions/${shopId}`)

@@ -12,7 +12,7 @@ import {
   getTimePricingStatus, restoreSku,
   getAIPricing, updateAIPricing,
   enableAIPricing, disableAIPricing,
-  manualAnalyze, getSuggestions,
+  manualAnalyze, getSuggestions, getDiagnostic,
   approveSuggestion, rejectSuggestion,
   approveBatch, rejectBatch, removeProduct,
   checkConflict, getBidLogs,
@@ -1045,6 +1045,8 @@ const AIPricingConfig = ({ shopId, platform, onSaved }) => {
   const [editModalOpen, setEditModalOpen] = useState(false)
   const [editingTemplate, setEditingTemplate] = useState({})
   const [suggestions, setSuggestions] = useState([])
+  const [diagnostic, setDiagnostic] = useState(null)
+  const [diagnosticOpen, setDiagnosticOpen] = useState(false)
   const [analyzing, setAnalyzing] = useState(false)
   const [streamRaw, setStreamRaw] = useState('')
   const [streamPhase, setStreamPhase] = useState('')
@@ -1065,8 +1067,18 @@ const AIPricingConfig = ({ shopId, platform, onSaved }) => {
     loadConfig()
     loadSuggestions()
     loadDataStatus()
+    loadDiagnostic()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [shopId])
+
+  const loadDiagnostic = async () => {
+    try {
+      const res = await getDiagnostic(shopId)
+      setDiagnostic(res.data)
+    } catch {
+      setDiagnostic(null)
+    }
+  }
 
   const loadConfig = async () => {
     try {
@@ -1218,6 +1230,7 @@ const AIPricingConfig = ({ shopId, platform, onSaved }) => {
               } else if (eventType === 'done') {
                 setStreamPhase(data)
                 await loadSuggestions()
+                await loadDiagnostic()
               } else if (eventType === 'error') {
                 setStreamPhase(`${data}`)
               }
@@ -1837,6 +1850,72 @@ const AIPricingConfig = ({ shopId, platform, onSaved }) => {
           }
         `}</style>
       </Modal>
+
+      {/* AI 诊断概览（数据分档） */}
+      {diagnostic && diagnostic.total > 0 && (
+        <div style={{ marginBottom: 10 }}>
+          <div
+            style={{
+              display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+              padding: '8px 12px',
+              background: '#fafafa',
+              border: '0.5px solid #e8e8e8',
+              borderRadius: diagnosticOpen ? '6px 6px 0 0' : 6,
+              cursor: 'pointer',
+              fontSize: 12,
+            }}
+            onClick={() => setDiagnosticOpen(v => !v)}
+          >
+            <Space size={12}>
+              <span style={{ fontWeight: 500 }}>诊断概览</span>
+              <span>共 {diagnostic.total} 个 SKU</span>
+              <span style={{ color: '#fa8c16' }}>
+                攒数据中 {diagnostic.cold_start_count}
+              </span>
+              <span style={{ color: '#faad14' }}>
+                仅可降价 {diagnostic.short_data_count}
+              </span>
+              <span style={{ color: '#52c41a' }}>
+                全量决策 {diagnostic.full_data_count}
+              </span>
+            </Space>
+            <span style={{ fontSize: 11, color: '#999' }}>
+              {diagnosticOpen ? '收起 ▲' : '展开明细 ▼'}
+            </span>
+          </div>
+          {diagnosticOpen && (
+            <div style={{
+              border: '0.5px solid #e8e8e8', borderTop: 0,
+              borderRadius: '0 0 6px 6px',
+            }}>
+              <Table
+                size="small"
+                pagination={false}
+                dataSource={diagnostic.items}
+                rowKey={r => `${r.campaign_id}_${r.sku}`}
+                columns={[
+                  { title: 'SKU', dataIndex: 'sku', width: 110 },
+                  { title: '活动', dataIndex: 'campaign_name', ellipsis: true },
+                  { title: '天数', dataIndex: 'days', width: 60 },
+                  { title: '曝光', dataIndex: 'impressions', width: 70 },
+                  { title: '点击', dataIndex: 'clicks', width: 60 },
+                  { title: '花费(₽)', dataIndex: 'spend', width: 80 },
+                  { title: '订单', dataIndex: 'orders', width: 60 },
+                  { title: 'ROAS', dataIndex: 'roas', width: 70 },
+                  {
+                    title: '状态', dataIndex: 'bucket', width: 110,
+                    render: (v) => {
+                      if (v === 'cold_start') return <span style={{ color: '#fa8c16' }}>攒数据(&lt;7天)</span>
+                      if (v === 'short_data') return <span style={{ color: '#faad14' }}>仅可降价(7-9天)</span>
+                      return <span style={{ color: '#52c41a' }}>全量决策(≥10天)</span>
+                    },
+                  },
+                ]}
+              />
+            </div>
+          )}
+        </div>
+      )}
 
       {/* 建议列表 */}
       <div style={{

@@ -299,6 +299,81 @@ async def manual_analyze(
     })
 
 
+@router.get("/ai-pricing/{shop_id}/diagnostic")
+def ai_pricing_diagnostic(
+    shop: Shop = Depends(get_owned_shop),
+    db: Session = Depends(get_db),
+):
+    """AI调价诊断概览：按 days 分档展示所有 active 活动下的 SKU 状态
+
+    分档：
+      - full_data(>=10天): 可全量决策（加价+降价）
+      - short_data(7-9天): 仅可降价（硬规则B）
+      - cold_start(<7天): 攒数据中，AI 不动
+    """
+    platform = shop.platform
+    # WB 的 ad_stats 记录 ad_group_id 必须非空; Ozon 老数据可能 NULL (设计所限, 不展示)
+    sku_filter = "AND s.ad_group_id IS NOT NULL"
+
+    rows = db.execute(text(f"""
+        SELECT c.id AS campaign_id, c.name AS campaign_name,
+               s.ad_group_id AS sku_id,
+               COUNT(DISTINCT s.stat_date) AS days,
+               SUM(s.spend) AS spend,
+               SUM(s.revenue) AS revenue,
+               SUM(s.orders) AS orders,
+               SUM(s.clicks) AS clicks,
+               SUM(s.impressions) AS impressions
+        FROM ad_stats s
+        JOIN ad_campaigns c ON s.campaign_id = c.id
+        WHERE c.shop_id = :sid AND c.tenant_id = :tid
+          AND s.platform = :p
+          AND c.status = 'active'
+          AND s.stat_date >= DATE_SUB(CURDATE(), INTERVAL 10 DAY)
+          {sku_filter}
+        GROUP BY c.id, s.ad_group_id
+        ORDER BY days DESC, revenue DESC
+    """), {"sid": shop.id, "tid": shop.tenant_id, "p": platform}).fetchall()
+
+    items = []
+    cold = short = full = 0
+    for r in rows:
+        days = int(r.days or 0)
+        spend = float(r.spend or 0)
+        revenue = float(r.revenue or 0)
+        roas = round(revenue / spend, 2) if spend > 0 else 0
+        if days < 7:
+            bucket = "cold_start"
+            cold += 1
+        elif days < 10:
+            bucket = "short_data"
+            short += 1
+        else:
+            bucket = "full_data"
+            full += 1
+        items.append({
+            "sku": str(r.sku_id),
+            "campaign_id": r.campaign_id,
+            "campaign_name": r.campaign_name,
+            "days": days,
+            "roas": roas,
+            "spend": round(spend, 2),
+            "revenue": round(revenue, 2),
+            "orders": int(r.orders or 0),
+            "clicks": int(r.clicks or 0),
+            "impressions": int(r.impressions or 0),
+            "bucket": bucket,
+        })
+
+    return success({
+        "total": len(items),
+        "cold_start_count": cold,
+        "short_data_count": short,
+        "full_data_count": full,
+        "items": items,
+    })
+
+
 @router.get("/ai-pricing/{shop_id}/analyze-stream")
 async def analyze_stream_sse(
     shop: Shop = Depends(get_owned_shop),
