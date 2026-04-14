@@ -50,9 +50,9 @@ const Ads = () => {
   }, [])
 
   // 已确认店铺后获取上次同步时间，超过30分钟自动同步
-  // 仅在"概览"和"自动化规则" Tab 下触发，出价管理/数据分析/预算管理不自动同步
+  // 仅"广告概览" Tab 下触发，其他 Tab（规则/出价管理/数据分析/预算）不自动同步
   useEffect(() => {
-    const needAutoSync = mainTab === 'overview' || mainTab === 'rules'
+    const needAutoSync = mainTab === 'overview'
     if (committedShopId && committedPlatform && needAutoSync) {
       getLastSyncTime(committedShopId).then(res => {
         if (res.data?.last_sync_at) {
