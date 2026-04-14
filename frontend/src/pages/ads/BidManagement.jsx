@@ -1581,8 +1581,12 @@ const AIPricingConfig = ({ shopId, platform, onSaved }) => {
                 padding: '9px 12px',
                 background: 'var(--color-background-secondary, #fafafa)',
                 borderRadius: 6,
+                lineHeight: 1.8,
               }}>
-                净毛利率：<b style={{ color: '#262626' }}>{Math.round(m * 100)}%</b>
+                <div>净毛利率：<b style={{ color: '#262626' }}>{Math.round(m * 100)}%</b></div>
+                <div style={{ fontSize: 11, color: 'var(--color-text-tertiary, #999)' }}>
+                  请修改每个商品的净毛利率，如未设置商品的净毛利率，商品出价将默认此毛利率值
+                </div>
               </div>
             )
           })()}
