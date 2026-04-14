@@ -50,13 +50,14 @@ const Ads = () => {
   }, [])
 
   // 已确认店铺后获取上次同步时间，超过30分钟自动同步
+  // 仅在"概览"和"自动化规则" Tab 下触发，出价管理/数据分析/预算管理不自动同步
   useEffect(() => {
-    if (committedShopId && committedPlatform) {
+    const needAutoSync = mainTab === 'overview' || mainTab === 'rules'
+    if (committedShopId && committedPlatform && needAutoSync) {
       getLastSyncTime(committedShopId).then(res => {
         if (res.data?.last_sync_at) {
           const syncTime = new Date(res.data.last_sync_at)
           setLastSyncTime(syncTime)
-          // 超过30分钟自动触发同步
           const diffMin = (Date.now() - syncTime.getTime()) / 60000
           if (diffMin > 30) {
             setSyncing(true)
@@ -68,7 +69,6 @@ const Ads = () => {
           }
         } else {
           setLastSyncTime(null)
-          // 从未同步过，自动触发一次
           setSyncing(true)
           syncData(committedShopId).then(() => {
             setLastSyncTime(new Date())
@@ -77,10 +77,10 @@ const Ads = () => {
           }).catch(() => {}).finally(() => setSyncing(false))
         }
       }).catch(() => {})
-    } else {
+    } else if (!committedShopId) {
       setLastSyncTime(null)
     }
-  }, [committedShopId, committedPlatform])
+  }, [committedShopId, committedPlatform, mainTab])
 
   const canSearch = filterPlatform && filterShopId
 
