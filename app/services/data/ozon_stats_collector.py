@@ -175,7 +175,19 @@ async def _fetch_seller_data(
 
 def _start_perf_background(shop: Shop, camp_map: dict,
                            date_from: date, date_to: date, tenant_id: int):
-    """在后台线程中拉广告数据（独立数据库连接，避免跨线程连接池冲突）"""
+    """在后台线程中拉广告数据（独立数据库连接，避免跨线程连接池冲突）
+
+    注意：shop 是主线程 session 的 ORM 对象，主线程 session 结束后 shop 会 detached,
+    跨线程访问属性会触发 refresh 报错。这里先提取为普通 dict 传入后台。
+    """
+    shop_data = {
+        "id": shop.id,
+        "api_key": shop.api_key or '',
+        "client_id": shop.client_id or '',
+        "perf_client_id": getattr(shop, 'perf_client_id', None) or '',
+        "perf_client_secret": getattr(shop, 'perf_client_secret', None) or '',
+    }
+
     def _run():
         from sqlalchemy import create_engine
         from sqlalchemy.orm import sessionmaker
@@ -188,7 +200,7 @@ def _start_perf_background(shop: Shop, camp_map: dict,
         loop = asyncio.new_event_loop()
         try:
             loop.run_until_complete(
-                _fetch_perf_data(new_db, shop, camp_map, date_from, date_to, tenant_id)
+                _fetch_perf_data(new_db, shop_data, camp_map, date_from, date_to, tenant_id)
             )
         except Exception as e:
             logger.error(f"Performance API 后台拉取失败: {e}")
@@ -203,15 +215,19 @@ def _start_perf_background(shop: Shop, camp_map: dict,
 
 
 async def _fetch_perf_data(
-    db: Session, shop: Shop, camp_map: dict,
+    db: Session, shop_data: dict, camp_map: dict,
     date_from: date, date_to: date, tenant_id: int,
 ):
-    """Performance API 拉广告数据（impressions/clicks/spend）"""
+    """Performance API 拉广告数据（impressions/clicks/spend）
+
+    shop_data: 普通 dict（id/api_key/client_id/perf_client_id/perf_client_secret），
+               不要传 ORM 对象, 避免跨线程 detached 问题
+    """
     ozon = OzonClient(
-        shop_id=shop.id, api_key=shop.api_key,
-        client_id=shop.client_id or '',
-        perf_client_id=getattr(shop, 'perf_client_id', None) or '',
-        perf_client_secret=getattr(shop, 'perf_client_secret', None) or '',
+        shop_id=shop_data["id"], api_key=shop_data["api_key"],
+        client_id=shop_data["client_id"],
+        perf_client_id=shop_data["perf_client_id"],
+        perf_client_secret=shop_data["perf_client_secret"],
     )
 
     try:
@@ -335,8 +351,8 @@ async def _fetch_perf_data(
         await ozon.close()
 
     # 更新 data_days
-    data_days = _count_data_days(db, shop.id, tenant_id)
-    _update_init_status(db, shop.id, tenant_id,
+    data_days = _count_data_days(db, shop_data["id"], tenant_id)
+    _update_init_status(db, shop_data["id"], tenant_id,
                         date.today() - timedelta(days=1), data_days)
     logger.info(f"Performance API 后台完成，共 {data_days} 天数据")
 
