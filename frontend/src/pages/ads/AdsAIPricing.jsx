@@ -526,13 +526,12 @@ const OzonAIPricing = ({ shopId }) => {
   const handleEditConfig = (record) => {
     setEditingConfig(record)
     configForm.setFieldsValue({
-      target_roas: record.target_roas,
-      min_roas: record.min_roas,
-      gross_margin: record.gross_margin,
-      daily_budget_limit: record.daily_budget_limit,
-      max_bid: record.max_bid,
-      min_bid: record.min_bid,
-      max_adjust_pct: record.max_adjust_pct,
+      gross_margin:           record.gross_margin          ?? 0.27,
+      default_client_price:   record.default_client_price  ?? 600,
+      max_bid:                record.max_bid               ?? 200,
+      max_adjust_pct:         record.max_adjust_pct        ?? 30,
+      auto_remove_losing_sku: !!record.auto_remove_losing_sku,
+      losing_days_threshold:  record.losing_days_threshold ?? 21,
     })
   }
 
@@ -540,7 +539,11 @@ const OzonAIPricing = ({ shopId }) => {
     try {
       const values = await configForm.validateFields()
       setConfigSubmitting(true)
-      await updateAIPricingConfig(editingConfig.id, values)
+      const payload = {
+        ...values,
+        auto_remove_losing_sku: values.auto_remove_losing_sku ? 1 : 0,
+      }
+      await updateAIPricingConfig(shopId, payload)
       message.success('配置已保存')
       setEditingConfig(null)
       fetchConfigs()
@@ -817,7 +820,7 @@ const OzonAIPricing = ({ shopId }) => {
           <Table size="small" dataSource={configs} rowKey="id" pagination={false}
             columns={[
               {
-                title: '模板名称', dataIndex: 'template_name', width: 160,
+                title: '模板名称', dataIndex: 'template_name', width: 120,
                 render: (name, record) => (
                   <Space>
                     <Tag color={templateTypeConfig[record.template_type]?.color || 'default'}>
@@ -828,25 +831,36 @@ const OzonAIPricing = ({ shopId }) => {
                 ),
               },
               {
-                title: <Tooltip title="广告ROAS的理想目标值">目标ROAS</Tooltip>,
-                dataIndex: 'target_roas', width: 90, align: 'right',
-                render: v => `${v}x`,
+                title: <Tooltip title="扣除所有成本后的净毛利率">净毛利率</Tooltip>,
+                dataIndex: 'gross_margin', width: 90, align: 'right',
+                render: v => v ? `${(v * 100).toFixed(0)}%` : '-',
               },
               {
-                title: <Tooltip title="ROAS低于此值触发止损">最低ROAS</Tooltip>,
-                dataIndex: 'min_roas', width: 90, align: 'right',
-                render: v => `${v}x`,
+                title: <Tooltip title="商品无价格数据时的兜底客单价">默认客单价</Tooltip>,
+                dataIndex: 'default_client_price', width: 100, align: 'right',
+                render: v => v ? `₽${v}` : '₽600',
+              },
+              {
+                title: <Tooltip title="系统自动计算：客单价 × 净毛利率">每单广告上限</Tooltip>,
+                width: 110, align: 'right',
+                render: (_, record) => {
+                  const margin = record.gross_margin
+                  const price  = record.default_client_price || 600
+                  if (!margin) return '-'
+                  return <span style={{ color: '#ff4d4f' }}>₽{(price * margin).toFixed(0)}</span>
+                },
               },
               {
                 title: '最高出价', dataIndex: 'max_bid', width: 90, align: 'right',
-                render: v => `₽${v}`,
+                render: v => v ? `₽${v}` : '-',
               },
               {
-                title: '日预算', dataIndex: 'daily_budget_limit', width: 100, align: 'right',
-                render: (v, r) => r.no_budget_limit ? <Tag color="red">不限</Tag> : `₽${v}`,
-              },
-              {
-                title: '说明', dataIndex: 'description', ellipsis: true,
+                title: '智能清理', width: 90, align: 'center',
+                render: (_, record) => (
+                  record.auto_remove_losing_sku
+                    ? <Tag color="orange">开启·{record.losing_days_threshold || 21}天</Tag>
+                    : <Tag color="default">关闭</Tag>
+                ),
               },
               {
                 title: '操作', key: 'action', width: 70,
@@ -963,67 +977,169 @@ const OzonAIPricing = ({ shopId }) => {
 
       {/* 模板编辑弹窗 */}
       <Modal
-        title={`编辑模板 — ${editingConfig?.template_name || ''}`}
+        title={`编辑策略配置 — ${editingConfig?.template_name || ''}`}
         open={!!editingConfig}
         onOk={handleConfigSave}
         onCancel={() => setEditingConfig(null)}
         confirmLoading={configSubmitting}
         destroyOnClose
+        width={560}
       >
         <Form form={configForm} layout="vertical" style={{ marginTop: 16 }}>
+
+          {/* 盈利参数 */}
+          <div style={{ fontWeight: 500, marginBottom: 12, color: '#333' }}>
+            盈利参数
+          </div>
           <Row gutter={16}>
             <Col span={12}>
-              <Form.Item name="target_roas" label={
-                <Tooltip title="广告ROAS的理想目标值">目标ROAS</Tooltip>
-              } rules={[{ required: true }]}>
-                <InputNumber min={0.1} step={0.1} style={{ width: '100%' }} addonAfter="x" />
+              <Form.Item
+                name="gross_margin"
+                label={
+                  <Tooltip title="扣除进货成本、平台佣金、物流、退货后的净毛利率，请确认已包含所有成本">
+                    净毛利率 <span style={{ color: '#999', fontSize: 12 }}>（含佣金物流）</span>
+                  </Tooltip>
+                }
+                rules={[
+                  { required: true, message: '请输入净毛利率' },
+                  { type: 'number', min: 0.01, max: 0.99, message: '请输入0.01~0.99之间的值' },
+                ]}
+              >
+                <InputNumber
+                  min={0.01} max={0.99} step={0.01}
+                  style={{ width: '100%' }}
+                  addonAfter="%"
+                  formatter={v => v ? `${(v * 100).toFixed(0)}` : ''}
+                  parser={v => v ? parseFloat(v) / 100 : 0}
+                  placeholder="如：27 表示27%"
+                />
               </Form.Item>
             </Col>
             <Col span={12}>
-              <Form.Item name="min_roas" label={
-                <Tooltip title="低于此值触发止损降价">最低ROAS</Tooltip>
-              } rules={[{ required: true }]}>
-                <InputNumber min={0.1} step={0.1} style={{ width: '100%' }} addonAfter="x" />
+              <Form.Item
+                name="default_client_price"
+                label={
+                  <Tooltip title="商品无价格数据时使用此默认客单价，有数据时自动读取实际售价">
+                    默认客单价 <span style={{ color: '#999', fontSize: 12 }}>（₽，无数据时兜底）</span>
+                  </Tooltip>
+                }
+                rules={[{ required: true, message: '请输入默认客单价' }]}
+              >
+                <InputNumber
+                  min={1} step={50}
+                  style={{ width: '100%' }}
+                  addonBefore="₽"
+                  placeholder="如：600"
+                />
               </Form.Item>
             </Col>
           </Row>
+
+          {/* 系统自动计算提示 */}
+          {(() => {
+            const margin = configForm.getFieldValue('gross_margin')
+            const price  = configForm.getFieldValue('default_client_price')
+            if (!margin || !price) return null
+            const maxCpa       = (price * margin).toFixed(0)
+            const breakeven    = (1 / margin).toFixed(1)
+            const targetCpa    = (price * margin * 0.6).toFixed(0)
+            return (
+              <Alert
+                type="info"
+                showIcon={false}
+                style={{ marginBottom: 16, fontSize: 12 }}
+                message={
+                  <span>
+                    系统自动计算：每单广告上限 <strong>₽{maxCpa}</strong>
+                    &nbsp;·&nbsp;保本ROAS <strong>{breakeven}x</strong>
+                    &nbsp;·&nbsp;利润最大化目标CPA <strong>₽{targetCpa}</strong>
+                  </span>
+                }
+              />
+            )
+          })()}
+
+          {/* 出价上限 */}
+          <div style={{ fontWeight: 500, marginBottom: 12, color: '#333' }}>
+            出价限制
+          </div>
           <Row gutter={16}>
             <Col span={12}>
-              <Form.Item name="gross_margin" label={
-                <Tooltip title="商品毛利率(0~1)">毛利率</Tooltip>
-              } rules={[{ required: true }]}>
-                <InputNumber min={0.01} max={0.99} step={0.05} style={{ width: '100%' }} />
+              <Form.Item
+                name="max_bid"
+                label={<Tooltip title="WB单次出价CPM上限，Ozon单次出价CPC上限">最高出价 (₽)</Tooltip>}
+                rules={[{ required: true, message: '请输入最高出价' }]}
+              >
+                <InputNumber min={3} step={10} style={{ width: '100%' }} addonBefore="₽" />
               </Form.Item>
             </Col>
             <Col span={12}>
-              <Form.Item name="daily_budget_limit" label={
-                <Tooltip title="单日最大广告花费限额">日预算上限 (₽)</Tooltip>
-              } rules={[{ required: true }]}>
-                <InputNumber min={1} step={100} style={{ width: '100%' }} />
+              <Form.Item
+                name="max_adjust_pct"
+                label={<Tooltip title="单次出价调整幅度不超过此百分比">单次最大调整幅度</Tooltip>}
+                rules={[{ required: true, message: '请输入最大调整幅度' }]}
+              >
+                <InputNumber min={1} max={100} step={5} style={{ width: '100%' }} addonAfter="%" />
               </Form.Item>
             </Col>
           </Row>
-          <Row gutter={16}>
-            <Col span={12}>
-              <Form.Item name="max_bid" label={
-                <Tooltip title="单次出价最高限额">最高出价 (₽)</Tooltip>
-              } rules={[{ required: true }]}>
-                <InputNumber min={1} step={10} style={{ width: '100%' }} />
-              </Form.Item>
-            </Col>
-            <Col span={12}>
-              <Form.Item name="min_bid" label={
-                <Tooltip title="Ozon最低出价3卢布">最低出价 (₽)</Tooltip>
-              }>
-                <InputNumber min={1} step={1} style={{ width: '100%' }} />
-              </Form.Item>
-            </Col>
-          </Row>
-          <Form.Item name="max_adjust_pct" label={
-            <Tooltip title="单次调价的最大比例(1~100)">最大调整幅度 (%)</Tooltip>
-          } rules={[{ required: true }]}>
-            <InputNumber min={1} max={100} step={5} style={{ width: '100%' }} addonAfter="%" />
-          </Form.Item>
+
+          {/* 智能清理 */}
+          <div style={{ fontWeight: 500, marginBottom: 12, color: '#333', marginTop: 8 }}>
+            智能清理
+          </div>
+          <div style={{
+            border: '1px solid #f0f0f0', borderRadius: 8,
+            padding: '16px', background: '#fafafa',
+          }}>
+            <Form.Item
+              name="auto_remove_losing_sku"
+              valuePropName="checked"
+              style={{ marginBottom: 8 }}
+            >
+              <Switch
+                checkedChildren="已开启"
+                unCheckedChildren="已关闭"
+              />
+            </Form.Item>
+            <div style={{ fontSize: 13, fontWeight: 500, marginBottom: 4 }}>
+              自动删除持续亏损商品
+            </div>
+            <div style={{ fontSize: 12, color: '#999', lineHeight: 1.6, marginBottom: 12 }}>
+              开启后，当商品广告数据超过观察期且持续亏损（ROAS低于保本线），
+              系统将自动从广告活动中删除该商品的出价记录，并发送企业微信通知。
+              <span style={{ color: '#ff4d4f' }}>此操作不可逆，请谨慎开启。</span>
+            </div>
+            <Form.Item
+              noStyle
+              shouldUpdate={(prev, curr) => prev.auto_remove_losing_sku !== curr.auto_remove_losing_sku}
+            >
+              {({ getFieldValue }) =>
+                getFieldValue('auto_remove_losing_sku') ? (
+                  <Form.Item
+                    name="losing_days_threshold"
+                    label="亏损观察天数"
+                    style={{ marginBottom: 0 }}
+                    extra="商品数据天数超过此值且持续亏损，才会触发自动删除"
+                  >
+                    <InputNumber
+                      min={14} max={60} step={1}
+                      style={{ width: 160 }}
+                      addonAfter="天"
+                    />
+                  </Form.Item>
+                ) : null
+              }
+            </Form.Item>
+          </div>
+
+          {/* 汇率提示 */}
+          <Alert
+            type="warning"
+            showIcon={false}
+            style={{ marginTop: 16, fontSize: 12 }}
+            message="💡 提示：汇率波动时请及时更新净毛利率，平台佣金已包含在净毛利率中无需单独设置"
+          />
         </Form>
       </Modal>
     </div>

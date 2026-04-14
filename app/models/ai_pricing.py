@@ -43,6 +43,18 @@ class AiPricingConfig(Base):
     conservative_config: Mapped[dict] = mapped_column(JSON, nullable=False)
     default_config: Mapped[dict] = mapped_column(JSON, nullable=False)
     aggressive_config: Mapped[dict] = mapped_column(JSON, nullable=False)
+    default_client_price: Mapped[float] = mapped_column(
+        DECIMAL(10, 2), nullable=False, default=600.00,
+        comment="默认客单价（卢布），商品表无数据时使用"
+    )
+    auto_remove_losing_sku: Mapped[int] = mapped_column(
+        SmallInteger, nullable=False, default=0,
+        comment="是否自动删除持续亏损SKU：0=不删除 1=自动删除"
+    )
+    losing_days_threshold: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=21,
+        comment="亏损判断观察天数，默认21天"
+    )
     last_executed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     last_execute_status: Mapped[Optional[str]] = mapped_column(
         Enum("success", "failed", "partial", name="ai_exec_status"), nullable=True,
@@ -128,6 +140,7 @@ class BidAdjustmentLog(Base):
     adjust_pct: Mapped[float] = mapped_column(DECIMAL(5, 2), nullable=False)
     execute_type: Mapped[str] = mapped_column(
         Enum("time_pricing", "ai_auto", "ai_manual", "user_manual",
+             "time_restore", "auto_remove",
              name="bid_execute_type"),
         nullable=False,
     )

@@ -16,6 +16,10 @@ class Product(BaseMixin, Base):
     brand: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     category: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
     cost_price: Mapped[Optional[float]] = mapped_column(DECIMAL(10, 2), nullable=True)
+    net_margin: Mapped[Optional[float]] = mapped_column(
+        DECIMAL(5, 2), nullable=True,
+        comment="商品净毛利率(0-1)，为空则使用店铺默认配置gross_margin"
+    )
     weight_g: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     image_url: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
     status: Mapped[str] = mapped_column(
