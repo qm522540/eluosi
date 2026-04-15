@@ -30,6 +30,39 @@ OZON_PERFORMANCE_API = "https://api-performance.ozon.ru"
 MIN_REQUEST_INTERVAL = 60.0 / settings.OZON_RATE_LIMIT_PER_MINUTE
 
 
+def _extract_ozon_min_bid(limits_resp: dict, category: Optional[str] = None) -> Optional[float]:
+    """从 /api/client/limits/list 响应里提取最低出价（卢布）
+
+    响应结构（per 2026-04 实测）：
+      {"limits": [
+        {"objectType": "SKU", "placement": "SEARCH_AND_PDP",
+         "paymentMethod": "CPC", "limits": [
+           {"categoryId": "...", "minBid": 7, "maxBid": 200}, ...
+         ]}, ...
+      ]}
+
+    传 category_id 时返回该品类的 minBid；否则返回所有组里最低的 minBid 作为兜底。
+    """
+    if not isinstance(limits_resp, dict):
+        return None
+    groups = limits_resp.get("limits") or []
+    candidates = []
+    for grp in groups:
+        for rec in grp.get("limits") or []:
+            min_bid = rec.get("minBid")
+            if min_bid is None:
+                continue
+            if category is not None and str(rec.get("categoryId") or "") != str(category):
+                continue
+            try:
+                candidates.append(float(min_bid))
+            except (TypeError, ValueError):
+                pass
+    if not candidates:
+        return None
+    return min(candidates)
+
+
 class OzonClient(BasePlatformClient):
     """Ozon 平台客户端
 
@@ -479,26 +512,94 @@ class OzonClient(BasePlatformClient):
             return {"ok": False, "error": str(e)}
 
     async def update_campaign_bid(self, campaign_id: str, sku: str, new_bid: str) -> dict:
-        """修改广告活动中商品的出价
+        """修改广告活动中商品的出价（支持最低出价自动兜底重试）
 
         Performance API:
         PUT /api/client/campaign/{id}/products  body: {"bids":[{"sku":"...","bid":"..."}]}
 
-        返回 {"ok": bool, "error": str|None}
+        策略（对齐 WB update_campaign_cpm 行为）：
+          1. 第一次用 AI 建议值尝试
+          2. 若 Ozon 返回 "min"/"minimum"/"too low" 类错误，正则提取 min 值
+          3. 用 min 值重试一次
+          4. 如果错误里没 min 值，fallback 调 /api/client/limits/list 拿类目最低，再重试
+          5. 仍失败 → 返回错误
+
+        new_bid 单位：micro-rubles（整数字符串），和 AI executor 里的换算一致
+
+        返回 {"ok": bool, "error": str|None, "actual_bid_rub": float}
         """
+        import re as _re
+
         await self._ensure_perf_token()
         if not self._perf_token:
             return {"ok": False, "error": "no_perf_token"}
 
-        try:
-            url = f"{OZON_PERFORMANCE_API}/api/client/campaign/{campaign_id}/products"
-            payload = {"bids": [{"sku": str(sku), "bid": str(new_bid)}]}
-            result = await self._request("PUT", url, use_perf=True, json=payload)
-            logger.info(f"Ozon 出价修改成功 campaign={campaign_id} sku={sku} bid={new_bid} result={result}")
-            return {"ok": True, "error": None}
-        except Exception as e:
-            logger.error(f"Ozon 出价修改失败: {e}")
-            return {"ok": False, "error": str(e)}
+        url = f"{OZON_PERFORMANCE_API}/api/client/campaign/{campaign_id}/products"
+        attempt_bid = str(new_bid)
+        last_error = ""
+
+        for attempt in range(2):
+            try:
+                payload = {"bids": [{"sku": str(sku), "bid": attempt_bid}]}
+                result = await self._request("PUT", url, use_perf=True, json=payload)
+                actual_bid_rub = int(attempt_bid) / 1_000_000
+                logger.info(
+                    f"Ozon 出价修改成功 campaign={campaign_id} sku={sku} "
+                    f"bid_micro={attempt_bid} actual_rub={actual_bid_rub} "
+                    f"attempt={attempt} result={result}"
+                )
+                return {
+                    "ok": True,
+                    "error": None,
+                    "actual_bid_rub": actual_bid_rub,
+                }
+            except Exception as e:
+                err_str = str(e)
+                last_error = err_str
+                logger.warning(
+                    f"Ozon 出价修改失败 attempt={attempt} "
+                    f"campaign={campaign_id} sku={sku} bid={attempt_bid}: {err_str}"
+                )
+
+                if attempt >= 1:
+                    break
+
+                # ① 从错误信息正则提取 min（可能以 micro-rubles 或卢布出现）
+                min_match = _re.search(
+                    r'min[^\d]{0,20}(\d+)', err_str, _re.IGNORECASE
+                )
+                if min_match:
+                    min_val = min_match.group(1)
+                    # 启发式：<=1000 视为卢布，否则 micro-rubles
+                    if int(min_val) <= 1000:
+                        attempt_bid = str(int(min_val) * 1_000_000)
+                    else:
+                        attempt_bid = str(min_val)
+                    logger.warning(
+                        f"Ozon 出价低于最低 → 从错误里提取 min={min_val}，"
+                        f"自动用最低值重试 (micro={attempt_bid})"
+                    )
+                    continue
+
+                # ② 错误里没 min，调 /api/client/limits/list 拿类目最低
+                try:
+                    limits_url = f"{OZON_PERFORMANCE_API}/api/client/limits/list"
+                    limits_resp = await self._request("GET", limits_url, use_perf=True)
+                    min_rub = _extract_ozon_min_bid(limits_resp, category=None)
+                    if min_rub and min_rub > 0:
+                        attempt_bid = str(int(min_rub * 1_000_000))
+                        logger.warning(
+                            f"Ozon 出价低于最低 → /limits/list 返回 min={min_rub}₽，"
+                            f"自动用最低值重试 (micro={attempt_bid})"
+                        )
+                        continue
+                except Exception as fetch_err:
+                    logger.warning(f"Ozon /limits/list 查询失败: {fetch_err}")
+
+                # ③ 没法兜底，退出
+                break
+
+        return {"ok": False, "error": last_error or "Ozon 出价修改失败"}
 
     # ==================== 商品 ====================
 
