@@ -469,6 +469,31 @@ const OzonAIPricing = ({ shopId, platform = 'ozon' }) => {
   const [dataStatus, setDataStatus] = useState(null)
   const [dataSyncing, setDataSyncing] = useState(false)
 
+  // DeepSeek 流式分析弹窗
+  const [streamOpen, setStreamOpen] = useState(false)
+  const [streamPhase, setStreamPhase] = useState('')
+  const [streamItems, setStreamItems] = useState([])
+  const lastParsedRef = useRef(0)
+
+  const extractSuggestions = (raw) => {
+    const items = []
+    const seen = new Set()
+    const regex = /\{[^{}]*?"reason"\s*:\s*"[^"]*?"[^{}]*?\}/g
+    let m
+    while ((m = regex.exec(raw)) !== null) {
+      try {
+        const obj = JSON.parse(m[0])
+        if (obj.platform_sku_id && obj.reason) {
+          const key = `${obj.campaign_id || ''}_${obj.platform_sku_id}`
+          if (seen.has(key)) continue
+          seen.add(key)
+          items.push(obj)
+        }
+      } catch { /* incomplete JSON */ }
+    }
+    return items
+  }
+
   const loadDataStatus = useCallback(async () => {
     if (!shopId) return
     try {
@@ -619,12 +644,58 @@ const OzonAIPricing = ({ shopId, platform = 'ozon' }) => {
 
   const handleManualAnalyze = async () => {
     setAnalyzing(true)
+    setStreamPhase('正在连接...')
+    setStreamItems([])
+    lastParsedRef.current = 0
+    setStreamOpen(true)
+
+    let fullText = ''
     try {
-      const res = await triggerAIAnalysis(shopId)
-      const data = res.data || {}
-      message.success(`分析完成：分析了 ${data.analyzed_count || 0} 个活动，生成 ${data.suggestion_count || 0} 条建议`)
-      fetchSuggestions(1)
+      const token = useAuthStore.getState().token
+      const resp = await fetch(`/api/v1/bid-management/ai-pricing/${shopId}/analyze-stream`, {
+        headers: { Authorization: `Bearer ${token}` },
+      })
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
+
+      const reader = resp.body.getReader()
+      const decoder = new TextDecoder()
+      let buffer = ''
+
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+        buffer += decoder.decode(value, { stream: true })
+        const lines = buffer.split('\n')
+        buffer = lines.pop() || ''
+
+        let eventType = ''
+        for (const line of lines) {
+          if (line.startsWith('event: ')) {
+            eventType = line.slice(7).trim()
+          } else if (line.startsWith('data: ')) {
+            try {
+              const data = JSON.parse(line.slice(6))
+              if (eventType === 'phase') {
+                setStreamPhase(data)
+              } else if (eventType === 'token') {
+                fullText += data
+                const parsed = extractSuggestions(fullText)
+                if (parsed.length > lastParsedRef.current) {
+                  lastParsedRef.current = parsed.length
+                  setStreamItems([...parsed])
+                }
+              } else if (eventType === 'done') {
+                setStreamPhase(data)
+                fetchSuggestions(1)
+              } else if (eventType === 'error') {
+                setStreamPhase(`${data}`)
+              }
+            } catch { /* parse error */ }
+          }
+        }
+      }
     } catch (err) {
+      setStreamPhase(`分析失败：${err.message || err}`)
       message.error(err.message || '分析失败')
     } finally {
       setAnalyzing(false)
@@ -1019,6 +1090,103 @@ const OzonAIPricing = ({ shopId, platform = 'ozon' }) => {
           立即分析
         </Button>
       </div>
+
+      {/* DeepSeek 智能分析弹窗（流式） */}
+      <Modal
+        title={
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <div style={{
+              width: 28, height: 28, borderRadius: '50%',
+              background: 'linear-gradient(135deg, #7c6cf0, #534AB7)',
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              color: '#fff', fontSize: 12, fontWeight: 600,
+            }}>AI</div>
+            <span>DeepSeek 智能分析</span>
+          </div>
+        }
+        open={streamOpen}
+        footer={!analyzing ? (
+          <Button type="primary" onClick={() => setStreamOpen(false)}>查看建议列表</Button>
+        ) : null}
+        closable={!analyzing}
+        maskClosable={false}
+        onCancel={() => setStreamOpen(false)}
+        width={620}
+      >
+        <div style={{
+          display: 'flex', alignItems: 'center', gap: 8,
+          padding: '8px 12px', marginBottom: 12,
+          background: analyzing ? '#f0ecff' : '#f6ffed',
+          borderRadius: 6, fontSize: 13,
+          color: analyzing ? '#534AB7' : '#389e0d',
+        }}>
+          {analyzing && <Spin size="small" />}
+          {!analyzing && <span style={{ fontSize: 16 }}>&#10003;</span>}
+          {streamPhase}
+        </div>
+
+        <div style={{ maxHeight: 420, overflowY: 'auto' }}>
+          {streamItems.length === 0 && analyzing && (
+            <div style={{ textAlign: 'center', padding: '40px 0', color: '#999', fontSize: 13 }}>
+              AI 正在分析商品数据，建议将逐条出现...
+            </div>
+          )}
+          {streamItems.map((item, idx) => {
+            const isUp = item.suggested_bid > item.current_bid
+            const stageMap = {
+              growing: { color: 'green', label: '放量期' },
+              declining: { color: 'red', label: '衰退期' },
+              testing: { color: 'orange', label: '测试期' },
+              cold_start: { color: 'blue', label: '冷启动' },
+            }
+            const stage = stageMap[item.product_stage] || { color: 'default', label: '数据不足' }
+            return (
+              <div key={idx} style={{
+                border: '1px solid #f0f0f0',
+                borderRadius: 8,
+                padding: '12px 14px',
+                marginBottom: 8,
+                animation: 'fadeSlideIn 0.3s ease-out',
+                background: '#fafafa',
+              }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+                  <span style={{ fontSize: 13, fontWeight: 500, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {item.sku_name ? `${item.sku_name} · ${item.platform_sku_id}` : item.platform_sku_id}
+                  </span>
+                  <Tag color={stage.color} style={{ marginLeft: 8 }}>{stage.label}</Tag>
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, marginBottom: 6 }}>
+                  <span style={{ color: '#999' }}>出价</span>
+                  <span style={{ fontWeight: 500 }}>₽{item.current_bid}</span>
+                  <span style={{ color: isUp ? '#cf1322' : '#389e0d', fontSize: 16 }}>{isUp ? '↑' : '↓'}</span>
+                  <span style={{ fontWeight: 600, color: isUp ? '#cf1322' : '#389e0d', fontSize: 15 }}>
+                    ₽{item.suggested_bid}
+                  </span>
+                  {item.current_roas != null && (
+                    <span style={{ color: '#999', marginLeft: 8, fontSize: 12 }}>ROAS {item.current_roas}x</span>
+                  )}
+                </div>
+                {item.reason && (
+                  <div style={{ fontSize: 12, color: '#666', lineHeight: 1.6 }}>
+                    {item.reason}
+                  </div>
+                )}
+              </div>
+            )
+          })}
+          {!analyzing && streamItems.length > 0 && (
+            <div style={{ textAlign: 'center', padding: '10px 0', color: '#999', fontSize: 12 }}>
+              共 {streamItems.length} 条建议
+            </div>
+          )}
+        </div>
+        <style>{`
+          @keyframes fadeSlideIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+          }
+        `}</style>
+      </Modal>
 
       {/* 待确认建议列表 */}
       {!autoExecute && (
