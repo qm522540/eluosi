@@ -1,5 +1,6 @@
-from typing import Optional
-from sqlalchemy import BigInteger, String, Enum, Integer, DECIMAL
+from datetime import datetime
+from typing import Optional, Any
+from sqlalchemy import BigInteger, String, Enum, Integer, DECIMAL, Text, JSON, DateTime
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database import Base
@@ -38,7 +39,19 @@ class PlatformListing(BaseMixin, Base):
         Enum("wb", "ozon", "yandex", name="listing_platform"), nullable=False
     )
     platform_product_id: Mapped[str] = mapped_column(String(100), nullable=False)
+    barcode: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
     title_ru: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    description_ru: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    variant_name: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    variant_attrs: Mapped[Optional[Any]] = mapped_column(JSON, nullable=True)
+    platform_listed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    oss_images: Mapped[Optional[Any]] = mapped_column(JSON, nullable=True)
+    oss_videos: Mapped[Optional[Any]] = mapped_column(JSON, nullable=True)
+    source_listing_id: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
+    publish_status: Mapped[str] = mapped_column(
+        Enum("draft", "pending", "published", name="listing_publish_status"),
+        nullable=False, default="published"
+    )
     price: Mapped[Optional[float]] = mapped_column(DECIMAL(10, 2), nullable=True)
     discount_price: Mapped[Optional[float]] = mapped_column(DECIMAL(10, 2), nullable=True)
     commission_rate: Mapped[Optional[float]] = mapped_column(DECIMAL(5, 2), nullable=True)
@@ -46,6 +59,6 @@ class PlatformListing(BaseMixin, Base):
     rating: Mapped[Optional[float]] = mapped_column(DECIMAL(3, 2), nullable=True)
     review_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     status: Mapped[str] = mapped_column(
-        Enum("active", "inactive", "deleted", "out_of_stock", name="listing_status"),
+        Enum("active", "inactive", "deleted", "out_of_stock", "blocked", name="listing_status"),
         nullable=False, default="active"
     )
