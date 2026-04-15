@@ -1,23 +1,22 @@
-"""探测 Ozon/WB 是否有支持小时级数据的"隐藏"端点
+"""探测 Ozon/WB 是否有支持小时级数据的"隐藏"端点 v2
 
-Ozon 方向（A）：
-  - Performance API: statistics/daily/json, statistics/video/json, statistics/phrases/json,
-    statistics/attribution, statistics/orders, statistics/expense
-  - Seller API: /v1/analytics/data（可以传 dimension=hour/day/week/month）
-  - Seller API: /v1/analytics/stocks_on_warehouses, /v1/finance/realization
+关键新发现要验证：
+- Ozon Seller /v1/analytics/data 接受 dimension=["hour"] 但响应可能静默忽略 hour
+  → 单独只传 ["hour"] 看看结果
 
-WB 方向（C）：
-  - /adv/v2/auto/stat（自动广告）
-  - /adv/v1/stat/words（关键词统计）
-  - /adv/v1/fullstats（v1 旧版）
-  - /adv/v2/fullstats（v2 旧版）
-  - statistics-api /api/v1/supplier/reportDetailByPeriod
-  - statistics-api /api/v5/supplier/reportDetailByPeriod
+WB 广告端点补测（第一版用了错误的方法名）：
+- /adv/v3/fullstats GET 带 T23:59:59 的时间戳
+- /adv/v2/fullstats POST
+- /adv/v1/fullstats POST
+- /adv/v2/auto/stat
+- /adv/v1/stat/words
+- /adv/v1/promotion/count
+- /adv/v1/seacat/stat  搜索目录
+- /adv/v2/auto/daily/stat
 """
 import asyncio
 import json
 import sys
-import traceback
 from datetime import date
 
 sys.path.insert(0, "/data/ecommerce-ai")
@@ -28,48 +27,28 @@ from app.services.platform.ozon import OzonClient, OZON_PERFORMANCE_API, OZON_SE
 from app.services.platform.wb import WBClient, WB_ADVERT_API, WB_STATISTICS_API
 
 TARGET_DATE = "2026-04-14"
+WB_TEST_ADVERT_IDS = ["32319603", "33121342", "35104408"]
 
 
-async def try_ozon(ozon: OzonClient, label: str, method: str, url: str, **kwargs):
-    """试一个端点，捕获所有错误，返回 {label, status, body_summary}"""
-    print(f"\n--- Ozon: {label} ---")
+async def try_req(client, label: str, method: str, url: str, use_perf=False, **kwargs):
+    print(f"\n--- {label} ---")
     print(f"  {method} {url}")
+    body_preview = ""
     if "json" in kwargs:
-        print(f"  body: {json.dumps(kwargs['json'], ensure_ascii=False)[:200]}")
-    try:
-        resp = await ozon._request(method, url, **kwargs)
-        body_str = json.dumps(resp, ensure_ascii=False, default=str)[:800]
-        print(f"  OK body={body_str}")
-        return {"label": label, "ok": True, "body": body_str}
-    except Exception as e:
-        msg = str(e)[:500]
-        # 尝试取 response body
-        resp_body = ""
-        if hasattr(e, "response"):
-            try:
-                resp_body = e.response.text[:500]
-            except Exception:
-                pass
-        print(f"  ERR {msg}")
-        if resp_body:
-            print(f"  response body: {resp_body}")
-        return {"label": label, "ok": False, "err": msg, "resp_body": resp_body}
-
-
-async def try_wb(wb: WBClient, label: str, method: str, url: str, **kwargs):
-    print(f"\n--- WB: {label} ---")
-    print(f"  {method} {url}")
-    if "json" in kwargs:
-        print(f"  body: {json.dumps(kwargs['json'], ensure_ascii=False)[:200]}")
+        body_preview = f"body: {json.dumps(kwargs['json'], ensure_ascii=False)[:250]}"
+        print(f"  {body_preview}")
     if "params" in kwargs:
         print(f"  params: {kwargs['params']}")
     try:
-        resp = await wb._request(method, url, **kwargs)
-        body_str = json.dumps(resp, ensure_ascii=False, default=str)[:800]
+        if use_perf:
+            resp = await client._request(method, url, use_perf=True, **kwargs)
+        else:
+            resp = await client._request(method, url, **kwargs)
+        body_str = json.dumps(resp, ensure_ascii=False, default=str)[:1500]
         print(f"  OK body={body_str}")
         return {"label": label, "ok": True, "body": body_str}
     except Exception as e:
-        msg = str(e)[:500]
+        msg = str(e)[:400]
         resp_body = ""
         if hasattr(e, "response"):
             try:
@@ -85,64 +64,54 @@ async def try_wb(wb: WBClient, label: str, method: str, url: str, **kwargs):
 async def probe_ozon():
     db = SessionLocal()
     shop = db.query(Shop).filter(Shop.platform == "ozon", Shop.status == "active").first()
-    if not shop:
-        print("无 Ozon 店铺")
-        return []
     ozon = OzonClient(
         shop_id=shop.id, api_key=shop.api_key, client_id=shop.client_id,
         perf_client_id=shop.perf_client_id, perf_client_secret=shop.perf_client_secret,
     )
-    await ozon._ensure_perf_token()
     db.close()
 
     results = []
-    # Performance API 其他子路径
-    results.append(await try_ozon(ozon, "perf statistics/daily/json",
-        "POST", f"{OZON_PERFORMANCE_API}/api/client/statistics/daily/json",
-        use_perf=True, json={"campaigns": ["24664750"], "dateFrom": TARGET_DATE, "dateTo": TARGET_DATE}))
 
-    results.append(await try_ozon(ozon, "perf statistics/video/json",
-        "POST", f"{OZON_PERFORMANCE_API}/api/client/statistics/video/json",
-        use_perf=True, json={"campaigns": ["24664750"], "dateFrom": TARGET_DATE, "dateTo": TARGET_DATE}))
-
-    results.append(await try_ozon(ozon, "perf statistics/phrases/json",
-        "POST", f"{OZON_PERFORMANCE_API}/api/client/statistics/phrases/json",
-        use_perf=True, json={"campaigns": ["24664750"], "dateFrom": TARGET_DATE, "dateTo": TARGET_DATE}))
-
-    results.append(await try_ozon(ozon, "perf statistics/attribution",
-        "POST", f"{OZON_PERFORMANCE_API}/api/client/statistics/attribution",
-        use_perf=True, json={"campaigns": ["24664750"], "dateFrom": TARGET_DATE, "dateTo": TARGET_DATE}))
-
-    results.append(await try_ozon(ozon, "perf statistics/orders",
-        "POST", f"{OZON_PERFORMANCE_API}/api/client/statistics/orders",
-        use_perf=True, json={"campaigns": ["24664750"], "dateFrom": TARGET_DATE, "dateTo": TARGET_DATE}))
-
-    results.append(await try_ozon(ozon, "perf statistics/expense",
-        "POST", f"{OZON_PERFORMANCE_API}/api/client/statistics/expense",
-        use_perf=True, json={"campaigns": ["24664750"], "dateFrom": TARGET_DATE, "dateTo": TARGET_DATE}))
-
-    # Performance API 的 statistics list（列出可用报表）
-    results.append(await try_ozon(ozon, "perf statistics/list",
-        "POST", f"{OZON_PERFORMANCE_API}/api/client/statistics/list",
-        use_perf=True, json={}))
-
-    # Seller API Analytics（支持 dimension=day/week/month，看是否有 hour）
-    results.append(await try_ozon(ozon, "seller v1/analytics/data dim=hour",
+    # 1. analytics/data 单独 hour 维度（不带 sku 混淆）
+    results.append(await try_req(ozon, "seller analytics dim=[hour] only",
         "POST", f"{OZON_SELLER_API}/v1/analytics/data",
         json={
             "date_from": TARGET_DATE, "date_to": TARGET_DATE,
-            "dimension": ["hour", "sku"],
+            "dimension": ["hour"],
             "metrics": ["hits_view", "hits_tocart", "ordered_units", "revenue"],
-            "limit": 10, "offset": 0,
+            "limit": 100, "offset": 0,
         }))
 
-    results.append(await try_ozon(ozon, "seller v1/analytics/data dim=day",
+    # 2. analytics/data dim=[day,hour] 两个维度
+    results.append(await try_req(ozon, "seller analytics dim=[day,hour]",
         "POST", f"{OZON_SELLER_API}/v1/analytics/data",
         json={
             "date_from": TARGET_DATE, "date_to": TARGET_DATE,
-            "dimension": ["day", "sku"],
+            "dimension": ["day", "hour"],
             "metrics": ["hits_view", "ordered_units", "revenue"],
-            "limit": 10, "offset": 0,
+            "limit": 100, "offset": 0,
+        }))
+
+    # 3. analytics/data dim=["hour","day","sku"]
+    results.append(await try_req(ozon, "seller analytics dim=[hour,day,sku]",
+        "POST", f"{OZON_SELLER_API}/v1/analytics/data",
+        json={
+            "date_from": TARGET_DATE, "date_to": TARGET_DATE,
+            "dimension": ["hour", "day", "sku"],
+            "metrics": ["hits_view"],
+            "limit": 100, "offset": 0,
+        }))
+
+    # 4. Ozon Seller finance transaction list — 广告扣费交易可能带时间戳
+    results.append(await try_req(ozon, "seller finance/transaction/list v3",
+        "POST", f"{OZON_SELLER_API}/v3/finance/transaction/list",
+        json={
+            "filter": {
+                "date": {"from": f"{TARGET_DATE}T00:00:00.000Z", "to": f"{TARGET_DATE}T23:59:59.999Z"},
+                "operation_type": ["ClientReturnAgentOperation", "MarketplaceMarketingActionCostOperation"],
+                "transaction_type": "all",
+            },
+            "page": 1, "page_size": 10,
         }))
 
     return results
@@ -151,55 +120,59 @@ async def probe_ozon():
 async def probe_wb():
     db = SessionLocal()
     shop = db.query(Shop).filter(Shop.platform == "wb", Shop.status == "active").first()
-    if not shop:
-        print("无 WB 店铺")
-        return []
     wb = WBClient(shop_id=shop.id, api_key=shop.api_key)
     db.close()
 
-    # 先拿个活动 id
-    try:
-        camps = await wb.fetch_campaigns()
-        advert_id = None
-        for c in camps[:30]:
-            advert_id = c.get("platform_campaign_id") or c.get("advertId") or c.get("id")
-            if advert_id:
-                break
-        print(f"WB 测试活动 ID: {advert_id}")
-    except Exception as e:
-        print(f"WB fetch_campaigns 失败: {e}")
-        advert_id = None
-
+    advert_id = WB_TEST_ADVERT_IDS[0]
     results = []
-    # v3/fullstats 带时间戳参数（试着塞 from=datetime）
-    if advert_id:
-        results.append(await try_wb(wb, "v3/fullstats params with dates+hour",
-            "GET", f"{WB_ADVERT_API}/adv/v3/fullstats",
-            params={"ids": str(advert_id), "beginDate": f"{TARGET_DATE}T00:00:00", "endDate": f"{TARGET_DATE}T23:59:59"}))
 
-        # v2/fullstats
-        results.append(await try_wb(wb, "v2/fullstats",
-            "POST", f"{WB_ADVERT_API}/adv/v2/fullstats",
-            json=[{"id": int(advert_id), "dates": [TARGET_DATE]}]))
+    # v3/fullstats GET 用 interval 格式（T00:00:00 到 T23:59:59）
+    results.append(await try_req(wb, "v3/fullstats GET interval timestamps",
+        "GET", f"{WB_ADVERT_API}/adv/v3/fullstats",
+        params={
+            "ids": advert_id,
+            "beginDate": f"{TARGET_DATE}T00:00:00",
+            "endDate": f"{TARGET_DATE}T23:59:59",
+        }))
 
-        # v1/fullstats
-        results.append(await try_wb(wb, "v1/fullstats",
-            "POST", f"{WB_ADVERT_API}/adv/v1/fullstats",
-            json={"id": int(advert_id), "begin": TARGET_DATE, "end": TARGET_DATE}))
+    # v3/fullstats POST（官方有的版本是 POST）
+    results.append(await try_req(wb, "v3/fullstats POST body",
+        "POST", f"{WB_ADVERT_API}/adv/v3/fullstats",
+        json=[{"id": int(advert_id), "dates": [TARGET_DATE]}]))
 
-        # 自动广告小时级? /adv/v2/auto/stat
-        results.append(await try_wb(wb, "v2/auto/stat",
-            "GET", f"{WB_ADVERT_API}/adv/v2/auto/stat",
-            params={"id": int(advert_id)}))
+    # v2/fullstats
+    results.append(await try_req(wb, "v2/fullstats POST",
+        "POST", f"{WB_ADVERT_API}/adv/v2/fullstats",
+        json=[{"id": int(advert_id), "dates": [TARGET_DATE]}]))
 
-        # 关键词统计
-        results.append(await try_wb(wb, "v1/stat/words",
-            "GET", f"{WB_ADVERT_API}/adv/v1/stat/words",
-            params={"id": int(advert_id)}))
+    # v1/fullstats
+    results.append(await try_req(wb, "v1/fullstats POST",
+        "POST", f"{WB_ADVERT_API}/adv/v1/fullstats",
+        json={"id": int(advert_id), "begin": TARGET_DATE, "end": TARGET_DATE}))
 
-    # statistics-api — 供应商报表
-    results.append(await try_wb(wb, "statistics-api supplier/orders",
-        "GET", f"{WB_STATISTICS_API}/api/v1/supplier/orders",
+    # 自动广告日级
+    results.append(await try_req(wb, "v2/auto/daily/stat",
+        "GET", f"{WB_ADVERT_API}/adv/v2/auto/daily/stat",
+        params={"id": advert_id}))
+
+    # 关键词统计
+    results.append(await try_req(wb, "v1/stat/words",
+        "GET", f"{WB_ADVERT_API}/adv/v1/stat/words",
+        params={"id": advert_id}))
+
+    # 搜索目录活动统计
+    results.append(await try_req(wb, "v1/seacat/stat",
+        "GET", f"{WB_ADVERT_API}/adv/v1/seacat/stat",
+        params={"id": advert_id}))
+
+    # WB 内容统计 — 按日期详细报表
+    results.append(await try_req(wb, "statistics-api reportDetailByPeriod v5",
+        "GET", f"{WB_STATISTICS_API}/api/v5/supplier/reportDetailByPeriod",
+        params={"dateFrom": TARGET_DATE, "dateTo": TARGET_DATE}))
+
+    # WB 销售（不是广告但看时间粒度）
+    results.append(await try_req(wb, "statistics-api supplier/sales",
+        "GET", f"{WB_STATISTICS_API}/api/v1/supplier/sales",
         params={"dateFrom": f"{TARGET_DATE}T00:00:00", "flag": 1}))
 
     return results
@@ -207,12 +180,12 @@ async def probe_wb():
 
 async def main():
     print("=" * 60)
-    print("OZON 端点探测")
+    print("OZON 端点探测 v2")
     print("=" * 60)
     ozon_results = await probe_ozon()
 
     print("\n" + "=" * 60)
-    print("WB 端点探测")
+    print("WB 端点探测 v2")
     print("=" * 60)
     wb_results = await probe_wb()
 
@@ -222,13 +195,13 @@ async def main():
     print("\n-- Ozon --")
     for r in ozon_results:
         status = "OK" if r["ok"] else "ERR"
-        hint = r.get("body", "") if r["ok"] else (r.get("resp_body") or r.get("err", ""))[:150]
-        print(f"  [{status}] {r['label']:40s} {hint[:150]}")
+        hint = r.get("body", "") if r["ok"] else (r.get("resp_body") or r.get("err", ""))[:200]
+        print(f"  [{status}] {r['label']:45s} {hint[:200]}")
     print("\n-- WB --")
     for r in wb_results:
         status = "OK" if r["ok"] else "ERR"
-        hint = r.get("body", "") if r["ok"] else (r.get("resp_body") or r.get("err", ""))[:150]
-        print(f"  [{status}] {r['label']:40s} {hint[:150]}")
+        hint = r.get("body", "") if r["ok"] else (r.get("resp_body") or r.get("err", ""))[:200]
+        print(f"  [{status}] {r['label']:45s} {hint[:200]}")
 
 
 if __name__ == "__main__":
