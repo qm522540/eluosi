@@ -254,11 +254,12 @@ export function toggleAIAutoExecute(shopId, data) {
   })
 }
 
-/** 获取AI调价历史记录（出价日志，按 execute_type 过滤 AI 相关） */
+/** 获取AI调价历史记录（出价日志）
+ *  默认 execute_type='all' → 返回所有出价调整记录（ai_auto/ai_manual/auto_remove/user_manual/time_pricing...）
+ *  调用方可显式传 execute_type 做过滤
+ */
 export function getAIPricingHistory(shopId, params) {
-  return request.get(`/bid-management/bid-logs/${shopId}`, {
-    params: { ...params, execute_type: params?.execute_type || 'ai_auto' },
-  })
+  return request.get(`/bid-management/bid-logs/${shopId}`, { params })
 }
 
 /** 获取所有策略模板列表 */
