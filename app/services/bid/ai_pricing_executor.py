@@ -421,8 +421,9 @@ async def analyze_stream(db, tenant_id: int, shop_id: int,
 
         status = result.get("status")
         if status == "failed":
-            yield _sse("error", result.get("message") or "分析失败")
-            yield _sse("done", "分析失败")
+            msg = result.get("message") or "分析失败"
+            yield _sse("error", msg)
+            yield _sse("done", f"分析失败：{msg}")
             return
 
         # 读取本次产生的 suggestions（pending + 今日）
@@ -460,7 +461,7 @@ async def analyze_stream(db, tenant_id: int, shop_id: int,
     except Exception as e:
         logger.exception(f"analyze_stream 失败 shop_id={shop_id}: {e}")
         yield _sse("error", f"分析失败: {e}")
-        yield _sse("done", "分析失败")
+        yield _sse("done", f"分析失败: {e}")
 
 
 async def _analyze_now_inner(db, tenant_id: int, shop_id: int,

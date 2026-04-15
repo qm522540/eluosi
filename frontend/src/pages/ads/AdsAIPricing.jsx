@@ -544,6 +544,7 @@ const OzonAIPricing = ({ shopId, platform = 'ozon' }) => {
   const [streamOpen, setStreamOpen] = useState(false)
   const [streamPhase, setStreamPhase] = useState('')
   const [streamItems, setStreamItems] = useState([])
+  const [streamHasError, setStreamHasError] = useState(false)
   const lastParsedRef = useRef(0)
 
   const extractSuggestions = (raw) => {
@@ -755,6 +756,7 @@ const OzonAIPricing = ({ shopId, platform = 'ozon' }) => {
     setAnalyzing(true)
     setStreamPhase('正在连接...')
     setStreamItems([])
+    setStreamHasError(false)
     lastParsedRef.current = 0
     setStreamOpen(true)
 
@@ -798,6 +800,7 @@ const OzonAIPricing = ({ shopId, platform = 'ozon' }) => {
                 fetchSuggestions(1)
               } else if (eventType === 'error') {
                 setStreamPhase(`${data}`)
+                setStreamHasError(true)
               }
             } catch { /* parse error */ }
           }
@@ -1478,12 +1481,13 @@ const OzonAIPricing = ({ shopId, platform = 'ozon' }) => {
         <div style={{
           display: 'flex', alignItems: 'center', gap: 8,
           padding: '8px 12px', marginBottom: 12,
-          background: analyzing ? '#f0ecff' : '#f6ffed',
+          background: analyzing ? '#f0ecff' : (streamHasError ? '#fff2f0' : '#f6ffed'),
           borderRadius: 6, fontSize: 13,
-          color: analyzing ? '#534AB7' : '#389e0d',
+          color: analyzing ? '#534AB7' : (streamHasError ? '#cf1322' : '#389e0d'),
         }}>
           {analyzing && <Spin size="small" />}
-          {!analyzing && <span style={{ fontSize: 16 }}>&#10003;</span>}
+          {!analyzing && streamHasError && <span style={{ fontSize: 16, fontWeight: 700 }}>×</span>}
+          {!analyzing && !streamHasError && <span style={{ fontSize: 16 }}>&#10003;</span>}
           {streamPhase}
         </div>
 
