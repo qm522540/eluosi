@@ -915,12 +915,12 @@ const OzonAIPricing = ({ shopId, platform = 'ozon' }) => {
               ? <img src={r.image_url} alt="" style={{ width: 36, height: 36, borderRadius: 4, objectFit: 'cover', flexShrink: 0 }} />
               : <div style={{ width: 36, height: 36, borderRadius: 4, background: '#f0f0f0', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 11, color: '#bbb', flexShrink: 0 }}>无图</div>)
         return (
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
             {img}
-            <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>
+            <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0, lineHeight: 1.3 }}>
               {productUrl ? (
-                <a href={productUrl} target="_blank" rel="noopener noreferrer">{name}</a>
-              ) : name}
+                <a href={productUrl} target="_blank" rel="noopener noreferrer" style={{ fontSize: 13 }}>{name}</a>
+              ) : <span style={{ fontSize: 13 }}>{name}</span>}
               {r.platform_sku_id && (
                 <div style={{ fontSize: 11, color: '#999', marginTop: 2 }}>
                   SKU：{r.platform_sku_id}
@@ -1354,15 +1354,19 @@ const OzonAIPricing = ({ shopId, platform = 'ozon' }) => {
         >
           <style>{`
             .ai-suggestion-item-row > td.ant-table-selection-column {
-              padding-left: 20px !important;
-              padding-right: 4px !important;
+              padding-left: 14px !important;
+              padding-right: 0 !important;
+              width: 40px !important;
             }
             .ai-suggestion-item-row > td:nth-child(2) {
-              padding-left: 4px !important;
+              padding-left: 0 !important;
             }
             .ai-suggestion-group-row > td {
               background: #fafafa !important;
               border-bottom: 1px solid #e8e8e8 !important;
+            }
+            .ai-suggestion-group-row > td.ant-table-selection-column {
+              padding-left: 14px !important;
             }
           `}</style>
           <Table
