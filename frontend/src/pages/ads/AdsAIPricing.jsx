@@ -558,16 +558,33 @@ const OzonAIPricing = ({ shopId, platform = 'ozon' }) => {
     setSuggestionsPage(p)
     try {
       const res = await getAIPricingSuggestions(shopId, { status: 'pending' })
-      // 后端按活动分组 {campaigns:[{campaign_id, campaign_name, suggestions:[...]}]}，前端摊平成建议数组
-      const flat = (res.data?.campaigns || []).flatMap(c =>
-        (c.suggestions || []).map(s => ({
-          ...s,
+      // 后端按活动分组 {campaigns:[{campaign_id, campaign_name, suggestions:[...]}]}
+      // 摊成"分组行 + 建议行"交织的行数组，供 Table 渲染树形分组
+      const rows = []
+      let total = 0
+      ;(res.data?.campaigns || []).forEach(c => {
+        const items = c.suggestions || []
+        if (items.length === 0) return
+        rows.push({
+          key: `group-${c.campaign_id}`,
+          isGroup: true,
           campaign_id: c.campaign_id,
           campaign_name: c.campaign_name,
-        }))
-      )
-      setSuggestions(flat)
-      setSuggestionsTotal(flat.length)
+          count: items.length,
+        })
+        items.forEach(s => {
+          rows.push({
+            key: `item-${s.id}`,
+            isGroup: false,
+            ...s,
+            campaign_id: c.campaign_id,
+            campaign_name: c.campaign_name,
+          })
+          total += 1
+        })
+      })
+      setSuggestions(rows)
+      setSuggestionsTotal(total)
     } catch {
       setSuggestions([])
       setSuggestionsTotal(0)
@@ -744,11 +761,18 @@ const OzonAIPricing = ({ shopId, platform = 'ozon' }) => {
     }
   }
 
+  // rowKey 是 "item-{id}" 字符串，批量操作时拆出真实 id
+  const extractIds = (keys) => keys
+    .filter(k => typeof k === 'string' && k.startsWith('item-'))
+    .map(k => Number(k.slice(5)))
+    .filter(Boolean)
+
   const handleBatchApprove = async () => {
-    if (selectedRowKeys.length === 0) return
+    const ids = extractIds(selectedRowKeys)
+    if (ids.length === 0) return
     setBatchApproving(true)
     try {
-      const results = await Promise.allSettled(selectedRowKeys.map(id => approveAIPricingSuggestion(id)))
+      const results = await Promise.allSettled(ids.map(id => approveAIPricingSuggestion(id)))
       const succeeded = results.filter(r => r.status === 'fulfilled').length
       const failed = results.filter(r => r.status === 'rejected').length
       if (failed > 0) {
@@ -767,10 +791,11 @@ const OzonAIPricing = ({ shopId, platform = 'ozon' }) => {
   }
 
   const handleBatchReject = async () => {
-    if (selectedRowKeys.length === 0) return
+    const ids = extractIds(selectedRowKeys)
+    if (ids.length === 0) return
     setBatchRejecting(true)
     try {
-      const results = await Promise.allSettled(selectedRowKeys.map(id => rejectAIPricingSuggestion(id)))
+      const results = await Promise.allSettled(ids.map(id => rejectAIPricingSuggestion(id)))
       const succeeded = results.filter(r => r.status === 'fulfilled').length
       const failed = results.filter(r => r.status === 'rejected').length
       if (failed > 0) {
@@ -787,25 +812,44 @@ const OzonAIPricing = ({ shopId, platform = 'ozon' }) => {
     }
   }
 
+  // 分组行在第一列渲染整行横幅（colSpan 跨所有列），其余列返回 colSpan:0 被合并
+  const groupRowCell = (node) => ({ children: node, props: { colSpan: 12 } })
+  const groupHiddenCell = () => ({ children: null, props: { colSpan: 0 } })
+
   const suggestionColumns = [
     {
       title: '商品名称', dataIndex: 'product_name', width: 220, ellipsis: true,
       render: (v, r) => {
-        const name = v || r.product_id || '-'
+        if (r.isGroup) {
+          return groupRowCell(
+            <div style={{
+              display: 'flex', alignItems: 'center', gap: 8,
+              padding: '6px 0', fontWeight: 500,
+            }}>
+              <span style={{
+                display: 'inline-block', width: 3, height: 14,
+                background: '#534AB7', borderRadius: 2,
+              }} />
+              <span>活动：{r.campaign_name || `#${r.campaign_id}`}</span>
+              <Tag color="blue" style={{ marginLeft: 4 }}>{r.count} 条建议</Tag>
+            </div>
+          )
+        }
+        const name = v || r.sku_name || r.platform_sku_id || '-'
         const ozonUrl = r.ozon_product_url || (r.product_id ? `https://www.ozon.ru/product/${r.product_id}` : null)
         const img = r.image_url ? (
-          <Avatar src={r.image_url} size={36} shape="square" style={{ marginRight: 8, flexShrink: 0 }} />
+          <Avatar src={r.image_url} size={28} shape="square" style={{ marginRight: 6, flexShrink: 0 }} />
         ) : null
         return (
-          <div style={{ display: 'flex', alignItems: 'center' }}>
+          <div style={{ display: 'flex', alignItems: 'center', paddingLeft: 20 }}>
             {img}
             <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
               {ozonUrl ? (
                 <a href={ozonUrl} target="_blank" rel="noopener noreferrer">{name}</a>
               ) : name}
-              {r.campaign_name && (
-                <div style={{ fontSize: 12, color: '#999', marginTop: 2 }}>
-                  活动：{r.campaign_name}
+              {r.platform_sku_id && (
+                <div style={{ fontSize: 11, color: '#999', marginTop: 2 }}>
+                  SKU：{r.platform_sku_id}
                 </div>
               )}
             </div>
@@ -815,11 +859,11 @@ const OzonAIPricing = ({ shopId, platform = 'ozon' }) => {
     },
     {
       title: '当前出价', dataIndex: 'current_bid', width: 90, align: 'right',
-      render: v => `₽${Math.round(v)}`,
+      render: (v, r) => r.isGroup ? groupHiddenCell() : `₽${Math.round(v)}`,
     },
     {
       title: `建议${bidLabel}`, dataIndex: 'suggested_bid', width: 90, align: 'right',
-      render: (v, r) => (
+      render: (v, r) => r.isGroup ? groupHiddenCell() : (
         <Text style={{ color: v > r.current_bid ? '#52c41a' : '#ff4d4f', fontWeight: 600 }}>
           ₽{Math.round(v)}
         </Text>
@@ -827,7 +871,8 @@ const OzonAIPricing = ({ shopId, platform = 'ozon' }) => {
     },
     {
       title: '调幅', dataIndex: 'adjust_pct', width: 80, align: 'center',
-      render: (v) => {
+      render: (v, r) => {
+        if (r.isGroup) return groupHiddenCell()
         const isUp = v > 0
         return (
           <Tag color={isUp ? 'green' : 'red'} icon={isUp ? <ArrowUpOutlined /> : <ArrowDownOutlined />}>
@@ -839,6 +884,7 @@ const OzonAIPricing = ({ shopId, platform = 'ozon' }) => {
     {
       title: '数据质量', width: 90, align: 'center',
       render: (_, r) => {
+        if (r.isGroup) return groupHiddenCell()
         const days = r.campaign_data_days || r.data_days || 0
         const isNew = r.is_new_campaign
         let status = 'success', text = '数据充足'
@@ -853,7 +899,7 @@ const OzonAIPricing = ({ shopId, platform = 'ozon' }) => {
     },
     {
       title: '决策依据', dataIndex: 'decision_basis', width: 100, align: 'center',
-      render: basis => ({
+      render: (basis, r) => r.isGroup ? groupHiddenCell() : ({
         'history_weighted': <Tag color="blue">历史数据</Tag>,
         'shop_benchmark': <Tag color="green">店铺基准</Tag>,
         'budget_control': <Tag color="orange">预算控制</Tag>,
@@ -862,7 +908,7 @@ const OzonAIPricing = ({ shopId, platform = 'ozon' }) => {
     },
     {
       title: 'ROAS', width: 110, align: 'right',
-      render: (_, r) => (
+      render: (_, r) => r.isGroup ? groupHiddenCell() : (
         <span>
           {r.current_roas != null ? `${r.current_roas}x` : '-'}
           {r.expected_roas != null && (
@@ -873,16 +919,16 @@ const OzonAIPricing = ({ shopId, platform = 'ozon' }) => {
         </span>
       ),
     },
-    stageColumn,
-    optimizeColumn,
-    promoColumn,
+    { ...stageColumn, render: (v, r) => r.isGroup ? groupHiddenCell() : stageColumn.render?.(v, r) },
+    { ...optimizeColumn, render: (v, r) => r.isGroup ? groupHiddenCell() : optimizeColumn.render?.(v, r) },
+    { ...promoColumn, render: (v, r) => r.isGroup ? groupHiddenCell() : promoColumn.render?.(v, r) },
     {
       title: 'AI理由', dataIndex: 'reason', ellipsis: { showTitle: false },
-      render: v => <Tooltip title={v} placement="topLeft">{v}</Tooltip>,
+      render: (v, r) => r.isGroup ? groupHiddenCell() : <Tooltip title={v} placement="topLeft">{v}</Tooltip>,
     },
     {
       title: '操作', key: 'action', width: 140, fixed: 'right',
-      render: (_, record) => (
+      render: (_, record) => record.isGroup ? groupHiddenCell() : (
         <Space size="small">
           <Button type="primary" size="small" icon={<CheckOutlined />} onClick={() => handleApprove(record.id)}>
             执行
@@ -1235,17 +1281,15 @@ const OzonAIPricing = ({ shopId, platform = 'ozon' }) => {
           <Table
             size="small"
             dataSource={suggestions}
-            rowKey="id"
+            rowKey="key"
             loading={suggestionsLoading}
-            rowSelection={{ selectedRowKeys, onChange: setSelectedRowKeys }}
-            pagination={{
-              current: suggestionsPage,
-              total: suggestionsTotal,
-              pageSize: 20,
-              size: 'small',
-              showTotal: t => `共 ${t} 条`,
-              onChange: p => fetchSuggestions(p),
+            rowClassName={r => r.isGroup ? 'ai-suggestion-group-row' : ''}
+            rowSelection={{
+              selectedRowKeys,
+              onChange: setSelectedRowKeys,
+              getCheckboxProps: r => ({ disabled: !!r.isGroup, style: r.isGroup ? { display: 'none' } : {} }),
             }}
+            pagination={false}
             columns={suggestionColumns}
             scroll={{ x: 1200 }}
           />
