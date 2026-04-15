@@ -861,38 +861,74 @@ const OzonAIPricing = ({ shopId, platform = 'ozon' }) => {
       <Collapse defaultActiveKey={['template-config']} style={{ marginBottom: 12 }} items={[{
         key: 'template-config',
         label: '基础配置',
-        children: configsLoading ? <Card loading size="small" /> : configs.length > 0 ? (
-          <Table size="small" dataSource={configs} rowKey="id" pagination={false}
-            columns={[
-              {
-                title: <Tooltip title="扣除所有成本后的净毛利率">默认净毛利率</Tooltip>,
-                dataIndex: 'gross_margin', width: 120, align: 'right',
-                render: v => v ? `${(v * 100).toFixed(0)}%` : '-',
-              },
-              {
-                title: <Tooltip title="商品无价格数据时的兜底客单价">默认客单价</Tooltip>,
-                dataIndex: 'default_client_price', width: 100, align: 'right',
-                render: v => v ? `₽${v}` : '₽600',
-              },
-              {
-                title: '自动删除亏损商品', width: 180, align: 'center',
-                render: (_, record) => (
-                  record.auto_remove_losing_sku
-                    ? <Tag color="orange">开启 · {record.losing_days_threshold || 21} 天</Tag>
-                    : <Tag color="default">关闭</Tag>
-                ),
-              },
-              {
-                title: '操作', key: 'action', width: 70,
-                render: (_, record) => (
-                  <Button type="link" size="small" icon={<EditOutlined />} onClick={() => handleEditConfig(record)}>
-                    编辑
-                  </Button>
-                ),
-              },
-            ]}
-          />
-        ) : <Empty description="暂无策略模板" />,
+        children: configsLoading ? <Card loading size="small" /> : configs.length > 0 ? (() => {
+          const c = configs[0]
+          const margin = c.gross_margin || 0
+          const price  = c.default_client_price || 600
+          const maxCpa = (price * margin).toFixed(0)
+          return (
+            <>
+              <div style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                padding: '9px 12px',
+                background: '#fafafa',
+                borderRadius: 6,
+                marginBottom: 10,
+              }}>
+                <span style={{ fontSize: 12, color: '#666' }}>
+                  当前店铺策略 · 每单广告上限 <span style={{ color: '#ff4d4f', fontWeight: 500 }}>₽{maxCpa}</span>
+                  <span style={{ color: '#999', marginLeft: 8 }}>（= 默认客单价 × 净毛利率）</span>
+                </span>
+                <Button size="small" type="primary" ghost icon={<EditOutlined />} onClick={() => handleEditConfig(c)}>
+                  编辑
+                </Button>
+              </div>
+
+              <div style={{
+                display: 'grid',
+                gridTemplateColumns: '1fr 1fr 1fr',
+                gap: 6,
+              }}>
+                {[
+                  {
+                    title: '默认净毛利率',
+                    value: margin ? `${(margin * 100).toFixed(0)}%` : '-',
+                    valueColor: '#1677ff',
+                    hint: '扣除所有固定成本后的利润空间',
+                  },
+                  {
+                    title: '默认客单价',
+                    value: `₽${price}`,
+                    valueColor: '#262626',
+                    hint: '商品无价格数据时的兜底',
+                  },
+                  {
+                    title: '自动删除亏损商品',
+                    value: c.auto_remove_losing_sku ? '开启' : '关闭',
+                    valueColor: c.auto_remove_losing_sku ? '#fa8c16' : '#999',
+                    hint: c.auto_remove_losing_sku
+                      ? `持续亏损超过 ${c.losing_days_threshold || 21} 天自动删除`
+                      : '仅提醒不自动处理',
+                  },
+                ].map(item => (
+                  <div key={item.title} style={{ background: '#fafafa', borderRadius: 6, padding: '10px 12px' }}>
+                    <div style={{ fontSize: 11, fontWeight: 500, color: '#666', marginBottom: 4 }}>
+                      {item.title}
+                    </div>
+                    <div style={{ fontSize: 20, fontWeight: 600, color: item.valueColor, lineHeight: 1.2, marginBottom: 2 }}>
+                      {item.value}
+                    </div>
+                    <div style={{ fontSize: 11, color: '#999' }}>
+                      {item.hint}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </>
+          )
+        })() : <Empty description="暂无基础配置" />,
       }]} />
 
       {/* 数据源管理（默认展开） */}
