@@ -216,14 +216,14 @@ export function getBidLogs(params) {
 
 // ==================== AI智能调价 ====================
 
-/** 获取店铺调价配置列表 */
+/** 获取店铺调价配置列表（3 档模板虚拟数组） */
 export function getAIPricingConfigs(shopId) {
-  return request.get(`/ai-pricing/configs/${shopId}`)
+  return request.get(`/bid-management/ai-pricing/configs/${shopId}`)
 }
 
-/** 更新调价配置 */
-export function updateAIPricingConfig(configId, data) {
-  return request.put(`/ai-pricing/configs/${configId}`, data)
+/** 更新单档模板配置（payload 必须带 template_type） */
+export function updateAIPricingConfig(shopId, data) {
+  return request.put(`/bid-management/ai-pricing/configs/${shopId}`, data)
 }
 
 /** 手动触发AI分析 */
