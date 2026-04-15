@@ -814,17 +814,13 @@ const OzonAIPricing = ({ shopId, platform = 'ozon' }) => {
         label: (
           <Space>
             <SettingOutlined />
-            <span style={{ fontWeight: 500 }}>策略模板配置</span>
+            <span style={{ fontWeight: 500 }}>基础配置</span>
             <span style={{ fontSize: 12, color: '#999', fontWeight: 400 }}>（点击展开编辑）</span>
           </Space>
         ),
         children: configsLoading ? <Card loading size="small" /> : configs.length > 0 ? (
           <Table size="small" dataSource={configs} rowKey="id" pagination={false}
             columns={[
-              {
-                title: '策略名称', dataIndex: 'template_name', width: 140,
-                render: (name) => <span style={{ fontWeight: 500 }}>{name || '店铺策略'}</span>,
-              },
               {
                 title: <Tooltip title="扣除所有成本后的净毛利率">默认净毛利率</Tooltip>,
                 dataIndex: 'gross_margin', width: 120, align: 'right',
@@ -834,16 +830,6 @@ const OzonAIPricing = ({ shopId, platform = 'ozon' }) => {
                 title: <Tooltip title="商品无价格数据时的兜底客单价">默认客单价</Tooltip>,
                 dataIndex: 'default_client_price', width: 100, align: 'right',
                 render: v => v ? `₽${v}` : '₽600',
-              },
-              {
-                title: <Tooltip title="系统自动计算：客单价 × 净毛利率">每单广告上限</Tooltip>,
-                width: 110, align: 'right',
-                render: (_, record) => {
-                  const margin = record.gross_margin
-                  const price  = record.default_client_price || 600
-                  if (!margin) return '-'
-                  return <span style={{ color: '#ff4d4f' }}>₽{(price * margin).toFixed(0)}</span>
-                },
               },
               {
                 title: '自动删除亏损商品', width: 180, align: 'center',
