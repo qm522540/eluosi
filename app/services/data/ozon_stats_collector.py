@@ -14,6 +14,7 @@ import asyncio
 import threading
 import httpx
 from datetime import datetime, timedelta, date, timezone
+from typing import Optional
 
 from sqlalchemy import text
 from sqlalchemy.orm import Session
@@ -234,52 +235,81 @@ async def _fetch_perf_data(
     try:
         await ozon._ensure_perf_token()
 
-        # 分批提交（每批5个活动）
         all_ids = list(camp_map.keys())
-        batches = [all_ids[i:i+5] for i in range(0, len(all_ids), 5)]
 
-        for batch_idx, batch in enumerate(batches):
-            logger.info(f"Performance API batch {batch_idx+1}/{len(batches)}: {batch}")
+        async def _submit_and_fetch(batch_ids: list, batch_label: str) -> Optional[dict]:
+            """提交一个 statistics 任务，轮询直到 OK，返回报表 dict"""
             try:
+                logger.info(f"Performance API {batch_label}: 提交 {len(batch_ids)} 个活动")
                 submit = await ozon._request("POST",
                     f"{PERF_API}/api/client/statistics/json",
                     use_perf=True,
                     json={
-                        "campaigns": batch,
+                        "campaigns": batch_ids,
                         "dateFrom": date_from.strftime("%Y-%m-%d"),
                         "dateTo": date_to.strftime("%Y-%m-%d"),
                     },
                 )
-                uuid = submit.get("UUID")
-                if not uuid:
-                    continue
+            except Exception as e:
+                logger.error(f"Performance API {batch_label} 提交失败: {e}")
+                return None
 
-                # 轮询（最多90秒）
-                report = None
-                for _ in range(18):
-                    await asyncio.sleep(5)
+            uuid = submit.get("UUID")
+            if not uuid:
+                logger.warning(f"Performance API {batch_label} 未返回 UUID: {submit}")
+                return None
+
+            # 轮询（最多 180 秒，报表大时需要更久）
+            for attempt in range(36):
+                await asyncio.sleep(5)
+                try:
                     data = await ozon._request("GET",
                         f"{PERF_API}/api/client/statistics/{uuid}",
                         use_perf=True,
                     )
-                    if data.get("state") == "OK":
-                        link = data.get("link", "")
-                        if link:
-                            report = await ozon._request("GET",
-                                f"{PERF_API}{link}", use_perf=True,
-                            )
-                        break
-
-                if not report:
+                except Exception as e:
+                    logger.warning(f"Performance API {batch_label} 轮询 {attempt+1} 失败: {e}")
                     continue
+                state = data.get("state")
+                if state == "OK":
+                    link = data.get("link", "")
+                    if not link:
+                        return None
+                    try:
+                        return await ozon._request("GET", f"{PERF_API}{link}", use_perf=True)
+                    except Exception as e:
+                        logger.error(f"Performance API {batch_label} 下载报表失败: {e}")
+                        return None
+                if state in ("ERROR", "CANCELLED"):
+                    logger.warning(f"Performance API {batch_label} 任务 state={state}")
+                    return None
+            logger.warning(f"Performance API {batch_label} 轮询超时（180s）")
+            return None
 
-                # 解析并更新 ad_stats
+        # 先尝试一次性提交所有活动（根本性避开 submit 频次限流）
+        report = await _submit_and_fetch(all_ids, "ALL")
+        # 降级：一次性失败时拆小批，每批 3 个，批次间隔 20 秒
+        reports = [report] if report else []
+        if not report:
+            logger.warning("Performance API 单次全量提交失败，降级为小批提交")
+            batches = [all_ids[i:i+3] for i in range(0, len(all_ids), 3)]
+            for idx, batch in enumerate(batches):
+                if idx > 0:
+                    await asyncio.sleep(20)  # 批次间等 20s，避开 Ozon 提交窗口
+                r = await _submit_and_fetch(batch, f"batch {idx+1}/{len(batches)}")
+                if r:
+                    reports.append(r)
+
+        total_updated = 0
+        for report_idx, report in enumerate(reports):
+            if not report:
+                continue
+            try:
                 updated = 0
                 for cid, cdata in report.items():
                     if not isinstance(cdata, dict):
                         continue
                     rows = cdata.get("report", {}).get("rows", [])
-                    # 找到内部 campaign_id
                     internal_cid = camp_map.get(cid)
                     if not internal_cid:
                         continue
@@ -296,7 +326,6 @@ async def _fetch_perf_data(
                         orders = _parse_num(row.get("orders"), True)
                         revenue = _parse_num(row.get("ordersMoney"))
 
-                        # 更新已有记录的广告字段
                         db.execute(text("""
                             UPDATE ad_stats SET
                                 impressions = :views, clicks = :clicks,
@@ -312,7 +341,6 @@ async def _fetch_perf_data(
                             "orders": orders, "revenue": revenue,
                         })
 
-                        # 如果没匹配到已有记录（Seller API 没这个SKU），插入新记录
                         if db.execute(text("SELECT ROW_COUNT()")).scalar() == 0:
                             db.execute(text("""
                                 INSERT INTO ad_stats (
@@ -334,12 +362,12 @@ async def _fetch_perf_data(
                         updated += 1
 
                 db.commit()
-                logger.info(f"Performance API batch {batch_idx+1}: 更新 {updated} 条广告数据")
-
+                total_updated += updated
+                logger.info(f"Performance API report {report_idx+1}/{len(reports)}: 更新 {updated} 条广告数据")
             except Exception as e:
-                logger.error(f"Performance API batch {batch_idx+1} 失败: {e}")
+                logger.error(f"Performance API report {report_idx+1} 解析/写入失败: {e}")
 
-            await asyncio.sleep(2)  # 批次间等待
+        logger.info(f"Performance API 共写入 {total_updated} 条广告效果数据")
 
     finally:
         await ozon.close()

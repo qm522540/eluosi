@@ -158,16 +158,23 @@ class OzonClient(BasePlatformClient):
         await self._rate_limit()
         client = await (self._get_perf_client() if use_perf else self._get_seller_client())
 
-        max_retries = 3
+        # Performance API 的 statistics 接口限速远比 Seller API 严（估计每分钟 3-5 次）
+        # 老策略 5/10/15 秒三次就放弃，根本熬不过一个窗口
+        is_perf_heavy = use_perf and "/api/client/statistics" in url
+        max_retries = 6 if is_perf_heavy else 3
+        backoff = [15, 30, 60, 90, 120, 180] if is_perf_heavy else [5, 10, 15]
+
         for attempt in range(max_retries):
             try:
                 response = await client.request(method, url, **kwargs)
 
                 if response.status_code == 429:
-                    wait_time = min(30, 5 * (attempt + 1))
+                    # 优先用服务端给的 Retry-After
+                    retry_after = response.headers.get("Retry-After")
+                    wait_time = int(retry_after) if retry_after and retry_after.isdigit() else backoff[min(attempt, len(backoff) - 1)]
                     logger.warning(
                         f"Ozon API 限速(429)，shop_id={self.shop_id}，"
-                        f"等待{wait_time}秒 ({attempt+1}/{max_retries})"
+                        f"等待{wait_time}秒 ({attempt+1}/{max_retries}) url={url.rsplit('/', 1)[-1]}"
                     )
                     await asyncio.sleep(wait_time)
                     continue
