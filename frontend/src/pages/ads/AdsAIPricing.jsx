@@ -6,6 +6,7 @@ import {
 import {
   EditOutlined, CheckOutlined, CloseOutlined, RobotOutlined,
   ArrowUpOutlined, ArrowDownOutlined, HistoryOutlined, SettingOutlined,
+  ExclamationCircleOutlined,
 } from '@ant-design/icons'
 import dayjs from 'dayjs'
 import {
@@ -821,6 +822,30 @@ const OzonAIPricing = ({ shopId, platform = 'ozon' }) => {
     }
   }
 
+  const handleDeleteConfirm = (record) => {
+    Modal.confirm({
+      title: '确认移除该商品出价？',
+      icon: <ExclamationCircleOutlined style={{ color: '#ff4d4f' }} />,
+      width: 460,
+      content: (
+        <div style={{ fontSize: 13, lineHeight: 1.8 }}>
+          <div>
+            商品：<strong>{record.sku_name || record.platform_sku_id}</strong>
+            <span style={{ color: '#999', marginLeft: 6 }}>SKU：{record.platform_sku_id}</span>
+          </div>
+          <div>活动：<strong>{record.campaign_name || `#${record.campaign_id}`}</strong></div>
+          <div style={{ marginTop: 10, padding: 10, background: '#fff2f0', borderRadius: 4, color: '#cf1322' }}>
+            删除后该商品出价将从活动列表中移除，此操作不可撤销。
+          </div>
+        </div>
+      ),
+      okText: '确认移除',
+      okType: 'danger',
+      cancelText: '取消',
+      onOk: () => handleApprove(record.id),
+    })
+  }
+
   const handleReject = async (id) => {
     try {
       await rejectAIPricingSuggestion(id)
@@ -1017,7 +1042,7 @@ const OzonAIPricing = ({ shopId, platform = 'ozon' }) => {
         return (
           <Space size="small">
             {isDelete ? (
-              <Button danger size="small" onClick={() => handleApprove(record.id)}>
+              <Button danger size="small" onClick={() => handleDeleteConfirm(record)}>
                 建议删除
               </Button>
             ) : (
