@@ -685,8 +685,10 @@ class WBClient(BasePlatformClient):
     async def remove_campaign_product(self, advert_id: str, nm_id: int) -> dict:
         """从 WB 广告活动中移除指定商品
 
-        WB API: POST /adv/v0/nm-to-advert/delete
-        Body: {"advertId": int, "nms": [int]}
+        主路径：POST /adv/v0/nm-to-advert/delete（对旧类型活动有效）
+        Fallback：unified/auction 类型活动该接口返回 404，自动改调
+                  update_campaign_cpm 把 CPM 降到最低出价（0.01 → WB min bid 自动兜底），
+                  视觉等同于"停止该 SKU 竞价曝光"。
         """
         try:
             await self._request(
@@ -694,14 +696,32 @@ class WBClient(BasePlatformClient):
                 f"{WB_ADVERT_API}/adv/v0/nm-to-advert/delete",
                 json={"advertId": int(advert_id), "nms": [int(nm_id)]},
             )
-            logger.info(f"WB 移除商品成功 shop_id={self.shop_id} advert={advert_id} nm={nm_id}")
-            return {"ok": True}
+            logger.info(f"WB 真删除成功 shop_id={self.shop_id} advert={advert_id} nm={nm_id}")
+            return {"ok": True, "action": "deleted"}
         except Exception as e:
             err_str = str(e)
-            logger.error(f"WB 移除商品失败 advert={advert_id} nm={nm_id}: {err_str}")
-            # 404 通常表示活动类型不支持该接口 或 SKU/advert 不存在
+            logger.warning(
+                f"WB 真删除失败 advert={advert_id} nm={nm_id}: {err_str}"
+            )
+            # 404 → unified/auction 类型不支持真删，fallback 降 CPM 到最低
             if "404" in err_str:
-                return {"ok": False, "error": f"WB 返回 404，可能该活动类型不支持删除操作或 advert/nm 不存在（advert={advert_id} nm={nm_id}）"}
+                logger.info(
+                    f"WB /adv/v0/nm-to-advert/delete 对 advert={advert_id} 404，"
+                    f"fallback 降最低 CPM 停投"
+                )
+                cpm_result = await self.update_campaign_cpm(
+                    advert_id=str(advert_id),
+                    nm_id=int(nm_id),
+                    cpm_rub=0.01,
+                )
+                if cpm_result.get("ok"):
+                    return {
+                        "ok": True,
+                        "action": "min_bid_fallback",
+                        "actual_bid_rub": cpm_result.get("actual_bid_rub"),
+                        "note": "WB 统一活动不支持 API 真删除，已降至类目最低出价停止竞价曝光。如需完全移除请在 WB 后台操作。",
+                    }
+                return {"ok": False, "error": cpm_result.get("error") or "fallback 失败"}
             return {"ok": False, "error": err_str}
 
     # ==================== 订单 ====================
