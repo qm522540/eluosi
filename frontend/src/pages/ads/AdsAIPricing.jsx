@@ -1007,12 +1007,66 @@ const OzonAIPricing = ({ shopId, platform = 'ozon' }) => {
     },
     {
       title: '决策依据', dataIndex: 'decision_basis', width: 100, align: 'center',
-      render: (basis, r) => r.isGroup ? groupHiddenCell() : ({
-        'history_weighted': <Tag color="blue">历史数据</Tag>,
-        'shop_benchmark': <Tag color="green">店铺基准</Tag>,
-        'budget_control': <Tag color="orange">预算控制</Tag>,
-        'today_only': <Tag>今日数据</Tag>,
-      }[basis] || <Tag>{basis || '未知'}</Tag>),
+      render: (basis, r) => {
+        if (r.isGroup) return groupHiddenCell()
+        const DECISION_BASIS = {
+          history_data: {
+            color: 'blue', label: '历史数据',
+            hint: 'SKU 自身数据 ≥ 7 天，主要按其历史 CTR / CR / ROAS 推算目标出价',
+          },
+          shop_benchmark: {
+            color: 'green', label: '店铺基准',
+            hint: 'SKU 自身数据 < 7 天（冷启动），借用店铺均值作为 CTR / CR 预估基线',
+          },
+          cold_start_baseline: {
+            color: 'orange', label: '冷启动基准',
+            hint: '完全无历史数据，使用类目冷启动兜底参数计算',
+          },
+          imported_data: {
+            color: 'purple', label: '导入数据',
+            hint: '基于人工导入的历史数据做判断',
+          },
+        }
+        const cfg = DECISION_BASIS[basis] || { color: 'default', label: basis || '未知', hint: '未知决策来源' }
+        const isDelete = Number(r.suggested_bid) === 0 && Number(r.adjust_pct) === -100
+        const direction = isDelete
+          ? { text: '建议移除', color: '#cf1322' }
+          : (Number(r.adjust_pct) > 0
+              ? { text: `建议涨价 +${r.adjust_pct}%`, color: '#cf1322' }
+              : { text: `建议降价 ${r.adjust_pct}%`, color: '#389e0d' })
+        return (
+          <Tooltip
+            color="#fff"
+            overlayInnerStyle={{ color: '#333', maxWidth: 420 }}
+            title={
+              <div style={{ fontSize: 12, lineHeight: 1.7, padding: '4px 2px' }}>
+                <div style={{ fontWeight: 600, marginBottom: 2 }}>{cfg.label}</div>
+                <div style={{ color: '#666' }}>{cfg.hint}</div>
+                <div style={{
+                  margin: '8px 0 6px', padding: '4px 8px',
+                  background: '#fafafa', borderLeft: `3px solid ${direction.color}`,
+                  fontWeight: 500,
+                }}>
+                  {direction.text}
+                  {!isDelete && (
+                    <span style={{ color: '#999', fontWeight: 400, marginLeft: 6 }}>
+                      ₽{Math.round(r.current_bid)} → ₽{Math.round(r.suggested_bid)}
+                    </span>
+                  )}
+                </div>
+                {r.reason && (
+                  <div>
+                    <div style={{ color: '#999', fontSize: 11, marginBottom: 2 }}>AI 计算理由：</div>
+                    <div style={{ color: '#333' }}>{r.reason}</div>
+                  </div>
+                )}
+              </div>
+            }
+          >
+            <Tag color={cfg.color} style={{ cursor: 'help' }}>{cfg.label}</Tag>
+          </Tooltip>
+        )
+      },
     },
     {
       title: 'ROAS', width: 110, align: 'right',
