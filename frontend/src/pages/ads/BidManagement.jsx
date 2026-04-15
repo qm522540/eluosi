@@ -2181,9 +2181,6 @@ const BidManagement = ({ shopId, platform }) => {
         }}>
           {platform === 'wb' ? 'Wildberries' : 'Ozon'}
         </span>
-        <span style={{ fontSize: 12, color: 'var(--color-text-secondary, #666)' }}>
-          商品级别出价 · 店铺级别配置
-        </span>
         {activeMode !== 'none' && (
           <span style={{
             marginLeft: 'auto',
