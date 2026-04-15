@@ -228,32 +228,37 @@ export function updateAIPricingConfig(shopId, data) {
 
 /** 手动触发AI分析 */
 export function triggerAIAnalysis(shopId, data = {}) {
-  return request.post(`/ai-pricing/analyze/${shopId}`, data)
+  return request.post(`/bid-management/ai-pricing/${shopId}/analyze`, data, { timeout: 120000 })
 }
 
 /** 获取AI调价建议列表 */
 export function getAIPricingSuggestions(shopId, params) {
-  return request.get(`/ai-pricing/suggestions/${shopId}`, { params })
+  return request.get(`/bid-management/suggestions/${shopId}`, { params })
 }
 
 /** 确认执行AI调价建议 */
 export function approveAIPricingSuggestion(suggestionId) {
-  return request.post(`/ai-pricing/suggestions/${suggestionId}/approve`)
+  return request.post(`/bid-management/suggestions/${suggestionId}/approve`)
 }
 
 /** 拒绝AI调价建议 */
 export function rejectAIPricingSuggestion(suggestionId) {
-  return request.post(`/ai-pricing/suggestions/${suggestionId}/reject`)
+  return request.post(`/bid-management/suggestions/${suggestionId}/reject`)
 }
 
-/** 切换AI调价自动/建议模式 */
+/** 切换AI调价自动/建议模式（复用 PUT 配置接口更新 auto_execute） */
 export function toggleAIAutoExecute(shopId, data) {
-  return request.post(`/ai-pricing/toggle-auto/${shopId}`, data)
+  return request.put(`/bid-management/ai-pricing/configs/${shopId}`, {
+    template_type: 'default',
+    auto_execute: !!data.auto_execute,
+  })
 }
 
-/** 获取AI调价历史记录 */
+/** 获取AI调价历史记录（出价日志，按 execute_type 过滤 AI 相关） */
 export function getAIPricingHistory(shopId, params) {
-  return request.get(`/ai-pricing/history/${shopId}`, { params })
+  return request.get(`/bid-management/bid-logs/${shopId}`, {
+    params: { ...params, execute_type: params?.execute_type || 'ai_auto' },
+  })
 }
 
 /** 获取所有策略模板列表 */
