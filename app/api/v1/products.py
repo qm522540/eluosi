@@ -1,13 +1,19 @@
 """商品路由"""
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, BackgroundTasks
 from sqlalchemy.orm import Session
 
 from app.dependencies import get_db, get_current_user, get_tenant_id
-from app.schemas.product import ProductCreate, ProductUpdate, ListingCreate, ListingUpdate
+from app.schemas.product import (
+    ProductCreate, ProductUpdate, ProductMarginUpdate,
+    ListingCreate, ListingUpdate,
+    ProductSyncRequest, GenerateDescriptionRequest, SpreadRequest,
+)
 from app.services.product.service import (
-    list_products, create_product, get_product, update_product, delete_product,
+    list_products, create_product, get_product,
+    update_product, update_product_margin, delete_product,
     list_listings, create_listing, update_listing, delete_listing,
+    check_sync_needed, sync_products_from_platform, generate_description,
 )
 from app.utils.response import success, error
 
@@ -20,7 +26,9 @@ router = APIRouter()
 def product_list(
     keyword: str = Query(None, description="搜索关键词(SKU/名称)"),
     category: str = Query(None, description="分类筛选"),
-    status: str = Query(None, description="状态筛选: active/inactive"),
+    status: str = Query("active"),
+    platform: str = Query(None),
+    shop_id: int = Query(None),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     db: Session = Depends(get_db),
@@ -145,3 +153,93 @@ def listing_delete(
     if result["code"] != 0:
         return error(result["code"], result["msg"])
     return success(msg="Listing已删除")
+
+
+@router.patch("/{product_id}/margin")
+def product_margin_update(
+    product_id: int,
+    req: ProductMarginUpdate,
+    db: Session = Depends(get_db),
+    tenant_id: int = Depends(get_tenant_id),
+):
+    result = update_product_margin(db, product_id, tenant_id, req.net_margin)
+    if result["code"] != 0:
+        return error(result["code"], result["msg"])
+    return success(result["data"])
+
+
+@router.get("/sync/check")
+def sync_check(
+    shop_id: int = Query(...),
+    db: Session = Depends(get_db),
+    tenant_id: int = Depends(get_tenant_id),
+):
+    result = check_sync_needed(db, shop_id, tenant_id)
+    return success(result)
+
+
+@router.post("/sync")
+def sync_products(
+    req: ProductSyncRequest,
+    db: Session = Depends(get_db),
+    tenant_id: int = Depends(get_tenant_id),
+):
+    check = check_sync_needed(db, req.shop_id, tenant_id, force=req.force)
+    if not check["need_sync"]:
+        return success({"syncing": False, "message": "无需重复同步"})
+    from app.tasks.daily_sync_task import sync_shop_products
+    task = sync_shop_products.delay(req.shop_id, tenant_id)
+    return success({"syncing": True, "task_id": task.id, "message": "同步任务已启动"})
+
+
+@router.post("/listings/{listing_id}/generate-description")
+async def listing_generate_description(
+    listing_id: int,
+    req: GenerateDescriptionRequest,
+    db: Session = Depends(get_db),
+    tenant_id: int = Depends(get_tenant_id),
+):
+    result = await generate_description(db, listing_id, tenant_id, req.target_platform)
+    if result["code"] != 0:
+        return error(result["code"], result["msg"])
+    return success(result["data"])
+
+
+@router.post("/spread")
+def spread_products(
+    req: SpreadRequest,
+    db: Session = Depends(get_db),
+    tenant_id: int = Depends(get_tenant_id),
+):
+    return success({"task_id": "pending", "message": "铺货功能开发中"})
+
+
+@router.get("/spread/records")
+def spread_records(
+    shop_id: int = Query(None),
+    status: str = Query(None),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    db: Session = Depends(get_db),
+    tenant_id: int = Depends(get_tenant_id),
+):
+    from sqlalchemy import text
+    where = "WHERE tenant_id = :tenant_id"
+    params = {"tenant_id": tenant_id}
+    if shop_id:
+        where += " AND dst_shop_id = :shop_id"
+        params["shop_id"] = shop_id
+    if status:
+        where += " AND status = :status"
+        params["status"] = status
+    total = db.execute(
+        text(f"SELECT COUNT(*) FROM spread_records {where}"), params
+    ).scalar()
+    rows = db.execute(text(f"""
+        SELECT * FROM spread_records {where}
+        ORDER BY created_at DESC LIMIT :limit OFFSET :offset
+    """), {**params, "limit": page_size, "offset": (page-1)*page_size}).fetchall()
+    return success({
+        "items": [dict(r._mapping) for r in rows],
+        "total": total, "page": page
+    })

@@ -1,6 +1,9 @@
 """商品业务逻辑"""
 
+from datetime import datetime, timezone
+from typing import Optional
 from sqlalchemy.orm import Session
+from sqlalchemy import text
 
 from app.models.product import Product, PlatformListing
 from app.models.shop import Shop
@@ -299,6 +302,7 @@ def _product_to_dict(p: Product) -> dict:
         "brand": p.brand,
         "category": p.category,
         "cost_price": float(p.cost_price) if p.cost_price else None,
+        "net_margin": float(p.net_margin) if p.net_margin else None,
         "weight_g": p.weight_g,
         "image_url": p.image_url,
         "status": p.status,
@@ -315,6 +319,10 @@ def _listing_to_dict(l: PlatformListing) -> dict:
         "shop_id": l.shop_id,
         "platform": l.platform,
         "platform_product_id": l.platform_product_id,
+        "barcode": l.barcode,
+        "description_ru": l.description_ru,
+        "variant_name": l.variant_name,
+        "variant_attrs": l.variant_attrs,
         "title_ru": l.title_ru,
         "price": float(l.price) if l.price else None,
         "discount_price": float(l.discount_price) if l.discount_price else None,
@@ -323,6 +331,234 @@ def _listing_to_dict(l: PlatformListing) -> dict:
         "rating": float(l.rating) if l.rating else None,
         "review_count": l.review_count,
         "status": l.status,
+        "publish_status": l.publish_status,
+        "oss_images": l.oss_images,
+        "oss_videos": l.oss_videos,
+        "source_listing_id": l.source_listing_id,
+        "platform_listed_at": l.platform_listed_at.isoformat() if l.platform_listed_at else None,
         "created_at": l.created_at.isoformat() if l.created_at else None,
         "updated_at": l.updated_at.isoformat() if l.updated_at else None,
     }
+
+
+SYNC_INTERVAL_MINUTES = 30
+
+
+def update_product_margin(db: Session, product_id: int, tenant_id: int,
+                          net_margin) -> dict:
+    try:
+        product = db.query(Product).filter(
+            Product.id == product_id,
+            Product.tenant_id == tenant_id,
+            Product.status != "deleted"
+        ).first()
+        if not product:
+            return {"code": ErrorCode.PRODUCT_NOT_FOUND, "msg": "商品不存在"}
+        product.net_margin = net_margin
+        db.commit()
+        return {"code": ErrorCode.SUCCESS,
+                "data": {"id": product_id, "net_margin": net_margin}}
+    except Exception as e:
+        db.rollback()
+        logger.error(f"更新净毛利率失败: {e}")
+        return {"code": ErrorCode.UNKNOWN_ERROR, "msg": "更新净毛利率失败"}
+
+
+def check_sync_needed(db: Session, shop_id: int, tenant_id: int,
+                      force: bool = False) -> dict:
+    if force:
+        return {"need_sync": True, "reason": "强制同步"}
+    row = db.execute(text("""
+        SELECT last_sync_at FROM shop_data_init_status
+        WHERE shop_id = :shop_id AND tenant_id = :tenant_id
+    """), {"shop_id": shop_id, "tenant_id": tenant_id}).fetchone()
+    if not row or not row.last_sync_at:
+        return {"need_sync": True, "reason": "首次同步"}
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    elapsed = (now - row.last_sync_at).total_seconds() / 60
+    if elapsed >= SYNC_INTERVAL_MINUTES:
+        return {"need_sync": True, "reason": f"上次同步{int(elapsed)}分钟前"}
+    return {"need_sync": False, "elapsed_minutes": int(elapsed)}
+
+
+def sync_products_from_platform(db: Session, shop_id: int, tenant_id: int) -> dict:
+    from app.models.shop import Shop
+    shop = db.query(Shop).filter(
+        Shop.id == shop_id, Shop.tenant_id == tenant_id,
+    ).first()
+    if not shop:
+        return {"code": ErrorCode.SHOP_NOT_FOUND, "msg": "店铺不存在"}
+    if shop.platform == "wb":
+        return _sync_wb_products(db, shop, tenant_id)
+    elif shop.platform == "ozon":
+        return _sync_ozon_products(db, shop, tenant_id)
+    return {"code": 0, "data": {"synced": 0}}
+
+
+def _sync_wb_products(db: Session, shop, tenant_id: int) -> dict:
+    import asyncio
+    from app.services.platform.wb import WBClient
+    async def _fetch():
+        client = WBClient(shop_id=shop.id, api_key=shop.api_key)
+        try:
+            return await client.fetch_all_products()
+        finally:
+            await client.close()
+    loop = asyncio.new_event_loop()
+    try:
+        products = loop.run_until_complete(_fetch())
+    finally:
+        loop.close()
+    synced = created = updated = 0
+    for p in (products or []):
+        nm_id = str(p.get("nmID") or p.get("nmId") or "")
+        if not nm_id:
+            continue
+        listing = db.query(PlatformListing).filter(
+            PlatformListing.tenant_id == tenant_id,
+            PlatformListing.shop_id == shop.id,
+            PlatformListing.platform == "wb",
+            PlatformListing.platform_product_id == nm_id,
+        ).first()
+        data = {
+            "title_ru": (p.get("subjectName") or p.get("name") or "")[:500],
+            "price": float(p.get("salePriceU", 0)) / 100 if p.get("salePriceU") else None,
+            "status": "active" if int(p.get("quantityFull", 0)) > 0 else "out_of_stock",
+        }
+        if listing:
+            for k, v in data.items():
+                if v is not None:
+                    setattr(listing, k, v)
+            updated += 1
+        else:
+            product = _get_or_create_product(
+                db, tenant_id, name_ru=data["title_ru"], sku=f"WB-{nm_id}")
+            listing = PlatformListing(
+                tenant_id=tenant_id, product_id=product.id,
+                shop_id=shop.id, platform="wb",
+                platform_product_id=nm_id, **data)
+            db.add(listing)
+            created += 1
+        synced += 1
+    db.commit()
+    _update_sync_time(db, shop.id, tenant_id)
+    return {"code": 0, "data": {"synced": synced, "created": created, "updated": updated}}
+
+
+def _sync_ozon_products(db: Session, shop, tenant_id: int) -> dict:
+    import asyncio
+    from app.services.platform.ozon import OzonClient
+    async def _fetch():
+        client = OzonClient(
+            shop_id=shop.id, api_key=shop.api_key, client_id=shop.client_id,
+            perf_client_id=shop.perf_client_id or "",
+            perf_client_secret=shop.perf_client_secret or "")
+        try:
+            return await client.fetch_all_products()
+        finally:
+            await client.close()
+    loop = asyncio.new_event_loop()
+    try:
+        products = loop.run_until_complete(_fetch())
+    finally:
+        loop.close()
+    synced = created = updated = 0
+    status_map = {
+        "VISIBLE": "active", "INVISIBLE": "inactive",
+        "OUT_OF_STOCK": "out_of_stock", "BANNED": "blocked", "ARCHIVED": "deleted"
+    }
+    for p in (products or []):
+        product_id = str(p.get("product_id") or "")
+        if not product_id:
+            continue
+        listing = db.query(PlatformListing).filter(
+            PlatformListing.tenant_id == tenant_id,
+            PlatformListing.shop_id == shop.id,
+            PlatformListing.platform == "ozon",
+            PlatformListing.platform_product_id == product_id,
+        ).first()
+        data = {
+            "title_ru": (p.get("name") or "")[:500],
+            "price": float(p.get("price") or 0) or None,
+            "discount_price": float(p.get("marketing_price") or 0) or None,
+            "status": status_map.get((p.get("visibility") or "").upper(), "active"),
+        }
+        if listing:
+            for k, v in data.items():
+                if v is not None:
+                    setattr(listing, k, v)
+            updated += 1
+        else:
+            product = _get_or_create_product(
+                db, tenant_id, name_ru=data["title_ru"], sku=f"OZ-{product_id}")
+            listing = PlatformListing(
+                tenant_id=tenant_id, product_id=product.id,
+                shop_id=shop.id, platform="ozon",
+                platform_product_id=product_id, **data)
+            db.add(listing)
+            created += 1
+        synced += 1
+    db.commit()
+    _update_sync_time(db, shop.id, tenant_id)
+    return {"code": 0, "data": {"synced": synced, "created": created, "updated": updated}}
+
+
+def _get_or_create_product(db: Session, tenant_id: int,
+                           name_ru: str, sku: str):
+    existing = db.query(Product).filter(
+        Product.tenant_id == tenant_id,
+        Product.sku == sku,
+    ).first()
+    if existing:
+        return existing
+    product = Product(
+        tenant_id=tenant_id, sku=sku,
+        name_zh=name_ru[:200] if name_ru else sku,
+        name_ru=name_ru[:200] if name_ru else None,
+        status="active",
+    )
+    db.add(product)
+    db.flush()
+    return product
+
+
+def _update_sync_time(db: Session, shop_id: int, tenant_id: int):
+    db.execute(text("""
+        UPDATE shop_data_init_status SET last_sync_at = NOW()
+        WHERE shop_id = :shop_id AND tenant_id = :tenant_id
+    """), {"shop_id": shop_id, "tenant_id": tenant_id})
+    db.commit()
+
+
+async def generate_description(db: Session, listing_id: int,
+                               tenant_id: int, target_platform: str) -> dict:
+    from app.config import get_settings
+    from app.services.ai.kimi import KimiClient
+    listing = db.query(PlatformListing).filter(
+        PlatformListing.id == listing_id,
+        PlatformListing.tenant_id == tenant_id,
+    ).first()
+    if not listing:
+        return {"code": ErrorCode.LISTING_NOT_FOUND, "msg": "Listing不存在"}
+    if not listing.description_ru and not listing.title_ru:
+        return {"code": ErrorCode.PARAM_ERROR, "msg": "商品暂无描述内容"}
+    style = {
+        "wb": "简洁直接，200-500字，突出材质工艺",
+        "ozon": "详细结构化，500-1000字，分段落",
+        "yandex": "SEO导向，300-600字，融入关键词",
+    }
+    prompt = f"""你是俄罗斯电商文案专家。
+商品标题：{listing.title_ru or ""}
+原描述：{listing.description_ru or listing.title_ru or ""}
+请改写为{target_platform.upper()}平台风格：{style.get(target_platform, "")}
+只返回改写后内容，不要解释。"""
+    settings = get_settings()
+    client = KimiClient(api_key=settings.KIMI_API_KEY)
+    try:
+        result = await client.chat(
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.7, max_tokens=2000)
+        return {"code": 0, "data": {"description": result.get("content", "")}}
+    except Exception as e:
+        logger.error(f"Kimi改写失败: {e}")
+        return {"code": ErrorCode.UNKNOWN_ERROR, "msg": "AI改写失败"}

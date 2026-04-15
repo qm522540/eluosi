@@ -106,3 +106,17 @@ def daily_sync_all_shops(self):
         raise self.retry(exc=e)
     finally:
         db.close()
+
+
+@celery_app.task(name="app.tasks.daily_sync_task.sync_shop_products")
+def sync_shop_products(shop_id: int, tenant_id: int):
+    from app.services.product.service import sync_products_from_platform
+    db = SessionLocal()
+    try:
+        return sync_products_from_platform(db, shop_id, tenant_id)
+    except Exception as e:
+        logger.error(f"sync_shop_products 失败 shop_id={shop_id}: {e}")
+        db.rollback()
+        return {"code": 1, "msg": str(e)[:200]}
+    finally:
+        db.close()
