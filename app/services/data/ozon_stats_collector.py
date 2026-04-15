@@ -72,7 +72,6 @@ async def smart_sync(db: Session, shop_id: int, tenant_id: int) -> dict:
 
     logger.info(f"shop_id={shop_id} 同步 {date_from}~{date_to}")
 
-    # ① Seller API 同步拉 revenue + orders（秒回）
     campaigns = db.query(AdCampaign).filter(
         AdCampaign.shop_id == shop_id,
         AdCampaign.tenant_id == tenant_id,
@@ -81,12 +80,9 @@ async def smart_sync(db: Session, shop_id: int, tenant_id: int) -> dict:
     if not campaigns:
         raise ValueError("无Ozon广告活动，请先同步广告活动列表")
 
-    default_campaign = campaigns[0]
-    total_synced = await _fetch_seller_data(
-        db, shop, default_campaign, date_from, date_to, tenant_id,
-    )
-
-    # ② 后台线程拉广告数据（Performance API，慢但不阻塞用户）
+    # ad_stats 所有字段（曝光/点击/花费/订单/营收）全部由 Performance API 提供
+    # 因为 groupBy=DATE 响应里本身有 orders + ordersMoney，是广告真实归因
+    # Seller API 的订单是店铺自然+广告合计，没法归因到具体活动，所以不再使用
     camp_map = {str(c.platform_campaign_id): c.id for c in campaigns}
     _start_perf_background(shop, camp_map, date_from, date_to, tenant_id)
 
@@ -94,14 +90,18 @@ async def smart_sync(db: Session, shop_id: int, tenant_id: int) -> dict:
     data_days = _count_data_days(db, shop_id, tenant_id)
     _update_init_status(db, shop_id, tenant_id, date_to, data_days)
 
-    logger.info(f"shop_id={shop_id} Seller API 完成: {total_synced}条 + Performance API 后台补充中")
+    logger.info(
+        f"shop_id={shop_id} Ozon 同步已触发：Performance API 后台拉取中"
+        f"（后台线程预计 1-3 分钟完成）"
+    )
     return {
-        "synced": total_synced,
+        "synced": 0,
         "date_from": str(date_from),
         "date_to": str(date_to),
         "cleaned": cleaned,
         "already_latest": False,
         "data_days": data_days,
+        "msg": "Performance API 后台拉取中，数据将在 1-3 分钟内补上",
     }
 
 
