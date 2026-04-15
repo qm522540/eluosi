@@ -97,16 +97,8 @@ async def main():
         return
     print(f"店铺: id={shop.id} name={shop.name}")
 
-    camps = (
-        db.query(AdCampaign)
-        .filter(AdCampaign.shop_id == shop.id, AdCampaign.platform == "ozon")
-        .limit(3)
-        .all()
-    )
-    if not camps:
-        print("找不到活动")
-        return
-    platform_cids = [str(c.platform_campaign_id) for c in camps]
+    # 04-14 真有数据的 Ozon 活动（imp/clk 大于 0）
+    platform_cids = ["24664750", "16319347", "24463141", "16756542", "24463338", "24459320"]
     print(f"活动: {platform_cids}")
 
     ozon = OzonClient(
