@@ -811,7 +811,7 @@ const OzonAIPricing = ({ shopId, platform = 'ozon' }) => {
     }
   }
 
-  const handleApprove = async (id) => {
+  const doApprove = async (id) => {
     try {
       await approveAIPricingSuggestion(id)
       message.success('已执行')
@@ -820,6 +820,53 @@ const OzonAIPricing = ({ shopId, platform = 'ozon' }) => {
     } catch (err) {
       message.error(err.message || '执行失败')
     }
+  }
+
+  const handleApprove = (id) => {
+    // 删除建议（从 handleDeleteConfirm 调过来）直接执行
+    // 正常调价建议：弹确认框
+    const record = suggestions.find(s => !s.isGroup && s.id === id)
+    const isDelete = record && Number(record.suggested_bid) === 0 && Number(record.adjust_pct) === -100
+    if (isDelete) {
+      // 走真实 API（handleDeleteConfirm 已经弹过确认框）
+      return doApprove(id)
+    }
+
+    if (!record) return doApprove(id)
+
+    const isUp = Number(record.suggested_bid) > Number(record.old_bid ?? record.current_bid ?? 0)
+    Modal.confirm({
+      title: '确认执行该出价调整？',
+      icon: <ExclamationCircleOutlined style={{ color: isUp ? '#cf1322' : '#389e0d' }} />,
+      width: 460,
+      content: (
+        <div style={{ fontSize: 13, lineHeight: 1.8 }}>
+          <div>
+            商品：<strong>{record.sku_name || record.platform_sku_id}</strong>
+            <span style={{ color: '#999', marginLeft: 6 }}>SKU：{record.platform_sku_id}</span>
+          </div>
+          <div>活动：<strong>{record.campaign_name || `#${record.campaign_id}`}</strong></div>
+          <div style={{
+            marginTop: 10, padding: 10, borderRadius: 4,
+            background: isUp ? '#fff2f0' : '#f6ffed',
+            color: isUp ? '#cf1322' : '#389e0d',
+            fontWeight: 500,
+          }}>
+            {isUp ? '加价' : '降价'} ₽{Math.round(Number(record.current_bid))} → ₽{Math.round(Number(record.suggested_bid))}
+            <span style={{ marginLeft: 8, fontWeight: 400 }}>
+              ({Number(record.adjust_pct) > 0 ? '+' : ''}{Number(record.adjust_pct).toFixed(2)}%)
+            </span>
+          </div>
+          <div style={{ marginTop: 8, color: '#999', fontSize: 12 }}>
+            执行后将调用平台 API 修改出价，生效立即计入 AI 调价历史。
+          </div>
+        </div>
+      ),
+      okText: '确认执行',
+      okType: isUp ? 'danger' : 'primary',
+      cancelText: '取消',
+      onOk: () => doApprove(id),
+    })
   }
 
   const handleDeleteConfirm = (record) => {
@@ -842,7 +889,7 @@ const OzonAIPricing = ({ shopId, platform = 'ozon' }) => {
       okText: '确认移除',
       okType: 'danger',
       cancelText: '取消',
-      onOk: () => handleApprove(record.id),
+      onOk: () => doApprove(record.id),
     })
   }
 
@@ -862,9 +909,7 @@ const OzonAIPricing = ({ shopId, platform = 'ozon' }) => {
     .map(k => Number(k.slice(5)))
     .filter(Boolean)
 
-  const handleBatchApprove = async () => {
-    const ids = extractIds(selectedRowKeys)
-    if (ids.length === 0) return
+  const doBatchApprove = async (ids) => {
     setBatchApproving(true)
     try {
       const results = await Promise.allSettled(ids.map(id => approveAIPricingSuggestion(id)))
@@ -883,6 +928,49 @@ const OzonAIPricing = ({ shopId, platform = 'ozon' }) => {
     } finally {
       setBatchApproving(false)
     }
+  }
+
+  const handleBatchApprove = () => {
+    const ids = extractIds(selectedRowKeys)
+    if (ids.length === 0) return
+
+    // 统计批次构成：多少条调价、多少条删除
+    const selectedRecords = suggestions.filter(r => !r.isGroup && ids.includes(r.id))
+    const deleteCount = selectedRecords.filter(r =>
+      Number(r.suggested_bid) === 0 && Number(r.adjust_pct) === -100
+    ).length
+    const adjustCount = ids.length - deleteCount
+
+    Modal.confirm({
+      title: `确认批量执行 ${ids.length} 条建议？`,
+      icon: <ExclamationCircleOutlined style={{ color: '#faad14' }} />,
+      width: 480,
+      content: (
+        <div style={{ fontSize: 13, lineHeight: 1.8 }}>
+          <div style={{ marginBottom: 8 }}>
+            本次批次包含：
+          </div>
+          {adjustCount > 0 && (
+            <div>· <strong>{adjustCount}</strong> 条出价调整（直接调平台 API 改价）</div>
+          )}
+          {deleteCount > 0 && (
+            <div style={{ color: '#cf1322' }}>
+              · <strong>{deleteCount}</strong> 条商品移除（从活动里移除/降至最低出价，不可撤销）
+            </div>
+          )}
+          <div style={{
+            marginTop: 10, padding: 10, background: '#fffbe6',
+            borderRadius: 4, color: '#d48806', fontSize: 12,
+          }}>
+            执行后所有改动会计入 AI 调价历史。部分失败的条目会在结果提示中显示。
+          </div>
+        </div>
+      ),
+      okText: `确认执行 (${ids.length})`,
+      okType: deleteCount > 0 ? 'danger' : 'primary',
+      cancelText: '取消',
+      onOk: () => doBatchApprove(ids),
+    })
   }
 
   const handleBatchReject = async () => {
