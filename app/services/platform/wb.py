@@ -683,19 +683,26 @@ class WBClient(BasePlatformClient):
             raise
 
     async def remove_campaign_product(self, advert_id: str, nm_id: int) -> dict:
-        """从 WB 广告活动中移除指定商品
+        """从 WB 广告活动中"移除"指定商品出价
 
-        WB API: POST /adv/v0/nm-to-advert/delete
-        Body: {"advertId": int, "nms": [int]}
+        实际行为：WB 统一活动不支持 API 真删除 SKU（旧的
+        /adv/v0/nm-to-advert/delete 已被平台废弃返回 404）。
+        这里改为把该 SKU 的 CPM 降到 0（WB 实际按最低出价兜底），
+        视觉上等同于"不再竞价曝光"。
         """
         try:
-            await self._request(
-                "POST",
-                f"{WB_ADVERT_API}/adv/v0/nm-to-advert/delete",
-                json={"advertId": int(advert_id), "nms": [int(nm_id)]},
+            result = await self.update_campaign_cpm(
+                advert_id=str(advert_id),
+                nm_id=int(nm_id),
+                cpm_rub=0,
             )
-            logger.info(f"WB 移除商品成功 shop_id={self.shop_id} advert={advert_id} nm={nm_id}")
-            return {"ok": True}
+            if result.get("ok"):
+                logger.info(
+                    f"WB 移除商品(降最低CPM) shop_id={self.shop_id} "
+                    f"advert={advert_id} nm={nm_id}"
+                )
+                return {"ok": True, "note": "已降至最低出价，停止该SKU竞价曝光"}
+            return {"ok": False, "error": result.get("error") or "WB API 调用失败"}
         except Exception as e:
             logger.error(f"WB 移除商品失败 advert={advert_id} nm={nm_id}: {e}")
             return {"ok": False, "error": str(e)}

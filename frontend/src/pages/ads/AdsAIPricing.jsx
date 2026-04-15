@@ -835,7 +835,9 @@ const OzonAIPricing = ({ shopId, platform = 'ozon' }) => {
           </div>
           <div>活动：<strong>{record.campaign_name || `#${record.campaign_id}`}</strong></div>
           <div style={{ marginTop: 10, padding: 10, background: '#fff2f0', borderRadius: 4, color: '#cf1322' }}>
-            删除后该商品出价将从活动列表中移除，此操作不可撤销。
+            {platform === 'wb'
+              ? 'WB 统一活动 API 不支持真删除 SKU，实际操作为"将该 SKU 的 CPM 降至最低，停止竞价曝光"。此操作不可自动恢复，需要在 WB 后台手动重新设置出价。'
+              : '删除后该商品出价将从活动列表中移除，此操作不可撤销。'}
           </div>
         </div>
       ),
