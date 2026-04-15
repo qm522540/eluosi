@@ -2160,30 +2160,13 @@ const BidManagement = ({ shopId, platform }) => {
 
   return (
     <div>
-      {/* 平台标识栏 */}
-      <div style={{
-        display: 'flex',
-        alignItems: 'center',
-        gap: 10,
-        padding: '9px 14px',
-        background: 'var(--color-background-secondary, #fafafa)',
-        border: '0.5px solid var(--color-border-tertiary, #e8e8e8)',
-        borderRadius: 6,
-        marginBottom: 14,
-      }}>
-        <span style={{
-          background: platform === 'wb' ? '#CB11AB' : '#005BFF',
-          color: '#fff',
-          fontSize: 12,
-          fontWeight: 500,
-          padding: '3px 10px',
-          borderRadius: 20,
+      {/* 运行中标识（只在有模式运行时显示） */}
+      {activeMode !== 'none' && (
+        <div style={{
+          display: 'flex', justifyContent: 'flex-end',
+          marginBottom: 10,
         }}>
-          {platform === 'wb' ? 'Wildberries' : 'Ozon'}
-        </span>
-        {activeMode !== 'none' && (
           <span style={{
-            marginLeft: 'auto',
             background: '#f6ffed',
             color: '#389e0d',
             fontSize: 12,
@@ -2192,8 +2175,8 @@ const BidManagement = ({ shopId, platform }) => {
           }}>
             {activeMode === 'time_pricing' ? '分时调价运行中' : 'AI调价运行中'}
           </span>
-        )}
-      </div>
+        </div>
+      )}
 
       {/* 状态栏 */}
       <StatusBar shopId={shopId} />
