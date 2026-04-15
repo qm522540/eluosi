@@ -1245,11 +1245,11 @@ const AdsAIPricing = ({ shopId, platform, searched }) => {
     try {
       const res = await getDataStatus(shopId)
       setDataStatus(res.data)
-      if (!res.data.initialized) {
+      if (!res.data?.is_initialized) {
         pollTimer.current = setInterval(async () => {
           try {
             const r = await getDataStatus(shopId)
-            if (r.data.initialized) {
+            if (r.data?.is_initialized) {
               setDataStatus(r.data)
               clearInterval(pollTimer.current)
             }
@@ -1257,7 +1257,7 @@ const AdsAIPricing = ({ shopId, platform, searched }) => {
         }, 30000)
       }
     } catch {
-      setDataStatus({ initialized: true })
+      setDataStatus({ is_initialized: true })
     } finally {
       setChecking(false)
     }
@@ -1275,7 +1275,7 @@ const AdsAIPricing = ({ shopId, platform, searched }) => {
     )
   }
 
-  if (dataStatus && !dataStatus.initialized) {
+  if (dataStatus && !dataStatus.is_initialized) {
     return (
       <div style={{ textAlign: 'center', padding: '60px 0' }}>
         <Spin size="large" />
@@ -1283,7 +1283,7 @@ const AdsAIPricing = ({ shopId, platform, searched }) => {
           正在拉取历史广告数据
         </div>
         <div style={{ marginTop: 8, color: '#999', fontSize: 14 }}>
-          首次进入需要拉取近3个月数据，约需1-3分钟
+          首次进入需要拉取近 14 天数据，约需 1-3 分钟
           <br />
           页面将自动刷新，请稍候...
         </div>
