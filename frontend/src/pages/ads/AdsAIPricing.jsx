@@ -998,7 +998,16 @@ const OzonAIPricing = ({ shopId, platform = 'ozon' }) => {
               <Form.Item
                 name="gross_margin"
                 label={
-                  <Tooltip title="扣除进货成本、平台佣金、物流、退货后的净毛利率，请确认已包含所有成本">
+                  <Tooltip
+                    title={
+                      <div style={{ lineHeight: 1.7 }}>
+                        <div><strong>净毛利率（广义）</strong></div>
+                        <div>= （售价 - 进货成本 - 平台佣金 - 物流 - 退货损耗）/ 售价</div>
+                        <div>= 扣除所有固定成本后</div>
+                        <div>= 广告费花出去之前的利润空间</div>
+                      </div>
+                    }
+                  >
                     净毛利率 <span style={{ color: '#999', fontSize: 12 }}>（含佣金物流）</span>
                   </Tooltip>
                 }
@@ -1060,31 +1069,6 @@ const OzonAIPricing = ({ shopId, platform = 'ozon' }) => {
               />
             )
           })()}
-
-          {/* 出价上限 */}
-          <div style={{ fontWeight: 500, marginBottom: 12, color: '#333' }}>
-            出价限制
-          </div>
-          <Row gutter={16}>
-            <Col span={12}>
-              <Form.Item
-                name="max_bid"
-                label={<Tooltip title="WB单次出价CPM上限，Ozon单次出价CPC上限">最高出价 (₽)</Tooltip>}
-                rules={[{ required: true, message: '请输入最高出价' }]}
-              >
-                <InputNumber min={3} step={10} style={{ width: '100%' }} addonBefore="₽" />
-              </Form.Item>
-            </Col>
-            <Col span={12}>
-              <Form.Item
-                name="max_adjust_pct"
-                label={<Tooltip title="单次出价调整幅度不超过此百分比">单次最大调整幅度</Tooltip>}
-                rules={[{ required: true, message: '请输入最大调整幅度' }]}
-              >
-                <InputNumber min={1} max={100} step={5} style={{ width: '100%' }} addonAfter="%" />
-              </Form.Item>
-            </Col>
-          </Row>
 
           {/* 智能清理 */}
           <div style={{ fontWeight: 500, marginBottom: 12, color: '#333', marginTop: 8 }}>
