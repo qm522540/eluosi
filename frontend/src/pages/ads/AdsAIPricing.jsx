@@ -937,16 +937,25 @@ const OzonAIPricing = ({ shopId, platform = 'ozon' }) => {
     },
     {
       title: `建议${bidLabel}`, dataIndex: 'suggested_bid', width: 90, align: 'right',
-      render: (v, r) => r.isGroup ? groupHiddenCell() : (
-        <Text style={{ color: v > r.current_bid ? '#52c41a' : '#ff4d4f', fontWeight: 600 }}>
-          ₽{Math.round(v)}
-        </Text>
-      ),
+      render: (v, r) => {
+        if (r.isGroup) return groupHiddenCell()
+        if (Number(v) === 0 && Number(r.adjust_pct) === -100) {
+          return <Tag color="red">删除</Tag>
+        }
+        return (
+          <Text style={{ color: v > r.current_bid ? '#52c41a' : '#ff4d4f', fontWeight: 600 }}>
+            ₽{Math.round(v)}
+          </Text>
+        )
+      },
     },
     {
       title: '调幅', dataIndex: 'adjust_pct', width: 80, align: 'center',
       render: (v, r) => {
         if (r.isGroup) return groupHiddenCell()
+        if (Number(v) === -100 && Number(r.suggested_bid) === 0) {
+          return <Tag color="red">移除活动</Tag>
+        }
         const isUp = v > 0
         return (
           <Tag color={isUp ? 'green' : 'red'} icon={isUp ? <ArrowUpOutlined /> : <ArrowDownOutlined />}>
@@ -1001,17 +1010,27 @@ const OzonAIPricing = ({ shopId, platform = 'ozon' }) => {
       render: (v, r) => r.isGroup ? groupHiddenCell() : <Tooltip title={v} placement="topLeft">{v}</Tooltip>,
     },
     {
-      title: '操作', key: 'action', width: 140, fixed: 'right',
-      render: (_, record) => record.isGroup ? groupHiddenCell() : (
-        <Space size="small">
-          <Button type="primary" size="small" icon={<CheckOutlined />} onClick={() => handleApprove(record.id)}>
-            执行
-          </Button>
-          <Button size="small" icon={<CloseOutlined />} onClick={() => handleReject(record.id)}>
-            忽略
-          </Button>
-        </Space>
-      ),
+      title: '操作', key: 'action', width: 160, fixed: 'right',
+      render: (_, record) => {
+        if (record.isGroup) return groupHiddenCell()
+        const isDelete = Number(record.suggested_bid) === 0 && Number(record.adjust_pct) === -100
+        return (
+          <Space size="small">
+            {isDelete ? (
+              <Button danger size="small" onClick={() => handleApprove(record.id)}>
+                建议删除
+              </Button>
+            ) : (
+              <Button type="primary" size="small" icon={<CheckOutlined />} onClick={() => handleApprove(record.id)}>
+                执行
+              </Button>
+            )}
+            <Button size="small" icon={<CloseOutlined />} onClick={() => handleReject(record.id)}>
+              忽略
+            </Button>
+          </Space>
+        )
+      },
     },
   ]
 
@@ -1359,7 +1378,7 @@ const OzonAIPricing = ({ shopId, platform = 'ozon' }) => {
               width: 40px !important;
             }
             .ai-suggestion-item-row > td:nth-child(2) {
-              padding-left: 0 !important;
+              padding-left: 5px !important;
             }
             .ai-suggestion-group-row > td {
               background: #fafafa !important;

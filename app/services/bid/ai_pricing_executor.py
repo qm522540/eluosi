@@ -583,15 +583,64 @@ async def _analyze_now_inner(db, tenant_id: int, shop_id: int,
             sku_stat  = sku_stats.get(stats_key, {})
             data_days = int(sku_stat.get("days", 0) or 0)
 
-            # ── 生命周期管理：检查是否自动删除 ──
+            # ── 生命周期管理：检查亏损条件 ──
             if cfg.auto_remove_losing_sku and data_days > cfg.losing_days_threshold:
-                removed = await _check_and_remove_losing_sku(
-                    db, client, shop, camp, sku, sku_name,
-                    current_bid, tenant_id, sku_stat,
+                is_losing, roas_21_30, breakeven_roas, net_margin_losing = _is_losing_sku(
+                    db, tenant_id, shop_id, camp.id, platform, sku,
                 )
-                if removed:
-                    auto_removed += 1
-                    continue
+                if is_losing:
+                    if cfg.auto_execute:
+                        # 全自动模式：直接调平台 API 删除
+                        removed = await _check_and_remove_losing_sku(
+                            db, client, shop, camp, sku, sku_name,
+                            current_bid, tenant_id, sku_stat,
+                        )
+                        if removed:
+                            auto_removed += 1
+                            continue
+                    else:
+                        # 建议模式：写一条"建议删除"到 suggestions 表，交用户确认
+                        reason_txt = (
+                            f"[亏损删除建议] 21-30天ROAS={roas_21_30:.2f}x "
+                            f"低于保本线{breakeven_roas:.2f}x (净毛利率={net_margin_losing})，"
+                            f"数据天数{data_days}天，建议从活动中移除该 SKU"
+                        )
+                        ins = db.execute(text("""
+                            INSERT INTO ai_pricing_suggestions (
+                                tenant_id, shop_id, campaign_id,
+                                platform_sku_id, sku_name,
+                                current_bid, suggested_bid, adjust_pct,
+                                product_stage, decision_basis,
+                                current_roas, expected_roas,
+                                data_days, reason, status, generated_at
+                            ) VALUES (
+                                :tenant_id, :shop_id, :campaign_id,
+                                :sku, :sku_name,
+                                :current_bid, 0, -100,
+                                'declining', 'history_data',
+                                :current_roas, NULL,
+                                :data_days, :reason, 'pending', NOW()
+                            )
+                        """), {
+                            "tenant_id": tenant_id, "shop_id": shop_id,
+                            "campaign_id": camp.id, "sku": sku,
+                            "sku_name": sku_name,
+                            "current_bid": current_bid,
+                            "current_roas": round(roas_21_30, 2),
+                            "data_days": data_days,
+                            "reason": reason_txt[:500],
+                        })
+                        saved.append({
+                            "id": ins.lastrowid,
+                            "tenant_id": tenant_id, "shop_id": shop_id,
+                            "campaign_id": camp.id,
+                            "platform_sku_id": sku, "sku_name": sku_name,
+                            "current_bid": current_bid, "suggested_bid": 0,
+                            "adjust_pct": -100,
+                            "product_stage": "declining",
+                            "reason": reason_txt,
+                        })
+                        continue
 
             # ── 净毛利率和客单价 ──
             net_margin   = _get_net_margin(db, tenant_id, shop_id, sku)
@@ -728,18 +777,28 @@ async def _analyze_now_inner(db, tenant_id: int, shop_id: int,
 
 # ==================== 生命周期管理 ====================
 
+def _is_losing_sku(db, tenant_id: int, shop_id: int, camp_id: int,
+                   platform: str, sku: str):
+    """检查 SKU 是否满足"21-30 天持续亏损"条件。
+    返回 (is_losing, roas_21_30, breakeven_roas, net_margin)
+    任一为 None 表示判定数据不足，is_losing=False。
+    """
+    roas_21_30 = _get_roas_21_30(db, camp_id, sku, tenant_id, platform)
+    if roas_21_30 is None:
+        return False, None, None, None
+    net_margin = _get_net_margin(db, tenant_id, shop_id, sku)
+    breakeven_roas = 1.0 / net_margin if net_margin > 0 else 3.7
+    return (roas_21_30 < breakeven_roas, roas_21_30, breakeven_roas, net_margin)
+
+
 async def _check_and_remove_losing_sku(
     db, client, shop, camp, sku: str, sku_name: str,
     current_bid: float, tenant_id: int, sku_stat: dict,
 ) -> bool:
-    roas_21_30 = _get_roas_21_30(db, camp.id, sku, tenant_id, shop.platform)
-    if roas_21_30 is None:
-        return False
-
-    net_margin     = _get_net_margin(db, tenant_id, shop.id, sku)
-    breakeven_roas = 1.0 / net_margin if net_margin > 0 else 3.7
-
-    if roas_21_30 >= breakeven_roas:
+    is_losing, roas_21_30, breakeven_roas, _ = _is_losing_sku(
+        db, tenant_id, shop.id, camp.id, shop.platform, sku,
+    )
+    if not is_losing:
         return False
 
     logger.info(
@@ -906,13 +965,24 @@ async def approve_suggestion(db, tenant_id: int, suggestion_id: int,
     if not shop:
         return {"code": ErrorCode.SHOP_NOT_FOUND, "msg": "店铺不存在"}
 
-    final_bid = override_bid if override_bid is not None else float(row.suggested_bid)
+    # 识别"建议删除"：suggested_bid=0 AND adjust_pct=-100
+    is_delete = (float(row.suggested_bid) == 0 and float(row.adjust_pct) == -100)
+    final_bid = 0 if is_delete else (
+        override_bid if override_bid is not None else float(row.suggested_bid)
+    )
+
     client = _create_platform_client(shop)
     try:
-        api_result = await _execute_bid_update(
-            client, shop.platform, row.platform_campaign_id,
-            row.platform_sku_id, final_bid,
-        )
+        if is_delete:
+            api_result = await _execute_bid_update(
+                client, shop.platform, row.platform_campaign_id,
+                row.platform_sku_id, 0, delete=True,
+            )
+        else:
+            api_result = await _execute_bid_update(
+                client, shop.platform, row.platform_campaign_id,
+                row.platform_sku_id, final_bid,
+            )
     finally:
         await client.close()
 
@@ -931,24 +1001,26 @@ async def approve_suggestion(db, tenant_id: int, suggestion_id: int,
     campaign = db.query(AdCampaign).filter(
         AdCampaign.id == row.campaign_id, AdCampaign.tenant_id == tenant_id,
     ).first()
-    final_adjust_pct = (
+    final_adjust_pct = -100 if is_delete else (
         round((final_bid - float(row.current_bid)) / float(row.current_bid) * 100, 2)
         if float(row.current_bid) > 0 else 0
     )
-    _upsert_group_last_auto(db, campaign, row.platform_sku_id, row.sku_name or "", final_bid)
+    if not is_delete:
+        _upsert_group_last_auto(db, campaign, row.platform_sku_id, row.sku_name or "", final_bid)
     _write_bidlog(db, campaign, {
         "platform_sku_id": row.platform_sku_id, "sku_name": row.sku_name,
         "current_bid": float(row.current_bid), "suggested_bid": final_bid,
         "adjust_pct": final_adjust_pct, "product_stage": row.product_stage,
-    }, "ai_manual", success=True)
+    }, "auto_remove" if is_delete else "ai_manual", success=True)
     db.commit()
 
     return {"code": 0, "data": {
         "id": suggestion_id, "status": "approved",
         "executed_at": now_utc.isoformat() + "Z",
         "old_bid": float(row.current_bid),
-        "new_bid": api_result.get("actual_bid_rub", final_bid),
+        "new_bid": 0 if is_delete else api_result.get("actual_bid_rub", final_bid),
         "suggested_bid": final_bid,
+        "action": "remove" if is_delete else "update",
     }}
 
 
