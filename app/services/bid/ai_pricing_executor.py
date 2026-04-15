@@ -31,6 +31,7 @@
   → 调平台API删除该SKU出价，写 bid_adjustment_logs(execute_type='auto_remove')
 """
 
+import asyncio as _asyncio
 import json
 import re
 from datetime import datetime, timezone, date, timedelta
@@ -392,6 +393,80 @@ async def analyze_now(db, tenant_id: int, shop_id: int,
         return await _analyze_now_inner(db, tenant_id, shop_id, force, campaign_ids)
     finally:
         _release_analyze_lock(shop_id)
+
+
+async def analyze_stream(db, tenant_id: int, shop_id: int,
+                         campaign_ids: Optional[list] = None):
+    """SSE 流式分析包装器：调 analyze_now 拿结果，按 SSE 协议分阶段推送给前端。
+    当前不做真流式（DeepSeek token 级别），仅分阶段事件 + 建议逐条推送。
+    """
+    def _sse(event: str, data) -> str:
+        return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+
+    try:
+        yield _sse("phase", "正在准备数据...")
+
+        lock_acquired = _try_acquire_analyze_lock(shop_id)
+        if not lock_acquired:
+            yield _sse("error", "AI 分析进行中，请等待 60 秒后重试")
+            yield _sse("done", "已跳过")
+            return
+
+        try:
+            yield _sse("phase", "DeepSeek 正在生成建议...")
+            result = await _analyze_now_inner(db, tenant_id, shop_id,
+                                              force=True, campaign_ids=campaign_ids)
+        finally:
+            _release_analyze_lock(shop_id)
+
+        status = result.get("status")
+        if status == "failed":
+            yield _sse("error", result.get("message") or "分析失败")
+            yield _sse("done", "分析失败")
+            return
+
+        # 读取本次产生的 suggestions（pending + 今日）
+        rows = db.execute(text("""
+            SELECT s.id, s.campaign_id, s.platform_sku_id,
+                   s.current_bid, s.suggested_bid, s.current_roas,
+                   s.product_stage, s.reason,
+                   c.name AS campaign_name,
+                   l.title AS sku_name
+            FROM ai_pricing_suggestions s
+            LEFT JOIN ad_campaigns c ON s.campaign_id = c.id
+            LEFT JOIN platform_listings l
+              ON l.tenant_id = s.tenant_id
+             AND l.platform_sku_id = s.platform_sku_id
+            WHERE s.tenant_id = :tid AND s.shop_id = :sid
+              AND DATE(s.created_at) = CURDATE()
+              AND s.status = 'pending'
+            ORDER BY s.id DESC
+        """), {"tid": tenant_id, "sid": shop_id}).fetchall()
+
+        # 逐条作为 token 事件推送 JSON 片段，前端 extractSuggestions 正则能解析
+        for r in rows:
+            item = {
+                "campaign_id": r.campaign_id,
+                "platform_sku_id": r.platform_sku_id,
+                "sku_name": r.sku_name,
+                "current_bid": float(r.current_bid) if r.current_bid is not None else None,
+                "suggested_bid": float(r.suggested_bid) if r.suggested_bid is not None else None,
+                "current_roas": float(r.current_roas) if r.current_roas is not None else None,
+                "product_stage": r.product_stage,
+                "reason": r.reason or "",
+            }
+            yield _sse("token", json.dumps(item, ensure_ascii=False))
+            await _asyncio.sleep(0.05)  # 给前端一点渲染缓冲
+
+        msg = (f"分析完成，生成 {result.get('suggestion_count', 0)} 条调价建议"
+               f"（自动执行 {result.get('auto_executed_count', 0)} 条）")
+        yield _sse("phase", msg)
+        yield _sse("done", msg)
+
+    except Exception as e:
+        logger.exception(f"analyze_stream 失败 shop_id={shop_id}: {e}")
+        yield _sse("error", f"分析失败: {e}")
+        yield _sse("done", "分析失败")
 
 
 async def _analyze_now_inner(db, tenant_id: int, shop_id: int,
