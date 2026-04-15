@@ -615,19 +615,41 @@ class OzonClient(BasePlatformClient):
 
     # ==================== 商品 ====================
 
-    async def fetch_products(self, page: int = 1, limit: int = 100) -> dict:
-        """拉取商品列表"""
+    async def fetch_products(self, last_id: str = "", limit: int = 1000) -> dict:
+        """拉取商品列表（v3），只含 product_id/offer_id/stocks/archived
+        返回 {"result": {"items": [...], "total": N, "last_id": "cursor"}}
+        分页：用返回的 last_id 再传回来直到 items 为空或 last_id 为空
+        """
         try:
-            url = f"{OZON_SELLER_API}/v2/product/list"
+            url = f"{OZON_SELLER_API}/v3/product/list"
             payload = {
                 "filter": {"visibility": "ALL"},
-                "last_id": "",
+                "last_id": last_id,
                 "limit": limit,
             }
             result = await self._request("POST", url, json=payload)
             return result
         except Exception as e:
             logger.error(f"Ozon 拉取商品失败，shop_id={self.shop_id}: {e}")
+            raise
+
+    async def fetch_product_info(self, product_ids: list) -> list:
+        """批量拉取商品详情（v3）。单次最多 1000 个 product_id
+        返回 items 列表；每项含 id/name/price/old_price/images/primary_image/barcodes/is_archived/...
+        """
+        if not product_ids:
+            return []
+        try:
+            url = f"{OZON_SELLER_API}/v3/product/info/list"
+            payload = {
+                "product_id": [int(pid) for pid in product_ids],
+                "offer_id": [],
+                "sku": [],
+            }
+            result = await self._request("POST", url, json=payload)
+            return (result or {}).get("result", {}).get("items", []) or result.get("items", [])
+        except Exception as e:
+            logger.error(f"Ozon 拉取商品详情失败，shop_id={self.shop_id}: {e}")
             raise
 
     # ==================== 订单 ====================

@@ -457,8 +457,111 @@ def _sync_wb_products(db: Session, shop, tenant_id: int) -> dict:
 
 
 def _sync_ozon_products(db: Session, shop, tenant_id: int) -> dict:
-    return {"code": 0, "data": {"synced": 0, "created": 0, "updated": 0},
-            "msg": "Ozon 商品同步对接中（/v3/product/list 端点升级待完成）"}
+    import asyncio
+    from app.services.platform.ozon import OzonClient
+
+    async def _fetch_all():
+        client = OzonClient(
+            shop_id=shop.id, api_key=shop.api_key, client_id=shop.client_id,
+            perf_client_id=shop.perf_client_id or "",
+            perf_client_secret=shop.perf_client_secret or "")
+        try:
+            all_items = []
+            last_id = ""
+            for _ in range(50):
+                r = await client.fetch_products(last_id=last_id, limit=1000)
+                result = (r or {}).get("result", {})
+                items = result.get("items") or []
+                if not items:
+                    break
+                all_items.extend(items)
+                next_last = result.get("last_id") or ""
+                if not next_last or next_last == last_id:
+                    break
+                last_id = next_last
+            product_ids = [it["product_id"] for it in all_items if it.get("product_id")]
+            archived_map = {it["product_id"]: it.get("archived") for it in all_items}
+            stock_map = {
+                it["product_id"]: (it.get("has_fbo_stocks") or it.get("has_fbs_stocks"))
+                for it in all_items
+            }
+            infos = []
+            for i in range(0, len(product_ids), 200):
+                chunk = product_ids[i:i + 200]
+                infos.extend(await client.fetch_product_info(chunk))
+            return infos, archived_map, stock_map
+        finally:
+            await client.close()
+
+    loop = asyncio.new_event_loop()
+    try:
+        infos, archived_map, stock_map = loop.run_until_complete(_fetch_all())
+    finally:
+        loop.close()
+
+    synced = created = updated = 0
+    for p in infos:
+        pid = p.get("id") or p.get("product_id")
+        if not pid:
+            continue
+        pid_str = str(pid)
+        listing = db.query(PlatformListing).filter(
+            PlatformListing.tenant_id == tenant_id,
+            PlatformListing.shop_id == shop.id,
+            PlatformListing.platform == "ozon",
+            PlatformListing.platform_product_id == pid_str,
+        ).first()
+
+        if archived_map.get(pid) or p.get("is_archived"):
+            status = "deleted"
+        elif stock_map.get(pid) is False:
+            status = "out_of_stock"
+        else:
+            status = "active"
+
+        def _to_float(v):
+            try:
+                return float(v) if v not in (None, "", "0", "0.00") else None
+            except (TypeError, ValueError):
+                return None
+
+        images = p.get("images") or []
+        primary = p.get("primary_image") or (images[0] if images else None)
+        if isinstance(primary, list):
+            primary = primary[0] if primary else None
+        barcodes = p.get("barcodes") or []
+        barcode = barcodes[0] if barcodes else None
+        title = (p.get("name") or "")[:500]
+        price = _to_float(p.get("price"))
+        old_price = _to_float(p.get("old_price"))
+
+        data = {
+            "title_ru": title,
+            "price": old_price or price,
+            "discount_price": price if (old_price and price and old_price != price) else None,
+            "barcode": barcode,
+            "status": status,
+        }
+
+        if listing:
+            for k, v in data.items():
+                if v is not None:
+                    setattr(listing, k, v)
+            updated += 1
+        else:
+            offer_id = p.get("offer_id") or f"OZ-{pid_str}"
+            product = _get_or_create_product(
+                db, tenant_id, name_ru=title, sku=offer_id, image_url=primary)
+            listing = PlatformListing(
+                tenant_id=tenant_id, product_id=product.id,
+                shop_id=shop.id, platform="ozon",
+                platform_product_id=pid_str, **data)
+            db.add(listing)
+            created += 1
+        synced += 1
+    db.commit()
+    _update_sync_time(db, shop.id, tenant_id)
+    return {"code": 0, "data": {"synced": synced, "created": created, "updated": updated}}
 
 
 def _get_or_create_product(db: Session, tenant_id: int,
