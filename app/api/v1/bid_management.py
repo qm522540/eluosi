@@ -563,9 +563,16 @@ def get_suggestions(
             s.product_stage, s.decision_basis,
             s.current_roas, s.expected_roas, s.data_days, s.reason,
             s.status, s.generated_at, s.executed_at,
-            c.name AS campaign_name, c.platform_campaign_id
+            c.name AS campaign_name, c.platform_campaign_id,
+            pl.url AS product_url,
+            p.image_url AS image_url
         FROM ai_pricing_suggestions s
         JOIN ad_campaigns c ON s.campaign_id = c.id
+        LEFT JOIN platform_listings pl
+          ON pl.tenant_id = s.tenant_id
+         AND pl.shop_id = s.shop_id
+         AND pl.platform_product_id = s.platform_sku_id
+        LEFT JOIN products p ON p.id = pl.product_id
         WHERE {' AND '.join(where)}
         ORDER BY c.name, s.platform_sku_id
     """), params).fetchall()
@@ -596,6 +603,8 @@ def get_suggestions(
             "status": r.status,
             "generated_at": r.generated_at.isoformat() if r.generated_at else None,
             "executed_at": r.executed_at.isoformat() if r.executed_at else None,
+            "image_url": r.image_url,
+            "product_url": r.product_url,
         })
 
     return success({

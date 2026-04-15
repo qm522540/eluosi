@@ -836,16 +836,25 @@ const OzonAIPricing = ({ shopId, platform = 'ozon' }) => {
           )
         }
         const name = v || r.sku_name || r.platform_sku_id || '-'
-        const ozonUrl = r.ozon_product_url || (r.product_id ? `https://www.ozon.ru/product/${r.product_id}` : null)
-        const img = r.image_url ? (
-          <Avatar src={r.image_url} size={28} shape="square" style={{ marginRight: 6, flexShrink: 0 }} />
-        ) : null
+        const productUrl = r.product_url
+          || (platform === 'wb' && r.platform_sku_id ? `https://www.wildberries.ru/catalog/${r.platform_sku_id}/detail.aspx` : null)
+          || (platform === 'ozon' && r.platform_sku_id ? `https://www.ozon.ru/product/${r.platform_sku_id}` : null)
+        const img = (
+          <Avatar
+            src={r.image_url || undefined}
+            size={36}
+            shape="square"
+            style={{ marginRight: 8, flexShrink: 0, background: '#f0f0f0' }}
+          >
+            {(!r.image_url) && (r.sku_name?.[0] || '?')}
+          </Avatar>
+        )
         return (
           <div style={{ display: 'flex', alignItems: 'center', paddingLeft: 20 }}>
             {img}
-            <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-              {ozonUrl ? (
-                <a href={ozonUrl} target="_blank" rel="noopener noreferrer">{name}</a>
+            <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>
+              {productUrl ? (
+                <a href={productUrl} target="_blank" rel="noopener noreferrer">{name}</a>
               ) : name}
               {r.platform_sku_id && (
                 <div style={{ fontSize: 11, color: '#999', marginTop: 2 }}>
@@ -1278,12 +1287,21 @@ const OzonAIPricing = ({ shopId, platform = 'ozon' }) => {
             )
           }
         >
+          <style>{`
+            .ai-suggestion-item-row > td.ant-table-selection-column {
+              padding-left: 10px !important;
+            }
+            .ai-suggestion-group-row > td {
+              background: #fafafa !important;
+              border-bottom: 1px solid #e8e8e8 !important;
+            }
+          `}</style>
           <Table
             size="small"
             dataSource={suggestions}
             rowKey="key"
             loading={suggestionsLoading}
-            rowClassName={r => r.isGroup ? 'ai-suggestion-group-row' : ''}
+            rowClassName={r => r.isGroup ? 'ai-suggestion-group-row' : 'ai-suggestion-item-row'}
             rowSelection={{
               selectedRowKeys,
               onChange: setSelectedRowKeys,
