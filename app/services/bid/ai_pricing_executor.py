@@ -427,18 +427,12 @@ async def analyze_stream(db, tenant_id: int, shop_id: int,
 
         # 读取本次产生的 suggestions（pending + 今日）
         rows = db.execute(text("""
-            SELECT s.id, s.campaign_id, s.platform_sku_id,
+            SELECT s.id, s.campaign_id, s.platform_sku_id, s.sku_name,
                    s.current_bid, s.suggested_bid, s.current_roas,
-                   s.product_stage, s.reason,
-                   c.name AS campaign_name,
-                   l.title AS sku_name
+                   s.product_stage, s.reason
             FROM ai_pricing_suggestions s
-            LEFT JOIN ad_campaigns c ON s.campaign_id = c.id
-            LEFT JOIN platform_listings l
-              ON l.tenant_id = s.tenant_id
-             AND l.platform_sku_id = s.platform_sku_id
             WHERE s.tenant_id = :tid AND s.shop_id = :sid
-              AND DATE(s.created_at) = CURDATE()
+              AND DATE(s.generated_at) = CURDATE()
               AND s.status = 'pending'
             ORDER BY s.id DESC
         """), {"tid": tenant_id, "sid": shop_id}).fetchall()
