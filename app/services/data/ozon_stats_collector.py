@@ -286,19 +286,18 @@ async def _fetch_perf_data(
             logger.warning(f"Performance API {batch_label} 轮询超时（180s）")
             return None
 
-        # 先尝试一次性提交所有活动（根本性避开 submit 频次限流）
-        report = await _submit_and_fetch(all_ids, "ALL")
-        # 降级：一次性失败时拆小批，每批 3 个，批次间隔 20 秒
-        reports = [report] if report else []
-        if not report:
-            logger.warning("Performance API 单次全量提交失败，降级为小批提交")
-            batches = [all_ids[i:i+3] for i in range(0, len(all_ids), 3)]
-            for idx, batch in enumerate(batches):
-                if idx > 0:
-                    await asyncio.sleep(20)  # 批次间等 20s，避开 Ozon 提交窗口
-                r = await _submit_and_fetch(batch, f"batch {idx+1}/{len(batches)}")
-                if r:
-                    reports.append(r)
+        # Ozon Performance API 两条硬限制（2026-04-15 实测）：
+        #   ① POST /api/client/statistics/json 单次最多 10 个活动（超则 400）
+        #   ② 同时只允许 1 个活跃 UUID，前一个必须完成才能提交下一个（否则 429）
+        # 所以：每批 ≤ 10 个，严格串行（await _submit_and_fetch 自然保证）
+        OZON_PERF_BATCH_MAX = 10
+        batches = [all_ids[i:i+OZON_PERF_BATCH_MAX] for i in range(0, len(all_ids), OZON_PERF_BATCH_MAX)]
+        logger.info(f"Performance API 分 {len(batches)} 批，每批 ≤ {OZON_PERF_BATCH_MAX} 个活动")
+        reports = []
+        for idx, batch in enumerate(batches):
+            r = await _submit_and_fetch(batch, f"batch {idx+1}/{len(batches)}")
+            if r:
+                reports.append(r)
 
         total_updated = 0
         for report_idx, report in enumerate(reports):
