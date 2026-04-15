@@ -22,6 +22,76 @@ import { useAuthStore } from '@/stores/authStore'
 const { Text } = Typography
 const { RangePicker } = DatePicker
 
+// WB 商品图片：basket 编号不确定，用 onError 自动探测相邻 basket
+const _wbImgCache = {}
+const _getWbImgInfo = (nmId) => {
+  const id = Number(nmId)
+  if (!id) return null
+  return { id, vol: Math.floor(id / 100000), part: Math.floor(id / 1000) }
+}
+const _buildWbImgUrl = (vol, part, id, basket) =>
+  `https://basket-${String(basket).padStart(2, '0')}.wbbasket.ru/vol${vol}/part${part}/${id}/images/c246x328/1.webp`
+const _guessBasket = (vol) => {
+  const thresholds = [143,287,431,719,1007,1061,1115,1169,1313,1601,1655,1919,2045,2189,2405,2621,2837]
+  for (let i = 0; i < thresholds.length; i++) {
+    if (vol <= thresholds[i]) return i + 1
+  }
+  return Math.min(18 + Math.floor((vol - 2838) / 350), 60)
+}
+const WbProductImg = ({ nmId, size = 36 }) => {
+  const [src, setSrc] = useState(null)
+  const [loaded, setLoaded] = useState(false)
+  const [failed, setFailed] = useState(false)
+  const triedRef = useRef(0)
+  const infoRef = useRef(null)
+
+  useEffect(() => {
+    const info = _getWbImgInfo(nmId)
+    if (!info) { setFailed(true); return }
+    infoRef.current = info
+    triedRef.current = 0
+    setLoaded(false)
+    setFailed(false)
+    if (_wbImgCache[nmId]) { setSrc(_wbImgCache[nmId]); setLoaded(true) }
+    else setSrc(_buildWbImgUrl(info.vol, info.part, info.id, _guessBasket(info.vol)))
+  }, [nmId])
+
+  if (failed || !src) {
+    return (
+      <div style={{
+        width: size, height: size, borderRadius: 4,
+        background: '#f0f0f0', display: 'flex',
+        alignItems: 'center', justifyContent: 'center',
+        fontSize: 11, color: '#bbb', flexShrink: 0,
+      }}>无图</div>
+    )
+  }
+
+  return (
+    <img
+      src={src}
+      alt=""
+      style={{
+        width: size, height: size, borderRadius: 4, objectFit: 'cover',
+        flexShrink: 0, display: loaded ? 'block' : 'none',
+        background: '#f5f5f5',
+      }}
+      onError={() => {
+        triedRef.current++
+        const info = infoRef.current
+        if (!info) { setFailed(true); return }
+        const base = _guessBasket(info.vol)
+        const offsets = [0, -1, 1, -2, 2, -3, 3, -4, 4, -5, 5, -6, 6, -7, 7, -8, 8]
+        if (triedRef.current >= offsets.length) { setFailed(true); return }
+        const next = base + offsets[triedRef.current]
+        if (next < 1 || next > 65) { setFailed(true); return }
+        setSrc(_buildWbImgUrl(info.vol, info.part, info.id, next))
+      }}
+      onLoad={() => { setLoaded(true); _wbImgCache[nmId] = src }}
+    />
+  )
+}
+
 // ==================== 平台配置 ====================
 
 const PLATFORM_CONFIG = {
@@ -839,18 +909,13 @@ const OzonAIPricing = ({ shopId, platform = 'ozon' }) => {
         const productUrl = r.product_url
           || (platform === 'wb' && r.platform_sku_id ? `https://www.wildberries.ru/catalog/${r.platform_sku_id}/detail.aspx` : null)
           || (platform === 'ozon' && r.platform_sku_id ? `https://www.ozon.ru/product/${r.platform_sku_id}` : null)
-        const img = (
-          <Avatar
-            src={r.image_url || undefined}
-            size={36}
-            shape="square"
-            style={{ marginRight: 8, flexShrink: 0, background: '#f0f0f0' }}
-          >
-            {(!r.image_url) && (r.sku_name?.[0] || '?')}
-          </Avatar>
-        )
+        const img = platform === 'wb'
+          ? <WbProductImg nmId={r.platform_sku_id} size={36} />
+          : (r.image_url
+              ? <img src={r.image_url} alt="" style={{ width: 36, height: 36, borderRadius: 4, objectFit: 'cover', flexShrink: 0 }} />
+              : <div style={{ width: 36, height: 36, borderRadius: 4, background: '#f0f0f0', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 11, color: '#bbb', flexShrink: 0 }}>无图</div>)
         return (
-          <div style={{ display: 'flex', alignItems: 'center', paddingLeft: 20 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
             {img}
             <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>
               {productUrl ? (
@@ -1289,7 +1354,11 @@ const OzonAIPricing = ({ shopId, platform = 'ozon' }) => {
         >
           <style>{`
             .ai-suggestion-item-row > td.ant-table-selection-column {
-              padding-left: 10px !important;
+              padding-left: 20px !important;
+              padding-right: 4px !important;
+            }
+            .ai-suggestion-item-row > td:nth-child(2) {
+              padding-left: 4px !important;
             }
             .ai-suggestion-group-row > td {
               background: #fafafa !important;
