@@ -94,9 +94,13 @@ const Products = () => {
   }, [])
 
   const handleSync = async (force = false) => {
+    if (!filters.shop_id) {
+      message.warning('请先在上方下拉框选择店铺')
+      return
+    }
     setSyncing(true)
     try {
-      const res = await syncProducts(null, force)
+      const res = await syncProducts(filters.shop_id, force)
       if (res.data?.syncing) {
         message.success('同步任务已启动，请稍后刷新')
         setTimeout(() => fetchProducts(1), 3000)
