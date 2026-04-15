@@ -1007,6 +1007,18 @@ async def approve_suggestion(db, tenant_id: int, suggestion_id: int,
     )
     if not is_delete:
         _upsert_group_last_auto(db, campaign, row.platform_sku_id, row.sku_name or "", final_bid)
+    else:
+        # 删除操作：给 ad_groups 打 user_managed=1 锁，避免下次分析又对此 SKU 重复出建议
+        db.execute(text("""
+            UPDATE ad_groups
+            SET user_managed = 1, user_managed_at = NOW()
+            WHERE campaign_id = :cid AND platform_group_id = :sku
+              AND tenant_id = :tid
+        """), {
+            "cid": row.campaign_id,
+            "sku": row.platform_sku_id,
+            "tid": tenant_id,
+        })
     _write_bidlog(db, campaign, {
         "platform_sku_id": row.platform_sku_id, "sku_name": row.sku_name,
         "current_bid": float(row.current_bid), "suggested_bid": final_bid,
