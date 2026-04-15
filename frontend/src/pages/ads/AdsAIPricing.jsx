@@ -557,11 +557,20 @@ const OzonAIPricing = ({ shopId, platform = 'ozon' }) => {
     setSuggestionsLoading(true)
     setSuggestionsPage(p)
     try {
-      const res = await getAIPricingSuggestions(shopId, { status: 'pending', page: p, page_size: 20 })
-      setSuggestions(res.data?.items || [])
-      setSuggestionsTotal(res.data?.total || 0)
+      const res = await getAIPricingSuggestions(shopId, { status: 'pending' })
+      // 后端按活动分组 {campaigns:[{campaign_id, campaign_name, suggestions:[...]}]}，前端摊平成建议数组
+      const flat = (res.data?.campaigns || []).flatMap(c =>
+        (c.suggestions || []).map(s => ({
+          ...s,
+          campaign_id: c.campaign_id,
+          campaign_name: c.campaign_name,
+        }))
+      )
+      setSuggestions(flat)
+      setSuggestionsTotal(flat.length)
     } catch {
       setSuggestions([])
+      setSuggestionsTotal(0)
     } finally {
       setSuggestionsLoading(false)
     }
