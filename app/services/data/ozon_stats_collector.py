@@ -238,7 +238,9 @@ async def _fetch_perf_data(
         all_ids = list(camp_map.keys())
 
         async def _submit_and_fetch(batch_ids: list, batch_label: str) -> Optional[dict]:
-            """提交一个 statistics 任务，轮询直到 OK，返回报表 dict"""
+            """提交一个 statistics 任务，轮询直到 OK，返回报表 dict
+            groupBy=DATE 让返回按天 × SKU 拆分（否则是整区间汇总，stat_date 取不到正确值）
+            """
             try:
                 logger.info(f"Performance API {batch_label}: 提交 {len(batch_ids)} 个活动")
                 submit = await ozon._request("POST",
@@ -248,6 +250,7 @@ async def _fetch_perf_data(
                         "campaigns": batch_ids,
                         "dateFrom": date_from.strftime("%Y-%m-%d"),
                         "dateTo": date_to.strftime("%Y-%m-%d"),
+                        "groupBy": "DATE",
                     },
                 )
             except Exception as e:
@@ -315,7 +318,18 @@ async def _fetch_perf_data(
 
                     for row in rows:
                         sku = row.get("sku", "")
-                        stat_date = (row.get("createdAt") or "")[:10]
+                        # Ozon groupBy=DATE 响应里 date 是 DD.MM.YYYY 俄文格式，要转成 YYYY-MM-DD
+                        # createdAt 是 SKU 创建时间（常为 "0001-01-01" 或无关日期），不能用
+                        raw_date = row.get("date", "")
+                        if raw_date and "." in raw_date:
+                            parts = raw_date.split(".")
+                            if len(parts) == 3:
+                                dd, mm, yyyy = parts
+                                stat_date = f"{yyyy}-{mm.zfill(2)}-{dd.zfill(2)}"
+                            else:
+                                stat_date = ""
+                        else:
+                            stat_date = raw_date[:10] if raw_date else ""
                         if not sku or not stat_date:
                             continue
 

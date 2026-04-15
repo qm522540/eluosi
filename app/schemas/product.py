@@ -1,7 +1,7 @@
 """商品模块 Pydantic 数据模型"""
 
 from datetime import datetime
-from typing import Optional, List
+from typing import Optional, List, Dict, Any
 from pydantic import BaseModel, Field
 
 
