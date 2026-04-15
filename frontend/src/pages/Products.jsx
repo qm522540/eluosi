@@ -13,6 +13,7 @@ import {
   updateProductMargin, deleteProduct, generateDescription,
   spreadProducts, getSpreadRecords, updateProduct,
 } from '@/api/products'
+import { getShops } from '@/api/shops'
 import { useAuthStore } from '@/stores/authStore'
 
 const { Text } = Typography
@@ -42,8 +43,9 @@ const Products = () => {
   const [lastSyncAt, setLastSyncAt] = useState(null)
 
   const [filters, setFilters] = useState({
-    keyword: '', category: '', platform: '', status: 'active',
+    keyword: '', category: '', platform: '', shop_id: null, status: 'active',
   })
+  const [shops, setShops] = useState([])
   const [page, setPage] = useState(1)
   const [pageSize] = useState(20)
 
@@ -84,6 +86,12 @@ const Products = () => {
   useEffect(() => {
     fetchProducts(1)
   }, [fetchProducts])
+
+  useEffect(() => {
+    getShops({ page: 1, page_size: 100 }).then(res => {
+      setShops(res.data?.items || [])
+    }).catch(() => setShops([]))
+  }, [])
 
   const handleSync = async (force = false) => {
     setSyncing(true)
@@ -392,13 +400,33 @@ const Products = () => {
             onChange={e => setFilters(p => ({ ...p, keyword: e.target.value }))}
             onPressEnter={() => fetchProducts(1)} /></Col>
           <Col>
-            <Select style={{ width: 120 }} value={filters.platform}
-              onChange={v => setFilters(p => ({ ...p, platform: v }))}
-              placeholder="全部平台">
-              <Option value="">全部平台</Option>
-              <Option value="wb">WB</Option>
-              <Option value="ozon">Ozon</Option>
-              <Option value="yandex">Yandex</Option>
+            <Select
+              style={{ width: 220 }}
+              value={filters.shop_id}
+              onChange={(shopId, opt) => setFilters(p => ({
+                ...p,
+                shop_id: shopId ?? null,
+                platform: opt?.platform || '',
+              }))}
+              placeholder="选择店铺（单店管理）"
+              allowClear
+              showSearch
+              optionFilterProp="children"
+            >
+              {['wb', 'ozon', 'yandex'].map(plat => {
+                const list = shops.filter(s => s.platform === plat)
+                if (!list.length) return null
+                const cfg = PLATFORM_COLOR[plat] || {}
+                return (
+                  <Select.OptGroup key={plat} label={cfg.label}>
+                    {list.map(s => (
+                      <Option key={s.id} value={s.id} platform={plat}>
+                        {cfg.label} · {s.name}
+                      </Option>
+                    ))}
+                  </Select.OptGroup>
+                )
+              })}
             </Select>
           </Col>
           <Col>
@@ -415,7 +443,7 @@ const Products = () => {
           </Col>
           <Col>
             <Button onClick={() => {
-              setFilters({ keyword: '', category: '', platform: '', status: 'active' })
+              setFilters({ keyword: '', category: '', platform: '', shop_id: null, status: 'active' })
               setTimeout(() => fetchProducts(1), 0)
             }}>重置</Button>
           </Col>
