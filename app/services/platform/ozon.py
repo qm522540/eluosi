@@ -196,9 +196,14 @@ class OzonClient(BasePlatformClient):
                 await asyncio.sleep(2 * (attempt + 1))
 
             except httpx.HTTPStatusError as e:
+                try:
+                    body = e.response.text[:500]
+                except Exception:
+                    body = "<no body>"
                 logger.error(
                     f"Ozon API 错误，shop_id={self.shop_id}，"
-                    f"status={e.response.status_code}，url={url}"
+                    f"status={e.response.status_code}，url={url}，"
+                    f"body={body}"
                 )
                 raise
 
