@@ -1262,12 +1262,12 @@ async def _execute_bid_update(client, platform: str, campaign_id,
     """
     if delete:
         if platform == "wb":
-            return await client.delete_campaign_sku(
+            return await client.remove_campaign_product(
                 advert_id=str(campaign_id), nm_id=int(sku),
             )
         else:
-            return await client.delete_campaign_sku(
-                campaign_id=campaign_id, sku=str(sku),
+            return await client.remove_campaign_product(
+                campaign_id=str(campaign_id), sku=str(sku),
             )
 
     if platform == "wb":
