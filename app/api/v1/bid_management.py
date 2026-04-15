@@ -49,6 +49,18 @@ class AIConfigUpdate(BaseModel):
     aggressive_config: dict = Field(default_factory=dict)
 
 
+class AITemplateRowUpdate(BaseModel):
+    """前端 v2 策略模板表：单行编辑（保守/默认/激进 之一）"""
+    template_type: Optional[str] = None
+    gross_margin: Optional[float] = None
+    default_client_price: Optional[float] = None
+    max_bid: Optional[float] = None
+    max_adjust_pct: Optional[float] = None
+    auto_remove_losing_sku: Optional[int] = None
+    losing_days_threshold: Optional[int] = None
+    auto_execute: Optional[bool] = None
+
+
 class EnableAIRequest(BaseModel):
     auto_execute: bool = False
 
@@ -253,6 +265,152 @@ def update_ai_pricing(
     if result.get("code") != 0:
         return error(result["code"], result.get("msg") or "")
     return get_ai_pricing(shop=shop, db=db)
+
+
+# ==================== §3.x 前端 v2 策略模板兼容接口 ====================
+# 前端把 ai_pricing_configs 当作 3 行模板表渲染（保守/默认/激进）
+# 后端把单行 3 嵌套 JSON 摊平成数组；写回时按 template_type 回填
+
+_TEMPLATE_TYPES = ("conservative", "default", "aggressive")
+_TEMPLATE_LABELS = {"conservative": "保守", "default": "默认", "aggressive": "激进"}
+
+
+def _flatten_template_rows(row) -> list:
+    """把 ai_pricing_configs 单行 → 3 行虚拟模板数组"""
+    if row is None:
+        return []
+    default_price = float(row.default_client_price or 600.0)
+    auto_remove = int(row.auto_remove_losing_sku or 0)
+    losing_days = int(row.losing_days_threshold or 21)
+    auto_exec = bool(row.auto_execute)
+    rows = []
+    for ttype in _TEMPLATE_TYPES:
+        cfg = _safe_json(getattr(row, f"{ttype}_config", None), {})
+        rows.append({
+            "id": f"{row.id}:{ttype}",
+            "shop_id": row.shop_id,
+            "tenant_id": row.tenant_id,
+            "template_type": ttype,
+            "template_name": _TEMPLATE_LABELS[ttype],
+            "gross_margin": cfg.get("gross_margin"),
+            "default_client_price": default_price,
+            "max_bid": cfg.get("max_bid"),
+            "max_adjust_pct": cfg.get("max_adjust_pct"),
+            "auto_remove_losing_sku": auto_remove,
+            "losing_days_threshold": losing_days,
+            "auto_execute": auto_exec,
+            "is_current": row.template_name == ttype,
+        })
+    return rows
+
+
+@router.get("/ai-pricing/configs/{shop_id}")
+def list_ai_pricing_templates(
+    shop: Shop = Depends(get_owned_shop),
+    db: Session = Depends(get_db),
+):
+    """返回 3 行虚拟模板数组（保守/默认/激进），供前端 v2 策略模板表渲染"""
+    row = db.execute(text("""
+        SELECT id, tenant_id, shop_id, is_active, auto_execute, template_name,
+               conservative_config, default_config, aggressive_config,
+               default_client_price, auto_remove_losing_sku, losing_days_threshold
+        FROM ai_pricing_configs
+        WHERE shop_id = :shop_id AND tenant_id = :tenant_id
+        LIMIT 1
+    """), {"shop_id": shop.id, "tenant_id": shop.tenant_id}).fetchone()
+
+    if not row:
+        # 无配置行：返回 3 档兜底默认值，用户编辑后首次 PUT 会 INSERT
+        from app.services.bid.ai_pricing_executor import (
+            _DEFAULT_CONSERVATIVE, _DEFAULT_DEFAULT, _DEFAULT_AGGRESSIVE,
+        )
+        defaults_map = {
+            "conservative": _DEFAULT_CONSERVATIVE,
+            "default":      _DEFAULT_DEFAULT,
+            "aggressive":   _DEFAULT_AGGRESSIVE,
+        }
+        return success([
+            {
+                "id": f"new:{ttype}",
+                "shop_id": shop.id,
+                "tenant_id": shop.tenant_id,
+                "template_type": ttype,
+                "template_name": _TEMPLATE_LABELS[ttype],
+                "gross_margin": defaults_map[ttype].get("gross_margin"),
+                "default_client_price": 600.0,
+                "max_bid": defaults_map[ttype].get("max_bid"),
+                "max_adjust_pct": defaults_map[ttype].get("max_adjust_pct"),
+                "auto_remove_losing_sku": 0,
+                "losing_days_threshold": 21,
+                "auto_execute": False,
+                "is_current": ttype == "default",
+            }
+            for ttype in _TEMPLATE_TYPES
+        ])
+
+    return success(_flatten_template_rows(row))
+
+
+@router.put("/ai-pricing/configs/{shop_id}")
+def update_ai_pricing_template(
+    req: AITemplateRowUpdate,
+    shop: Shop = Depends(get_owned_shop),
+    db: Session = Depends(get_db),
+):
+    """前端 v2 单行模板编辑：按 template_type 回写到对应 *_config JSON
+    + top-level 字段（default_client_price/auto_remove_losing_sku/losing_days_threshold）
+    因为 top-level 字段在 3 档模板之间共享，编辑任何一行都会同步更新
+    """
+    from app.services.bid.ai_pricing_executor import update_config
+
+    ttype = req.template_type or "default"
+    if ttype not in _TEMPLATE_TYPES:
+        return error(ErrorCode.PARAM_ERROR,
+                     "template_type 必须是 conservative/default/aggressive")
+
+    # 先读当前行，缺失字段用现值兜底（update_config 对 top-level 字段是无条件覆盖）
+    cur = db.execute(text("""
+        SELECT template_name, auto_execute, default_client_price,
+               auto_remove_losing_sku, losing_days_threshold,
+               conservative_config, default_config, aggressive_config
+        FROM ai_pricing_configs
+        WHERE shop_id = :shop_id AND tenant_id = :tenant_id
+        LIMIT 1
+    """), {"shop_id": shop.id, "tenant_id": shop.tenant_id}).fetchone()
+
+    # 构造传给 update_config 的 payload：目标模板的 JSON + 共享字段
+    cur_template_json = _safe_json(getattr(cur, f"{ttype}_config", None), {}) if cur else {}
+    template_json = dict(cur_template_json)
+    if req.gross_margin is not None:
+        template_json["gross_margin"] = float(req.gross_margin)
+    if req.max_bid is not None:
+        template_json["max_bid"] = float(req.max_bid)
+    if req.max_adjust_pct is not None:
+        template_json["max_adjust_pct"] = float(req.max_adjust_pct)
+
+    payload = {
+        f"{ttype}_config": template_json,
+        "template_name": cur.template_name if cur else "default",
+        "auto_execute": bool(cur.auto_execute) if cur else False,
+        "default_client_price": float(cur.default_client_price) if cur else 600.0,
+        "auto_remove_losing_sku": bool(cur.auto_remove_losing_sku) if cur else False,
+        "losing_days_threshold": int(cur.losing_days_threshold) if cur else 21,
+    }
+    if req.default_client_price is not None:
+        payload["default_client_price"] = float(req.default_client_price)
+    if req.auto_remove_losing_sku is not None:
+        payload["auto_remove_losing_sku"] = bool(req.auto_remove_losing_sku)
+    if req.losing_days_threshold is not None:
+        payload["losing_days_threshold"] = int(req.losing_days_threshold)
+    if req.auto_execute is not None:
+        payload["auto_execute"] = bool(req.auto_execute)
+
+    result = update_config(db, shop.tenant_id, shop.id, payload)
+    if result.get("code") != 0:
+        return error(result["code"], result.get("msg") or "")
+
+    # 返回更新后的摊平数组
+    return list_ai_pricing_templates(shop=shop, db=db)
 
 
 @router.post("/ai-pricing/{shop_id}/enable")

@@ -543,6 +543,7 @@ const OzonAIPricing = ({ shopId, platform = 'ozon' }) => {
       const payload = {
         ...values,
         auto_remove_losing_sku: values.auto_remove_losing_sku ? 1 : 0,
+        template_type: editingConfig?.template_type || 'default',
       }
       await updateAIPricingConfig(shopId, payload)
       message.success('配置已保存')
