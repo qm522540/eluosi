@@ -1113,54 +1113,89 @@ const OzonAIPricing = ({ shopId, platform = 'ozon' }) => {
     },
   ]
 
+  const EXECUTE_TYPE_CONFIG = {
+    ai_auto:      { color: 'blue',    label: 'AI 自动' },
+    ai_manual:    { color: 'cyan',    label: 'AI 建议确认' },
+    auto_remove:  { color: 'red',     label: '亏损移除' },
+    user_manual:  { color: 'default', label: '用户手动' },
+    time_pricing: { color: 'purple',  label: '分时调价' },
+    time_restore: { color: 'gold',    label: '分时恢复' },
+  }
+
   const historyColumns = [
     {
       title: '时间', dataIndex: 'created_at', width: 130,
       render: v => v ? dayjs(v).format('MM-DD HH:mm') : '-',
     },
     {
-      title: '商品', dataIndex: 'product_name', ellipsis: true,
+      title: '商品', dataIndex: 'sku_name', ellipsis: true,
       render: (v, r) => {
-        const name = v || r.product_id || '-'
-        const img = r.image_url ? (
-          <Avatar src={r.image_url} size={28} shape="square" style={{ marginRight: 6, flexShrink: 0 }} />
-        ) : null
+        const name = v || r.platform_sku_id || '-'
+        const img = platform === 'wb'
+          ? <WbProductImg nmId={r.platform_sku_id} size={28} />
+          : null
         return (
-          <div style={{ display: 'flex', alignItems: 'center' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
             {img}
-            {name}
+            <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>
+              <div style={{ fontSize: 13 }}>{name}</div>
+              {r.platform_sku_id && (
+                <div style={{ fontSize: 11, color: '#999' }}>SKU：{r.platform_sku_id}</div>
+              )}
+            </div>
           </div>
         )
       },
     },
     {
-      title: '调整前', dataIndex: 'current_bid', width: 80, align: 'right',
-      render: v => `₽${Math.round(v)}`,
+      title: '调整前', dataIndex: 'old_bid', width: 80, align: 'right',
+      render: v => (v == null ? '-' : `₽${Math.round(Number(v))}`),
     },
     {
-      title: '调整后', dataIndex: 'suggested_bid', width: 80, align: 'right',
-      render: (v, r) => (
-        <Text style={{ color: v > r.current_bid ? '#52c41a' : '#ff4d4f' }}>₽{Math.round(v)}</Text>
-      ),
+      title: '调整后', dataIndex: 'new_bid', width: 100, align: 'right',
+      render: (v, r) => {
+        if (v == null) return '-'
+        const val = Number(v)
+        const old = Number(r.old_bid ?? 0)
+        const isDelete = val === 0 && Number(r.adjust_pct) === -100
+        if (isDelete) return <Tag color="red">移除</Tag>
+        return (
+          <Text style={{ color: val > old ? '#cf1322' : '#389e0d', fontWeight: 500 }}>
+            ₽{Math.round(val)}
+          </Text>
+        )
+      },
     },
     {
-      title: '模板', dataIndex: 'template_name', width: 90, ellipsis: true,
-      render: v => v || '-',
-    },
-    {
-      title: '执行方式', dataIndex: 'auto_executed', width: 80, align: 'center',
-      render: v => v ? <Tag color="blue">自动</Tag> : <Tag>手动</Tag>,
-    },
-    {
-      title: '状态', dataIndex: 'status', width: 80,
+      title: '调幅', dataIndex: 'adjust_pct', width: 80, align: 'center',
       render: v => {
-        const map = {
-          executed: { color: 'green', text: '已执行' },
-          rejected: { color: 'default', text: '已忽略' },
-          expired: { color: 'orange', text: '已过期' },
-        }
-        const s = map[v] || { color: 'default', text: v }
-        return <Tag color={s.color}>{s.text}</Tag>
+        if (v == null) return '-'
+        const val = Number(v)
+        if (val === -100) return <Tag color="red">-100%</Tag>
+        const isUp = val > 0
+        return (
+          <span style={{ color: isUp ? '#cf1322' : '#389e0d', fontSize: 12 }}>
+            {isUp ? '+' : ''}{val.toFixed(2)}%
+          </span>
+        )
+      },
+    },
+    {
+      title: '执行方式', dataIndex: 'execute_type', width: 110, align: 'center',
+      render: v => {
+        const cfg = EXECUTE_TYPE_CONFIG[v] || { color: 'default', label: v || '未知' }
+        return <Tag color={cfg.color}>{cfg.label}</Tag>
+      },
+    },
+    {
+      title: '状态', dataIndex: 'success', width: 90,
+      render: (v, r) => {
+        if (v) return <Tag color="green">成功</Tag>
+        return (
+          <Tooltip title={r.error_msg || '失败'}>
+            <Tag color="red">失败</Tag>
+          </Tooltip>
+        )
       },
     },
   ]
