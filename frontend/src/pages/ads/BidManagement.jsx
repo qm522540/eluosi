@@ -1594,8 +1594,8 @@ const AIPricingConfig = ({ shopId, platform, onSaved }) => {
         </Collapse.Panel>
       </Collapse>
 
-      {/* 数据源管理（可折叠） */}
-      <Collapse style={{ marginBottom: 12 }}>
+      {/* 数据源管理（默认展开） */}
+      <Collapse defaultActiveKey={['data']} style={{ marginBottom: 12 }}>
         <Collapse.Panel key="data" header="数据源管理">
           <div style={{
             display: 'flex',
