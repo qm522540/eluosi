@@ -2115,9 +2115,17 @@ const BidManagement = ({ shopId, platform }) => {
   const [selectedMode, setSelectedMode] = useState('time_pricing')
   const [loading, setLoading] = useState(true)
 
+  // 数据源管理（两种模式共用）
+  const [dataStatus, setDataStatus] = useState(null)
+  const [syncing, setSyncing] = useState(false)
+
   useEffect(() => {
-    if (shopId) loadActiveMode()
-    else setLoading(false)
+    if (shopId) {
+      loadActiveMode()
+      loadDataStatus()
+    } else {
+      setLoading(false)
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [shopId])
 
@@ -2132,6 +2140,48 @@ const BidManagement = ({ shopId, platform }) => {
       setActiveMode('none')
     } finally {
       setLoading(false)
+    }
+  }
+
+  const loadDataStatus = async () => {
+    try {
+      const res = await getDataStatus(shopId)
+      setDataStatus(res.data)
+    } catch {
+      setDataStatus(null)
+    }
+  }
+
+  const handleDataSync = async () => {
+    setSyncing(true)
+    try {
+      const res = await syncData(shopId)
+      const d = res?.data || {}
+      if (d.background) {
+        message.success('数据同步任务已提交，预计 10~20 分钟完成')
+        setTimeout(() => loadDataStatus(), 60000)
+      } else {
+        message.success('数据同步完成')
+        await loadDataStatus()
+      }
+    } catch (e) {
+      message.error(e?.response?.data?.msg || e?.message || '同步失败')
+    } finally {
+      setSyncing(false)
+    }
+  }
+
+  const handleDataDownload = async (days) => {
+    try {
+      const res = await downloadData(shopId, days)
+      const url = URL.createObjectURL(new Blob([res]))
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `${platform || 'ads'}_data_${days}days.xlsx`
+      a.click()
+      URL.revokeObjectURL(url)
+    } catch {
+      message.error('下载失败')
     }
   }
 
@@ -2200,6 +2250,72 @@ const BidManagement = ({ shopId, platform }) => {
 
       {/* 状态栏 */}
       <StatusBar shopId={shopId} />
+
+      {/* 数据源管理（默认展开，两种模式共用） */}
+      <Collapse defaultActiveKey={['data']} style={{ marginBottom: 12 }}>
+        <Collapse.Panel key="data" header="数据源管理">
+          <div style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            padding: '9px 12px',
+            background: '#fafafa',
+            borderRadius: 6,
+            marginBottom: 10,
+          }}>
+            <span style={{ fontSize: 12, color: '#666' }}>
+              上次同步：{dataStatus?.last_sync_at ? dataStatus.last_sync_at.slice(0, 16) : '未同步'} ·
+              数据范围：{dataStatus?.data_days || 0} 天
+            </span>
+            <Button type="primary" size="small" loading={syncing} onClick={handleDataSync}>
+              {syncing ? '更新中...' : '更新数据源'}
+            </Button>
+          </div>
+
+          <div style={{
+            display: 'grid',
+            gridTemplateColumns: '1fr 1fr 1fr',
+            gap: 6,
+            marginBottom: 10,
+          }}>
+            {[
+              { title: '广告效果', items: ['CPM出价', '曝光量', '点击量/CTR', '订单数/CR', '收入/ROAS', '花费'] },
+              { title: '时段分布', items: ['各小时花费', '各小时点击', '各小时转化'] },
+              { title: '数据粒度', items: ['按活动维度', '按SKU维度', '按天汇总', '保留3个月'] },
+            ].map(group => (
+              <div key={group.title} style={{ background: '#fafafa', borderRadius: 6, padding: '8px 10px' }}>
+                <div style={{ fontSize: 11, fontWeight: 500, color: '#666', marginBottom: 4 }}>
+                  {group.title}
+                </div>
+                {group.items.map(item => (
+                  <div key={item} style={{
+                    fontSize: 11, color: '#262626', padding: '1px 0',
+                    display: 'flex', alignItems: 'center', gap: 3,
+                  }}>
+                    <span style={{ width: 4, height: 4, borderRadius: '50%', background: '#534AB7', flexShrink: 0 }} />
+                    {item}
+                  </div>
+                ))}
+              </div>
+            ))}
+          </div>
+
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+            <span style={{ fontSize: 12, color: '#666' }}>下载：</span>
+            {[
+              { label: '近7天', days: 7 },
+              { label: '近1个月', days: 30 },
+              { label: '近2个月', days: 60 },
+              { label: '近3个月', days: 90 },
+            ].map(item => (
+              <Button key={item.days} size="small" onClick={() => handleDataDownload(item.days)}>
+                {item.label}
+              </Button>
+            ))}
+            <span style={{ fontSize: 11, color: '#999' }}>Excel格式</span>
+          </div>
+        </Collapse.Panel>
+      </Collapse>
 
       {/* 模式选择 */}
       <ModeSelector activeMode={selectedMode} onSelect={setSelectedMode} />

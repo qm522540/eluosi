@@ -853,20 +853,22 @@ const OzonAIPricing = ({ shopId, platform = 'ozon' }) => {
       }]} />
 
       {/* 模式开关 */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 16, padding: '16px 0' }}>
-        <span style={{ fontWeight: 500 }}>AI自动执行</span>
-        <Switch
-          checked={autoExecute}
-          onChange={handleToggleAuto}
-          checkedChildren="自动模式"
-          unCheckedChildren="建议模式"
-        />
-        <span style={{ color: autoExecute ? '#52c41a' : '#faad14', fontSize: 13 }}>
-          {autoExecute
-            ? '✓ AI将自动调整出价（高峰30分钟/平稳2小时巡检）'
-            : '✓ AI将生成建议，需要你手动确认执行'}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '16px 0' }}>
+        <Switch checked={autoExecute} onChange={handleToggleAuto} />
+        <span style={{ fontWeight: 500 }}>AI 智能调价</span>
+        <span style={{ color: '#999', fontSize: 13 }}>
+          {autoExecute ? '已开启' : '已关闭'}
         </span>
-        <Button icon={<RobotOutlined />} onClick={handleManualAnalyze} loading={analyzing}>
+        <span style={{
+          color: autoExecute ? '#52c41a' : '#faad14',
+          fontSize: 12,
+          marginLeft: 8,
+        }}>
+          {autoExecute
+            ? '✓ AI 将自动调整出价（高峰 30 分钟 / 平稳 2 小时巡检）'
+            : '✓ AI 将生成建议，需要你手动确认执行'}
+        </span>
+        <Button icon={<RobotOutlined />} onClick={handleManualAnalyze} loading={analyzing} style={{ marginLeft: 'auto' }}>
           立即分析
         </Button>
       </div>
