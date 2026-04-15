@@ -15,7 +15,8 @@ import {
   toggleAIAutoExecute, getAIPricingHistory,
 } from '@/api/ads'
 import { triggerWBAnalysis, getWBSuggestions, rejectWBSuggestion } from '@/api/wb_pricing'
-import { getPromoStatus, getPromoCalendars, createPromoCalendar, getDataStatus } from '@/api/ai_pricing'
+import { getPromoStatus, getPromoCalendars, createPromoCalendar } from '@/api/ai_pricing'
+import { getDataStatus, syncData, downloadData } from '@/api/bid_management'
 import { useAuthStore } from '@/stores/authStore'
 
 const { Text } = Typography
@@ -464,6 +465,53 @@ const OzonAIPricing = ({ shopId, platform = 'ozon' }) => {
   const [historyPage, setHistoryPage] = useState(1)
   const [historyDateRange, setHistoryDateRange] = useState(null)
 
+  // 数据源管理
+  const [dataStatus, setDataStatus] = useState(null)
+  const [dataSyncing, setDataSyncing] = useState(false)
+
+  const loadDataStatus = useCallback(async () => {
+    if (!shopId) return
+    try {
+      const res = await getDataStatus(shopId)
+      setDataStatus(res.data)
+    } catch {
+      setDataStatus(null)
+    }
+  }, [shopId])
+
+  const handleDataSync = async () => {
+    setDataSyncing(true)
+    try {
+      const res = await syncData(shopId)
+      const d = res?.data || {}
+      if (d.background) {
+        message.success('数据同步任务已提交，预计 10~20 分钟完成')
+        setTimeout(() => loadDataStatus(), 60000)
+      } else {
+        message.success('数据同步完成')
+        await loadDataStatus()
+      }
+    } catch (e) {
+      message.error(e?.response?.data?.msg || e?.message || '同步失败')
+    } finally {
+      setDataSyncing(false)
+    }
+  }
+
+  const handleDataDownload = async (days) => {
+    try {
+      const res = await downloadData(shopId, days)
+      const url = URL.createObjectURL(new Blob([res]))
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `${platform || 'ads'}_data_${days}days.xlsx`
+      a.click()
+      URL.revokeObjectURL(url)
+    } catch {
+      message.error('下载失败')
+    }
+  }
+
   const fetchConfigs = useCallback(async () => {
     if (!shopId) return
     setConfigsLoading(true)
@@ -518,7 +566,8 @@ const OzonAIPricing = ({ shopId, platform = 'ozon' }) => {
     fetchConfigs()
     fetchSuggestions()
     fetchHistory()
-  }, [fetchConfigs, fetchSuggestions, fetchHistory])
+    loadDataStatus()
+  }, [fetchConfigs, fetchSuggestions, fetchHistory, loadDataStatus])
 
   useEffect(() => {
     fetchHistory(1)
@@ -809,15 +858,9 @@ const OzonAIPricing = ({ shopId, platform = 'ozon' }) => {
   return (
     <div>
       {/* 策略模板配置（默认折叠） */}
-      <Collapse ghost style={{ marginBottom: 16 }} items={[{
+      <Collapse defaultActiveKey={['template-config']} style={{ marginBottom: 12 }} items={[{
         key: 'template-config',
-        label: (
-          <Space>
-            <SettingOutlined />
-            <span style={{ fontWeight: 500 }}>基础配置</span>
-            <span style={{ fontSize: 12, color: '#999', fontWeight: 400 }}>（点击展开编辑）</span>
-          </Space>
-        ),
+        label: '基础配置',
         children: configsLoading ? <Card loading size="small" /> : configs.length > 0 ? (
           <Table size="small" dataSource={configs} rowKey="id" pagination={false}
             columns={[
@@ -850,6 +893,74 @@ const OzonAIPricing = ({ shopId, platform = 'ozon' }) => {
             ]}
           />
         ) : <Empty description="暂无策略模板" />,
+      }]} />
+
+      {/* 数据源管理（默认展开） */}
+      <Collapse defaultActiveKey={['data']} style={{ marginBottom: 12 }} items={[{
+        key: 'data',
+        label: '数据源管理',
+        children: (
+          <>
+            <div style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              padding: '9px 12px',
+              background: '#fafafa',
+              borderRadius: 6,
+              marginBottom: 10,
+            }}>
+              <span style={{ fontSize: 12, color: '#666' }}>
+                上次同步：{dataStatus?.last_sync_at ? dataStatus.last_sync_at.slice(0, 16) : '未同步'} ·
+                数据范围：{dataStatus?.data_days || 0} 天
+              </span>
+              <Button type="primary" size="small" loading={dataSyncing} onClick={handleDataSync}>
+                {dataSyncing ? '更新中...' : '更新数据源'}
+              </Button>
+            </div>
+
+            <div style={{
+              display: 'grid',
+              gridTemplateColumns: '1fr 1fr 1fr',
+              gap: 6,
+              marginBottom: 10,
+            }}>
+              {[
+                { title: '广告效果', items: ['CPM出价', '曝光量', '点击量/CTR', '订单数/CR', '收入/ROAS', '花费'] },
+                { title: '时段分布', items: ['各小时花费', '各小时点击', '各小时转化'] },
+                { title: '数据粒度', items: ['按活动维度', '按SKU维度', '按天汇总', '保留40天'] },
+              ].map(group => (
+                <div key={group.title} style={{ background: '#fafafa', borderRadius: 6, padding: '8px 10px' }}>
+                  <div style={{ fontSize: 11, fontWeight: 500, color: '#666', marginBottom: 4 }}>
+                    {group.title}
+                  </div>
+                  {group.items.map(item => (
+                    <div key={item} style={{
+                      fontSize: 11, color: '#262626', padding: '1px 0',
+                      display: 'flex', alignItems: 'center', gap: 3,
+                    }}>
+                      <span style={{ width: 4, height: 4, borderRadius: '50%', background: '#534AB7', flexShrink: 0 }} />
+                      {item}
+                    </div>
+                  ))}
+                </div>
+              ))}
+            </div>
+
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+              <span style={{ fontSize: 12, color: '#666' }}>下载：</span>
+              {[
+                { label: '近7天', days: 7 },
+                { label: '近1个月', days: 30 },
+              ].map(item => (
+                <Button key={item.days} size="small" onClick={() => handleDataDownload(item.days)}>
+                  {item.label}
+                </Button>
+              ))}
+              <span style={{ fontSize: 11, color: '#999' }}>Excel格式</span>
+            </div>
+          </>
+        ),
       }]} />
 
       {/* 模式开关 */}

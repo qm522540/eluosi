@@ -25,8 +25,9 @@ from app.utils.logger import setup_logger
 
 logger = setup_logger("data.wb_collector")
 
-SYNC_DAYS = 7        # 每次最多拉 7 天（首次也是 7 天）
-MAX_KEEP_DAYS = 90
+SYNC_DAYS = 7        # 增量同步单次最多拉 7 天
+FIRST_SYNC_DAYS = 14 # 首次同步（无历史）拉 14 天
+MAX_KEEP_DAYS = 40   # 数据保留天数
 
 
 async def smart_sync(db: Session, shop_id: int, tenant_id: int) -> dict:
@@ -49,9 +50,9 @@ async def smart_sync(db: Session, shop_id: int, tenant_id: int) -> dict:
 
     # 2. 决定拉取范围（每次最多 SYNC_DAYS 天）
     if not latest_date:
-        date_from = yesterday - timedelta(days=SYNC_DAYS - 1)
+        date_from = yesterday - timedelta(days=FIRST_SYNC_DAYS - 1)
         date_to = yesterday
-        logger.info(f"shop_id={shop_id} WB 无历史数据，拉取最近{SYNC_DAYS}天 {date_from}~{date_to}")
+        logger.info(f"shop_id={shop_id} WB 无历史数据，拉取最近{FIRST_SYNC_DAYS}天 {date_from}~{date_to}")
     elif latest_date >= yesterday:
         cleaned = _clean_old_data(db, shop_id, tenant_id)
         data_days = _count_data_days(db, shop_id, tenant_id)

@@ -26,8 +26,9 @@ from app.utils.logger import setup_logger
 
 logger = setup_logger("data.ozon_collector")
 
-SYNC_DAYS = 7
-MAX_KEEP_DAYS = 90
+SYNC_DAYS = 7        # 增量同步单次最多拉 7 天
+FIRST_SYNC_DAYS = 14 # 首次同步（无历史）拉 14 天
+MAX_KEEP_DAYS = 40   # 数据保留天数
 SELLER_API = "https://api-seller.ozon.ru"
 PERF_API = "https://api-performance.ozon.ru"
 
@@ -52,7 +53,7 @@ async def smart_sync(db: Session, shop_id: int, tenant_id: int) -> dict:
     latest_date = latest_row.latest_date if latest_row else None
 
     if not latest_date:
-        date_from = yesterday - timedelta(days=SYNC_DAYS - 1)
+        date_from = yesterday - timedelta(days=FIRST_SYNC_DAYS - 1)
         date_to = yesterday
     elif latest_date >= yesterday:
         cleaned = _clean_old_data(db, shop_id, tenant_id)
