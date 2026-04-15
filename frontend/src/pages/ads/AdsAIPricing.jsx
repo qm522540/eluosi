@@ -643,6 +643,18 @@ const OzonAIPricing = ({ shopId, platform = 'ozon' }) => {
   }
 
   const handleManualAnalyze = async () => {
+    // 校验基础配置完整性
+    const cfg = configs[0]
+    if (!cfg || !cfg.gross_margin || !cfg.default_client_price) {
+      Modal.warning({
+        title: '基础配置未完成',
+        content: '请先在「基础配置」里填写"默认净毛利率"和"默认客单价"，AI 才能计算每单广告上限。',
+        okText: '去设置',
+        onOk: () => cfg && handleEditConfig(cfg),
+      })
+      return
+    }
+
     setAnalyzing(true)
     setStreamPhase('正在连接...')
     setStreamItems([])
@@ -929,7 +941,7 @@ const OzonAIPricing = ({ shopId, platform = 'ozon' }) => {
   return (
     <div>
       {/* 策略模板配置（默认折叠） */}
-      <Collapse defaultActiveKey={['template-config']} style={{ marginBottom: 12 }} items={[{
+      <Collapse style={{ marginBottom: 12 }} items={[{
         key: 'template-config',
         label: '基础配置',
         children: configsLoading ? <Card loading size="small" /> : configs.length > 0 ? (() => {
@@ -1002,8 +1014,8 @@ const OzonAIPricing = ({ shopId, platform = 'ozon' }) => {
         })() : <Empty description="暂无基础配置" />,
       }]} />
 
-      {/* 数据源管理（默认展开） */}
-      <Collapse defaultActiveKey={['data']} style={{ marginBottom: 12 }} items={[{
+      {/* 数据源管理（默认折叠） */}
+      <Collapse style={{ marginBottom: 12 }} items={[{
         key: 'data',
         label: '数据源管理',
         children: (
