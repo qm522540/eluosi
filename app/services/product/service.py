@@ -401,17 +401,18 @@ def _sync_wb_products(db: Session, shop, tenant_id: int) -> dict:
     async def _fetch():
         client = WBClient(shop_id=shop.id, api_key=shop.api_key)
         try:
-            return await client.fetch_all_products()
+            return await client.fetch_products(limit=100)
         finally:
             await client.close()
     loop = asyncio.new_event_loop()
     try:
-        products = loop.run_until_complete(_fetch())
+        result = loop.run_until_complete(_fetch())
     finally:
         loop.close()
+    cards = (result or {}).get("cards", []) if isinstance(result, dict) else []
     synced = created = updated = 0
-    for p in (products or []):
-        nm_id = str(p.get("nmID") or p.get("nmId") or "")
+    for p in cards:
+        nm_id = str(p.get("nmID") or "")
         if not nm_id:
             continue
         listing = db.query(PlatformListing).filter(
@@ -420,10 +421,18 @@ def _sync_wb_products(db: Session, shop, tenant_id: int) -> dict:
             PlatformListing.platform == "wb",
             PlatformListing.platform_product_id == nm_id,
         ).first()
+        price = None
+        for sz in (p.get("sizes") or []):
+            if sz.get("price"):
+                price = float(sz["price"])
+                break
+        photos = p.get("photos") or []
+        image_url = (photos[0].get("big") or photos[0].get("tm")) if photos and isinstance(photos[0], dict) else None
         data = {
-            "title_ru": (p.get("subjectName") or p.get("name") or "")[:500],
-            "price": float(p.get("salePriceU", 0)) / 100 if p.get("salePriceU") else None,
-            "status": "active" if int(p.get("quantityFull", 0)) > 0 else "out_of_stock",
+            "title_ru": (p.get("title") or p.get("subjectName") or "")[:500],
+            "description_ru": p.get("description"),
+            "price": price,
+            "status": "active",
         }
         if listing:
             for k, v in data.items():
@@ -431,8 +440,10 @@ def _sync_wb_products(db: Session, shop, tenant_id: int) -> dict:
                     setattr(listing, k, v)
             updated += 1
         else:
+            vendor_code = p.get("vendorCode") or f"WB-{nm_id}"
             product = _get_or_create_product(
-                db, tenant_id, name_ru=data["title_ru"], sku=f"WB-{nm_id}")
+                db, tenant_id, name_ru=data["title_ru"], sku=vendor_code,
+                brand=p.get("brand"), image_url=image_url)
             listing = PlatformListing(
                 tenant_id=tenant_id, product_id=product.id,
                 shop_id=shop.id, platform="wb",
@@ -446,65 +457,14 @@ def _sync_wb_products(db: Session, shop, tenant_id: int) -> dict:
 
 
 def _sync_ozon_products(db: Session, shop, tenant_id: int) -> dict:
-    import asyncio
-    from app.services.platform.ozon import OzonClient
-    async def _fetch():
-        client = OzonClient(
-            shop_id=shop.id, api_key=shop.api_key, client_id=shop.client_id,
-            perf_client_id=shop.perf_client_id or "",
-            perf_client_secret=shop.perf_client_secret or "")
-        try:
-            return await client.fetch_all_products()
-        finally:
-            await client.close()
-    loop = asyncio.new_event_loop()
-    try:
-        products = loop.run_until_complete(_fetch())
-    finally:
-        loop.close()
-    synced = created = updated = 0
-    status_map = {
-        "VISIBLE": "active", "INVISIBLE": "inactive",
-        "OUT_OF_STOCK": "out_of_stock", "BANNED": "blocked", "ARCHIVED": "deleted"
-    }
-    for p in (products or []):
-        product_id = str(p.get("product_id") or "")
-        if not product_id:
-            continue
-        listing = db.query(PlatformListing).filter(
-            PlatformListing.tenant_id == tenant_id,
-            PlatformListing.shop_id == shop.id,
-            PlatformListing.platform == "ozon",
-            PlatformListing.platform_product_id == product_id,
-        ).first()
-        data = {
-            "title_ru": (p.get("name") or "")[:500],
-            "price": float(p.get("price") or 0) or None,
-            "discount_price": float(p.get("marketing_price") or 0) or None,
-            "status": status_map.get((p.get("visibility") or "").upper(), "active"),
-        }
-        if listing:
-            for k, v in data.items():
-                if v is not None:
-                    setattr(listing, k, v)
-            updated += 1
-        else:
-            product = _get_or_create_product(
-                db, tenant_id, name_ru=data["title_ru"], sku=f"OZ-{product_id}")
-            listing = PlatformListing(
-                tenant_id=tenant_id, product_id=product.id,
-                shop_id=shop.id, platform="ozon",
-                platform_product_id=product_id, **data)
-            db.add(listing)
-            created += 1
-        synced += 1
-    db.commit()
-    _update_sync_time(db, shop.id, tenant_id)
-    return {"code": 0, "data": {"synced": synced, "created": created, "updated": updated}}
+    return {"code": 0, "data": {"synced": 0, "created": 0, "updated": 0},
+            "msg": "Ozon 商品同步对接中（/v3/product/list 端点升级待完成）"}
 
 
 def _get_or_create_product(db: Session, tenant_id: int,
-                           name_ru: str, sku: str):
+                           name_ru: str, sku: str,
+                           brand: Optional[str] = None,
+                           image_url: Optional[str] = None):
     existing = db.query(Product).filter(
         Product.tenant_id == tenant_id,
         Product.sku == sku,
@@ -515,6 +475,8 @@ def _get_or_create_product(db: Session, tenant_id: int,
         tenant_id=tenant_id, sku=sku,
         name_zh=name_ru[:200] if name_ru else sku,
         name_ru=name_ru[:200] if name_ru else None,
+        brand=brand,
+        image_url=image_url,
         status="active",
     )
     db.add(product)
