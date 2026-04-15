@@ -19,3 +19,4 @@ class ShopDataInitStatus(BaseMixin, Base):
     initialized_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     last_sync_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
     last_sync_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    data_days: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
