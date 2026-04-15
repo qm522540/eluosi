@@ -276,32 +276,27 @@ _TEMPLATE_LABELS = {"conservative": "保守", "default": "默认", "aggressive":
 
 
 def _flatten_template_rows(row) -> list:
-    """把 ai_pricing_configs 单行 → 3 行虚拟模板数组"""
+    """店铺级单策略：只返回 default 档一行，表示"店铺策略"。
+    conservative/aggressive JSON 字段保留不动，便于未来恢复多档。
+    """
     if row is None:
         return []
-    default_price = float(row.default_client_price or 600.0)
-    auto_remove = int(row.auto_remove_losing_sku or 0)
-    losing_days = int(row.losing_days_threshold or 21)
-    auto_exec = bool(row.auto_execute)
-    rows = []
-    for ttype in _TEMPLATE_TYPES:
-        cfg = _safe_json(getattr(row, f"{ttype}_config", None), {})
-        rows.append({
-            "id": f"{row.id}:{ttype}",
-            "shop_id": row.shop_id,
-            "tenant_id": row.tenant_id,
-            "template_type": ttype,
-            "template_name": _TEMPLATE_LABELS[ttype],
-            "gross_margin": cfg.get("gross_margin"),
-            "default_client_price": default_price,
-            "max_bid": cfg.get("max_bid"),
-            "max_adjust_pct": cfg.get("max_adjust_pct"),
-            "auto_remove_losing_sku": auto_remove,
-            "losing_days_threshold": losing_days,
-            "auto_execute": auto_exec,
-            "is_current": row.template_name == ttype,
-        })
-    return rows
+    cfg = _safe_json(getattr(row, "default_config", None), {})
+    return [{
+        "id": f"{row.id}:default",
+        "shop_id": row.shop_id,
+        "tenant_id": row.tenant_id,
+        "template_type": "default",
+        "template_name": "店铺策略",
+        "gross_margin": cfg.get("gross_margin"),
+        "default_client_price": float(row.default_client_price or 600.0),
+        "max_bid": cfg.get("max_bid"),
+        "max_adjust_pct": cfg.get("max_adjust_pct"),
+        "auto_remove_losing_sku": int(row.auto_remove_losing_sku or 0),
+        "losing_days_threshold": int(row.losing_days_threshold or 21),
+        "auto_execute": bool(row.auto_execute),
+        "is_current": True,
+    }]
 
 
 @router.get("/ai-pricing/configs/{shop_id}")
@@ -320,33 +315,23 @@ def list_ai_pricing_templates(
     """), {"shop_id": shop.id, "tenant_id": shop.tenant_id}).fetchone()
 
     if not row:
-        # 无配置行：返回 3 档兜底默认值，用户编辑后首次 PUT 会 INSERT
-        from app.services.bid.ai_pricing_executor import (
-            _DEFAULT_CONSERVATIVE, _DEFAULT_DEFAULT, _DEFAULT_AGGRESSIVE,
-        )
-        defaults_map = {
-            "conservative": _DEFAULT_CONSERVATIVE,
-            "default":      _DEFAULT_DEFAULT,
-            "aggressive":   _DEFAULT_AGGRESSIVE,
-        }
-        return success([
-            {
-                "id": f"new:{ttype}",
-                "shop_id": shop.id,
-                "tenant_id": shop.tenant_id,
-                "template_type": ttype,
-                "template_name": _TEMPLATE_LABELS[ttype],
-                "gross_margin": defaults_map[ttype].get("gross_margin"),
-                "default_client_price": 600.0,
-                "max_bid": defaults_map[ttype].get("max_bid"),
-                "max_adjust_pct": defaults_map[ttype].get("max_adjust_pct"),
-                "auto_remove_losing_sku": 0,
-                "losing_days_threshold": 21,
-                "auto_execute": False,
-                "is_current": ttype == "default",
-            }
-            for ttype in _TEMPLATE_TYPES
-        ])
+        # 无配置行：返回 1 行兜底默认值，用户编辑后首次 PUT 会 INSERT
+        from app.services.bid.ai_pricing_executor import _DEFAULT_DEFAULT
+        return success([{
+            "id": "new:default",
+            "shop_id": shop.id,
+            "tenant_id": shop.tenant_id,
+            "template_type": "default",
+            "template_name": "店铺策略",
+            "gross_margin": _DEFAULT_DEFAULT.get("gross_margin"),
+            "default_client_price": 600.0,
+            "max_bid": _DEFAULT_DEFAULT.get("max_bid"),
+            "max_adjust_pct": _DEFAULT_DEFAULT.get("max_adjust_pct"),
+            "auto_remove_losing_sku": 0,
+            "losing_days_threshold": 21,
+            "auto_execute": False,
+            "is_current": True,
+        }])
 
     return success(_flatten_template_rows(row))
 

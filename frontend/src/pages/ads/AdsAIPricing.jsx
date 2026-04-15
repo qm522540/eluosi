@@ -822,19 +822,12 @@ const OzonAIPricing = ({ shopId, platform = 'ozon' }) => {
           <Table size="small" dataSource={configs} rowKey="id" pagination={false}
             columns={[
               {
-                title: '模板名称', dataIndex: 'template_name', width: 120,
-                render: (name, record) => (
-                  <Space>
-                    <Tag color={templateTypeConfig[record.template_type]?.color || 'default'}>
-                      {templateTypeConfig[record.template_type]?.label || record.template_type}
-                    </Tag>
-                    <span style={{ fontWeight: 500 }}>{name}</span>
-                  </Space>
-                ),
+                title: '策略名称', dataIndex: 'template_name', width: 140,
+                render: (name) => <span style={{ fontWeight: 500 }}>{name || '店铺策略'}</span>,
               },
               {
-                title: <Tooltip title="扣除所有成本后的净毛利率">净毛利率</Tooltip>,
-                dataIndex: 'gross_margin', width: 90, align: 'right',
+                title: <Tooltip title="扣除所有成本后的净毛利率">默认净毛利率</Tooltip>,
+                dataIndex: 'gross_margin', width: 120, align: 'right',
                 render: v => v ? `${(v * 100).toFixed(0)}%` : '-',
               },
               {
@@ -853,14 +846,10 @@ const OzonAIPricing = ({ shopId, platform = 'ozon' }) => {
                 },
               },
               {
-                title: '最高出价', dataIndex: 'max_bid', width: 90, align: 'right',
-                render: v => v ? `₽${v}` : '-',
-              },
-              {
-                title: '智能清理', width: 90, align: 'center',
+                title: '自动删除亏损商品', width: 180, align: 'center',
                 render: (_, record) => (
                   record.auto_remove_losing_sku
-                    ? <Tag color="orange">开启·{record.losing_days_threshold || 21}天</Tag>
+                    ? <Tag color="orange">开启 · {record.losing_days_threshold || 21} 天</Tag>
                     : <Tag color="default">关闭</Tag>
                 ),
               },
@@ -979,7 +968,7 @@ const OzonAIPricing = ({ shopId, platform = 'ozon' }) => {
 
       {/* 模板编辑弹窗 */}
       <Modal
-        title={`编辑策略配置 — ${editingConfig?.template_name || ''}`}
+        title="编辑店铺策略"
         open={!!editingConfig}
         onOk={handleConfigSave}
         onCancel={() => setEditingConfig(null)}
