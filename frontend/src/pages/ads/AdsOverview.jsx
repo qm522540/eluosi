@@ -1221,7 +1221,7 @@ const AdsOverview = ({ shopId, platform, shops, searched, syncing, lastSyncTime,
         title={`广告活动详情 — ${detailData?.name || ''}`}
         open={detailVisible}
         onClose={() => { setDetailVisible(false); setSelectedGroupId(null); setKeywords([]) }}
-        width={900}
+        width="85%"
         loading={detailLoading}
       >
         {detailData && (
