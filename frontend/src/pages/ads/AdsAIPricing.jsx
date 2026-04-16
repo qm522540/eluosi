@@ -1400,7 +1400,7 @@ const OzonAIPricing = ({ shopId, platform = 'ozon' }) => {
               {[
                 { title: '广告效果', items: ['CPM出价', '曝光量', '点击量/CTR', '订单数/CR', '收入/ROAS', '花费'] },
                 { title: '时段分布', items: ['各小时花费', '各小时点击', '各小时转化'] },
-                { title: '数据粒度', items: ['按活动维度', '按SKU维度', '按天汇总', '保留40天'] },
+                { title: '数据粒度', items: ['按活动维度', '按SKU维度', '按天汇总', '保留45天'] },
               ].map(group => (
                 <div key={group.title} style={{ background: '#fafafa', borderRadius: 6, padding: '8px 10px' }}>
                   <div style={{ fontSize: 11, fontWeight: 500, color: '#666', marginBottom: 4 }}>
