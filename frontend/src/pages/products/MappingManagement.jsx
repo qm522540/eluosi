@@ -245,16 +245,17 @@ const MappingManagement = () => {
       )
     }
     return (
-      <Card size="small" bordered>
-        <Text type="secondary">
-          当前选中：<Text strong>{selectedNode.name}</Text>
-          {selectedNode.name_ru && <Text type="secondary"> · {selectedNode.name_ru}</Text>}
-        </Text>
-        <Paragraph style={{ marginTop: 12, marginBottom: 0 }} type="secondary">
-          属性值映射按属性绑定，请切到 <Text strong>属性映射</Text> Tab，点 enum 类型属性行的
-          <Text strong> 值映射 </Text> 按钮，从右侧抽屉管理。
-        </Paragraph>
-      </Card>
+      <Empty
+        description={
+          <span>
+            属性值映射按属性绑定。请切到
+            <Button type="link" size="small" onClick={() => setActiveTab('attribute')}>
+              属性映射 Tab
+            </Button>
+            ，点 enum 类型属性行的 <Text strong>值映射</Text> 按钮，从右侧抽屉管理。
+          </span>
+        }
+      />
     )
   }
 
@@ -264,7 +265,7 @@ const MappingManagement = () => {
         <PartitionOutlined /> 映射管理
       </Title>
       <Paragraph type="secondary">
-        本地统一分类 → WB / Ozon 分类 / 属性 / 属性值 映射。AI 推荐 + 人工确认流程见
+        本地统一分类 → WB / Ozon 分类 / 属性 / 属性值 映射。节奏：<Text strong>①建本地分类 → ②品类映射 → ③属性映射 → ④属性值映射</Text>。每条映射 AI 推荐后需人工确认，详见
         <Text code>docs/api/category_mapping.md</Text>
       </Paragraph>
 
