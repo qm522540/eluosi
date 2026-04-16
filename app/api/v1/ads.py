@@ -883,16 +883,17 @@ async def _sync_ozon_campaigns(db, shop) -> tuple:
             INSERT INTO ad_campaigns (
                 shop_id, tenant_id, platform,
                 platform_campaign_id,
-                name, ad_type, status,
+                name, ad_type, payment_type, status,
                 daily_budget, created_at
             ) VALUES (
                 :shop_id, :tenant_id, 'ozon',
                 :platform_id,
-                :name, :ad_type, :status,
+                :name, :ad_type, :payment_type, :status,
                 :budget, NOW()
             )
             ON DUPLICATE KEY UPDATE
                 name          = VALUES(name),
+                payment_type  = VALUES(payment_type),
                 status        = VALUES(status),
                 daily_budget  = VALUES(daily_budget),
                 updated_at    = NOW()
@@ -902,6 +903,7 @@ async def _sync_ozon_campaigns(db, shop) -> tuple:
             "platform_id": platform_id,
             "name": c.get("name", ""),
             "ad_type": c.get("ad_type", "search"),
+            "payment_type": c.get("payment_type", "cpc"),
             "status": mapped_status,
             "budget": min(float(c.get("daily_budget") or 0), 99999999.99),
         })
@@ -962,16 +964,17 @@ async def _sync_wb_campaigns(db, shop) -> tuple:
             INSERT INTO ad_campaigns (
                 shop_id, tenant_id, platform,
                 platform_campaign_id,
-                name, ad_type, status,
+                name, ad_type, payment_type, status,
                 daily_budget, created_at
             ) VALUES (
                 :shop_id, :tenant_id, 'wb',
                 :platform_id,
-                :name, :ad_type, :status,
+                :name, :ad_type, :payment_type, :status,
                 :budget, NOW()
             )
             ON DUPLICATE KEY UPDATE
                 name          = IF(VALUES(name) != '', VALUES(name), name),
+                payment_type  = VALUES(payment_type),
                 status        = VALUES(status),
                 daily_budget  = VALUES(daily_budget),
                 updated_at    = NOW()
@@ -981,6 +984,7 @@ async def _sync_wb_campaigns(db, shop) -> tuple:
             "platform_id": platform_id,
             "name": c.get("name", ""),
             "ad_type": c.get("ad_type", "search"),
+            "payment_type": c.get("payment_type", "cpm"),
             "status": mapped_status,
             "budget": min(float(c.get("daily_budget") or 0), 99999999.99),
         })

@@ -21,6 +21,10 @@ class AdCampaign(BaseMixin, Base):
         Enum("search", "catalog", "product_page", "recommendation", "auction", name="ad_type"),
         nullable=False,
     )
+    payment_type: Mapped[str] = mapped_column(
+        Enum("cpm", "cpc", "cpo", name="payment_type"),
+        nullable=False, default="cpm"
+    )
     daily_budget: Mapped[Optional[float]] = mapped_column(DECIMAL(10, 2), nullable=True)
     total_budget: Mapped[Optional[float]] = mapped_column(DECIMAL(10, 2), nullable=True)
     status: Mapped[str] = mapped_column(

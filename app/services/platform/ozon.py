@@ -370,10 +370,15 @@ class OzonClient(BasePlatformClient):
         start_date = raw.get("createdAt") or raw.get("created_at") or raw.get("startDate") or ""
         end_date = raw.get("endDate") or raw.get("end_date") or ""
 
+        # 付费类型：Ozon 字段 paymentType（CPC/CPO/CPM）
+        raw_pt = (raw.get("paymentType") or raw.get("payment_type") or "CPC").upper()
+        payment_type = raw_pt.lower() if raw_pt.lower() in ("cpc", "cpm", "cpo") else "cpc"
+
         return {
             "platform_campaign_id": campaign_id,
             "name": name,
             "ad_type": ad_type,
+            "payment_type": payment_type,
             "daily_budget": daily_budget,
             "total_budget": total_budget,
             "status": state_map.get(state_raw, "paused"),

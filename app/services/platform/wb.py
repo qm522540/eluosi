@@ -169,9 +169,8 @@ class WBClient(BasePlatformClient):
             if not advert_info:
                 return []
 
-            # 第2步: 分批调用 /api/advert/v2/adverts 拉取活动名称
-            # 同时识别WB后台已软删除的活动(timestamps.deleted是真实时间点)
-            name_map, deleted_ids = await self._fetch_advert_names(
+            # 第2步: 分批调用 /api/advert/v2/adverts 拉取活动名称、付费类型
+            name_map, payment_type_map, deleted_ids = await self._fetch_advert_names(
                 list(advert_info.keys())
             )
 
@@ -210,6 +209,7 @@ class WBClient(BasePlatformClient):
                     "dailyBudget": budget_map.get(advert_id),
                     "createTime": info.get("changeTime"),
                     "endTime": None,
+                    "payment_type": payment_type_map.get(advert_id, "cpm"),
                 }
                 campaigns.append(self._parse_campaign(merged))
 
@@ -225,21 +225,19 @@ class WBClient(BasePlatformClient):
         return campaigns
 
     async def _fetch_advert_names(self, advert_ids: list) -> tuple:
-        """通过 /api/advert/v2/adverts 批量拉取活动名称和删除状态
-
-        Args:
-            advert_ids: 活动ID列表
+        """通过 /api/advert/v2/adverts 批量拉取活动名称、付费类型和删除状态
 
         Returns:
-            (name_map, deleted_ids) 元组:
+            (name_map, payment_type_map, deleted_ids) 元组:
               - name_map: {advert_id: name}
+              - payment_type_map: {advert_id: "cpm" | "cpc"}（从 settings.payment_type 读）
               - deleted_ids: 在WB后台已软删除的活动ID集合
-                  判断依据: timestamps.deleted 是真实时间点(非21xx哨兵值)
         """
         if not advert_ids:
-            return {}, set()
+            return {}, {}, set()
 
         name_map: dict = {}
+        payment_type_map: dict = {}
         deleted_ids: set = set()
         batch_size = 50  # WB API 单次最多50个id
 
@@ -280,12 +278,16 @@ class WBClient(BasePlatformClient):
                 if name:
                     name_map[adv_id] = name.strip()
 
+                # 付费类型：WB settings.payment_type 取值 cpm/cpc
+                pt = (settings_obj.get("payment_type") or "cpm").lower()
+                payment_type_map[adv_id] = pt if pt in ("cpm", "cpc") else "cpm"
+
         logger.info(
             f"WB shop_id={self.shop_id} 获取活动元信息 "
             f"请求{len(advert_ids)}个 命中名称{len(name_map)}个 "
             f"已删除{len(deleted_ids)}个"
         )
-        return name_map, deleted_ids
+        return name_map, payment_type_map, deleted_ids
 
     def _parse_campaign(self, raw: dict) -> dict:
         """解析WB广告活动数据为标准格式"""
@@ -330,6 +332,7 @@ class WBClient(BasePlatformClient):
             "platform_campaign_id": advert_id,
             "name": name,
             "ad_type": ad_type,
+            "payment_type": raw.get("payment_type") or "cpm",
             "daily_budget": raw.get("dailyBudget"),
             "total_budget": None,
             "status": status_map.get(raw.get("status"), "paused"),

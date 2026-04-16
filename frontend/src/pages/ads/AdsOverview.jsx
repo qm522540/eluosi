@@ -757,11 +757,21 @@ const AdsOverview = ({ shopId, platform, shops, searched, syncing, lastSyncTime,
     budget_days_left: { title: '剩余天数', dataIndex: 'budget_days_left', group: '预算', width: 90, render: v => v != null ? `${v}天` : '-' },
     ozon_bid_type: { title: '出价类型', dataIndex: 'ozon_bid_type', group: 'Ozon', platforms: ['ozon'], width: 100, render: v => v || '-' },
     wb_campaign_type: { title: '活动类型', dataIndex: 'wb_campaign_type', group: 'WB', platforms: ['wb'], width: 100, render: v => v || '-' },
+    payment_type: {
+      title: '付费类型', dataIndex: 'payment_type', group: '基础', width: 90,
+      render: v => {
+        const map = { cpm: { label: 'CPM', color: 'blue', tip: '按1000次曝光付费' },
+                      cpc: { label: 'CPC', color: 'green', tip: '按点击付费' },
+                      cpo: { label: 'CPO', color: 'orange', tip: '按订单付费' } }
+        const cfg = map[v] || { label: v || '-', color: 'default', tip: '' }
+        return <Tooltip title={cfg.tip}><Tag color={cfg.color} style={{ margin: 0 }}>{cfg.label}</Tag></Tooltip>
+      }
+    },
   }
 
   const PLATFORM_DEFAULT_COLS = {
-    ozon: ['campaign_name', 'status', 'today_spend', 'today_roas', 'today_orders', 'avg_roas_7d', 'roas_trend', 'budget_used_pct', 'daily_budget'],
-    wb: ['campaign_name', 'status', 'today_spend', 'today_roas', 'today_orders', 'avg_roas_7d', 'spend_7d', 'budget_used_pct'],
+    ozon: ['campaign_name', 'payment_type', 'status', 'today_spend', 'today_roas', 'today_orders', 'avg_roas_7d', 'roas_trend', 'budget_used_pct', 'daily_budget'],
+    wb: ['campaign_name', 'payment_type', 'status', 'today_spend', 'today_roas', 'today_orders', 'avg_roas_7d', 'spend_7d', 'budget_used_pct'],
     yandex: ['campaign_name', 'status', 'today_spend', 'today_roas', 'today_orders', 'avg_roas_7d'],
   }
 

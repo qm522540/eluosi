@@ -430,6 +430,7 @@ def _campaign_to_dict(c: AdCampaign) -> dict:
         "platform_campaign_id": c.platform_campaign_id,
         "name": c.name,
         "ad_type": c.ad_type,
+        "payment_type": getattr(c, "payment_type", "cpm"),
         "daily_budget": float(c.daily_budget) if c.daily_budget is not None else None,
         "total_budget": float(c.total_budget) if c.total_budget is not None else None,
         "status": c.status,
