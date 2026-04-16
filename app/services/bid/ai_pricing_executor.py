@@ -735,11 +735,28 @@ async def _analyze_now_inner(db, tenant_id: int, shop_id: int,
     )
     if campaign_ids:
         q = q.filter(AdCampaign.id.in_(campaign_ids))
-    campaigns = q.all()
+    all_campaigns = q.all()
+
+    # 按付费类型过滤：AI 调价公式只支持 WB=CPM 和 Ozon=CPC
+    # 其他（WB-CPC / Ozon-CPM / Ozon-CPO）公式不匹配，先排除避免误操作
+    SUPPORTED_PT = {"wb": "cpm", "ozon": "cpc"}
+    supported = SUPPORTED_PT.get(platform)
+    campaigns = [
+        c for c in all_campaigns
+        if (getattr(c, "payment_type", None) or supported) == supported
+    ]
+    skipped_pt = len(all_campaigns) - len(campaigns)
+    if skipped_pt > 0:
+        logger.info(
+            f"shop_id={shop_id} 跳过{skipped_pt}个付费类型不支持的活动"
+            f"（{platform} 只处理 payment_type={supported}）"
+        )
 
     if not campaigns:
-        _update_status(db, tenant_id, shop_id, "success", "无活跃活动")
-        return {"status": "success", "message": "无活跃活动",
+        msg = (f"无活跃活动（{platform}仅支持 {supported} 付费类型）"
+               if skipped_pt else "无活跃活动")
+        _update_status(db, tenant_id, shop_id, "success", msg)
+        return {"status": "success", "message": msg,
                 "analyzed_count": 0, "suggestion_count": 0, "auto_executed_count": 0}
 
     # ── 拉取平台商品出价（client 保持开启用于后续 min bid 查询） ──

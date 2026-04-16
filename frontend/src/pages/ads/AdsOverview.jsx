@@ -1182,10 +1182,36 @@ const AdsOverview = ({ shopId, platform, shops, searched, syncing, lastSyncTime,
                             <Badge color={AD_STATUS[detailData.status]?.color} text={AD_STATUS[detailData.status]?.label || detailData.status} />
                           </Descriptions.Item>
                           <Descriptions.Item label="广告类型">{AD_TYPES[detailData.ad_type]?.label || detailData.ad_type}</Descriptions.Item>
+                          <Descriptions.Item label="付费类型">
+                            {(() => {
+                              const pt = detailData.payment_type
+                              const map = { cpm: { label: 'CPM (按曝光)', color: 'blue' },
+                                            cpc: { label: 'CPC (按点击)', color: 'green' },
+                                            cpo: { label: 'CPO (按订单)', color: 'orange' } }
+                              const cfg = map[pt] || { label: pt || '-', color: 'default' }
+                              return <Tag color={cfg.color} style={{ margin: 0 }}>{cfg.label}</Tag>
+                            })()}
+                          </Descriptions.Item>
                           <Descriptions.Item label="活动ID">{detailData.platform_campaign_id || '-'}</Descriptions.Item>
                         </Descriptions>
                       </Col>
                     </Row>
+                    {/* 不支持 AI 调价的活动加提示 */}
+                    {(() => {
+                      const pt = detailData.payment_type
+                      const plat = detailData.platform
+                      const supported = (plat === 'wb' && pt === 'cpm') || (plat === 'ozon' && pt === 'cpc')
+                      if (supported || !pt) return null
+                      return (
+                        <Alert
+                          style={{ marginTop: 12 }}
+                          type="warning"
+                          showIcon
+                          message="AI 调价暂不支持此付费类型"
+                          description={`当前活动付费类型为 ${pt.toUpperCase()}，AI 调价公式只支持 WB=CPM 和 Ozon=CPC。此活动仅展示数据，不会被 AI 自动调价。`}
+                        />
+                      )
+                    })()}
                   </Card>
                   <Descriptions column={2} bordered size="small">
                     <Descriptions.Item label="名称">{detailData.name}</Descriptions.Item>
