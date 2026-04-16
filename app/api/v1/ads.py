@@ -665,7 +665,8 @@ async def campaign_keywords(
                         "msg": "当前仅支持 WB 平台的关键词统计"})
 
     date_to = _date.today()
-    date_from = date_to - _td(days=days)
+    # WB 限制：from 和 to 跨度最多 7 天（差值 ≤ 6 天），否则 400
+    date_from = date_to - _td(days=min(days, 7) - 1)
 
     from app.services.platform.wb import WBClient
     client = WBClient(shop_id=shop.id, api_key=shop.api_key)

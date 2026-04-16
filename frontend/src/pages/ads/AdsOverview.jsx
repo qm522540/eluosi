@@ -11,6 +11,7 @@ import {
 import ReactECharts from 'echarts-for-react'
 import dayjs from 'dayjs'
 import { formatMoscowTime } from '@/utils/time'
+import WbProductImg from '@/components/WbProductImg'
 import {
   getCampaigns, getCampaign, createCampaign, updateCampaign, deleteCampaign,
   getAdGroups, createAdGroup, updateAdGroup, deleteAdGroup,
@@ -906,14 +907,17 @@ const AdsOverview = ({ shopId, platform, shops, searched, syncing, lastSyncTime,
 
   // ==================== 渲染 ====================
 
-  // 商品单元格：图 + 标题 + SKU 徽章（Ozon 有 image/title；WB 用 subject_name 兜底，nm_id 作 SKU）
+  // 商品单元格：图 + 标题 + SKU 徽章（Ozon 有 image/title；WB 用 WbProductImg 探测 basket）
   const renderProductCell = (record) => {
     const sku = record.sku
     const title = record.title || record.subject_name || `nm_id ${sku}`
     const img = record.image
+    const isWb = detailData?.platform === 'wb'
     return (
       <Space align="center" size="middle">
-        {img ? (
+        {isWb ? (
+          <WbProductImg nmId={sku} size={56} />
+        ) : img ? (
           <img src={img} alt="" style={{ width: 56, height: 56, objectFit: 'cover', borderRadius: 6, border: '1px solid #f0f0f0' }} />
         ) : (
           <div style={{

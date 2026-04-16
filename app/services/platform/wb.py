@@ -687,17 +687,19 @@ class WBClient(BasePlatformClient):
         API: GET /adv/v0/stats/keywords?advert_id=X&from=YYYY-MM-DD&to=YYYY-MM-DD
 
         注意：
+        - WB 限制：from 和 to 的时间跨度不能超过 1 周（7 天）
         - WB 活动级别的数据，不按 nm_id 过滤（所有 SKU 共享同一套关键词）
         - auction/unified 类型活动没有"手动关键词"概念，但可以查系统为活动触发的实际搜索词
-        - search (CPC) 类型活动也可查，但还有独立的 /search/{id}/words 配置关键词
 
         Returns:
-            [{keyword, date, views, clicks, ctr, sum(花费), currency}]
+            [{keyword, views, clicks, ctr, sum(花费), currency}]
         """
-        if not date_from:
-            date_from = (datetime.now(tz=None).date() - timedelta(days=7)).strftime("%Y-%m-%d")
+        # WB 限制：跨度必须 ≤ 7 天（from-to 差值最多 6 天）
+        today = datetime.now(tz=None).date()
         if not date_to:
-            date_to = datetime.now(tz=None).date().strftime("%Y-%m-%d")
+            date_to = today.strftime("%Y-%m-%d")
+        if not date_from:
+            date_from = (today - timedelta(days=6)).strftime("%Y-%m-%d")
 
         try:
             url = f"{WB_ADVERT_API}/adv/v0/stats/keywords"
