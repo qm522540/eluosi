@@ -768,6 +768,31 @@ async def _analyze_now_inner(db, tenant_id: int, shop_id: int,
     # ── 查询SKU历史数据 ──
     sku_stats = _query_sku_history(db, shop_id, tenant_id, platform)
 
+    # ── Ozon 预取全局最低CPC（每次分析拉一次，所有SKU复用） ──
+    ozon_min_cpc = None
+    if platform == "ozon":
+        try:
+            import httpx
+            from app.services.platform.ozon import (
+                _extract_ozon_min_bid, OZON_PERFORMANCE_API,
+            )
+            await client._ensure_perf_token()
+            async with httpx.AsyncClient(
+                headers={"Authorization": f"Bearer {client._perf_token}"},
+                timeout=30.0,
+            ) as _c:
+                _r = await _c.get(f"{OZON_PERFORMANCE_API}/api/client/limits/list")
+                if _r.status_code == 200:
+                    _limits_data = _r.json()
+                    ozon_min_cpc = _extract_ozon_min_bid(
+                        _limits_data,
+                        placement="CAMPAIGN_PLACEMENT_SEARCH_AND_CATEGORY",
+                        payment_method="CPC",
+                    )
+                    logger.info(f"Ozon 最低CPC预取: ₽{ozon_min_cpc}")
+        except Exception as e:
+            logger.warning(f"Ozon 最低CPC预取失败: {e}")
+
     # ── 时段系数 + 星期系数 ──
     time_multiplier = _get_time_slot_multiplier()
     day_multiplier  = _get_day_of_week_multiplier()
@@ -930,8 +955,8 @@ async def _analyze_now_inner(db, tenant_id: int, shop_id: int,
             )
 
             # ── Step 5: 平台最低出价校验 ──
-            # WB 最低价是"竞争阈值"不是硬卡，低于它仍能跑但曝光可能差
-            # 策略：算法值低于 min 时，标注警告但不强拉（保留利润最大化判断）
+            # 最低价是"竞争阈值"不是硬卡（update时WB/Ozon内部都有硬卡 fallback）
+            # 策略：算法值低于阈值时，标注警告但不强拉（保留利润最大化判断）
             min_bid_warning = ""
             if optimal_bid is not None and platform == "wb":
                 try:
@@ -947,6 +972,14 @@ async def _analyze_now_inner(db, tenant_id: int, shop_id: int,
                         )
                 except Exception as e:
                     logger.warning(f"WB 最低价查询异常 sku={sku}: {e}")
+            elif optimal_bid is not None and platform == "ozon":
+                # Ozon: 用分析开始时预取的全局最低 CPC
+                if ozon_min_cpc and optimal_bid < ozon_min_cpc:
+                    min_bid_warning = f"⚠ 低于Ozon最低CPC₽{int(ozon_min_cpc)}，曝光可能不足"
+                    logger.info(
+                        f"Ozon最低CPC提示：sku={sku} optimal={optimal_bid}"
+                        f"<min={ozon_min_cpc}，保留算法值+加警告"
+                    )
 
             # ── Step 6: ROAS 门控（≥21天） ──
             if optimal_bid is not None and data_days >= 21:
