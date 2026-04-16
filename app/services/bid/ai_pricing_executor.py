@@ -1051,16 +1051,22 @@ async def _analyze_now_inner(db, tenant_id: int, shop_id: int,
                           else "history_data"),
                 "current_roas": round(current_roas, 2) if current_roas else None,
                 "expected_roas": (
-                    # WB: ROAS = CTR × CR × client_price × 1000 / CPM
-                    # Ozon: ROAS = CR × client_price / CPC
-                    round(
-                        (ctr / 100) * (cr / 100) * client_price * 1000 / optimal_bid
-                        if platform == "wb"
-                        else (cr / 100) * client_price / optimal_bid,
-                        2,
+                    # 用实测 ROAS 等比换算，口径与 current_roas 一致
+                    # 假设 CTR/CR 短期不变：ROAS ∝ 1/bid
+                    # expected = current_roas × current_bid / new_bid
+                    round(current_roas * current_bid / optimal_bid, 2)
+                    if optimal_bid > 0 and current_roas and current_bid > 0
+                    # 无历史 ROAS 时降级用公式预测
+                    else (
+                        round(
+                            (ctr / 100) * (cr / 100) * client_price * 1000 / optimal_bid
+                            if platform == "wb"
+                            else (cr / 100) * client_price / optimal_bid,
+                            2,
+                        )
+                        if optimal_bid > 0 and client_price > 0 and ctr > 0 and cr > 0
+                        else None
                     )
-                    if optimal_bid > 0 and client_price > 0 and ctr > 0 and cr > 0
-                    else None
                 ),
                 "data_days": data_days,
                 "reason": reason[:500],
