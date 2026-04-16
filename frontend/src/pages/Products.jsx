@@ -247,35 +247,30 @@ const Products = () => {
     },
     {
       title: '分类',
-      dataIndex: 'category',
-      width: 90,
-      render: v => v ? (
-        <Text style={{ fontSize: 12, color: 'var(--color-text-secondary)' }}>{v}</Text>
-      ) : '-',
+      dataIndex: 'local_category_name',
+      width: 100,
+      render: (v, record) => {
+        if (v) {
+          return <Tag color="blue" style={{ fontSize: 12 }}>{v}</Tag>
+        }
+        // 本地分类未关联时，降级显示平台分类名（俄文）作为参考
+        const fallback = (record.listings || [])
+          .map(l => l.platform_category_name)
+          .find(n => n)
+        return fallback ? (
+          <Tooltip title="本地分类未关联，显示平台原始分类">
+            <Text style={{ fontSize: 11, color: 'var(--color-text-tertiary)' }}>{fallback}</Text>
+          </Tooltip>
+        ) : <Text style={{ color: 'var(--color-text-tertiary)' }}>-</Text>
+      },
     },
     marginColumn,
     {
-      title: '平台',
-      dataIndex: 'platforms',
-      width: 100,
-      render: (platforms) => (
-        <Space size={4}>
-          {(platforms || []).map(p => {
-            const cfg = PLATFORM_COLOR[p] || {}
-            return (
-              <div key={p} style={{
-                width: 22, height: 22, borderRadius: 4,
-                background: cfg.bg, color: cfg.color,
-                display: 'flex', alignItems: 'center', justifyContent: 'center',
-                fontSize: 10, fontWeight: 500,
-              }}>{cfg.label}</div>
-            )
-          })}
-        </Space>
+      title: (
+        <Tooltip title="商家在平台后台设置的销售价，非买家到手价（不含平台补贴/券后/会员折扣）">
+          <span>销售价 <span style={{ color: 'var(--color-text-tertiary)', fontSize: 11 }}>ⓘ</span></span>
+        </Tooltip>
       ),
-    },
-    {
-      title: '价格',
       width: 120,
       render: (_, record) => {
         const listings = record.listings || []
