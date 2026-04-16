@@ -8,6 +8,7 @@ import {
   EditOutlined, LockOutlined, SaveOutlined, CloseOutlined,
 } from '@ant-design/icons'
 import { getMe, updateProfile, changePassword } from '@/api/auth'
+import { formatMoscowTime } from '@/utils/time'
 import { useAuthStore } from '@/stores/authStore'
 
 const { Text } = Typography
@@ -204,7 +205,7 @@ const ProfileTab = () => {
                 <Tag color={role.color}>{role.label}</Tag>
               </Descriptions.Item>
               <Descriptions.Item label="最后登录">
-                {user.last_login_at ? new Date(user.last_login_at).toLocaleString('zh-CN') : '未知'}
+                {user.last_login_at ? formatMoscowTime(user.last_login_at) : '未知'}
               </Descriptions.Item>
             </Descriptions>
           </div>

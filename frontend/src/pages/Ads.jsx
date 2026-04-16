@@ -13,6 +13,7 @@ import {
 } from '@ant-design/icons'
 import ReactECharts from 'echarts-for-react'
 import dayjs from 'dayjs'
+import { formatMoscowShort } from '@/utils/time'
 import {
   getCampaigns, getCampaign, createCampaign, updateCampaign, deleteCampaign,
   getAdGroups, createAdGroup, updateAdGroup, deleteAdGroup,
@@ -1326,7 +1327,7 @@ const Ads = () => {
                       },
                       {
                         title: '最后触发', dataIndex: 'last_triggered_at', width: 160,
-                        render: v => v ? dayjs(v).format('MM-DD HH:mm') : '-',
+                        render: v => v ? formatMoscowShort(v) : '-',
                       },
                       {
                         title: '操作', key: 'action', width: 160,
@@ -1956,7 +1957,7 @@ const Ads = () => {
             onChange: (p) => fetchBidLogs(bidLogRuleId, p),
           }}
           columns={[
-            { title: '时间', dataIndex: 'created_at', width: 130, render: v => v ? dayjs(v).format('MM-DD HH:mm') : '-' },
+            { title: '时间', dataIndex: 'created_at', width: 130, render: v => v ? formatMoscowShort(v) : '-' },
             { title: '活动', dataIndex: 'campaign_name', ellipsis: true, render: (v, r) => <Tooltip title={`ID: ${r.campaign_id}`}>{v || r.campaign_id}</Tooltip> },
             { title: '平台', dataIndex: 'platform', width: 100, render: p => <Tag color={PLATFORMS[p]?.color}>{PLATFORMS[p]?.label || p}</Tag> },
             { title: '广告组', dataIndex: 'group_name', width: 110, ellipsis: true },

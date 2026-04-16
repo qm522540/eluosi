@@ -9,6 +9,7 @@ import {
   ExclamationCircleOutlined,
 } from '@ant-design/icons'
 import dayjs from 'dayjs'
+import { formatMoscowTime, formatMoscowShort } from '@/utils/time'
 import {
   getAIPricingConfigs, updateAIPricingConfig,
   triggerAIAnalysis, getAIPricingSuggestions,
@@ -1277,7 +1278,7 @@ const OzonAIPricing = ({ shopId, platform = 'ozon' }) => {
   const historyColumns = [
     {
       title: '时间', dataIndex: 'created_at', width: 130,
-      render: v => v ? dayjs(v).format('MM-DD HH:mm') : '-',
+      render: v => v ? formatMoscowShort(v) : '-',
     },
     {
       title: '商品', dataIndex: 'sku_name', ellipsis: true,
@@ -1444,7 +1445,7 @@ const OzonAIPricing = ({ shopId, platform = 'ozon' }) => {
               marginBottom: 10,
             }}>
               <span style={{ fontSize: 12, color: '#666' }}>
-                上次同步：{dataStatus?.last_sync_at ? dataStatus.last_sync_at.slice(0, 16) : '未同步'} ·
+                上次同步：{dataStatus?.last_sync_at ? formatMoscowTime(dataStatus.last_sync_at) : '未同步'} ·
                 数据范围：{dataStatus?.data_days || 0} 天
               </span>
               <Button type="primary" size="small" loading={dataSyncing} onClick={handleDataSync}>

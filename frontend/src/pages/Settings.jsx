@@ -9,6 +9,7 @@ import {
   ReloadOutlined, EyeInvisibleOutlined,
 } from '@ant-design/icons'
 import { getShops, createShop, updateShop, deleteShop, testConnection } from '@/api/shops'
+import { formatMoscowTime } from '@/utils/time'
 import { PLATFORMS, SHOP_STATUS } from '@/utils/constants'
 import ProfileTab from '@/components/ProfileTab'
 import NotificationsTab from '@/components/NotificationsTab'
@@ -166,7 +167,7 @@ const Settings = () => {
       dataIndex: 'last_sync_at',
       key: 'last_sync_at',
       width: 170,
-      render: (v) => v ? new Date(v).toLocaleString('zh-CN') : <span style={{ color: '#ccc' }}>未同步</span>,
+      render: (v) => v ? formatMoscowTime(v) : <span style={{ color: '#ccc' }}>未同步</span>,
     },
     {
       title: '操作',

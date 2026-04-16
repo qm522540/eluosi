@@ -10,6 +10,7 @@ import {
 } from '@ant-design/icons'
 import ReactECharts from 'echarts-for-react'
 import dayjs from 'dayjs'
+import { formatMoscowTime } from '@/utils/time'
 import {
   getCampaigns, getCampaign, createCampaign, updateCampaign, deleteCampaign,
   getAdGroups, createAdGroup, updateAdGroup, deleteAdGroup,
@@ -1020,7 +1021,7 @@ const AdsOverview = ({ shopId, platform, shops, searched, syncing, lastSyncTime,
                 })()}
               </span>
             )}
-            <Tooltip title={lastSyncTime ? `上次同步：${new Date(lastSyncTime).toLocaleString()}` : '从平台拉取最新活动列表'}>
+            <Tooltip title={lastSyncTime ? `上次同步：${formatMoscowTime(lastSyncTime)}` : '从平台拉取最新活动列表'}>
               <Button
                 size="small"
                 icon={<SyncOutlined spin={syncing} />}

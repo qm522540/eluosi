@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import { useAuthStore } from '../../stores/authStore'
+import { formatMoscowTime, formatMoscowHourMinute } from '@/utils/time'
 import AdsAIPricing from './AdsAIPricing'
 import {
   Button, Modal, message, Switch, Empty,
@@ -184,7 +185,7 @@ const StatusBar = ({ shopId }) => {
     },
     {
       label: '上次执行',
-      value: data.last_executed_at ? data.last_executed_at.slice(11, 16) : '-',
+      value: data.last_executed_at ? formatMoscowHourMinute(data.last_executed_at) : '-',
     },
     {
       label: '执行结果',
@@ -369,7 +370,7 @@ const BidLogs = ({ shopId, refreshKey }) => {
   }
 
   const columns = [
-    { title: '时间', dataIndex: 'created_at', width: 100, render: v => v?.slice(11, 16) },
+    { title: '时间', dataIndex: 'created_at', width: 100, render: v => v ? formatMoscowHourMinute(v) : '-' },
     {
       title: '活动 / 商品',
       key: 'name',
@@ -1607,7 +1608,7 @@ const AIPricingConfig = ({ shopId, platform, onSaved }) => {
             marginBottom: 10,
           }}>
             <span style={{ fontSize: 12, color: 'var(--color-text-secondary, #666)' }}>
-              上次同步：{dataStatus?.last_sync_at ? dataStatus.last_sync_at.slice(0, 16) : '未同步'} ·
+              上次同步：{dataStatus?.last_sync_at ? formatMoscowTime(dataStatus.last_sync_at) : '未同步'} ·
               数据范围：{dataStatus?.data_days || 0}天
             </span>
             <Button type="primary" size="small" loading={syncing} onClick={handleSync}>

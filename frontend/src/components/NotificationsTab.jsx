@@ -6,6 +6,7 @@ import {
   RobotOutlined, InboxOutlined, DesktopOutlined,
 } from '@ant-design/icons'
 import { getNotifications, markNotificationRead } from '@/api/notifications'
+import { formatMoscowTime } from '@/utils/time'
 
 const typeConfig = {
   roi_alert: { label: 'ROI告警', color: 'red', icon: <AlertOutlined /> },
@@ -111,7 +112,7 @@ const NotificationsTab = () => {
       dataIndex: 'created_at',
       key: 'created_at',
       width: 170,
-      render: (v) => v ? new Date(v).toLocaleString('zh-CN') : '-',
+      render: (v) => v ? formatMoscowTime(v) : '-',
     },
     {
       title: '操作',
