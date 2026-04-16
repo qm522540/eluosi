@@ -49,8 +49,8 @@ from app.utils.moscow_time import moscow_hour, moscow_today, now_moscow
 logger = setup_logger("bid.ai_pricing_executor")
 settings = get_settings()
 
-MIN_BID = 3.0
-MIN_DIFF = 1.0
+MIN_BID = 3
+MIN_DIFF = 1
 ANALYZE_LOCK_TTL = 60
 
 # 时段系数表（莫斯科时间，24小时）
@@ -231,8 +231,9 @@ def _roas_gate(db, campaign_id: int, sku: str, tenant_id: int,
     if p3_roas > 0 and l3_roas < p3_roas * 0.9:
         half_increase = (optimal_bid - current_bid) * 0.5
         adjusted = current_bid + half_increase
-        logger.info(f"ROAS门控：sku={sku} ROAS下跌{l3_roas}/{p3_roas}，加价砍半→{adjusted:.2f}")
-        return round(adjusted, 2)
+        adjusted = int(round(adjusted))
+        logger.info(f"ROAS门控：sku={sku} ROAS下跌{l3_roas}/{p3_roas}，加价砍半→{adjusted}")
+        return adjusted
 
     return optimal_bid
 
@@ -442,7 +443,7 @@ def _calc_optimal_bid(platform: str, target_cpa: float, ctr: float,
         if actual_cpa > max_cpa:
             raw_bid = max_cpa * cr_dec * combined_multiplier
 
-    return round(raw_bid, 2)
+    return int(round(raw_bid))
 
 
 # ==================== Config 更新 ====================
@@ -927,7 +928,8 @@ async def _analyze_now_inner(db, tenant_id: int, shop_id: int,
             )
 
             # ── Step 5: 平台最低出价校验 ──
-            # （留空：WB get_min_bid 未实现，暂用 MIN_BID 兜底）
+            # 预判阶段用 MIN_BID 兜底；实际执行阶段 update_campaign_bid/cpm
+            # 内部有 min bid fallback（从平台错误消息或 /limits/list 自动重试）
 
             # ── Step 6: ROAS 门控（≥21天） ──
             if optimal_bid is not None and data_days >= 21:
