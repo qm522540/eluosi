@@ -1210,9 +1210,11 @@ const OzonAIPricing = ({ shopId, platform = 'ozon' }) => {
         // 被忽略的 SKU: 只显示"恢复"按钮
         if (record.is_ignored) {
           return (
-            <Button type="primary" size="small" onClick={() => handleRestore(record.id)}>
-              恢复
-            </Button>
+            <Tooltip title="恢复后，该 SKU 重新参与 AI 自动调价和自动删除">
+              <Button type="primary" size="small" onClick={() => handleRestore(record.id)}>
+                恢复
+              </Button>
+            </Tooltip>
           )
         }
         const isDelete = Number(record.suggested_bid) === 0 && Number(record.adjust_pct) === -100
@@ -1227,9 +1229,11 @@ const OzonAIPricing = ({ shopId, platform = 'ozon' }) => {
                 执行
               </Button>
             )}
-            <Button size="small" icon={<CloseOutlined />} onClick={() => handleIgnore(record.id)}>
-              忽略
-            </Button>
+            <Tooltip title="忽略后，该 SKU 将长期不参与 AI 自动调价和自动删除，但仍会在建议列表中显示 AI 的推荐供参考。点击'恢复'可重新启用。">
+              <Button size="small" icon={<CloseOutlined />} onClick={() => handleIgnore(record.id)}>
+                忽略
+              </Button>
+            </Tooltip>
           </Space>
         )
       },

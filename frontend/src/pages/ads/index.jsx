@@ -14,9 +14,7 @@ import { getLastSyncTime } from '@/api/ads'
 import { syncData } from '@/api/bid_management'
 import { useAuthStore } from '@/stores/authStore'
 import AdsOverview from './AdsOverview'
-import AdsRules from './AdsRules'
 import BidManagement from './BidManagement'
-import ComingSoon from './ComingSoon'
 
 dayjs.extend(relativeTime)
 dayjs.locale('zh-cn')
@@ -182,28 +180,13 @@ const Ads = () => {
         items={[
           {
             key: 'overview',
-            label: '概览',
+            label: '推广信息',
             children: <AdsOverview shopId={committedShopId} platform={committedPlatform} shops={shops} searched={searched} syncing={syncing} lastSyncTime={lastSyncTime} onSync={handleSync} />,
-          },
-          {
-            key: 'rules',
-            label: '自动化规则',
-            children: <AdsRules shopId={committedShopId} platform={committedPlatform} searched={searched} />,
           },
           {
             key: 'bid-management',
             label: <Space size={4}><span>💰</span><span>出价管理</span></Space>,
             children: <BidManagement shopId={committedShopId} platform={committedPlatform} tenantId={tenantId} />,
-          },
-          {
-            key: 'analysis',
-            label: '数据分析',
-            children: <ComingSoon title="数据分析" />,
-          },
-          {
-            key: 'budget',
-            label: '预算管理',
-            children: <ComingSoon title="预算管理" />,
           },
         ]}
       />
