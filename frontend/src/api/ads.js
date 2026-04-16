@@ -236,6 +236,16 @@ export function rejectAIPricingSuggestion(suggestionId) {
   return request.post(`/bid-management/suggestions/${suggestionId}/reject`)
 }
 
+/** 忽略建议：该SKU长期不参与自动调价/删除 */
+export function ignoreAIPricingSuggestion(suggestionId) {
+  return request.post(`/bid-management/suggestions/${suggestionId}/ignore`)
+}
+
+/** 恢复：该SKU重新参与自动调价 */
+export function restoreAIPricingSuggestion(suggestionId) {
+  return request.post(`/bid-management/suggestions/${suggestionId}/restore`)
+}
+
 /** 切换AI调价自动/建议模式（复用 PUT 配置接口更新 auto_execute） */
 export function toggleAIAutoExecute(shopId, data) {
   return request.put(`/bid-management/ai-pricing/configs/${shopId}`, {

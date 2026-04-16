@@ -834,6 +834,14 @@ async def _analyze_now_inner(db, tenant_id: int, shop_id: int,
             sku_stat  = sku_stats.get(stats_key, {})
             data_days = int(sku_stat.get("days", 0) or 0)
 
+            # ── Step 0: 查询 user_managed（"忽略" 状态） ──
+            ag_check = db.execute(text("""
+                SELECT user_managed FROM ad_groups
+                WHERE campaign_id = :cid AND platform_group_id = :sku
+                  AND tenant_id = :tid LIMIT 1
+            """), {"cid": camp.id, "sku": sku, "tid": tenant_id}).fetchone()
+            is_ignored_sku = bool(ag_check and ag_check.user_managed)
+
             # ── Step 1: 生命周期管理：亏损检测（永远执行） ──
             net_margin   = _get_net_margin(db, tenant_id, shop_id, sku)
             client_price = _get_client_price(db, tenant_id, shop_id, sku)
@@ -845,7 +853,9 @@ async def _analyze_now_inner(db, tenant_id: int, shop_id: int,
                     db, tenant_id, shop_id, camp.id, platform, sku,
                 )
                 if is_losing:
-                    if cfg.auto_remove_losing_sku and cfg.auto_execute:
+                    # 被忽略的 SKU 不参与自动删除，但仍写建议列表提示
+                    if (cfg.auto_remove_losing_sku and cfg.auto_execute
+                            and not is_ignored_sku):
                         # 全自动删除
                         removed = await _check_and_remove_losing_sku(
                             db, client, shop, camp, sku, sku_name,
@@ -855,7 +865,7 @@ async def _analyze_now_inner(db, tenant_id: int, shop_id: int,
                             auto_removed += 1
                             continue
                     else:
-                        # 写建议列表（无论 auto_remove/auto_execute 设置）
+                        # 写建议列表（无论 auto_remove/auto_execute/is_ignored 设置）
                         reason_txt = (
                             f"[亏损删除建议] 21-30天ROAS={roas_21_30:.2f}x "
                             f"低于保本线{be_roas_l:.2f}x (净毛利率={net_margin_l})，"

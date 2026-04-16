@@ -565,7 +565,8 @@ def get_suggestions(
             s.status, s.generated_at, s.executed_at,
             c.name AS campaign_name, c.platform_campaign_id,
             pl.url AS product_url,
-            p.image_url AS image_url
+            p.image_url AS image_url,
+            COALESCE(ag.user_managed, 0) AS is_ignored
         FROM ai_pricing_suggestions s
         JOIN ad_campaigns c ON s.campaign_id = c.id
         LEFT JOIN platform_listings pl
@@ -573,6 +574,10 @@ def get_suggestions(
          AND pl.shop_id = s.shop_id
          AND pl.platform_product_id = s.platform_sku_id
         LEFT JOIN products p ON p.id = pl.product_id
+        LEFT JOIN ad_groups ag
+          ON ag.tenant_id = s.tenant_id
+         AND ag.campaign_id = s.campaign_id
+         AND ag.platform_group_id = s.platform_sku_id
         WHERE {' AND '.join(where)}
         ORDER BY c.name, s.platform_sku_id
     """), params).fetchall()
@@ -605,6 +610,7 @@ def get_suggestions(
             "executed_at": r.executed_at.isoformat() if r.executed_at else None,
             "image_url": r.image_url,
             "product_url": r.product_url,
+            "is_ignored": bool(r.is_ignored),
         })
 
     return success({
@@ -643,6 +649,70 @@ def reject_suggestion(
     from app.services.bid.ai_pricing_executor import reject_suggestion as reject_fn
     result = reject_fn(db, tenant_id, suggestion_id)
     return success(result.get("data") or {})
+
+
+@router.post("/suggestions/{suggestion_id}/ignore")
+def ignore_suggestion(
+    suggestion_id: int,
+    db: Session = Depends(get_db),
+    tenant_id: int = Depends(get_tenant_id),
+):
+    """忽略建议 → 该 SKU 长期不参与自动调价/删除（set user_managed=1）"""
+    row = db.execute(text("""
+        SELECT campaign_id, platform_sku_id, sku_name
+        FROM ai_pricing_suggestions
+        WHERE id = :id AND tenant_id = :tid
+    """), {"id": suggestion_id, "tid": tenant_id}).fetchone()
+    if not row:
+        return error(ErrorCode.BID_SUGGESTION_NOT_FOUND, "建议不存在")
+
+    # upsert ad_groups: 如果没记录就新建，user_managed=1
+    db.execute(text("""
+        INSERT INTO ad_groups (
+            tenant_id, campaign_id, platform_group_id, name,
+            user_managed, user_managed_at, status
+        ) VALUES (
+            :tid, :cid, :sku, :name, 1, NOW(), 'active'
+        )
+        ON DUPLICATE KEY UPDATE
+            user_managed = 1,
+            user_managed_at = NOW(),
+            updated_at = NOW()
+    """), {
+        "tid": tenant_id, "cid": row.campaign_id,
+        "sku": row.platform_sku_id,
+        "name": (row.sku_name or f"SKU-{row.platform_sku_id}")[:200],
+    })
+    db.commit()
+    return success({"id": suggestion_id, "is_ignored": True})
+
+
+@router.post("/suggestions/{suggestion_id}/restore")
+def restore_suggestion(
+    suggestion_id: int,
+    db: Session = Depends(get_db),
+    tenant_id: int = Depends(get_tenant_id),
+):
+    """取消忽略 → 该 SKU 重新参与自动调价（set user_managed=0）"""
+    row = db.execute(text("""
+        SELECT campaign_id, platform_sku_id
+        FROM ai_pricing_suggestions
+        WHERE id = :id AND tenant_id = :tid
+    """), {"id": suggestion_id, "tid": tenant_id}).fetchone()
+    if not row:
+        return error(ErrorCode.BID_SUGGESTION_NOT_FOUND, "建议不存在")
+
+    db.execute(text("""
+        UPDATE ad_groups
+        SET user_managed = 0, user_managed_at = NULL, updated_at = NOW()
+        WHERE tenant_id = :tid AND campaign_id = :cid
+          AND platform_group_id = :sku
+    """), {
+        "tid": tenant_id, "cid": row.campaign_id,
+        "sku": row.platform_sku_id,
+    })
+    db.commit()
+    return success({"id": suggestion_id, "is_ignored": False})
 
 
 @router.post("/suggestions/{suggestion_id}/remove-product")

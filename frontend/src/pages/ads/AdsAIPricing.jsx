@@ -13,6 +13,7 @@ import {
   getAIPricingConfigs, updateAIPricingConfig,
   triggerAIAnalysis, getAIPricingSuggestions,
   approveAIPricingSuggestion, rejectAIPricingSuggestion,
+  ignoreAIPricingSuggestion, restoreAIPricingSuggestion,
   toggleAIAutoExecute, getAIPricingHistory,
 } from '@/api/ads'
 import { triggerWBAnalysis, getWBSuggestions, rejectWBSuggestion } from '@/api/wb_pricing'
@@ -906,6 +907,26 @@ const OzonAIPricing = ({ shopId, platform = 'ozon' }) => {
     }
   }
 
+  const handleIgnore = async (id) => {
+    try {
+      await ignoreAIPricingSuggestion(id)
+      message.success('已忽略该 SKU，不再参与自动调价')
+      fetchSuggestions(suggestionsPage)
+    } catch (err) {
+      message.error(err.message || '操作失败')
+    }
+  }
+
+  const handleRestore = async (id) => {
+    try {
+      await restoreAIPricingSuggestion(id)
+      message.success('已恢复，重新参与自动调价')
+      fetchSuggestions(suggestionsPage)
+    } catch (err) {
+      message.error(err.message || '操作失败')
+    }
+  }
+
   // rowKey 是 "item-{id}" 字符串，批量操作时拆出真实 id
   const extractIds = (keys) => keys
     .filter(k => typeof k === 'string' && k.startsWith('item-'))
@@ -1034,6 +1055,9 @@ const OzonAIPricing = ({ shopId, platform = 'ozon' }) => {
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
             {img}
             <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0, lineHeight: 1.3 }}>
+              {r.is_ignored && (
+                <Tag color="default" style={{ marginRight: 4, fontSize: 11 }}>🔒 已忽略</Tag>
+              )}
               {productUrl ? (
                 <a href={productUrl} target="_blank" rel="noopener noreferrer" style={{ fontSize: 13 }}>{name}</a>
               ) : <span style={{ fontSize: 13 }}>{name}</span>}
@@ -1183,6 +1207,14 @@ const OzonAIPricing = ({ shopId, platform = 'ozon' }) => {
       title: '操作', key: 'action', width: 160, fixed: 'right',
       render: (_, record) => {
         if (record.isGroup) return groupHiddenCell()
+        // 被忽略的 SKU: 只显示"恢复"按钮
+        if (record.is_ignored) {
+          return (
+            <Button type="primary" size="small" onClick={() => handleRestore(record.id)}>
+              恢复
+            </Button>
+          )
+        }
         const isDelete = Number(record.suggested_bid) === 0 && Number(record.adjust_pct) === -100
         return (
           <Space size="small">
@@ -1195,7 +1227,7 @@ const OzonAIPricing = ({ shopId, platform = 'ozon' }) => {
                 执行
               </Button>
             )}
-            <Button size="small" icon={<CloseOutlined />} onClick={() => handleReject(record.id)}>
+            <Button size="small" icon={<CloseOutlined />} onClick={() => handleIgnore(record.id)}>
               忽略
             </Button>
           </Space>
@@ -1603,6 +1635,7 @@ const OzonAIPricing = ({ shopId, platform = 'ozon' }) => {
             rowKey="key"
             loading={suggestionsLoading}
             rowClassName={r => r.isGroup ? 'ai-suggestion-group-row' : 'ai-suggestion-item-row'}
+            onRow={r => r.is_ignored ? { style: { background: '#fafafa', opacity: 0.75 } } : {}}
             rowSelection={{
               selectedRowKeys,
               onChange: setSelectedRowKeys,

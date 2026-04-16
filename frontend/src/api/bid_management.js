@@ -67,6 +67,14 @@ export const approveBatch = (ids) =>
 export const rejectBatch = (ids) =>
   request.post(`${BASE}/suggestions/reject-batch`, { ids })
 
+// 忽略：该SKU长期不参与自动调价/删除
+export const ignoreSuggestion = (id) =>
+  request.post(`${BASE}/suggestions/${id}/ignore`)
+
+// 恢复：该SKU重新参与自动调价
+export const restoreSuggestion = (id) =>
+  request.post(`${BASE}/suggestions/${id}/restore`)
+
 // ==================== 冲突检测 ====================
 export const checkConflict = (shopId, enabling) =>
   request.get(`${BASE}/conflict-check/${shopId}`, {
