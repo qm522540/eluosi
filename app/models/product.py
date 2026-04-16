@@ -11,6 +11,7 @@ class Product(BaseMixin, Base):
     __tablename__ = "products"
 
     tenant_id: Mapped[int] = mapped_column(BigInteger, nullable=False, index=True)
+    shop_id: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True, comment="所属店铺ID（同一SKU在不同店铺独立记录）")
     sku: Mapped[str] = mapped_column(String(50), nullable=False)
     name_zh: Mapped[str] = mapped_column(String(200), nullable=False)
     name_ru: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)

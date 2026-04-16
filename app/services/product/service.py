@@ -23,18 +23,16 @@ def list_products(db: Session, tenant_id: int, keyword: str = None,
             Product.tenant_id == tenant_id,
             Product.status != "deleted"
         )
-        if platform or shop_id:
-            query = query.join(
-                PlatformListing,
-                (PlatformListing.product_id == Product.id) &
-                (PlatformListing.tenant_id == tenant_id) &
-                (PlatformListing.status != "deleted")
+        # 店铺过滤：product 表直接带 shop_id（029 迁移后），不再需要 JOIN listing
+        if shop_id:
+            query = query.filter(Product.shop_id == shop_id)
+        if platform:
+            # platform 过滤：product 没有直接字段，通过 shop.platform 间接
+            # 实际上选 shop_id 就已经确定平台，这个参数作为兼容保留
+            from app.models.shop import Shop
+            query = query.join(Shop, Shop.id == Product.shop_id).filter(
+                Shop.platform == platform
             )
-            if platform:
-                query = query.filter(PlatformListing.platform == platform)
-            if shop_id:
-                query = query.filter(PlatformListing.shop_id == shop_id)
-            query = query.distinct()
         if keyword:
             query = query.filter(
                 (Product.name_zh.contains(keyword)) |
@@ -338,6 +336,7 @@ def _product_to_dict(p: Product, cat_name_map: dict = None) -> dict:
     return {
         "id": p.id,
         "tenant_id": p.tenant_id,
+        "shop_id": p.shop_id,
         "sku": p.sku,
         "name_zh": p.name_zh,
         "name_ru": p.name_ru,
@@ -528,6 +527,7 @@ def _sync_wb_products(db: Session, shop, tenant_id: int) -> dict:
             vendor_code = p.get("vendorCode") or f"WB-{nm_id}"
             product = _get_or_create_product(
                 db, tenant_id, name_ru=data["title_ru"], sku=vendor_code,
+                shop_id=shop.id,
                 brand=p.get("brand"), image_url=image_url,
                 local_category_id=local_cat_id)
             listing = PlatformListing(
@@ -648,7 +648,9 @@ def _sync_ozon_products(db: Session, shop, tenant_id: int) -> dict:
         else:
             offer_id = p.get("offer_id") or f"OZ-{pid_str}"
             product = _get_or_create_product(
-                db, tenant_id, name_ru=title, sku=offer_id, image_url=primary,
+                db, tenant_id, name_ru=title, sku=offer_id,
+                shop_id=shop.id,
+                image_url=primary,
                 local_category_id=local_cat_id)
             listing = PlatformListing(
                 tenant_id=tenant_id, product_id=product.id,
@@ -664,20 +666,24 @@ def _sync_ozon_products(db: Session, shop, tenant_id: int) -> dict:
 
 def _get_or_create_product(db: Session, tenant_id: int,
                            name_ru: str, sku: str,
+                           shop_id: Optional[int] = None,
                            brand: Optional[str] = None,
                            image_url: Optional[str] = None,
                            local_category_id: Optional[int] = None):
-    existing = db.query(Product).filter(
+    # 按 (tenant_id, shop_id, sku) 查重 —— 同一 SKU 在不同店铺是独立 product
+    query = db.query(Product).filter(
         Product.tenant_id == tenant_id,
         Product.sku == sku,
-    ).first()
+    )
+    if shop_id is not None:
+        query = query.filter(Product.shop_id == shop_id)
+    existing = query.first()
     if existing:
-        # 如果本地分类还没关联，这次有映射就顺便回填
         if local_category_id and not existing.local_category_id:
             existing.local_category_id = local_category_id
         return existing
     product = Product(
-        tenant_id=tenant_id, sku=sku,
+        tenant_id=tenant_id, shop_id=shop_id, sku=sku,
         name_zh=name_ru[:200] if name_ru else sku,
         name_ru=name_ru[:200] if name_ru else None,
         brand=brand,
