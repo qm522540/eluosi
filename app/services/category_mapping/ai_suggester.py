@@ -51,6 +51,46 @@ async def _call_ai(prompt: str, max_tokens: int = 2000) -> Optional[list]:
         return None
 
 
+# ==================== 批量翻译 ====================
+
+async def _translate_batch(texts: list, target: str = "zh") -> list:
+    """批量翻译俄文→中文，返回等长数组（异常用原文兜底）
+
+    一次最多 200 条，超出自动切片。
+    """
+    if not texts:
+        return []
+    # 去重后翻译，再按原顺序填回
+    unique = list(dict.fromkeys(texts))  # 保持顺序去重
+    chunk_size = 200
+    translated_map = {}
+    for i in range(0, len(unique), chunk_size):
+        chunk = unique[i:i + chunk_size]
+        numbered = "\n".join([f"{j+1}. {t}" for j, t in enumerate(chunk)])
+        prompt = f"""把下列俄文翻译为{'中文' if target == 'zh' else target}，保持电商专业术语准确、简洁。
+特别注意：
+- 保留品牌名、型号等专有名词不翻译
+- 分类名用最常用的中文电商术语（如 Ожерелья → 项链）
+- 不要加"翻译："等前缀
+
+输入（俄文，共 {len(chunk)} 条）：
+{numbered}
+
+返回 JSON 数组（不含其他文字），长度必须等于 {len(chunk)}：
+["中文1", "中文2", ...]
+"""
+        result = await _call_ai(prompt, max_tokens=4000)
+        if result and isinstance(result, list) and len(result) == len(chunk):
+            for src, tgt in zip(chunk, result):
+                translated_map[src] = tgt if isinstance(tgt, str) and tgt.strip() else src
+        else:
+            # 翻译失败兜底：用原文
+            logger.warning(f"批量翻译失败，使用原文兜底（共 {len(chunk)} 条）")
+            for src in chunk:
+                translated_map.setdefault(src, src)
+    return [translated_map.get(t, t) for t in texts]
+
+
 # ==================== 品类映射推荐 ====================
 
 async def suggest_category_mappings(
@@ -518,3 +558,265 @@ async def _ai_match_values(attr_name: str, local_values: list, enum_values: list
     if not result or not isinstance(result, list):
         return []
     return result
+
+
+# ==================== 从 WB 初始化本地分类 ====================
+
+async def init_mapping_from_wb(
+    db: Session, tenant_id: int, shop_id: int,
+    include_enum_values: bool = True,
+) -> dict:
+    """从 WB 店铺已用分类初始化本地分类 + 属性 + 枚举值
+
+    流程：
+      1. 查店铺 platform_listings 里已出现的 subjectID 集合
+      2. 调 fetch_all_subjects 拉 WB 全量分类字典
+      3. 筛选出店铺实际用到的，批量翻译为中文
+      4. 建 local_category + WB 品类映射 (is_confirmed=1)
+      5. 对每个分类拉 charcs 属性，批量翻译，建 WB 属性映射
+      6. 如 include_enum_values=True，dictionary 字段内枚举值也批量翻译
+         写入 attribute_value_mappings（本地=中文，平台=俄文）
+
+    返回：{categories: N, attributes: M, values: K, skipped: [...]}
+    """
+    from app.models.product import PlatformListing
+    from app.models.category import LocalCategory, CategoryPlatformMapping, AttributeMapping
+    from app.services.platform.wb import WBClient
+    from sqlalchemy import distinct
+
+    shop = db.query(Shop).filter(
+        Shop.id == shop_id, Shop.tenant_id == tenant_id,
+    ).first()
+    if not shop:
+        return {"code": ErrorCode.SHOP_NOT_FOUND, "msg": "店铺不存在"}
+    if shop.platform != "wb":
+        return {"code": ErrorCode.PARAM_ERROR, "msg": "初始化只支持 WB 店铺"}
+
+    # 1. 店铺已用 subject_id
+    used_ids = [
+        row[0] for row in db.query(distinct(PlatformListing.platform_category_id)).filter(
+            PlatformListing.tenant_id == tenant_id,
+            PlatformListing.shop_id == shop_id,
+            PlatformListing.platform == "wb",
+            PlatformListing.platform_category_id.isnot(None),
+        ).all() if row[0]
+    ]
+    if not used_ids:
+        return {"code": ErrorCode.PARAM_ERROR, "msg": "店铺暂无商品分类数据，请先同步商品"}
+
+    # 2. 拉全量分类建字典
+    client = WBClient(shop_id=shop_id, api_key=shop.api_key)
+    try:
+        subjects = await client.fetch_all_subjects()
+    finally:
+        await client.close()
+    subject_map = {str(s.get("subjectID")): s for s in subjects if s.get("subjectID")}
+
+    # 3. 筛选店铺已用分类并收集俄文名做批量翻译
+    target_subjects = []
+    for sid in used_ids:
+        s = subject_map.get(str(sid))
+        if s:
+            target_subjects.append(s)
+    if not target_subjects:
+        return {"code": ErrorCode.UNKNOWN_ERROR, "msg": "WB 分类字典未命中店铺数据"}
+
+    ru_names = [s.get("subjectName", "") for s in target_subjects]
+    zh_names = await _translate_batch(ru_names)
+
+    # 4. 建本地分类 + WB 映射
+    stats = {"categories": 0, "attributes": 0, "values": 0, "skipped": []}
+    local_cat_map = {}  # subjectID → local_category_id
+    for s, zh in zip(target_subjects, zh_names):
+        subj_id = str(s["subjectID"])
+        subj_name_ru = s.get("subjectName", "")
+
+        # 检查是否已存在（按俄文名 + 租户唯一）
+        existing = db.query(LocalCategory).filter(
+            LocalCategory.tenant_id == tenant_id,
+            LocalCategory.name_ru == subj_name_ru,
+            LocalCategory.status == "active",
+        ).first()
+        if existing:
+            local_cat_map[subj_id] = existing.id
+            stats["skipped"].append(f"本地分类已存在: {subj_name_ru}")
+            continue
+
+        cat = LocalCategory(
+            tenant_id=tenant_id,
+            parent_id=None,
+            name=zh or subj_name_ru,
+            name_ru=subj_name_ru,
+            level=1,
+        )
+        db.add(cat)
+        db.flush()
+        local_cat_map[subj_id] = cat.id
+        stats["categories"] += 1
+
+        # 同时建 WB 品类映射（1:1 直接确认）
+        upsert_category_mapping(db, tenant_id, {
+            "local_category_id": cat.id,
+            "platform": "wb",
+            "platform_category_id": subj_id,
+            "platform_category_name": subj_name_ru,
+            "platform_parent_path": f"{s.get('parentName','')} > {subj_name_ru}".strip(" >"),
+            "ai_suggested": 0,  # 初始化来的不是 AI 推荐，是 1:1 直接关联
+            "ai_confidence": 100,
+        })
+        # 再标记为已确认
+        mp = db.query(CategoryPlatformMapping).filter(
+            CategoryPlatformMapping.tenant_id == tenant_id,
+            CategoryPlatformMapping.local_category_id == cat.id,
+            CategoryPlatformMapping.platform == "wb",
+        ).first()
+        if mp:
+            mp.is_confirmed = 1
+            from datetime import datetime, timezone
+            mp.confirmed_at = datetime.now(timezone.utc)
+    db.commit()
+
+    # 5. 对每个分类拉 charcs，建属性映射
+    client = WBClient(shop_id=shop_id, api_key=shop.api_key)
+    try:
+        for subj_id, local_cat_id in local_cat_map.items():
+            try:
+                charcs = await client.fetch_subject_charcs(int(subj_id))
+            except Exception as e:
+                logger.warning(f"拉取 subject_id={subj_id} charcs 失败: {e}")
+                stats["skipped"].append(f"charcs 拉取失败: {subj_id}")
+                continue
+            if not charcs:
+                continue
+
+            attr_ru_names = [c.get("name", "") for c in charcs]
+            attr_zh_names = await _translate_batch(attr_ru_names)
+
+            for c, attr_zh in zip(charcs, attr_zh_names):
+                attr_name_ru = c.get("name", "")
+                if not attr_name_ru:
+                    continue
+                has_dict = bool(c.get("dictionary"))
+                value_type = "enum" if has_dict else (c.get("charcType") or "string")
+
+                res = upsert_attribute_mapping(db, tenant_id, {
+                    "local_category_id": local_cat_id,
+                    "local_attr_name": attr_zh or attr_name_ru,
+                    "local_attr_name_ru": attr_name_ru,
+                    "platform": "wb",
+                    "platform_attr_id": str(c.get("charcID", "")),
+                    "platform_attr_name": attr_name_ru,
+                    "is_required": 1 if c.get("required") else 0,
+                    "value_type": value_type,
+                    "platform_dict_id": str(c.get("charcID")) if has_dict else None,
+                    "ai_suggested": 0,
+                    "ai_confidence": 100,
+                })
+                if res["code"] != 0:
+                    continue
+                attr_id = res["data"]["id"]
+                # 初始化来的直接确认
+                attr_mp = db.query(AttributeMapping).filter(
+                    AttributeMapping.id == attr_id,
+                    AttributeMapping.tenant_id == tenant_id,
+                ).first()
+                if attr_mp:
+                    attr_mp.is_confirmed = 1
+                    from datetime import datetime, timezone
+                    attr_mp.confirmed_at = datetime.now(timezone.utc)
+                stats["attributes"] += 1
+
+                # 6. 枚举值写入
+                if include_enum_values and has_dict:
+                    dict_items = c.get("dictionary") or []
+                    if not dict_items:
+                        continue
+                    enum_ru = [d.get("name", "") for d in dict_items if d.get("name")]
+                    if not enum_ru:
+                        continue
+                    enum_zh = await _translate_batch(enum_ru)
+                    for d, zh_val in zip(dict_items, enum_zh):
+                        val_ru = d.get("name", "")
+                        if not val_ru:
+                            continue
+                        upsert_attribute_value_mapping(db, tenant_id, {
+                            "attribute_mapping_id": attr_id,
+                            "local_value": zh_val or val_ru,
+                            "local_value_ru": val_ru,
+                            "platform_value": val_ru,
+                            "platform_value_id": str(d.get("id")) if d.get("id") else None,
+                            "ai_suggested": 0,
+                            "ai_confidence": 100,
+                        })
+                        stats["values"] += 1
+            db.commit()
+    finally:
+        await client.close()
+
+    return {"code": 0, "data": stats}
+
+
+# ==================== 从本地批量匹配 Ozon ====================
+
+async def match_ozon_from_local(
+    db: Session, tenant_id: int, shop_id: int,
+) -> dict:
+    """遍历已有本地分类，AI 批量匹配 Ozon 平台的分类 + 属性映射
+
+    流程:
+    1. 查所有本地分类
+    2. 对每个本地分类调现有 suggest_category_mappings(ozon)
+    3. 对每个已映射分类调 suggest_attribute_mappings(ozon)
+    4. 全部 is_confirmed=0（待人工确认）
+
+    返回：{categories: {matched, failed}, attributes: {matched, failed}}
+    """
+    shop = db.query(Shop).filter(
+        Shop.id == shop_id, Shop.tenant_id == tenant_id,
+    ).first()
+    if not shop:
+        return {"code": ErrorCode.SHOP_NOT_FOUND, "msg": "店铺不存在"}
+    if shop.platform != "ozon":
+        return {"code": ErrorCode.PARAM_ERROR, "msg": "Ozon 匹配只支持 Ozon 店铺"}
+
+    local_cats = db.query(LocalCategory).filter(
+        LocalCategory.tenant_id == tenant_id,
+        LocalCategory.status == "active",
+    ).all()
+    if not local_cats:
+        return {"code": ErrorCode.PARAM_ERROR, "msg": "本地暂无分类，请先从 WB 初始化"}
+
+    cat_stats = {"matched": 0, "failed": 0}
+    attr_stats = {"matched": 0, "failed": 0}
+
+    for lc in local_cats:
+        # 品类映射
+        try:
+            res = await suggest_category_mappings(
+                db, tenant_id, lc.id, shop_id, ["ozon"],
+            )
+            sugs = (res.get("data") or {}).get("suggestions") or []
+            if sugs and sugs[0].get("id"):
+                cat_stats["matched"] += 1
+            else:
+                cat_stats["failed"] += 1
+                continue
+        except Exception as e:
+            logger.warning(f"本地分类 {lc.id} 匹配 Ozon 失败: {e}")
+            cat_stats["failed"] += 1
+            continue
+
+        # 属性映射（基于上面成功的品类映射）
+        try:
+            res = await suggest_attribute_mappings(
+                db, tenant_id, lc.id, shop_id, "ozon",
+            )
+            if res["code"] == 0:
+                attr_stats["matched"] += (res.get("data") or {}).get("count", 0)
+            else:
+                attr_stats["failed"] += 1
+        except Exception as e:
+            logger.warning(f"本地分类 {lc.id} 属性映射 Ozon 失败: {e}")
+            attr_stats["failed"] += 1
+
+    return {"code": 0, "data": {"categories": cat_stats, "attributes": attr_stats}}

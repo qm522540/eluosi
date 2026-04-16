@@ -10,6 +10,7 @@ from app.schemas.category_mapping import (
     AttributeMappingCreate, AttributeMappingUpdate,
     AttributeValueMappingCreate, AttributeValueMappingUpdate,
     AISuggestCategoryRequest, AISuggestAttributesRequest, AISuggestValuesRequest,
+    InitFromWBRequest, MatchOzonRequest,
 )
 from app.services.category_mapping.service import (
     list_local_categories, get_local_category_tree,
@@ -307,3 +308,56 @@ async def ai_suggest_values(
     if result["code"] != 0:
         return error(result["code"], result["msg"])
     return success(result["data"], msg="AI 推荐完成，请人工确认")
+
+
+# ==================== 一键初始化（从 WB 种子 + AI 匹配 Ozon） ====================
+
+@router.post("/init-from-wb")
+async def init_from_wb(
+    req: InitFromWBRequest,
+    db: Session = Depends(get_db),
+    tenant_id: int = Depends(get_tenant_id),
+):
+    """从 WB 店铺初始化本地分类 + 属性 + 枚举值
+
+    业务：
+    - 读取 WB 店铺已用分类（从 platform_listings 反查）
+    - 每个 WB 分类 → 本地分类（AI 翻译中文）
+    - 自动建 WB 品类映射 is_confirmed=1
+    - 每个分类的属性 → 本地属性映射 is_confirmed=1
+    - 枚举值同步翻译写入
+
+    耗时：30-120 秒（视店铺分类数量，每 10 条 AI 翻译约 2-3 秒）
+
+    返回: {categories: N, attributes: M, values: K, skipped: [...]}
+    """
+    from app.services.category_mapping.ai_suggester import init_mapping_from_wb
+    result = await init_mapping_from_wb(
+        db, tenant_id, req.shop_id,
+        include_enum_values=req.include_enum_values,
+    )
+    if result["code"] != 0:
+        return error(result["code"], result["msg"])
+    return success(result["data"], msg="从 WB 初始化完成")
+
+
+@router.post("/match-ozon")
+async def match_ozon(
+    req: MatchOzonRequest,
+    db: Session = Depends(get_db),
+    tenant_id: int = Depends(get_tenant_id),
+):
+    """AI 批量为已有本地分类匹配 Ozon 分类 + 属性
+
+    前置：本地分类已存在（通过 init-from-wb 或手动创建）
+    产出：Ozon 品类映射 + 属性映射，全部 is_confirmed=0 待人工确认
+
+    耗时：60-300 秒（视分类数量）
+
+    返回: {categories: {matched, failed}, attributes: {matched, failed}}
+    """
+    from app.services.category_mapping.ai_suggester import match_ozon_from_local
+    result = await match_ozon_from_local(db, tenant_id, req.shop_id)
+    if result["code"] != 0:
+        return error(result["code"], result["msg"])
+    return success(result["data"], msg="Ozon 匹配完成，请人工确认")

@@ -110,3 +110,14 @@ class AISuggestValuesRequest(BaseModel):
     attribute_mapping_id: int
     local_values: List[str] = Field(..., min_length=1)
     shop_id: int
+
+
+class InitFromWBRequest(BaseModel):
+    """从 WB 店铺初始化本地分类+属性+枚举值"""
+    shop_id: int
+    include_enum_values: bool = True
+
+
+class MatchOzonRequest(BaseModel):
+    """AI 批量匹配 Ozon 分类+属性映射到已有本地分类"""
+    shop_id: int
