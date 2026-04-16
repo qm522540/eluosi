@@ -1280,7 +1280,7 @@ const Products = () => {
                             border: '1px solid #f0f0f0', borderRadius: 4,
                           }}>
                             {getFieldValue('price_mode') === 'auto'
-                              ? 'WB 15% / Ozon 12% 佣金差会自动折算'
+                              ? '按目标平台实时佣金率（按品类浮动）折算，保持毛利相同'
                               : '直接复用源店铺当前售价'}
                           </div>
                         </Form.Item>
