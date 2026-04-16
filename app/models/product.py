@@ -16,6 +16,7 @@ class Product(BaseMixin, Base):
     name_ru: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
     brand: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     category: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
+    local_category_id: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True, comment="本地统一分类ID")
     cost_price: Mapped[Optional[float]] = mapped_column(DECIMAL(10, 2), nullable=True)
     net_margin: Mapped[Optional[float]] = mapped_column(
         DECIMAL(5, 2), nullable=True,
@@ -39,6 +40,8 @@ class PlatformListing(BaseMixin, Base):
         Enum("wb", "ozon", "yandex", name="listing_platform"), nullable=False
     )
     platform_product_id: Mapped[str] = mapped_column(String(100), nullable=False)
+    platform_category_id: Mapped[Optional[str]] = mapped_column(String(100), nullable=True, comment="平台分类ID")
+    platform_category_name: Mapped[Optional[str]] = mapped_column(String(300), nullable=True, comment="平台分类名称")
     barcode: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
     title_ru: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
     description_ru: Mapped[Optional[str]] = mapped_column(Text, nullable=True)

@@ -332,6 +332,8 @@ def _listing_to_dict(l: PlatformListing) -> dict:
         "shop_id": l.shop_id,
         "platform": l.platform,
         "platform_product_id": l.platform_product_id,
+        "platform_category_id": l.platform_category_id,
+        "platform_category_name": l.platform_category_name,
         "barcode": l.barcode,
         "description_ru": l.description_ru,
         "variant_name": l.variant_name,
@@ -443,10 +445,14 @@ def _sync_wb_products(db: Session, shop, tenant_id: int) -> dict:
                 break
         photos = p.get("photos") or []
         image_url = (photos[0].get("big") or photos[0].get("tm")) if photos and isinstance(photos[0], dict) else None
+        subject_id = p.get("subjectID") or p.get("subjectId")
+        subject_name = p.get("subjectName") or ""
         data = {
-            "title_ru": (p.get("title") or p.get("subjectName") or "")[:500],
+            "title_ru": (p.get("title") or subject_name or "")[:500],
             "description_ru": p.get("description"),
             "price": price,
+            "platform_category_id": str(subject_id) if subject_id else None,
+            "platform_category_name": subject_name[:300] if subject_name else None,
             "status": "active",
         }
         if listing:
@@ -549,12 +555,17 @@ def _sync_ozon_products(db: Session, shop, tenant_id: int) -> dict:
         title = (p.get("name") or "")[:500]
         price = _to_float(p.get("price"))
         old_price = _to_float(p.get("old_price"))
+        # Ozon v3 info/list 返回的分类字段
+        category_id = p.get("description_category_id") or p.get("type_id")
+        category_name = p.get("type_name") or p.get("category_name")
 
         data = {
             "title_ru": title,
             "price": old_price or price,
             "discount_price": price if (old_price and price and old_price != price) else None,
             "barcode": barcode,
+            "platform_category_id": str(category_id) if category_id else None,
+            "platform_category_name": category_name[:300] if category_name else None,
             "status": status,
         }
 
