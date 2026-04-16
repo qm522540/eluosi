@@ -930,19 +930,21 @@ async def _analyze_now_inner(db, tenant_id: int, shop_id: int,
             )
 
             # ── Step 5: 平台最低出价校验 ──
+            # WB 最低价是"竞争阈值"不是硬卡，低于它仍能跑但曝光可能差
+            # 策略：算法值低于 min 时，标注警告但不强拉（保留利润最大化判断）
+            min_bid_warning = ""
             if optimal_bid is not None and platform == "wb":
-                # WB: 调 /api/advert/v1/bids/min 查 SKU 最低出价
                 try:
                     min_rub = await client.fetch_min_bid(
                         advert_id=str(camp.platform_campaign_id),
                         nm_id=int(sku),
                     )
                     if min_rub and optimal_bid < min_rub:
+                        min_bid_warning = f"⚠ 低于平台最低 ₽{int(min_rub)}，曝光可能不足"
                         logger.info(
-                            f"WB最低价校验：sku={sku} optimal={optimal_bid}"
-                            f"<min={min_rub}，拉到最低价"
+                            f"WB最低价提示：sku={sku} optimal={optimal_bid}"
+                            f"<min={min_rub}，保留算法值+加警告"
                         )
-                        optimal_bid = int(round(min_rub))
                 except Exception as e:
                     logger.warning(f"WB 最低价查询异常 sku={sku}: {e}")
 
