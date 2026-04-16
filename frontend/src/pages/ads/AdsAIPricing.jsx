@@ -1429,6 +1429,9 @@ const OzonAIPricing = ({ shopId, platform = 'ozon' }) => {
                   {item.label}
                 </Button>
               ))}
+              <Button size="small" onClick={() => handleDataDownload(45)}>
+                近45天
+              </Button>
               <span style={{ fontSize: 11, color: '#999' }}>Excel格式</span>
             </div>
           </>

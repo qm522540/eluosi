@@ -889,16 +889,20 @@ async def sync_data(
     shop.last_sync_at = _dt.now(_tz.utc)
     db.commit()
 
-    # 快速检查：是否已是最新（不需要调平台 API）
-    yesterday = _date.today() - _td(days=1)
-    latest_row = db.execute(text("""
-        SELECT MAX(s.stat_date) AS latest_date
-        FROM ad_stats s
-        JOIN ad_campaigns c ON s.campaign_id = c.id
-        WHERE c.shop_id = :shop_id AND c.tenant_id = :tenant_id AND s.platform = :platform
-    """), {"shop_id": shop.id, "tenant_id": shop.tenant_id, "platform": platform_code}).fetchone()
+    # 快速检查：45 天窗口内是否全齐
+    # 从 sync_helper 复用常量和缺失检测
+    if platform_code == "wb":
+        from app.services.data.wb_stats_collector import MAX_KEEP_DAYS, FIRST_SYNC_DAYS
+    else:
+        from app.services.data.ozon_stats_collector import MAX_KEEP_DAYS, FIRST_SYNC_DAYS
+    from app.services.data.sync_helper import find_missing_ranges
 
-    if latest_row and latest_row.latest_date and latest_row.latest_date >= yesterday:
+    ranges, _is_first = find_missing_ranges(
+        db, shop.id, shop.tenant_id, platform_code,
+        MAX_KEEP_DAYS, FIRST_SYNC_DAYS,
+    )
+
+    if not ranges:
         return success({
             "shop_id": shop.id,
             "msg": "数据已是最新，无需更新",
