@@ -677,6 +677,78 @@ class WBClient(BasePlatformClient):
 
         return None
 
+    async def fetch_campaign_keywords(
+        self, advert_id: str,
+        date_from: Optional[str] = None,
+        date_to: Optional[str] = None,
+    ) -> list:
+        """拉取 WB 广告活动的关键词统计
+
+        API: GET /adv/v0/stats/keywords?advert_id=X&from=YYYY-MM-DD&to=YYYY-MM-DD
+
+        注意：
+        - WB 活动级别的数据，不按 nm_id 过滤（所有 SKU 共享同一套关键词）
+        - auction/unified 类型活动没有"手动关键词"概念，但可以查系统为活动触发的实际搜索词
+        - search (CPC) 类型活动也可查，但还有独立的 /search/{id}/words 配置关键词
+
+        Returns:
+            [{keyword, date, views, clicks, ctr, sum(花费), currency}]
+        """
+        if not date_from:
+            date_from = (datetime.now(tz=None).date() - timedelta(days=7)).strftime("%Y-%m-%d")
+        if not date_to:
+            date_to = datetime.now(tz=None).date().strftime("%Y-%m-%d")
+
+        try:
+            url = f"{WB_ADVERT_API}/adv/v0/stats/keywords"
+            resp = await self._request("GET", url, params={
+                "advert_id": int(advert_id),
+                "from": date_from,
+                "to": date_to,
+            })
+        except Exception as e:
+            logger.warning(
+                f"WB 拉取关键词统计失败 advert={advert_id}: {e}"
+            )
+            return []
+
+        if not isinstance(resp, dict):
+            return []
+
+        # 响应: {"keywords": [{"date": "YYYY-MM-DD", "stats": [{...关键词数据}]}]}
+        # 按关键词聚合，每个关键词合并所有日期的 views/clicks/sum
+        agg: dict = {}
+        for day_group in resp.get("keywords") or []:
+            for stat in day_group.get("stats") or []:
+                kw = stat.get("keyword") or ""
+                if not kw:
+                    continue
+                if kw not in agg:
+                    agg[kw] = {
+                        "keyword": kw,
+                        "views": 0, "clicks": 0,
+                        "sum": 0.0, "currency": stat.get("currency", "RUB"),
+                    }
+                agg[kw]["views"] += int(stat.get("views") or 0)
+                agg[kw]["clicks"] += int(stat.get("clicks") or 0)
+                agg[kw]["sum"] += float(stat.get("sum") or 0)
+
+        # 按 views 降序
+        result = sorted(agg.values(), key=lambda x: x["views"], reverse=True)
+
+        # 算 CTR（聚合后重算）
+        for r in result:
+            r["ctr"] = (
+                round(r["clicks"] / r["views"] * 100, 2) if r["views"] > 0 else 0
+            )
+            r["sum"] = round(r["sum"], 2)
+
+        logger.info(
+            f"WB shop_id={self.shop_id} advert={advert_id} "
+            f"关键词 {date_from}~{date_to} 共 {len(result)} 个"
+        )
+        return result
+
     async def fetch_campaign_products(self, advert_id: str) -> list:
         """拉取 WB 广告活动下的商品列表及出价
 

@@ -185,6 +185,11 @@ export function getBudgetSuggestions(params) {
 // ==================== 活动详情增强 ====================
 
 /** 获取活动关联商品及出价 */
+/** 获取 WB 活动关键词统计（活动级，不按 SKU 过滤） */
+export function getCampaignKeywords(campaignId, days = 7) {
+  return request.get(`/ads/campaign-keywords/${campaignId}`, { params: { days } })
+}
+
 export function getCampaignProducts(campaignId) {
   return request.get(`/ads/campaign-products/${campaignId}`)
 }

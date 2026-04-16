@@ -632,6 +632,62 @@ async def campaign_products(
         return success([])
 
 
+@router.get("/campaign-keywords/{campaign_id}")
+async def campaign_keywords(
+    campaign_id: int,
+    days: int = Query(7, ge=1, le=30),
+    db: Session = Depends(get_db),
+    tenant_id: int = Depends(get_tenant_id),
+):
+    """获取广告活动的关键词统计（仅 WB 活动级数据，不按 SKU 过滤）
+
+    返回最近 N 天（默认7天）该活动触发的搜索词聚合统计。
+    auction/unified 类型活动没有"手动关键词"概念，但可以看系统为活动
+    触发的实际搜索词。search 类型活动除此外还有独立配置的关键词。
+    """
+    from app.models.ad import AdCampaign
+    from app.models.shop import Shop
+    from datetime import date as _date, timedelta as _td
+
+    camp = db.query(AdCampaign).filter(
+        AdCampaign.id == campaign_id, AdCampaign.tenant_id == tenant_id
+    ).first()
+    if not camp:
+        return error(50001, "广告活动不存在")
+
+    shop = db.query(Shop).filter(Shop.id == camp.shop_id).first()
+    if not shop:
+        return error(30001, "店铺不存在")
+
+    if camp.platform != "wb":
+        # Ozon 关键词走不同的 API（未来实现），当前返回空
+        return success({"campaign_id": campaign_id, "keywords": [],
+                        "msg": "当前仅支持 WB 平台的关键词统计"})
+
+    date_to = _date.today()
+    date_from = date_to - _td(days=days)
+
+    from app.services.platform.wb import WBClient
+    client = WBClient(shop_id=shop.id, api_key=shop.api_key)
+    try:
+        keywords = await client.fetch_campaign_keywords(
+            advert_id=camp.platform_campaign_id,
+            date_from=date_from.strftime("%Y-%m-%d"),
+            date_to=date_to.strftime("%Y-%m-%d"),
+        )
+    finally:
+        await client.close()
+
+    return success({
+        "campaign_id": campaign_id,
+        "date_from": str(date_from),
+        "date_to": str(date_to),
+        "days": days,
+        "total": len(keywords),
+        "keywords": keywords,
+    })
+
+
 class BidUpdateRequest(BaseModel):
     sku: str = Field(..., description="商品SKU")
     bid: str = Field(..., description="新出价")

@@ -17,7 +17,7 @@ import {
   getKeywords, createKeyword, batchCreateKeywords, updateKeyword, deleteKeyword,
   getAdStats, getAdSummary,
   exportAdStats, getAlerts, getAlertConfig, updateAlertConfig,
-  getCampaignProducts, updateCampaignBid, getCampaignBudget,
+  getCampaignProducts, getCampaignKeywords, updateCampaignBid, getCampaignBudget,
   getShopSummary,
 } from '@/api/ads'
 import { getListings } from '@/api/products'
@@ -383,6 +383,23 @@ const AdsOverview = ({ shopId, platform, shops, searched, syncing, lastSyncTime,
     setExpandedSkuKeys(keys => [...keys, sku])
     // 已缓存或正在加载则跳过
     if (keywordsBySku[sku] !== undefined || keywordsLoadingSku[sku]) return
+
+    // WB: 调活动级关键词 API（所有 SKU 共享，整份缓存）
+    if (platform === 'wb' && detailData?.id) {
+      setKeywordsLoadingSku(m => ({ ...m, [sku]: true }))
+      try {
+        const r = await getCampaignKeywords(detailData.id, 7)
+        const kws = r.data?.keywords || []
+        setKeywordsBySku(m => ({ ...m, [sku]: kws, __wb_activity_level: true }))
+      } catch {
+        setKeywordsBySku(m => ({ ...m, [sku]: [] }))
+      } finally {
+        setKeywordsLoadingSku(m => ({ ...m, [sku]: false }))
+      }
+      return
+    }
+
+    // Ozon: 保留原来按 ad_group_id 查本地 ad_keywords 的逻辑
     const adGroupId = getAdGroupIdBySku(sku)
     if (!adGroupId) {
       setKeywordsBySku(m => ({ ...m, [sku]: [] }))
@@ -928,12 +945,57 @@ const AdsOverview = ({ shopId, platform, shops, searched, syncing, lastSyncTime,
     const sku = record.sku
     const loading = !!keywordsLoadingSku[sku]
     const kws = keywordsBySku[sku]
-    const adGroupId = getAdGroupIdBySku(sku)
-    const adGroup = adGroups.find(g => g.id === adGroupId)
 
     if (loading) {
       return <div style={{ padding: 16, textAlign: 'center', color: '#999' }}>加载关键词中...</div>
     }
+
+    // WB：活动级关键词（所有 SKU 共享）
+    if (platform === 'wb') {
+      if (!kws || kws.length === 0) {
+        return (
+          <div style={{ padding: 12, background: '#fafafa', borderRadius: 4 }}>
+            <Empty
+              image={Empty.PRESENTED_IMAGE_SIMPLE}
+              description={<span style={{ fontSize: 13 }}>近7天无关键词数据（活动可能还没曝光）</span>}
+            />
+          </div>
+        )
+      }
+      return (
+        <div style={{ padding: 8, background: '#fafafa', borderRadius: 4 }}>
+          <div style={{ marginBottom: 8, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <Space size={4}>
+              <Text type="secondary" style={{ fontSize: 12 }}>活动级关键词（所有 SKU 共享）·</Text>
+              <Text strong style={{ fontSize: 13 }}>{kws.length} 个</Text>
+              <Text type="secondary" style={{ fontSize: 12 }}>· 近7天实际触发</Text>
+            </Space>
+          </div>
+          <Table
+            size="small"
+            rowKey="keyword"
+            dataSource={kws}
+            pagination={{ pageSize: 20, size: 'small', showSizeChanger: false }}
+            columns={[
+              { title: '关键词', dataIndex: 'keyword', key: 'keyword', ellipsis: true,
+                render: v => <Tooltip title={v} placement="topLeft"><span>{v}</span></Tooltip> },
+              { title: '曝光', dataIndex: 'views', key: 'views', width: 80, align: 'right',
+                render: v => (v || 0).toLocaleString() },
+              { title: '点击', dataIndex: 'clicks', key: 'clicks', width: 80, align: 'right',
+                render: v => (v || 0).toLocaleString() },
+              { title: 'CTR', dataIndex: 'ctr', key: 'ctr', width: 90, align: 'right',
+                render: v => v > 0 ? `${v}%` : '-' },
+              { title: '花费', dataIndex: 'sum', key: 'sum', width: 100, align: 'right',
+                render: v => v > 0 ? `₽${v.toFixed(2)}` : '-' },
+            ]}
+          />
+        </div>
+      )
+    }
+
+    // Ozon：保留原"本地广告组+关键词"逻辑
+    const adGroupId = getAdGroupIdBySku(sku)
+    const adGroup = adGroups.find(g => g.id === adGroupId)
     if (!adGroupId) {
       return (
         <div style={{ padding: 12, background: '#fafafa', borderRadius: 4 }}>
