@@ -19,6 +19,7 @@ import {
   getCampaignProducts, updateCampaignBid, getCampaignBudget,
   getShopSummary,
 } from '@/api/ads'
+import { getListings } from '@/api/products'
 import { PLATFORMS, AD_STATUS, AD_TYPES } from '@/utils/constants'
 
 const { Title, Text } = Typography
@@ -191,6 +192,14 @@ const AdsOverview = ({ shopId, platform, shops, searched, syncing, lastSyncTime,
   const [newBidValue, setNewBidValue] = useState(null)
   const [bidUpdating, setBidUpdating] = useState(false)
 
+  // 商品 → 广告组 → 关键词链路
+  // listings 用于把 campaignProducts.sku(=platform_product_id) 映射到本地 listing_id
+  const [shopListings, setShopListings] = useState([])
+  // 行展开：sku → keyword[] 缓存；loading 集合防重复请求
+  const [expandedSkuKeys, setExpandedSkuKeys] = useState([])
+  const [keywordsBySku, setKeywordsBySku] = useState({})
+  const [keywordsLoadingSku, setKeywordsLoadingSku] = useState({})
+
   // ==================== 数据加载 ====================
 
   const fetchSummary = useCallback(async () => {
@@ -332,16 +341,60 @@ const AdsOverview = ({ shopId, platform, shops, searched, syncing, lastSyncTime,
     setCampaignBudget(null)
     setCampaignProducts([])
     setEditingBid(null)
+    setShopListings([])
+    setExpandedSkuKeys([])
+    setKeywordsBySku({})
+    setKeywordsLoadingSku({})
     try {
       const res = await getCampaign(id)
       setDetailData(res.data)
       fetchAdGroups(id)
       getCampaignBudget(id).then(r => setCampaignBudget(r.data)).catch(err => console.warn('预算加载失败', err))
       fetchCampaignProducts(id)
+      // 拉店铺全量 listings 以便把 sku 映射到 listing_id → ad_group_id
+      if (res.data?.shop_id) {
+        getListings({ shop_id: res.data.shop_id, page: 1, page_size: 200 })
+          .then(r => setShopListings(r.data?.items || []))
+          .catch(() => setShopListings([]))
+      }
     } catch {
       message.error('获取广告详情失败')
     } finally {
       setDetailLoading(false)
+    }
+  }
+
+  // sku → ad_group_id 映射（sku 即 platform_product_id）
+  const getAdGroupIdBySku = (sku) => {
+    if (!sku) return null
+    const listing = shopListings.find(l => String(l.platform_product_id) === String(sku))
+    if (!listing) return null
+    const group = adGroups.find(g => g.listing_id === listing.id)
+    return group ? group.id : null
+  }
+
+  const handleProductRowExpand = async (expanded, record) => {
+    const sku = record.sku
+    if (!expanded) {
+      setExpandedSkuKeys(keys => keys.filter(k => k !== sku))
+      return
+    }
+    setExpandedSkuKeys(keys => [...keys, sku])
+    // 已缓存或正在加载则跳过
+    if (keywordsBySku[sku] !== undefined || keywordsLoadingSku[sku]) return
+    const adGroupId = getAdGroupIdBySku(sku)
+    if (!adGroupId) {
+      setKeywordsBySku(m => ({ ...m, [sku]: [] }))
+      return
+    }
+    setKeywordsLoadingSku(m => ({ ...m, [sku]: true }))
+    try {
+      const r = await getKeywords({ ad_group_id: adGroupId })
+      setKeywordsBySku(m => ({ ...m, [sku]: r.data || [] }))
+    } catch {
+      setKeywordsBySku(m => ({ ...m, [sku]: [] }))
+    } finally {
+      setKeywordsLoadingSku(m => ({ ...m, [sku]: false }))
     }
   }
 
