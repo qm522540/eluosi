@@ -623,21 +623,27 @@ class WBClient(BasePlatformClient):
         }
 
     async def fetch_min_bid(self, advert_id: str, nm_id: int,
-                             placement: str = "combined") -> Optional[float]:
+                             placement: str = "combined",
+                             payment_type: str = "cpm") -> Optional[float]:
         """查询 WB 广告活动下某 SKU 的最低 CPM 出价（卢布）
 
-        调 POST /api/advert/v1/bids/min，返回 kopecks，转卢布。
-        失败时返回 None（不抛异常，让调用方走默认逻辑）。
+        调 POST /api/advert/v1/bids/min
+        Body: {
+            "advert_id": int, "nm_ids": [int],
+            "payment_type": "cpm", "placement_types": ["combined"]
+        }
+        响应: {"bids": [{"bids": [{"value": kopecks, ...}], "nm_id": ...}]}
+        返回 kopecks / 100 → 卢布。失败时返回 None。
         """
         try:
             url = f"{WB_ADVERT_API}/api/advert/v1/bids/min"
-            params = {
-                "id": int(advert_id),
-                "nm": int(nm_id),
-                "param": 6,
-                "type": placement,
+            body = {
+                "advert_id": int(advert_id),
+                "nm_ids": [int(nm_id)],
+                "payment_type": payment_type,
+                "placement_types": [placement],
             }
-            resp = await self._request("GET", url, params=params)
+            resp = await self._request("POST", url, json=body)
         except Exception as e:
             logger.warning(
                 f"WB 查询最低出价失败 advert={advert_id} nm={nm_id}: {e}"
@@ -646,13 +652,26 @@ class WBClient(BasePlatformClient):
 
         if not isinstance(resp, dict):
             return None
-        min_kopecks = resp.get("min") or resp.get("minBid") or resp.get("value")
-        if min_kopecks is None:
+
+        # 解析嵌套 bids 结构
+        outer = resp.get("bids") or []
+        if not outer:
             return None
-        try:
-            return int(min_kopecks) / 100.0
-        except (ValueError, TypeError):
-            return None
+
+        # 取该 nm_id 对应的出价（通常只有一个）
+        for group in outer:
+            if int(group.get("nm_id", 0)) == int(nm_id):
+                inner = group.get("bids") or []
+                for b in inner:
+                    if b.get("type") == placement:
+                        val = b.get("value")
+                        if val:
+                            return int(val) / 100.0
+                # 没匹配到 placement 就取第一个
+                if inner and inner[0].get("value"):
+                    return int(inner[0]["value"]) / 100.0
+
+        return None
 
     async def fetch_campaign_products(self, advert_id: str) -> list:
         """拉取 WB 广告活动下的商品列表及出价
