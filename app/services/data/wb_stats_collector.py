@@ -31,49 +31,41 @@ MAX_KEEP_DAYS = 45   # 数据保留天数（首拉30+15缓冲）
 
 
 async def smart_sync(db: Session, shop_id: int, tenant_id: int) -> dict:
-    """WB 智能数据同步（"更新数据源"按钮入口）"""
+    """WB 智能数据同步（"更新数据源"按钮入口）
+
+    策略（2026-04-16 重构）：
+      - DB 空 → 首次拉 FIRST_SYNC_DAYS=30 天
+      - DB 有数据 → 查 MAX_KEEP_DAYS=45 天窗口内的缺失日期，分段补齐
+      - 窗口内全部齐 → 返回 already_latest
+    """
+    from app.services.data.sync_helper import find_missing_ranges
+
     shop = db.query(Shop).filter(Shop.id == shop_id, Shop.tenant_id == tenant_id).first()
     if not shop:
         raise ValueError("店铺不存在")
 
     yesterday = date.today() - timedelta(days=1)
 
-    # 1. 查服务器最新数据日期
-    latest_row = db.execute(text("""
-        SELECT MAX(s.stat_date) AS latest_date
-        FROM ad_stats s
-        JOIN ad_campaigns c ON s.campaign_id = c.id
-        WHERE c.shop_id = :shop_id AND c.tenant_id = :tenant_id AND s.platform = 'wb'
-    """), {"shop_id": shop_id, "tenant_id": tenant_id}).fetchone()
+    # 1. 找缺失日期段
+    ranges, is_first = find_missing_ranges(
+        db, shop_id, tenant_id, "wb", MAX_KEEP_DAYS, FIRST_SYNC_DAYS,
+    )
 
-    latest_date = latest_row.latest_date if latest_row else None
-
-    # 2. 决定拉取范围（每次最多 SYNC_DAYS 天）
-    if not latest_date:
-        date_from = yesterday - timedelta(days=FIRST_SYNC_DAYS - 1)
-        date_to = yesterday
-        logger.info(f"shop_id={shop_id} WB 无历史数据，拉取最近{FIRST_SYNC_DAYS}天 {date_from}~{date_to}")
-    elif latest_date >= yesterday:
+    if not ranges:
         cleaned = _clean_old_data(db, shop_id, tenant_id)
         data_days = _count_data_days(db, shop_id, tenant_id)
         _update_init_status(db, shop_id, tenant_id, yesterday, data_days)
         return {
-            "synced": 0,
-            "date_from": None,
-            "date_to": None,
-            "cleaned": cleaned,
-            "already_latest": True,
-            "data_days": data_days,
+            "synced": 0, "date_from": None, "date_to": None,
+            "cleaned": cleaned, "already_latest": True, "data_days": data_days,
         }
-    else:
-        date_from = latest_date + timedelta(days=1)
-        date_to = yesterday
-        # 增量也最多拉 SYNC_DAYS 天，避免长时间未更新时一次拉太多
-        if (date_to - date_from).days >= SYNC_DAYS:
-            date_from = date_to - timedelta(days=SYNC_DAYS - 1)
-        logger.info(f"shop_id={shop_id} WB 增量同步 {date_from}~{date_to}")
 
-    # 3. 拉取数据
+    logger.info(
+        f"shop_id={shop_id} WB {'首次' if is_first else '增量'}同步: "
+        f"{len(ranges)}段 {[(str(a), str(b)) for a, b in ranges]}"
+    )
+
+    # 2. 拉取数据
     campaigns = db.query(AdCampaign).filter(
         AdCampaign.shop_id == shop_id,
         AdCampaign.tenant_id == tenant_id,
@@ -87,37 +79,43 @@ async def smart_sync(db: Session, shop_id: int, tenant_id: int) -> dict:
     total_synced = 0
 
     try:
-        for campaign in campaigns:
-            try:
-                stats = await client.fetch_ad_stats(
-                    campaign_id=campaign.platform_campaign_id,
-                    date_from=date_from.strftime("%Y-%m-%d"),
-                    date_to=date_to.strftime("%Y-%m-%d"),
-                )
-                synced = _save_sku_stats(db, campaign, stats)
-                total_synced += synced
-                await asyncio.sleep(0.3)
-            except Exception as e:
-                logger.error(f"WB 活动 {campaign.name}(id={campaign.id}) 数据拉取失败: {e}")
-                db.rollback()
+        # 按日期段 × 活动循环拉取
+        for r_from, r_to in ranges:
+            for campaign in campaigns:
+                try:
+                    stats = await client.fetch_ad_stats(
+                        campaign_id=campaign.platform_campaign_id,
+                        date_from=r_from.strftime("%Y-%m-%d"),
+                        date_to=r_to.strftime("%Y-%m-%d"),
+                    )
+                    synced = _save_sku_stats(db, campaign, stats)
+                    total_synced += synced
+                    await asyncio.sleep(0.3)  # 限速间隔
+                except Exception as e:
+                    logger.error(
+                        f"WB 活动 {campaign.name}(id={campaign.id}) "
+                        f"{r_from}~{r_to} 拉取失败: {e}"
+                    )
+                    db.rollback()
     finally:
         await client.close()
 
-    # 4. 清理旧数据
+    # 3. 清理窗口外旧数据
     cleaned = _clean_old_data(db, shop_id, tenant_id)
-
-    # 5. 更新状态
     data_days = _count_data_days(db, shop_id, tenant_id)
-    _update_init_status(db, shop_id, tenant_id, date_to, data_days)
+    _update_init_status(db, shop_id, tenant_id, yesterday, data_days)
 
+    first_from = ranges[0][0]
+    last_to = ranges[-1][1]
     logger.info(
         f"shop_id={shop_id} WB 智能同步完成: "
-        f"{date_from}~{date_to} 写入{total_synced}条 清理{cleaned}条 共{data_days}天数据"
+        f"{first_from}~{last_to} 共 {len(ranges)}段 写入{total_synced}条 "
+        f"清理{cleaned}条 共{data_days}天数据"
     )
     return {
         "synced": total_synced,
-        "date_from": str(date_from),
-        "date_to": str(date_to),
+        "date_from": str(first_from),
+        "date_to": str(last_to),
         "cleaned": cleaned,
         "already_latest": False,
         "data_days": data_days,

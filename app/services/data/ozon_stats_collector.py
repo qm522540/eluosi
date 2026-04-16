@@ -35,7 +35,15 @@ PERF_API = "https://api-performance.ozon.ru"
 
 
 async def smart_sync(db: Session, shop_id: int, tenant_id: int) -> dict:
-    """智能数据同步（同步部分：Seller API 拉 revenue/orders）"""
+    """Ozon 智能数据同步
+
+    策略（2026-04-16 重构）：
+      - DB 空 → 首次拉 FIRST_SYNC_DAYS=30 天
+      - DB 有数据 → 查 MAX_KEEP_DAYS=45 天窗口内缺失日期，分段补齐
+      - 窗口内全部齐 → 返回 already_latest
+    """
+    from app.services.data.sync_helper import find_missing_ranges
+
     shop = db.query(Shop).filter(Shop.id == shop_id, Shop.tenant_id == tenant_id).first()
     if not shop:
         raise ValueError("店铺不存在")
@@ -44,19 +52,11 @@ async def smart_sync(db: Session, shop_id: int, tenant_id: int) -> dict:
 
     yesterday = date.today() - timedelta(days=1)
 
-    latest_row = db.execute(text("""
-        SELECT MAX(s.stat_date) AS latest_date
-        FROM ad_stats s
-        JOIN ad_campaigns c ON s.campaign_id = c.id
-        WHERE c.shop_id = :shop_id AND c.tenant_id = :tenant_id AND s.platform = 'ozon'
-    """), {"shop_id": shop_id, "tenant_id": tenant_id}).fetchone()
+    ranges, is_first = find_missing_ranges(
+        db, shop_id, tenant_id, "ozon", MAX_KEEP_DAYS, FIRST_SYNC_DAYS,
+    )
 
-    latest_date = latest_row.latest_date if latest_row else None
-
-    if not latest_date:
-        date_from = yesterday - timedelta(days=FIRST_SYNC_DAYS - 1)
-        date_to = yesterday
-    elif latest_date >= yesterday:
+    if not ranges:
         cleaned = _clean_old_data(db, shop_id, tenant_id)
         data_days = _count_data_days(db, shop_id, tenant_id)
         _update_init_status(db, shop_id, tenant_id, yesterday, data_days)
@@ -64,13 +64,11 @@ async def smart_sync(db: Session, shop_id: int, tenant_id: int) -> dict:
             "synced": 0, "date_from": None, "date_to": None,
             "cleaned": cleaned, "already_latest": True, "data_days": data_days,
         }
-    else:
-        date_from = latest_date + timedelta(days=1)
-        date_to = yesterday
-        if (date_to - date_from).days >= SYNC_DAYS:
-            date_from = date_to - timedelta(days=SYNC_DAYS - 1)
 
-    logger.info(f"shop_id={shop_id} 同步 {date_from}~{date_to}")
+    logger.info(
+        f"shop_id={shop_id} Ozon {'首次' if is_first else '增量'}同步: "
+        f"{len(ranges)}段 {[(str(a), str(b)) for a, b in ranges]}"
+    )
 
     campaigns = db.query(AdCampaign).filter(
         AdCampaign.shop_id == shop_id,
@@ -81,27 +79,27 @@ async def smart_sync(db: Session, shop_id: int, tenant_id: int) -> dict:
         raise ValueError("无Ozon广告活动，请先同步广告活动列表")
 
     # ad_stats 所有字段（曝光/点击/花费/订单/营收）全部由 Performance API 提供
-    # 因为 groupBy=DATE 响应里本身有 orders + ordersMoney，是广告真实归因
-    # Seller API 的订单是店铺自然+广告合计，没法归因到具体活动，所以不再使用
     camp_map = {str(c.platform_campaign_id): c.id for c in campaigns}
-    _start_perf_background(shop, camp_map, date_from, date_to, tenant_id)
+    _start_perf_background(shop, camp_map, ranges, tenant_id)
 
     cleaned = _clean_old_data(db, shop_id, tenant_id)
     data_days = _count_data_days(db, shop_id, tenant_id)
-    _update_init_status(db, shop_id, tenant_id, date_to, data_days)
+    _update_init_status(db, shop_id, tenant_id, yesterday, data_days)
 
+    first_from = ranges[0][0]
+    last_to = ranges[-1][1]
     logger.info(
         f"shop_id={shop_id} Ozon 同步已触发：Performance API 后台拉取中"
-        f"（后台线程预计 1-3 分钟完成）"
+        f"（{len(ranges)}段日期范围，后台线程预计 1-5 分钟完成）"
     )
     return {
         "synced": 0,
-        "date_from": str(date_from),
-        "date_to": str(date_to),
+        "date_from": str(first_from),
+        "date_to": str(last_to),
         "cleaned": cleaned,
         "already_latest": False,
         "data_days": data_days,
-        "msg": "Performance API 后台拉取中，数据将在 1-3 分钟内补上",
+        "msg": f"Performance API 后台拉取中（{len(ranges)}段日期），数据将在 1-5 分钟内补上",
     }
 
 
@@ -176,11 +174,10 @@ async def _fetch_seller_data(
 # ==================== Performance API（后台异步） ====================
 
 def _start_perf_background(shop: Shop, camp_map: dict,
-                           date_from: date, date_to: date, tenant_id: int):
-    """在后台线程中拉广告数据（独立数据库连接，避免跨线程连接池冲突）
+                           ranges: list, tenant_id: int):
+    """在后台线程中拉广告数据（独立数据库连接）
 
-    注意：shop 是主线程 session 的 ORM 对象，主线程 session 结束后 shop 会 detached,
-    跨线程访问属性会触发 refresh 报错。这里先提取为普通 dict 传入后台。
+    ranges: [(date_from, date_to), ...] 日期段列表
     """
     shop_data = {
         "id": shop.id,
@@ -202,7 +199,7 @@ def _start_perf_background(shop: Shop, camp_map: dict,
         loop = asyncio.new_event_loop()
         try:
             loop.run_until_complete(
-                _fetch_perf_data(new_db, shop_data, camp_map, date_from, date_to, tenant_id)
+                _fetch_perf_data(new_db, shop_data, camp_map, ranges, tenant_id)
             )
         except Exception as e:
             logger.error(f"Performance API 后台拉取失败: {e}")
@@ -213,12 +210,12 @@ def _start_perf_background(shop: Shop, camp_map: dict,
 
     thread = threading.Thread(target=_run, daemon=True)
     thread.start()
-    logger.info("Performance API 后台线程已启动")
+    logger.info(f"Performance API 后台线程已启动（{len(ranges)}段日期）")
 
 
 async def _fetch_perf_data(
     db: Session, shop_data: dict, camp_map: dict,
-    date_from: date, date_to: date, tenant_id: int,
+    ranges: list, tenant_id: int,
 ):
     """Performance API 拉广告数据（impressions/clicks/spend）
 
@@ -297,28 +294,31 @@ async def _fetch_perf_data(
         #   ① POST /api/client/statistics/json 单次最多 10 个活动（超则 400）
         #   ② 同时只允许 1 个活跃 UUID，前一个必须完成才能提交下一个（否则 429）
         # 所以：每批 ≤ 10 个，严格串行（await _submit_and_fetch 自然保证）
-        # 额外：日期范围 > 15 天时拆分，降低 Ozon 单次报告生成超时风险
+        # 额外：每段日期再按 15 天拆，降低 Ozon 单次报告生成超时风险
         OZON_PERF_BATCH_MAX = 10
         OZON_PERF_DAYS_PER_CHUNK = 15
         batches = [all_ids[i:i+OZON_PERF_BATCH_MAX]
                    for i in range(0, len(all_ids), OZON_PERF_BATCH_MAX)]
 
-        # 日期分片
-        date_chunks = []
-        chunk_from = date_from
-        while chunk_from <= date_to:
-            chunk_to = min(chunk_from + timedelta(days=OZON_PERF_DAYS_PER_CHUNK - 1), date_to)
-            date_chunks.append((chunk_from, chunk_to))
-            chunk_from = chunk_to + timedelta(days=1)
+        # 把 ranges 里每段再按 15 天拆分
+        all_chunks = []
+        for r_from, r_to in ranges:
+            chunk_from = r_from
+            while chunk_from <= r_to:
+                chunk_to = min(
+                    chunk_from + timedelta(days=OZON_PERF_DAYS_PER_CHUNK - 1), r_to,
+                )
+                all_chunks.append((chunk_from, chunk_to))
+                chunk_from = chunk_to + timedelta(days=1)
 
         logger.info(
-            f"Performance API 分 {len(batches)} 批活动 × {len(date_chunks)} 段日期"
-            f"，每段 ≤ {OZON_PERF_DAYS_PER_CHUNK} 天"
+            f"Performance API 分 {len(batches)} 批活动 × {len(all_chunks)} 段日期"
+            f"（原 {len(ranges)} 段拆成 {len(all_chunks)} 段，每段 ≤ {OZON_PERF_DAYS_PER_CHUNK} 天）"
         )
         reports = []
-        for d_idx, (cf, ct) in enumerate(date_chunks):
+        for d_idx, (cf, ct) in enumerate(all_chunks):
             for idx, batch in enumerate(batches):
-                label = (f"chunk {d_idx+1}/{len(date_chunks)} "
+                label = (f"chunk {d_idx+1}/{len(all_chunks)} "
                          f"batch {idx+1}/{len(batches)}")
                 r = await _submit_and_fetch(batch, label, cf, ct)
                 if r:
