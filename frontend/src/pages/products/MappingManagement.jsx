@@ -1,11 +1,22 @@
 import { useState, useEffect, useCallback } from 'react'
-import { Typography, Card, Tree, Tabs, Empty, Spin, message, Row, Col } from 'antd'
-import { PartitionOutlined } from '@ant-design/icons'
-import { getLocalCategoryTree } from '@/api/mapping'
+import {
+  Typography, Card, Tree, Tabs, Empty, Spin, message, Row, Col, Button, Space,
+  Modal, Form, Input, Popconfirm, Tooltip,
+} from 'antd'
+import {
+  PartitionOutlined, PlusOutlined, EditOutlined, DeleteOutlined, ReloadOutlined,
+} from '@ant-design/icons'
+import {
+  getLocalCategoryTree,
+  createLocalCategory,
+  updateLocalCategory,
+  deleteLocalCategory,
+} from '@/api/mapping'
 
 const { Title, Paragraph, Text } = Typography
 
-// 把 §3.2 后端树结构转成 Antd Tree 需要的格式
+const MAX_LEVEL = 3
+
 const toTreeData = (nodes) =>
   (nodes || []).map((n) => ({
     key: String(n.id),
@@ -14,18 +25,57 @@ const toTreeData = (nodes) =>
     children: n.children && n.children.length ? toTreeData(n.children) : undefined,
   }))
 
+// 从 key 递归找节点
+const findNode = (nodes, key) => {
+  for (const n of nodes || []) {
+    if (n.key === key) return n
+    if (n.children) {
+      const hit = findNode(n.children, key)
+      if (hit) return hit
+    }
+  }
+  return null
+}
+
+// 收集全部 key，用于 expandAll
+const collectKeys = (nodes) => {
+  const out = []
+  const walk = (arr) => {
+    for (const n of arr || []) {
+      out.push(n.key)
+      if (n.children) walk(n.children)
+    }
+  }
+  walk(nodes)
+  return out
+}
+
 const MappingManagement = () => {
   const [treeData, setTreeData] = useState([])
   const [treeLoading, setTreeLoading] = useState(false)
+  const [expandedKeys, setExpandedKeys] = useState([])
   const [selectedKey, setSelectedKey] = useState(null)
   const [selectedNode, setSelectedNode] = useState(null)
   const [activeTab, setActiveTab] = useState('category')
 
-  const loadTree = useCallback(async () => {
+  // 编辑态：{ mode: 'create_root' | 'create_child' | 'rename', target }
+  const [editing, setEditing] = useState(null)
+  const [form] = Form.useForm()
+  const [saving, setSaving] = useState(false)
+
+  const loadTree = useCallback(async (keepSelectedKey) => {
     setTreeLoading(true)
     try {
       const res = await getLocalCategoryTree()
-      setTreeData(toTreeData(res.data?.tree))
+      const next = toTreeData(res.data?.tree)
+      setTreeData(next)
+      setExpandedKeys((prev) => (prev.length ? prev : collectKeys(next)))
+      // 同步选中节点的最新数据
+      if (keepSelectedKey) {
+        const hit = findNode(next, keepSelectedKey)
+        setSelectedNode(hit?.raw ?? null)
+        if (!hit) setSelectedKey(null)
+      }
     } catch (err) {
       message.error(err.message || '加载本地分类树失败')
     } finally {
@@ -47,6 +97,84 @@ const MappingManagement = () => {
     setSelectedNode(node.raw)
   }
 
+  const openCreate = (mode) => {
+    setEditing({ mode })
+    form.resetFields()
+  }
+
+  const openRename = () => {
+    if (!selectedNode) return
+    setEditing({ mode: 'rename', target: selectedNode })
+    form.setFieldsValue({ name: selectedNode.name, name_ru: selectedNode.name_ru || '' })
+  }
+
+  const closeEdit = () => {
+    setEditing(null)
+    form.resetFields()
+  }
+
+  const submitEdit = async () => {
+    const values = await form.validateFields()
+    setSaving(true)
+    try {
+      if (editing.mode === 'create_root') {
+        const res = await createLocalCategory({
+          name: values.name,
+          name_ru: values.name_ru || null,
+          parent_id: null,
+        })
+        message.success('创建成功')
+        closeEdit()
+        await loadTree()
+        const newId = res.data?.id ? String(res.data.id) : null
+        if (newId) setSelectedKey(newId)
+      } else if (editing.mode === 'create_child') {
+        await createLocalCategory({
+          name: values.name,
+          name_ru: values.name_ru || null,
+          parent_id: selectedNode.id,
+        })
+        message.success('创建成功')
+        closeEdit()
+        await loadTree(selectedKey)
+      } else if (editing.mode === 'rename') {
+        await updateLocalCategory(editing.target.id, {
+          name: values.name,
+          name_ru: values.name_ru || null,
+        })
+        message.success('修改成功')
+        closeEdit()
+        await loadTree(selectedKey)
+      }
+    } catch (err) {
+      if (err?.errorFields) return
+      message.error(err.message || '操作失败')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const handleDelete = async () => {
+    if (!selectedNode) return
+    try {
+      await deleteLocalCategory(selectedNode.id)
+      message.success('删除成功')
+      setSelectedKey(null)
+      setSelectedNode(null)
+      await loadTree()
+    } catch (err) {
+      message.error(err.message || '删除失败')
+    }
+  }
+
+  const canAddChild = selectedNode && (selectedNode.level ?? 1) < MAX_LEVEL
+
+  const editModalTitle =
+    editing?.mode === 'create_root' ? '新建顶级分类'
+      : editing?.mode === 'create_child' ? `在 "${selectedNode?.name}" 下新建子分类`
+      : editing?.mode === 'rename' ? `重命名 "${editing?.target?.name}"`
+      : ''
+
   const renderTabContent = () => {
     if (!selectedNode) {
       return <Empty description="请先在左侧选择一个本地分类" />
@@ -56,6 +184,7 @@ const MappingManagement = () => {
         <Text type="secondary">
           当前选中：<Text strong>{selectedNode.name}</Text>
           {selectedNode.name_ru && <Text type="secondary"> · {selectedNode.name_ru}</Text>}
+          <Text type="secondary"> · 第 {selectedNode.level} 级</Text>
         </Text>
         <Paragraph style={{ marginTop: 12, marginBottom: 0 }} type="secondary">
           {activeTab === 'category' && '品类映射 Tab 待填充（Task 5）'}
@@ -82,22 +211,81 @@ const MappingManagement = () => {
             title="本地分类"
             size="small"
             styles={{ body: { padding: 8, minHeight: 400 } }}
+            extra={
+              <Space size={4}>
+                <Tooltip title="刷新">
+                  <Button
+                    type="text"
+                    size="small"
+                    icon={<ReloadOutlined />}
+                    onClick={() => loadTree(selectedKey)}
+                  />
+                </Tooltip>
+                <Tooltip title="新建顶级分类">
+                  <Button
+                    type="text"
+                    size="small"
+                    icon={<PlusOutlined />}
+                    onClick={() => openCreate('create_root')}
+                  />
+                </Tooltip>
+              </Space>
+            }
           >
             <Spin spinning={treeLoading}>
               {treeData.length === 0 && !treeLoading ? (
-                <Empty description="暂无本地分类" />
+                <Empty description="暂无本地分类，点右上角 + 新建">
+                  <Button type="primary" icon={<PlusOutlined />} onClick={() => openCreate('create_root')}>
+                    新建顶级分类
+                  </Button>
+                </Empty>
               ) : (
                 <Tree
                   blockNode
                   showLine
                   treeData={treeData}
+                  expandedKeys={expandedKeys}
+                  onExpand={setExpandedKeys}
                   selectedKeys={selectedKey ? [selectedKey] : []}
                   onSelect={onTreeSelect}
                 />
               )}
             </Spin>
+
+            {selectedNode && (
+              <div style={{ padding: 8, borderTop: '1px solid #f0f0f0', marginTop: 8 }}>
+                <Space wrap size={[4, 4]}>
+                  <Tooltip title={canAddChild ? '' : '已到 3 级上限'}>
+                    <Button
+                      size="small"
+                      icon={<PlusOutlined />}
+                      disabled={!canAddChild}
+                      onClick={() => openCreate('create_child')}
+                    >
+                      子分类
+                    </Button>
+                  </Tooltip>
+                  <Button size="small" icon={<EditOutlined />} onClick={openRename}>
+                    重命名
+                  </Button>
+                  <Popconfirm
+                    title="删除此分类？"
+                    description="有子分类将无法删除；会级联删除此分类下所有品类映射"
+                    okText="删除"
+                    okButtonProps={{ danger: true }}
+                    cancelText="取消"
+                    onConfirm={handleDelete}
+                  >
+                    <Button size="small" danger icon={<DeleteOutlined />}>
+                      删除
+                    </Button>
+                  </Popconfirm>
+                </Space>
+              </div>
+            )}
           </Card>
         </Col>
+
         <Col xs={24} md={16} lg={17} xl={18}>
           <Card size="small">
             <Tabs
@@ -113,6 +301,32 @@ const MappingManagement = () => {
           </Card>
         </Col>
       </Row>
+
+      <Modal
+        open={!!editing}
+        title={editModalTitle}
+        onCancel={closeEdit}
+        onOk={submitEdit}
+        confirmLoading={saving}
+        destroyOnClose
+      >
+        <Form form={form} layout="vertical" preserve={false}>
+          <Form.Item
+            name="name"
+            label="中文名"
+            rules={[{ required: true, message: '中文名必填' }, { max: 100 }]}
+          >
+            <Input placeholder="如：项链" autoFocus />
+          </Form.Item>
+          <Form.Item
+            name="name_ru"
+            label="俄文名（可选，AI 推荐映射时会用到）"
+            rules={[{ max: 200 }]}
+          >
+            <Input placeholder="如：Ожерелья" />
+          </Form.Item>
+        </Form>
+      </Modal>
     </div>
   )
 }
