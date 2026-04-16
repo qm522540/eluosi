@@ -105,6 +105,9 @@ const Products = () => {
   // AI 标题优化
   const [titleOptimizing, setTitleOptimizing] = useState(false)
   const [optimizedTitle, setOptimizedTitle] = useState(null)
+  // AI 描述优化
+  const [descOptimizing, setDescOptimizing] = useState(false)
+  const [optimizedDesc, setOptimizedDesc] = useState(null)
 
   const fetchProducts = useCallback(async (p = 1) => {
     if (!filters.shop_id) {
@@ -184,6 +187,7 @@ const Products = () => {
   const handleEdit = (record) => {
     setEditingProduct(record)
     setOptimizedTitle(null)
+    setOptimizedDesc(null)
     const firstListing = (record.listings || [])[0]
     editForm.setFieldsValue({
       sku: record.sku,
@@ -263,6 +267,31 @@ const Products = () => {
       message.error('更新失败')
     } finally {
       setEditSubmitting(false)
+    }
+  }
+
+  const handleOptimizeDesc = async () => {
+    const firstListing = (editingProduct?.listings || [])[0]
+    if (!firstListing) {
+      message.warning('此商品没有关联 listing，无法优化')
+      return
+    }
+    setDescOptimizing(true)
+    setOptimizedDesc(null)
+    try {
+      const res = await generateDescription(firstListing.id, firstListing.platform)
+      const newDesc = res.data?.description || ''
+      if (newDesc) {
+        editForm.setFieldsValue({ description_ru: newDesc })
+        setOptimizedDesc(newDesc)
+        message.success('AI 已生成并填入，可直接保存或继续编辑')
+      } else {
+        message.warning('AI 未返回内容')
+      }
+    } catch {
+      message.error('AI 描述优化失败')
+    } finally {
+      setDescOptimizing(false)
     }
   }
 
@@ -792,14 +821,53 @@ const Products = () => {
             )}
           </Form.Item>
           <Form.Item
-            name="description_ru"
-            label="商品描述"
-            extra="平台上的详细描述（俄文）。保存后同步到 listing，下次从平台拉取可能被覆盖"
+            label={
+              <Space size={8}>
+                <span>商品描述</span>
+                <Button
+                  size="small" type="link" icon={<RobotOutlined />}
+                  onClick={handleOptimizeDesc}
+                  loading={descOptimizing}
+                  style={{ padding: 0, height: 'auto' }}
+                >
+                  AI 优化描述
+                </Button>
+              </Space>
+            }
+            extra="平台上的详细描述（俄文）。AI 优化按当前店铺平台风格重写并直接填入。保存后同步到 listing，下次从平台拉取可能被覆盖"
           >
-            <Input.TextArea
-              autoSize={{ minRows: 4, maxRows: 10 }}
-              placeholder="商品详细描述（俄文）"
-            />
+            <Form.Item name="description_ru" noStyle>
+              <Input.TextArea
+                autoSize={{ minRows: 4, maxRows: 10 }}
+                placeholder="商品详细描述（俄文）"
+              />
+            </Form.Item>
+            {optimizedDesc && (
+              <div style={{
+                marginTop: 8, padding: '8px 12px',
+                background: '#f6ffed', border: '1px solid #b7eb8f',
+                borderRadius: 6,
+              }}>
+                <div style={{ fontSize: 12, color: '#389e0d', marginBottom: 4, fontWeight: 500 }}>
+                  🤖 AI 优化建议（{editingProduct?.listings?.[0]?.platform?.toUpperCase() || ''} 风格）— 已填入上方，可保存或继续编辑
+                </div>
+                <div style={{
+                  fontSize: 12, lineHeight: 1.6, color: '#1f1f1f',
+                  maxHeight: 180, overflow: 'auto',
+                  whiteSpace: 'pre-wrap',
+                }}>
+                  {optimizedDesc}
+                </div>
+                <Space size={6} style={{ marginTop: 6 }}>
+                  <Button size="small" onClick={handleOptimizeDesc} loading={descOptimizing}>
+                    重新生成
+                  </Button>
+                  <Button size="small" type="link" onClick={() => setOptimizedDesc(null)}>
+                    关闭建议
+                  </Button>
+                </Space>
+              </div>
+            )}
           </Form.Item>
           <Form.Item name="local_category_id" label="本地分类">
             <Select
