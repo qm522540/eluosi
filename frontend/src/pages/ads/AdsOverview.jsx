@@ -878,6 +878,122 @@ const AdsOverview = ({ shopId, platform, shops, searched, syncing, lastSyncTime,
 
   // ==================== 渲染 ====================
 
+  // 商品单元格：图 + 标题 + SKU 徽章（Ozon 有 image/title；WB 用 subject_name 兜底，nm_id 作 SKU）
+  const renderProductCell = (record) => {
+    const sku = record.sku
+    const title = record.title || record.subject_name || `nm_id ${sku}`
+    const img = record.image
+    return (
+      <Space align="center" size="middle">
+        {img ? (
+          <img src={img} alt="" style={{ width: 56, height: 56, objectFit: 'cover', borderRadius: 6, border: '1px solid #f0f0f0' }} />
+        ) : (
+          <div style={{
+            width: 56, height: 56, background: '#fafafa', borderRadius: 6, border: '1px solid #f0f0f0',
+            display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#ccc', fontSize: 11,
+          }}>无图</div>
+        )}
+        <div style={{ minWidth: 0, maxWidth: 400 }}>
+          <Tooltip title={title} placement="topLeft">
+            <div style={{
+              fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+            }}>{title}</div>
+          </Tooltip>
+          <Space size={4} style={{ marginTop: 4 }}>
+            <Tag style={{ marginRight: 0, fontFamily: 'ui-monospace, monospace', fontSize: 11 }}>
+              {detailData?.platform === 'wb' ? `nm_id ${sku}` : `SKU ${sku}`}
+            </Tag>
+            {record.subject_name && detailData?.platform === 'wb' && (
+              <Tag color="default" style={{ fontSize: 11 }}>{record.subject_name}</Tag>
+            )}
+          </Space>
+        </div>
+      </Space>
+    )
+  }
+
+  // 展开行：展示关键词子表 / 空态 / loading
+  const renderKeywordsExpandedRow = (record) => {
+    const sku = record.sku
+    const loading = !!keywordsLoadingSku[sku]
+    const kws = keywordsBySku[sku]
+    const adGroupId = getAdGroupIdBySku(sku)
+    const adGroup = adGroups.find(g => g.id === adGroupId)
+
+    if (loading) {
+      return <div style={{ padding: 16, textAlign: 'center', color: '#999' }}>加载关键词中...</div>
+    }
+    if (!adGroupId) {
+      return (
+        <div style={{ padding: 12, background: '#fafafa', borderRadius: 4 }}>
+          <Empty
+            image={Empty.PRESENTED_IMAGE_SIMPLE}
+            description={
+              <span style={{ fontSize: 13 }}>
+                该商品未绑定本地广告组。如需管理关键词，请在 <Text strong>广告组</Text> Tab 新建广告组并关联此商品。
+              </span>
+            }
+          />
+        </div>
+      )
+    }
+    if (!kws || kws.length === 0) {
+      return (
+        <div style={{ padding: 12, background: '#fafafa', borderRadius: 4 }}>
+          <Empty
+            image={Empty.PRESENTED_IMAGE_SIMPLE}
+            description={<span style={{ fontSize: 13 }}>暂无关键词（广告组：{adGroup?.name || adGroupId}）</span>}
+          >
+            <Button size="small" type="primary" icon={<PlusOutlined />} onClick={() => {
+              setSelectedGroupId(adGroupId)
+              setDetailTab('groups')
+              setTimeout(() => { fetchKeywords(adGroupId) }, 0)
+              message.info('已跳转到广告组 Tab，可在此添加关键词')
+            }}>去添加</Button>
+          </Empty>
+        </div>
+      )
+    }
+    return (
+      <div style={{ padding: 8, background: '#fafafa', borderRadius: 4 }}>
+        <div style={{ marginBottom: 8, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <Space size={4}>
+            <Text type="secondary" style={{ fontSize: 12 }}>广告组：</Text>
+            <Text strong style={{ fontSize: 13 }}>{adGroup?.name || `#${adGroupId}`}</Text>
+            <Text type="secondary" style={{ fontSize: 12 }}>· {kws.length} 个关键词</Text>
+          </Space>
+          <Button size="small" type="link" onClick={() => {
+            setSelectedGroupId(adGroupId)
+            setDetailTab('groups')
+            setTimeout(() => { fetchKeywords(adGroupId) }, 0)
+          }}>
+            前往广告组管理 →
+          </Button>
+        </div>
+        <Table
+          size="small"
+          rowKey="id"
+          dataSource={kws}
+          pagination={false}
+          columns={[
+            { title: '关键词', dataIndex: 'keyword', key: 'keyword',
+              render: (v, r) => r.is_negative
+                ? <Space><Tag color="red" style={{ marginRight: 0 }}>否定</Tag>{v}</Space>
+                : v },
+            { title: '匹配类型', dataIndex: 'match_type', key: 'match_type', width: 120,
+              render: v => <Tag>{MATCH_TYPES[v] || v}</Tag> },
+            { title: '出价', dataIndex: 'bid', key: 'bid', width: 100,
+              render: v => v ? `${v} ₽` : <Text type="secondary">组默认</Text> },
+            { title: '状态', dataIndex: 'status', key: 'status', width: 90,
+              render: v => v === 'active'
+                ? <Badge status="success" text="投放中" />
+                : <Badge status="default" text="暂停" /> },
+          ]}
+        />
+      </div>
+    )
+  }
+
   if (!searched) {
     return <Card><Empty description="请选择平台和店铺后点击确定" /></Card>
   }
@@ -1074,32 +1190,34 @@ const AdsOverview = ({ shopId, platform, shops, searched, syncing, lastSyncTime,
               label: `商品出价 (${campaignProducts.length})`,
               children: (
                 <div>
-                  <div style={{ marginBottom: 12 }}>
-                    <Text type="secondary">
-                      {detailData.platform === 'ozon'
-                        ? '以下是该活动关联的商品及出价，点击出价可修改。'
-                        : 'WB活动按搜索 / 推荐两个广告位分别定价，点击「修改」可同时设置两个广告位的 CPM（与 WB 后台一致）。如果活动未启动或 placement 未启用，修改会被 WB 拒绝。'}
-                    </Text>
-                  </div>
+                  <Alert
+                    type="info"
+                    showIcon
+                    style={{ marginBottom: 12 }}
+                    message={
+                      detailData.platform === 'ozon'
+                        ? '点击出价可修改；点击商品行可展开查看该商品的关键词。'
+                        : 'WB 同时改搜索+推荐 CPM（与 WB 后台一致），未启用的 placement 会被跳过。点击商品行可展开关键词。'
+                    }
+                  />
                   {campaignProducts.length > 0 ? (
                     detailData.platform === 'ozon' ? (
-                      <Table size="small" dataSource={campaignProducts} rowKey="sku" loading={productsLoading} pagination={false}
+                      <Table
+                        size="middle"
+                        dataSource={campaignProducts}
+                        rowKey="sku"
+                        loading={productsLoading}
+                        pagination={false}
+                        expandable={{
+                          expandedRowKeys: expandedSkuKeys,
+                          onExpand: handleProductRowExpand,
+                          expandedRowRender: record => renderKeywordsExpandedRow(record),
+                          rowExpandable: () => true,
+                        }}
                         columns={[
-                          { title: 'SKU', dataIndex: 'sku', key: 'sku', width: 130 },
                           {
-                            title: '商品', key: 'product', ellipsis: { showTitle: false },
-                            render: (_, record) => (
-                              <Space>
-                                {record.image ? (
-                                  <img src={record.image} alt="" style={{ width: 40, height: 40, objectFit: 'cover', borderRadius: 4 }} />
-                                ) : (
-                                  <div style={{ width: 40, height: 40, background: '#f0f0f0', borderRadius: 4, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#ccc', fontSize: 12 }}>无图</div>
-                                )}
-                                <Tooltip title={record.title} placement="topLeft">
-                                  <Text ellipsis style={{ maxWidth: 350 }}>{record.title || '-'}</Text>
-                                </Tooltip>
-                              </Space>
-                            ),
+                            title: '商品', key: 'product',
+                            render: (_, record) => renderProductCell(record),
                           },
                           {
                             title: '出价 (₽)', dataIndex: 'bid', key: 'bid', width: 180,
@@ -1116,9 +1234,12 @@ const AdsOverview = ({ shopId, platform, shops, searched, syncing, lastSyncTime,
                                 )
                               }
                               return (
-                                <a onClick={() => { setEditingBid(record); setNewBidValue(displayBid) }}>
-                                  {displayBid} ₽
-                                </a>
+                                <Tooltip title="点击修改出价">
+                                  <a onClick={() => { setEditingBid(record); setNewBidValue(displayBid) }}
+                                    style={{ fontSize: 16, fontWeight: 600 }}>
+                                    {displayBid} <span style={{ fontSize: 12, color: '#999' }}>₽</span>
+                                  </a>
+                                </Tooltip>
                               )
                             },
                           },
@@ -1126,16 +1247,27 @@ const AdsOverview = ({ shopId, platform, shops, searched, syncing, lastSyncTime,
                       />
                     ) : (
                       // WB 平台：per-SKU 出价表格（搜索 / 推荐双 CPM）
-                      // 一个输入框同时改两个广告位（对齐 WB 后台 UI 行为）
-                      <Table size="small" dataSource={campaignProducts} rowKey="sku" loading={productsLoading} pagination={false}
+                      <Table
+                        size="middle"
+                        dataSource={campaignProducts}
+                        rowKey="sku"
+                        loading={productsLoading}
+                        pagination={false}
+                        expandable={{
+                          expandedRowKeys: expandedSkuKeys,
+                          onExpand: handleProductRowExpand,
+                          expandedRowRender: record => renderKeywordsExpandedRow(record),
+                          rowExpandable: () => true,
+                        }}
                         columns={[
-                          { title: 'SKU (nm_id)', dataIndex: 'sku', key: 'sku', width: 140 },
-                          { title: '类目', dataIndex: 'subject_name', key: 'subject_name', width: 160,
-                            render: v => v || '-' },
-                          { title: '搜索 CPM (₽)', dataIndex: 'bid_search', key: 'bid_search', width: 130,
-                            render: v => `${Number(v || 0).toLocaleString()} ₽` },
-                          { title: '推荐 CPM (₽)', dataIndex: 'bid_recommendations', key: 'bid_recommendations', width: 130,
-                            render: v => `${Number(v || 0).toLocaleString()} ₽` },
+                          {
+                            title: '商品', key: 'product',
+                            render: (_, record) => renderProductCell(record),
+                          },
+                          { title: '搜索 CPM', dataIndex: 'bid_search', key: 'bid_search', width: 110,
+                            render: v => <Text strong>{Number(v || 0).toLocaleString()} ₽</Text> },
+                          { title: '推荐 CPM', dataIndex: 'bid_recommendations', key: 'bid_recommendations', width: 110,
+                            render: v => <Text strong>{Number(v || 0).toLocaleString()} ₽</Text> },
                           {
                             title: '修改 CPM', key: 'edit', width: 260,
                             render: (_, record) => {
@@ -1163,9 +1295,9 @@ const AdsOverview = ({ shopId, platform, shops, searched, syncing, lastSyncTime,
                                   <Button
                                     size="small"
                                     type="link"
+                                    icon={<EditOutlined />}
                                     onClick={() => {
                                       setEditingBid(record)
-                                      // 用 search 值作为初始值（实测两个 placement 通常相同）
                                       setNewBidValue(Number(record.bid_search || 0))
                                     }}
                                   >
