@@ -509,6 +509,8 @@ def _sync_wb_products(db: Session, shop, tenant_id: int) -> dict:
             "description_ru": p.get("description"),
             "price": price,
             "discount_price": discount_price,
+            # WB 的 sku_id 和 product_id 都是 nm_id，冗余写入方便广告 API 反查
+            "platform_sku_id": nm_id,
             "platform_category_id": subject_id_str,
             "platform_category_name": subject_name[:300] if subject_name else None,
             "status": "active",
@@ -626,11 +628,14 @@ def _sync_ozon_products(db: Session, shop, tenant_id: int) -> dict:
         category_id_str = str(category_id) if category_id else None
         local_cat_id = cat_map.get(category_id_str) if category_id_str else None
 
+        # OZON 的 sku_id（广告 API 返回的 sku 字段），与 product_id 是两套 ID
+        ozon_sku = p.get("sku")
         data = {
             "title_ru": title,
             "price": old_price or price,
             "discount_price": price if (old_price and price and old_price != price) else None,
             "barcode": barcode,
+            "platform_sku_id": str(ozon_sku) if ozon_sku else None,
             "platform_category_id": category_id_str,
             # OZON info/list 不返回分类名称，此字段留空，init-from-ozon 里从分类树反查
             "status": status,

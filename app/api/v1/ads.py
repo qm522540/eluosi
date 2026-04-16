@@ -562,19 +562,17 @@ def _enrich_products_with_listing_id(
         for p in products:
             p["listing_id"] = None
         return products
-    listing_map = {}
-    if platform == "wb":
-        rows = db.query(
-            PlatformListing.id, PlatformListing.platform_product_id,
-        ).filter(
-            PlatformListing.tenant_id == tenant_id,
-            PlatformListing.shop_id == shop_id,
-            PlatformListing.platform == "wb",
-            PlatformListing.platform_product_id.in_(skus),
-            PlatformListing.status != "deleted",
-        ).all()
-        listing_map = {str(r.platform_product_id): r.id for r in rows}
-    # Ozon 暂未实现（需要 platform_sku_id 字段）
+    # 统一按 platform_sku_id 反查（WB nm_id / OZON sku_id 都是这个字段）
+    rows = db.query(
+        PlatformListing.id, PlatformListing.platform_sku_id,
+    ).filter(
+        PlatformListing.tenant_id == tenant_id,
+        PlatformListing.shop_id == shop_id,
+        PlatformListing.platform == platform,
+        PlatformListing.platform_sku_id.in_(skus),
+        PlatformListing.status != "deleted",
+    ).all()
+    listing_map = {str(r.platform_sku_id): r.id for r in rows}
     for p in products:
         p["listing_id"] = listing_map.get(str(p.get("sku") or ""))
     return products

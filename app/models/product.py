@@ -41,6 +41,7 @@ class PlatformListing(BaseMixin, Base):
         Enum("wb", "ozon", "yandex", name="listing_platform"), nullable=False
     )
     platform_product_id: Mapped[str] = mapped_column(String(100), nullable=False)
+    platform_sku_id: Mapped[Optional[str]] = mapped_column(String(100), nullable=True, comment="OZON sku_id / WB nm_id（广告 API 返回的 sku）")
     platform_category_id: Mapped[Optional[str]] = mapped_column(String(100), nullable=True, comment="平台分类ID")
     platform_category_name: Mapped[Optional[str]] = mapped_column(String(300), nullable=True, comment="平台分类名称")
     barcode: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
