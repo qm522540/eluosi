@@ -14,6 +14,7 @@ import {
   spreadProducts, getSpreadRecords, updateProduct,
 } from '@/api/products'
 import { getShops } from '@/api/shops'
+import { listLocalCategories } from '@/api/mapping'
 import { useAuthStore } from '@/stores/authStore'
 
 const { Text } = Typography
@@ -81,6 +82,13 @@ const Products = () => {
 
   const [selectedRowKeys, setSelectedRowKeys] = useState([])
 
+  // 商品编辑弹窗
+  const [editModal, setEditModal] = useState(false)
+  const [editingProduct, setEditingProduct] = useState(null)
+  const [editForm] = Form.useForm()
+  const [editSubmitting, setEditSubmitting] = useState(false)
+  const [localCategories, setLocalCategories] = useState([])
+
   const fetchProducts = useCallback(async (p = 1) => {
     if (!filters.shop_id) {
       setProducts([])
@@ -117,6 +125,10 @@ const Products = () => {
     getShops({ page: 1, page_size: 100 }).then(res => {
       setShops(res.data?.items || [])
     }).catch(() => setShops([]))
+    // 本地分类下拉数据（编辑商品用）
+    listLocalCategories().then(res => {
+      setLocalCategories(res.data?.items || [])
+    }).catch(() => setLocalCategories([]))
   }, [])
 
   const handleSync = async (force = false) => {
@@ -441,6 +453,7 @@ const Products = () => {
         <Row gutter={8} align="middle" wrap>
           <Col><Input placeholder="搜索SKU/商品名" style={{ width: 180 }}
             value={filters.keyword}
+            allowClear
             onChange={e => setFilters(p => ({ ...p, keyword: e.target.value }))}
             onPressEnter={() => fetchProducts(1)} /></Col>
           <Col>
@@ -484,12 +497,6 @@ const Products = () => {
           </Col>
           <Col>
             <Button type="primary" onClick={() => fetchProducts(1)}>查询</Button>
-          </Col>
-          <Col>
-            <Button onClick={() => {
-              setFilters({ keyword: '', category: '', platform: '', shop_id: null, status: 'active' })
-              setTimeout(() => fetchProducts(1), 0)
-            }}>重置</Button>
           </Col>
           <Col flex={1} />
           {lastSyncAt && (
