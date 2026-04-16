@@ -2,15 +2,15 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import {
   Typography, Card, Table, Button, Tag, Space, Row, Col,
   Input, Select, InputNumber, Modal, Form, Tooltip, Empty,
-  Badge, message, Popconfirm, Alert, Spin, Drawer,
+  Badge, message, Alert, Spin, Drawer,
 } from 'antd'
 import {
-  SyncOutlined, PlusOutlined, EditOutlined, DeleteOutlined,
+  SyncOutlined, PlusOutlined, EditOutlined,
   RobotOutlined, SendOutlined, ShopOutlined,
 } from '@ant-design/icons'
 import {
   getProducts, syncProducts, checkSyncNeeded,
-  updateProductMargin, deleteProduct, generateDescription,
+  updateProductMargin, generateDescription,
   spreadProducts, getSpreadRecords, updateProduct,
 } from '@/api/products'
 import { getShops } from '@/api/shops'
@@ -149,16 +149,6 @@ const Products = () => {
       fetchProducts(page)
     } catch {
       message.error('更新失败')
-    }
-  }
-
-  const handleDelete = async (productId) => {
-    try {
-      await deleteProduct(productId)
-      message.success('商品已删除')
-      fetchProducts(page)
-    } catch {
-      message.error('删除失败')
     }
   }
 
@@ -369,9 +359,6 @@ const Products = () => {
             onClick={() => handleSpread(record.listings || [])}>
             铺货
           </Button>
-          <Popconfirm title="确认删除？" onConfirm={() => handleDelete(record.id)}>
-            <Button size="small" danger icon={<DeleteOutlined />} />
-          </Popconfirm>
         </Space>
       ),
     },
