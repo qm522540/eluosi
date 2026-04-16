@@ -36,7 +36,8 @@ def product_list(
 ):
     """获取商品列表"""
     result = list_products(db, tenant_id, keyword=keyword, category=category,
-                           status=status, page=page, page_size=page_size)
+                           status=status, platform=platform, shop_id=shop_id,
+                           page=page, page_size=page_size)
     if result["code"] != 0:
         return error(result["code"], result["msg"])
     return success(result["data"])

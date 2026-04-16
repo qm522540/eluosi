@@ -15,6 +15,7 @@ from app.utils.logger import logger
 
 def list_products(db: Session, tenant_id: int, keyword: str = None,
                   category: str = None, status: str = None,
+                  platform: str = None, shop_id: int = None,
                   page: int = 1, page_size: int = 20) -> dict:
     """获取商品列表"""
     try:
@@ -22,6 +23,18 @@ def list_products(db: Session, tenant_id: int, keyword: str = None,
             Product.tenant_id == tenant_id,
             Product.status != "deleted"
         )
+        if platform or shop_id:
+            query = query.join(
+                PlatformListing,
+                (PlatformListing.product_id == Product.id) &
+                (PlatformListing.tenant_id == tenant_id) &
+                (PlatformListing.status != "deleted")
+            )
+            if platform:
+                query = query.filter(PlatformListing.platform == platform)
+            if shop_id:
+                query = query.filter(PlatformListing.shop_id == shop_id)
+            query = query.distinct()
         if keyword:
             query = query.filter(
                 (Product.name_zh.contains(keyword)) |
