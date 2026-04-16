@@ -18,7 +18,7 @@ import AttributeMappingTab from './mapping/AttributeMappingTab'
 import AISuggestAttributesButton from './mapping/AISuggestAttributesButton'
 import AttributeValueMappingDrawer from './mapping/AttributeValueMappingDrawer'
 import InitFromWBButton from './mapping/InitFromWBButton'
-import MatchOzonButton from './mapping/MatchOzonButton'
+import InitFromOzonButton from './mapping/InitFromOzonButton'
 
 const { Title, Paragraph, Text } = Typography
 
@@ -115,8 +115,6 @@ const MappingManagement = () => {
   const [tabsRefreshKey, setTabsRefreshKey] = useState(0)
   const bumpTabsRefresh = () => setTabsRefreshKey((k) => k + 1)
 
-  // 本地分类数量（给 MatchOzonButton 做 disabled 判断）
-  const localCategoryCount = collectKeys(treeData).length
 
   const loadTree = useCallback(async (keepSelectedKey) => {
     setTreeLoading(true)
@@ -284,9 +282,9 @@ const MappingManagement = () => {
                 bumpTabsRefresh()
               }}
             />
-            <MatchOzonButton
-              localCategoryCount={localCategoryCount}
-              onSuccess={() => {
+            <InitFromOzonButton
+              onSuccess={async () => {
+                await loadTree(selectedKey)
                 bumpTabsRefresh()
               }}
             />
@@ -294,8 +292,8 @@ const MappingManagement = () => {
         </Col>
       </Row>
       <Paragraph type="secondary">
-        本地统一分类 → WB / Ozon 分类 / 属性 / 属性值 映射。推荐入口：<Text strong>从 WB 初始化</Text>（一次建好本地分类 + WB 映射） →
-        <Text strong> AI 匹配 Ozon </Text>（对所有本地分类生成 Ozon 待确认映射）。详见
+        本地统一分类 → WB / Ozon 分类 / 属性 / 属性值 映射。推荐入口：<Text strong>从 WB 初始化</Text>（建好本地分类 + WB 映射） →
+        <Text strong> 从 Ozon 扩充</Text>（AI 归一去重，合并同义分类 + 补齐 Ozon 独有分类）。详见
         <Text code>docs/api/category_mapping.md</Text>
       </Paragraph>
 

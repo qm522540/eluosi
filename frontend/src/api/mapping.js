@@ -103,7 +103,12 @@ export function initFromWB(data) {
   return request.post(`${BASE}/init-from-wb`, data, { timeout: 180000 })
 }
 
-// §7.5 AI 批量匹配 Ozon —— 耗时 60-300 秒
+// §7.5 一键从 Ozon 扩充 —— AI 归一去重 + 补齐 Ozon 独有分类，耗时 40-180 秒
+export function initFromOzon(data) {
+  return request.post(`${BASE}/init-from-ozon`, data, { timeout: 240000 })
+}
+
+// §7.6 AI 批量匹配 Ozon（备用）—— 只匹配已有本地分类，不新建，耗时 60-300 秒
 export function matchOzon(data) {
   return request.post(`${BASE}/match-ozon`, data, { timeout: 360000 })
 }
