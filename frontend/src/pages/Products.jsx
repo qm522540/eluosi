@@ -1007,6 +1007,59 @@ const Products = () => {
               <Divider style={{ margin: '16px 0 20px' }} />
 
               <SectionTitle>定价与物流</SectionTitle>
+
+              {/* 平台同步字段（只读） */}
+              {(() => {
+                const l = editingProduct?.listings?.[0]
+                const price = l?.price
+                const discount = l?.discount_price
+                const stock = l?.stock ?? 0
+                const discountPct = (price && discount && price > discount)
+                  ? Math.round(100 - (discount / price) * 100) : 0
+                const stockColor = stock === 0 ? '#cf1322' : stock < 10 ? '#d46b08' : '#389e0d'
+                return (
+                  <div style={{
+                    padding: '10px 14px', marginBottom: 16,
+                    background: '#fafafa', border: '1px solid #f0f0f0',
+                    borderRadius: 8,
+                  }}>
+                    <div style={{ fontSize: 11, color: '#888', marginBottom: 8 }}>
+                      平台同步字段（只读）
+                    </div>
+                    <Row gutter={16}>
+                      <Col span={8}>
+                        <div style={{ fontSize: 12, color: '#666', marginBottom: 2 }}>平台原价</div>
+                        <div style={{ fontSize: 18, fontWeight: 500, color: '#1f1f1f' }}>
+                          {price ? `₽ ${Number(price).toLocaleString()}` : '-'}
+                        </div>
+                      </Col>
+                      <Col span={8}>
+                        <div style={{ fontSize: 12, color: '#666', marginBottom: 2 }}>
+                          销售价
+                          {discountPct > 0 && (
+                            <Tag color="red" style={{ marginLeft: 6, fontSize: 10, padding: '0 4px', lineHeight: '16px' }}>
+                              -{discountPct}%
+                            </Tag>
+                          )}
+                        </div>
+                        <div style={{ fontSize: 18, fontWeight: 500, color: discount ? '#cf1322' : '#1f1f1f' }}>
+                          {discount
+                            ? `₽ ${Number(discount).toLocaleString()}`
+                            : price ? `₽ ${Number(price).toLocaleString()}` : '-'}
+                        </div>
+                      </Col>
+                      <Col span={8}>
+                        <div style={{ fontSize: 12, color: '#666', marginBottom: 2 }}>库存</div>
+                        <div style={{ fontSize: 18, fontWeight: 500, color: stockColor }}>
+                          {stock > 0 ? `${stock} 件` : '无货'}
+                        </div>
+                      </Col>
+                    </Row>
+                  </div>
+                )
+              })()}
+
+              {/* 本地字段（可编辑） */}
               <Row gutter={16}>
                 <Col span={8}>
                   <Form.Item
