@@ -954,41 +954,44 @@ async def _analyze_now_inner(db, tenant_id: int, shop_id: int,
                 max_cpa=max_cpa,
             )
 
-            # ── Step 5: 平台"推荐竞争价"警告（做法 C） ──
-            # /bids/min API 返回的是"推荐竞争价"不是"硬最低"（硬最低只能从 update
-            # 错误消息获取）。策略：
+            # ── Step 5: 平台"推荐竞争价"警告 + 降价反拉保护 ──
+            # /bids/min API 返回的是"推荐竞争价"（实测常与硬最低一致）
+            # 策略：
             #   - 不拉升 suggested_bid（保留算法值）
-            #   - 低于推荐价时加警告"低于推荐价 ₽X，曝光可能不足"
-            #   - 真正低于硬最低由 update_campaign_cpm/bid 内部 fallback 兜底
-            #   - bid_adjustment_logs 写 actual_bid_rub（执行真实值，非建议值）
+            #   - 低于推荐价时加警告
+            #   - 关键保护：想降价但被硬卡拉更高时 → 跳过此 SKU
+            #   - bid_adjustment_logs 写 actual_bid_rub（执行真实值）
             min_bid_warning = ""
+            platform_min = None
             if optimal_bid is not None and platform == "wb":
                 try:
-                    min_rub = await client.fetch_min_bid(
+                    platform_min = await client.fetch_min_bid(
                         advert_id=str(camp.platform_campaign_id),
                         nm_id=int(sku),
                     )
-                    if min_rub and optimal_bid < min_rub:
-                        min_bid_warning = (
-                            f"⚠ 低于WB推荐竞争价₽{int(min_rub)}，曝光可能不足"
-                            f"（执行时若低于硬最低会自动拉升）"
-                        )
-                        logger.info(
-                            f"WB推荐价警告：sku={sku} optimal={optimal_bid}"
-                            f"<推荐价={min_rub}"
-                        )
                 except Exception as e:
                     logger.warning(f"WB 最低价查询异常 sku={sku}: {e}")
             elif optimal_bid is not None and platform == "ozon":
-                if ozon_min_cpc and optimal_bid < ozon_min_cpc:
-                    min_bid_warning = (
-                        f"⚠ 低于Ozon最低CPC₽{int(ozon_min_cpc)}，曝光可能不足"
-                        f"（执行时若低于硬最低会自动拉升）"
-                    )
-                    logger.info(
-                        f"Ozon最低CPC警告：sku={sku} optimal={optimal_bid}"
-                        f"<min={ozon_min_cpc}"
-                    )
+                platform_min = ozon_min_cpc
+
+            # 降价反拉保护：想降价但平台最低价 > 当前价
+            # → 提交会被拉到更高值，放弃调整
+            if (platform_min and optimal_bid is not None
+                    and optimal_bid < current_bid
+                    and platform_min > current_bid):
+                logger.info(
+                    f"降价反拉保护：sku={sku} 想降 {current_bid}→{optimal_bid} "
+                    f"但平台最低={platform_min}，降了会被拉更高，跳过"
+                )
+                continue
+
+            # 低于平台最低价时加警告（不改 optimal_bid）
+            if platform_min and optimal_bid is not None and optimal_bid < platform_min:
+                src = "WB" if platform == "wb" else "Ozon"
+                min_bid_warning = (
+                    f"⚠ 低于{src}平台最低价₽{int(platform_min)}，"
+                    f"执行时可能被拉升至 ₽{int(platform_min)}"
+                )
 
             # ── Step 6: ROAS 门控（≥21天） ──
             if optimal_bid is not None and data_days >= 21:
