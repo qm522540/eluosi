@@ -30,34 +30,58 @@ OZON_PERFORMANCE_API = "https://api-performance.ozon.ru"
 MIN_REQUEST_INTERVAL = 60.0 / settings.OZON_RATE_LIMIT_PER_MINUTE
 
 
-def _extract_ozon_min_bid(limits_resp: dict, category: Optional[str] = None) -> Optional[float]:
+def _extract_ozon_min_bid(
+    limits_resp: dict,
+    category: Optional[str] = None,
+    placement: Optional[str] = None,
+    payment_method: str = "CPC",
+) -> Optional[float]:
     """从 /api/client/limits/list 响应里提取最低出价（卢布）
 
-    响应结构（per 2026-04 实测）：
+    实际响应结构（2026-04-16 实测）：
       {"limits": [
-        {"objectType": "SKU", "placement": "SEARCH_AND_PDP",
-         "paymentMethod": "CPC", "limits": [
-           {"categoryId": "...", "minBid": 7, "maxBid": 200}, ...
+        {"objectType": "SKU",
+         "paymentMethod": "CPC",
+         "placement": "CAMPAIGN_PLACEMENT_SEARCH_AND_CATEGORY",
+         "minBid": 7, "maxBid": 200,
+         "categories": [
+           {"category": "Ванная комната", "bid": 7}, ...
          ]}, ...
       ]}
 
-    传 category_id 时返回该品类的 minBid；否则返回所有组里最低的 minBid 作为兜底。
+    参数：
+      category: 传品类名时，从 categories[] 里找匹配的 bid；否则用组级 minBid
+      placement: 指定 placement 筛选；不传就用所有组里最低的
+      payment_method: CPC / CPM，默认 CPC（符合当前 Ozon 主流）
     """
     if not isinstance(limits_resp, dict):
         return None
     groups = limits_resp.get("limits") or []
     candidates = []
     for grp in groups:
-        for rec in grp.get("limits") or []:
-            min_bid = rec.get("minBid")
-            if min_bid is None:
-                continue
-            if category is not None and str(rec.get("categoryId") or "") != str(category):
-                continue
-            try:
-                candidates.append(float(min_bid))
-            except (TypeError, ValueError):
-                pass
+        if grp.get("paymentMethod") != payment_method:
+            continue
+        if placement is not None and grp.get("placement") != placement:
+            continue
+
+        # 优先找品类匹配的 bid
+        if category is not None:
+            for cat in grp.get("categories") or []:
+                if str(cat.get("category") or "") == str(category):
+                    try:
+                        candidates.append(float(cat.get("bid")))
+                    except (TypeError, ValueError):
+                        pass
+                    break
+        else:
+            # 没传品类就用组级 minBid 兜底
+            min_bid = grp.get("minBid")
+            if min_bid is not None:
+                try:
+                    candidates.append(float(min_bid))
+                except (TypeError, ValueError):
+                    pass
+
     if not candidates:
         return None
     return min(candidates)
