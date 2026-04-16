@@ -28,7 +28,21 @@
 
 ---
 
-## 1. 业务流程（前端交互的 4 个阶段）
+## 1. 业务流程
+
+### 推荐流程（一键初始化，2026-04-16 v2）
+
+```
+① 一键从 WB 初始化    ② 一键匹配 Ozon      ③ 人工确认 Ozon
+   ↓                     ↓                    ↓
+本地分类+属性+枚举值     Ozon 品类+属性映射    逐条核对修改
+(自动确认 WB 侧)         (待确认状态)
+```
+
+- 入口按钮 `[从 WB 初始化]` + `[AI 匹配 Ozon]`
+- 详见 §7.4 / §7.5
+
+### 手动流程（备用，适合新增零散分类）
 
 ```
 ① 建本地分类 → ② 品类映射 → ③ 属性映射 → ④ 属性值映射
@@ -416,6 +430,84 @@ Ozon 示例：
 - 用户先输入/粘贴一组本地值（如"925银\n18K金\n合金"），点按钮触发
 - Loading...（5-15 秒）
 - 完成后刷新 §6.1 列表，未确认的标橙色
+
+---
+
+### 7.4 一键从 WB 初始化（推荐入口）
+
+**POST** `/api/v1/mapping/init-from-wb`
+
+```json
+{
+  "shop_id": 5,
+  "include_enum_values": true
+}
+```
+
+**业务流程**：
+1. 从 `platform_listings` 反查店铺已出现的 WB `subjectID` 集合
+2. 拉 WB `/content/v2/object/all` 全量分类字典，筛出店铺用到的
+3. 批量 AI 翻译俄文 `subjectName` → 中文
+4. 建 `local_categories`（level=1）
+5. 自动建 WB `category_platform_mappings`，**直接 `is_confirmed=1`**（1:1 关联无需人工确认）
+6. 对每个分类拉 `charcs` 属性列表，翻译后建 `attribute_mappings`（同样自动确认）
+7. 如 `include_enum_values=true`，属性的 `dictionary` 字段内枚举值也批量翻译后写入 `attribute_value_mappings`
+
+**响应 data**：
+```json
+{
+  "categories": 20,
+  "attributes": 180,
+  "values": 650,
+  "skipped": ["本地分类已存在: Ожерелья", "charcs 拉取失败: 8765"]
+}
+```
+
+**注意**：
+- 如果 `platform_listings` 里该店铺没有任何分类数据（`platform_category_id` 全为空），返回 `10002 请先同步商品`
+- 已存在的本地分类（按 `name_ru` 去重）会跳过不覆盖
+- 耗时 **30-120 秒**（视分类数量），前端必须加 Loading 态
+
+**前端交互建议**：
+- 在映射管理页顶部放大按钮 `[从 WB 初始化]`
+- 弹窗选 WB 店铺 + 是否包含枚举值（默认勾选）
+- 确认弹窗提示："这将从 WB 店铺拉取分类和属性，预计 1-2 分钟。是否继续？"
+- Loading 期间不可关闭，显示进度提示"正在抓取分类..."/"正在翻译..."/"正在建立映射..."（可能只是静态文案，后端不回报进度）
+
+### 7.5 AI 批量匹配 Ozon
+
+**POST** `/api/v1/mapping/match-ozon`
+
+```json
+{ "shop_id": 6 }
+```
+
+**前置条件**：
+- 本地分类已经存在（通过 §7.4 初始化或手动创建）
+- 本地分类为空时返回 `10002 请先从 WB 初始化`
+
+**业务流程**：
+1. 遍历所有本地分类
+2. 每个分类调 `suggest_category_mappings(platforms=['ozon'])`（§7.1）
+3. 对每个成功匹配的分类再调 `suggest_attribute_mappings('ozon')`（§7.2）
+4. 所有新建映射 **`is_confirmed=0`**（等待用户在前端逐条确认）
+
+**响应 data**：
+```json
+{
+  "categories": { "matched": 18, "failed": 2 },
+  "attributes": { "matched": 142, "failed": 3 }
+}
+```
+
+**耗时**：60-300 秒（每个分类约 5-15 秒 AI 调用）
+
+**前端交互建议**：
+- 顶部第二个按钮 `[AI 匹配 Ozon]`（放在 §7.4 按钮旁边）
+- 只允许在**有本地分类后**才能点（前端做个简单检查）
+- 弹窗选 Ozon 店铺 + 确认"将对 N 个本地分类生成 Ozon 映射建议"
+- Loading 期间提示"正在为分类 X/N 匹配 Ozon..."
+- 完成后弹出完成提示，并切到"待确认"Tab 筛选（自然显示橙色待确认列表）
 
 ---
 
