@@ -291,10 +291,9 @@ const Products = () => {
   const columns = [
     {
       title: '商品',
-      dataIndex: 'name_ru',
-      width: 220,
-      render: (v, record) => {
-        // 当前列表已按店铺过滤，每个 product 只对应该店铺的一个 listing
+      dataIndex: 'name_zh',
+      width: 260,
+      render: (_, record) => {
         const firstListing = (record.listings || [])[0]
         const url = firstListing ? platformProductUrl(
           firstListing.platform, firstListing.platform_product_id, firstListing
@@ -309,7 +308,10 @@ const Products = () => {
             display: 'flex', alignItems: 'center', justifyContent: 'center',
             fontSize: 10, color: 'var(--color-text-tertiary)' }}>图</div>
         )
-        const title = v || record.name_zh || record.sku
+        // 主标题：中文名，如果没有就退到俄文名或 SKU
+        const mainTitle = record.name_zh || record.name_ru || record.sku
+        // 副标题：俄文名（如果跟主标题不一致）
+        const hasRuDifferent = record.name_ru && record.name_ru !== mainTitle
         return (
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
             {url ? (
@@ -319,16 +321,24 @@ const Products = () => {
                 {imgElement}
               </a>
             ) : imgElement}
-            <div>
-              <div style={{ fontWeight: 500, fontSize: 13 }}>
+            <div style={{ minWidth: 0, flex: 1 }}>
+              <div style={{ fontWeight: 500, fontSize: 13, lineHeight: 1.4 }}>
                 {url ? (
                   <a href={url} target="_blank" rel="noopener noreferrer"
                      style={{ color: 'inherit' }}
                      title="打开平台商品页">
-                    {title}
+                    {mainTitle}
                   </a>
-                ) : title}
+                ) : mainTitle}
               </div>
+              {hasRuDifferent && (
+                <div style={{ fontSize: 11, color: 'var(--color-text-tertiary)',
+                  lineHeight: 1.4, overflow: 'hidden', textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap' }}
+                  title={record.name_ru}>
+                  {record.name_ru}
+                </div>
+              )}
               <div style={{ fontSize: 11, color: 'var(--color-text-tertiary)' }}>
                 {(record.listings || []).map((l, i) => (
                   <span key={l.id}>
@@ -644,16 +654,16 @@ const Products = () => {
               </Form.Item>
             </Col>
             <Col span={12}>
-              <Form.Item name="brand" label="品牌">
-                <Input placeholder="品牌名" />
+              <Form.Item name="brand" label="品牌（平台同步，只读）">
+                <Input disabled />
               </Form.Item>
             </Col>
           </Row>
-          <Form.Item name="name_zh" label="中文名" rules={[{ required: true, message: '请填中文名' }]}>
-            <Input placeholder="商品中文名称" />
+          <Form.Item name="name_zh" label="中文名（本地备注，列表主显示）" rules={[{ required: true, message: '请填中文名' }]}>
+            <Input placeholder="方便自己识别的中文名称" />
           </Form.Item>
-          <Form.Item name="name_ru" label="俄文名">
-            <Input placeholder="商品俄文名称" />
+          <Form.Item name="name_ru" label="俄文名（平台标题，只读）">
+            <Input disabled />
           </Form.Item>
           <Form.Item name="local_category_id" label="本地分类">
             <Select
