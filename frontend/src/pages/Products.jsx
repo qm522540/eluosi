@@ -11,7 +11,7 @@ import {
 import {
   getProducts, syncProducts, checkSyncNeeded,
   updateProductMargin, generateDescription, optimizeTitle,
-  spreadProducts, getSpreadRecords, updateProduct,
+  spreadProducts, getSpreadRecords, updateProduct, updateListing,
 } from '@/api/products'
 import { getShops } from '@/api/shops'
 import { listLocalCategories } from '@/api/mapping'
@@ -184,11 +184,12 @@ const Products = () => {
   const handleEdit = (record) => {
     setEditingProduct(record)
     setOptimizedTitle(null)
+    const firstListing = (record.listings || [])[0]
     editForm.setFieldsValue({
       sku: record.sku,
       name_zh: record.name_zh,
-      name_ru: record.name_ru,
-      brand: record.brand,
+      name_ru: record.name_ru || firstListing?.title_ru || '',
+      description_ru: firstListing?.description_ru || '',
       local_category_id: record.local_category_id,
       cost_price: record.cost_price,
       net_margin: record.net_margin ? Math.round(record.net_margin * 100) : null,
@@ -208,7 +209,15 @@ const Products = () => {
     setOptimizedTitle(null)
     try {
       const res = await optimizeTitle(firstListing.id)
-      setOptimizedTitle(res.data?.optimized_title || '')
+      const newTitle = res.data?.optimized_title || ''
+      if (newTitle) {
+        // 直接填入文本框 + 保留建议展示框（对比原值）
+        editForm.setFieldsValue({ name_ru: newTitle })
+        setOptimizedTitle(newTitle)
+        message.success('AI 已生成并填入，可直接保存或继续编辑')
+      } else {
+        message.warning('AI 未返回内容')
+      }
     } catch {
       message.error('AI 标题优化失败')
     } finally {
@@ -216,31 +225,35 @@ const Products = () => {
     }
   }
 
-  const handleCopyOptimized = () => {
-    if (!optimizedTitle) return
-    try {
-      navigator.clipboard.writeText(optimizedTitle)
-      message.success('已复制，粘贴到平台后台即可')
-    } catch {
-      message.error('复制失败，请手动选中文本复制')
-    }
-  }
-
   const handleEditSubmit = async () => {
     try {
       const values = await editForm.validateFields()
       setEditSubmitting(true)
-      const payload = {
+      const productPayload = {
         name_zh: values.name_zh,
         name_ru: values.name_ru,
-        brand: values.brand,
         local_category_id: values.local_category_id,
         cost_price: values.cost_price,
         net_margin: values.net_margin ? values.net_margin / 100 : null,
         weight_g: values.weight_g,
         image_url: values.image_url,
       }
-      await updateProduct(editingProduct.id, payload)
+      const tasks = [updateProduct(editingProduct.id, productPayload)]
+      // 标题/描述同时更新到当前店铺的 listing
+      const firstListing = (editingProduct.listings || [])[0]
+      if (firstListing) {
+        const listingPayload = {}
+        if (values.name_ru !== (editingProduct.name_ru || firstListing.title_ru)) {
+          listingPayload.title_ru = values.name_ru
+        }
+        if (values.description_ru !== (firstListing.description_ru || '')) {
+          listingPayload.description_ru = values.description_ru
+        }
+        if (Object.keys(listingPayload).length > 0) {
+          tasks.push(updateListing(firstListing.id, listingPayload))
+        }
+      }
+      await Promise.all(tasks)
       message.success('商品已更新')
       setEditModal(false)
       editForm.resetFields()
@@ -725,18 +738,9 @@ const Products = () => {
         destroyOnClose
       >
         <Form form={editForm} layout="vertical" style={{ marginTop: 12 }}>
-          <Row gutter={12}>
-            <Col span={12}>
-              <Form.Item name="sku" label="SKU（只读）">
-                <Input disabled />
-              </Form.Item>
-            </Col>
-            <Col span={12}>
-              <Form.Item name="brand" label="品牌（平台同步，只读）">
-                <Input disabled />
-              </Form.Item>
-            </Col>
-          </Row>
+          <Form.Item name="sku" label="SKU（只读）">
+            <Input disabled />
+          </Form.Item>
           <Form.Item
             name="name_zh"
             label="中文名"
@@ -748,7 +752,7 @@ const Products = () => {
           <Form.Item
             label={
               <Space size={8}>
-                <span>商品标题（平台）</span>
+                <span>商品标题</span>
                 <Button
                   size="small" type="link" icon={<RobotOutlined />}
                   onClick={handleOptimizeTitle}
@@ -759,38 +763,43 @@ const Products = () => {
                 </Button>
               </Space>
             }
-            extra="平台上给俄罗斯买家看的标题，本地只读。AI 优化会按当前店铺平台（WB / OZON）的风格给出建议，复制后到平台后台修改"
+            extra="平台上给买家看的俄文标题。AI 优化会按当前店铺平台（WB / OZON）风格重写并直接填入，可再手动调整后保存。保存后会同步到 listing，下次从平台拉取可能被覆盖"
           >
             <Form.Item name="name_ru" noStyle>
-              <Input disabled />
+              <Input.TextArea autoSize={{ minRows: 2, maxRows: 4 }} placeholder="商品俄文标题" />
             </Form.Item>
-            {optimizedTitle !== null && (
+            {optimizedTitle && (
               <div style={{
                 marginTop: 8, padding: '8px 12px',
                 background: '#f0f7ff', border: '1px solid #bae0ff',
                 borderRadius: 6,
               }}>
                 <div style={{ fontSize: 12, color: '#0958d9', marginBottom: 4, fontWeight: 500 }}>
-                  🤖 AI 优化建议（{editingProduct?.listings?.[0]?.platform?.toUpperCase() || ''} 风格）
+                  🤖 AI 优化建议（{editingProduct?.listings?.[0]?.platform?.toUpperCase() || ''} 风格）— 已填入上方，可保存或继续编辑
                 </div>
                 <div style={{ fontSize: 13, lineHeight: 1.5, color: '#1f1f1f' }}>
-                  {optimizedTitle || <span style={{ color: '#999' }}>AI 未返回内容</span>}
+                  {optimizedTitle}
                 </div>
-                {optimizedTitle && (
-                  <Space size={6} style={{ marginTop: 6 }}>
-                    <Button size="small" type="primary" ghost onClick={handleCopyOptimized}>
-                      复制
-                    </Button>
-                    <Button size="small" onClick={handleOptimizeTitle} loading={titleOptimizing}>
-                      重新生成
-                    </Button>
-                    <Button size="small" type="link" onClick={() => setOptimizedTitle(null)}>
-                      关闭
-                    </Button>
-                  </Space>
-                )}
+                <Space size={6} style={{ marginTop: 6 }}>
+                  <Button size="small" onClick={handleOptimizeTitle} loading={titleOptimizing}>
+                    重新生成
+                  </Button>
+                  <Button size="small" type="link" onClick={() => setOptimizedTitle(null)}>
+                    关闭建议
+                  </Button>
+                </Space>
               </div>
             )}
+          </Form.Item>
+          <Form.Item
+            name="description_ru"
+            label="商品描述"
+            extra="平台上的详细描述（俄文）。保存后同步到 listing，下次从平台拉取可能被覆盖"
+          >
+            <Input.TextArea
+              autoSize={{ minRows: 4, maxRows: 10 }}
+              placeholder="商品详细描述（俄文）"
+            />
           </Form.Item>
           <Form.Item name="local_category_id" label="本地分类">
             <Select
