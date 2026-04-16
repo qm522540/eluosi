@@ -121,3 +121,9 @@ class InitFromWBRequest(BaseModel):
 class MatchOzonRequest(BaseModel):
     """AI 批量匹配 Ozon 分类+属性映射到已有本地分类"""
     shop_id: int
+
+
+class InitFromOzonRequest(BaseModel):
+    """从 Ozon 店铺智能扩充本地分类+属性+映射"""
+    shop_id: int
+    include_enum_values: bool = True

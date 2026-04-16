@@ -10,7 +10,7 @@ from app.schemas.category_mapping import (
     AttributeMappingCreate, AttributeMappingUpdate,
     AttributeValueMappingCreate, AttributeValueMappingUpdate,
     AISuggestCategoryRequest, AISuggestAttributesRequest, AISuggestValuesRequest,
-    InitFromWBRequest, MatchOzonRequest,
+    InitFromWBRequest, MatchOzonRequest, InitFromOzonRequest,
 )
 from app.services.category_mapping.service import (
     list_local_categories, get_local_category_tree,
@@ -339,6 +339,30 @@ async def init_from_wb(
     if result["code"] != 0:
         return error(result["code"], result["msg"])
     return success(result["data"], msg="从 WB 初始化完成")
+
+
+@router.post("/init-from-ozon")
+async def init_from_ozon(
+    req: InitFromOzonRequest,
+    db: Session = Depends(get_db),
+    tenant_id: int = Depends(get_tenant_id),
+):
+    """从 Ozon 店铺智能扩充本地分类 + 属性 + 映射
+
+    与 /init-from-wb 的区别：
+    - 先 AI 归一判断：每个 OZON 分类是否对应已有本地分类
+    - 有对应 → 建 OZON 映射（is_confirmed=0 待确认）
+    - 无对应 → 新建本地分类 + OZON 映射（is_confirmed=1 自动确认）
+    - 属性同理：已有同名本地属性则复用，否则新建
+    """
+    from app.services.category_mapping.ai_suggester import init_mapping_from_ozon
+    result = await init_mapping_from_ozon(
+        db, tenant_id, req.shop_id,
+        include_enum_values=req.include_enum_values,
+    )
+    if result["code"] != 0:
+        return error(result["code"], result["msg"])
+    return success(result["data"], msg="从 Ozon 初始化完成")
 
 
 @router.post("/match-ozon")

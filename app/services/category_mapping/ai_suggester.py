@@ -756,6 +756,349 @@ async def init_mapping_from_wb(
     return {"code": 0, "data": stats}
 
 
+# ==================== 从 Ozon 初始化（智能合并到本地） ====================
+
+async def init_mapping_from_ozon(
+    db: Session, tenant_id: int, shop_id: int,
+    include_enum_values: bool = True,
+) -> dict:
+    """从 Ozon 店铺已用分类智能扩充本地分类 + OZON 映射
+
+    与 init_mapping_from_wb 不同，本函数会：
+    - 先 AI 判断每个 OZON 分类是否已有对应本地分类
+    - 有 → 只建 OZON 映射（is_confirmed=0 待确认）
+    - 无 → 新建本地分类（翻译中文）+ OZON 映射（is_confirmed=1 自动确认，1:1）
+
+    属性映射同样逻辑：已有本地属性名则复用，否则新建。
+    """
+    from app.models.product import PlatformListing
+    from app.models.category import LocalCategory, CategoryPlatformMapping
+    from app.services.platform.ozon import OzonClient
+    from sqlalchemy import distinct
+
+    shop = db.query(Shop).filter(
+        Shop.id == shop_id, Shop.tenant_id == tenant_id,
+    ).first()
+    if not shop:
+        return {"code": ErrorCode.SHOP_NOT_FOUND, "msg": "店铺不存在"}
+    if shop.platform != "ozon":
+        return {"code": ErrorCode.PARAM_ERROR, "msg": "此接口仅支持 Ozon 店铺"}
+
+    # 1. 店铺已用 description_category_id（存在 platform_category_id 字段）
+    used_cat_ids = [
+        row[0] for row in db.query(distinct(PlatformListing.platform_category_id)).filter(
+            PlatformListing.tenant_id == tenant_id,
+            PlatformListing.shop_id == shop_id,
+            PlatformListing.platform == "ozon",
+            PlatformListing.platform_category_id.isnot(None),
+        ).all() if row[0]
+    ]
+    if not used_cat_ids:
+        return {"code": ErrorCode.PARAM_ERROR, "msg": "店铺暂无商品分类数据，请先同步 Ozon 商品"}
+
+    # 2. 反查每个 category_id 的 type_id 和名称：
+    #    从 listing 取任一 product_id → fetch_product_info 取 type_id
+    #    然后 fetch_category_tree 反查名称
+    client = OzonClient(
+        shop_id=shop_id, api_key=shop.api_key, client_id=shop.client_id,
+        perf_client_id=shop.perf_client_id or "",
+        perf_client_secret=shop.perf_client_secret or "",
+    )
+    ozon_cats = []  # [{id, extra_id, name_ru, path}]
+    try:
+        # 拉分类树建反查字典
+        tree = await client.fetch_category_tree()
+        tree_map = {}  # description_category_id → (name, path_list)
+        _build_ozon_tree_map(tree, [], tree_map)
+
+        for cat_id in used_cat_ids:
+            # 取该分类下任一商品 product_id
+            pid = db.execute(
+                PlatformListing.__table__.select()
+                .where(
+                    PlatformListing.tenant_id == tenant_id,
+                    PlatformListing.shop_id == shop_id,
+                    PlatformListing.platform == "ozon",
+                    PlatformListing.platform_category_id == cat_id,
+                )
+                .limit(1)
+            ).fetchone()
+            if not pid:
+                continue
+            product_id = int(pid.platform_product_id)
+            infos = await client.fetch_product_info([product_id])
+            if not infos:
+                continue
+            info = infos[0]
+            type_id = info.get("type_id")
+            if not type_id:
+                continue
+            tree_info = tree_map.get(str(cat_id)) or (None, [])
+            name_ru = tree_info[0] or f"Category_{cat_id}"
+            path = " > ".join(tree_info[1]) if tree_info[1] else name_ru
+            ozon_cats.append({
+                "id": str(cat_id),
+                "extra_id": str(type_id),
+                "name_ru": name_ru,
+                "path": path,
+            })
+    finally:
+        await client.close()
+
+    if not ozon_cats:
+        return {"code": ErrorCode.UNKNOWN_ERROR, "msg": "无法反查 Ozon 分类信息"}
+
+    # 3. AI 合并去重：判断每个 OZON 分类是否对应已有本地分类
+    existing_locals = db.query(LocalCategory).filter(
+        LocalCategory.tenant_id == tenant_id,
+        LocalCategory.status == "active",
+    ).all()
+    merge_map = await _ai_merge_ozon_to_local(ozon_cats, existing_locals)
+    # merge_map[i] = local_cat_id 或 None（null 表示需新建）
+
+    # 4. 先翻译需要新建的 OZON 分类名称
+    to_translate = [
+        oz["name_ru"] for i, oz in enumerate(ozon_cats) if merge_map[i] is None
+    ]
+    translated = await _translate_batch(to_translate) if to_translate else []
+    translate_iter = iter(translated)
+
+    stats = {"categories_new": 0, "categories_merged": 0,
+             "attributes_new": 0, "attributes_reused": 0,
+             "values": 0, "skipped": []}
+
+    # 5. 处理每个 OZON 分类
+    from datetime import datetime, timezone
+    cat_to_local_map = {}  # OZON idx → local_category_id
+    for i, oz in enumerate(ozon_cats):
+        matched_local_id = merge_map[i]
+        if matched_local_id:
+            # 复用已有本地分类
+            local_id = matched_local_id
+            stats["categories_merged"] += 1
+            # 建 OZON 映射（ai_suggested=1, is_confirmed=0 待确认）
+            upsert_category_mapping(db, tenant_id, {
+                "local_category_id": local_id,
+                "platform": "ozon",
+                "platform_category_id": oz["id"],
+                "platform_category_extra_id": oz["extra_id"],
+                "platform_category_name": oz["name_ru"],
+                "platform_parent_path": oz["path"],
+                "ai_suggested": 1,
+                "ai_confidence": 80,  # 合并来的认为有一定置信度
+            })
+        else:
+            # 新建本地分类
+            zh_name = next(translate_iter, oz["name_ru"])
+            cat = LocalCategory(
+                tenant_id=tenant_id, parent_id=None,
+                name=zh_name or oz["name_ru"],
+                name_ru=oz["name_ru"], level=1,
+            )
+            db.add(cat)
+            db.flush()
+            local_id = cat.id
+            stats["categories_new"] += 1
+            # 建 OZON 映射（ai_suggested=0, is_confirmed=1 1:1 自动确认）
+            upsert_category_mapping(db, tenant_id, {
+                "local_category_id": local_id,
+                "platform": "ozon",
+                "platform_category_id": oz["id"],
+                "platform_category_extra_id": oz["extra_id"],
+                "platform_category_name": oz["name_ru"],
+                "platform_parent_path": oz["path"],
+                "ai_suggested": 0,
+                "ai_confidence": 100,
+            })
+            mp = db.query(CategoryPlatformMapping).filter(
+                CategoryPlatformMapping.tenant_id == tenant_id,
+                CategoryPlatformMapping.local_category_id == local_id,
+                CategoryPlatformMapping.platform == "ozon",
+            ).first()
+            if mp:
+                mp.is_confirmed = 1
+                mp.confirmed_at = datetime.now(timezone.utc)
+        cat_to_local_map[i] = local_id
+    db.commit()
+
+    # 6. 处理每个 OZON 分类的属性
+    client = OzonClient(
+        shop_id=shop_id, api_key=shop.api_key, client_id=shop.client_id,
+        perf_client_id=shop.perf_client_id or "",
+        perf_client_secret=shop.perf_client_secret or "",
+    )
+    try:
+        for i, oz in enumerate(ozon_cats):
+            local_id = cat_to_local_map[i]
+            try:
+                ozon_attrs = await client.fetch_category_attributes(
+                    int(oz["id"]), int(oz["extra_id"]),
+                )
+            except Exception as e:
+                logger.warning(f"拉 OZON 属性失败 cat={oz['id']}: {e}")
+                stats["skipped"].append(f"Ozon 属性拉取失败: {oz['id']}")
+                continue
+            if not ozon_attrs:
+                continue
+
+            # 已有本地属性名（WB 种子带来的）用于去重
+            from app.models.category import AttributeMapping as AM
+            existing_attr_names = set(
+                r.local_attr_name for r in db.query(AM).filter(
+                    AM.tenant_id == tenant_id,
+                    AM.local_category_id == local_id,
+                ).all()
+            )
+
+            ru_attr_names = [a.get("name", "") for a in ozon_attrs]
+            zh_attr_names = await _translate_batch(ru_attr_names)
+
+            for a, zh in zip(ozon_attrs, zh_attr_names):
+                attr_name_ru = a.get("name", "")
+                if not attr_name_ru:
+                    continue
+                # 简单规则：如果翻译后的中文名已在本地存在，复用；否则新建
+                local_attr_name = zh if zh else attr_name_ru
+                if local_attr_name in existing_attr_names:
+                    stats["attributes_reused"] += 1
+                else:
+                    stats["attributes_new"] += 1
+                    existing_attr_names.add(local_attr_name)
+
+                dict_id = a.get("dictionary_id", 0)
+                value_type = _ozon_attr_value_type(a)
+
+                res = upsert_attribute_mapping(db, tenant_id, {
+                    "local_category_id": local_id,
+                    "local_attr_name": local_attr_name,
+                    "local_attr_name_ru": attr_name_ru,
+                    "platform": "ozon",
+                    "platform_attr_id": str(a.get("id", "")),
+                    "platform_attr_name": attr_name_ru,
+                    "is_required": 1 if a.get("is_required") else 0,
+                    "value_type": value_type,
+                    "platform_dict_id": str(dict_id) if dict_id else None,
+                    "ai_suggested": 1,
+                    "ai_confidence": 80,
+                })
+                if res["code"] != 0:
+                    continue
+
+                # 枚举值同步（只对新建的本地属性做，避免重复翻译）
+                if include_enum_values and value_type == "enum" and dict_id:
+                    attr_id = res["data"]["id"]
+                    try:
+                        values = await client.fetch_attribute_values(
+                            int(oz["id"]), int(oz["extra_id"]), int(a["id"]),
+                        )
+                    except Exception as e:
+                        logger.warning(f"拉 OZON 枚举值失败: {e}")
+                        continue
+                    if not values:
+                        continue
+                    # 只拉前 200 个枚举值避免过量（某些属性值可能上千）
+                    values = values[:200]
+                    v_ru = [v.get("value", "") for v in values if v.get("value")]
+                    v_zh = await _translate_batch(v_ru)
+                    for v, zh_val in zip(values, v_zh):
+                        val_ru = v.get("value", "")
+                        if not val_ru:
+                            continue
+                        upsert_attribute_value_mapping(db, tenant_id, {
+                            "attribute_mapping_id": attr_id,
+                            "local_value": zh_val or val_ru,
+                            "local_value_ru": val_ru,
+                            "platform_value": val_ru,
+                            "platform_value_id": str(v.get("id")) if v.get("id") else None,
+                            "ai_suggested": 1,
+                            "ai_confidence": 80,
+                        })
+                        stats["values"] += 1
+            db.commit()
+    finally:
+        await client.close()
+
+    return {"code": 0, "data": stats}
+
+
+def _build_ozon_tree_map(nodes: list, path: list, out: dict):
+    """递归构建 description_category_id → (name, path) 反查字典"""
+    for node in nodes or []:
+        name = node.get("category_name") or node.get("type_name") or ""
+        cur_path = path + [name] if name else path
+        cat_id = node.get("description_category_id")
+        if cat_id:
+            out[str(cat_id)] = (name, cur_path[:])
+        children = node.get("children") or []
+        if children:
+            _build_ozon_tree_map(children, cur_path, out)
+
+
+def _ozon_attr_value_type(a: dict) -> str:
+    t = (a.get("type") or "").lower()
+    if t in ("string", "multiline"):
+        return "string"
+    if t in ("integer", "decimal"):
+        return "number"
+    if t == "boolean":
+        return "boolean"
+    if a.get("dictionary_id", 0):
+        return "enum"
+    return "string"
+
+
+async def _ai_merge_ozon_to_local(
+    ozon_cats: list, existing_locals: list,
+) -> list:
+    """AI 判断每个 OZON 分类对应哪个已有本地分类，返回等长列表
+
+    返回 [local_category_id 或 None, ...]，长度等于 ozon_cats
+    """
+    if not existing_locals:
+        return [None] * len(ozon_cats)
+    # 构造提示词
+    local_lines = "\n".join([
+        f"{i}. 中文={lc.name} 俄文={lc.name_ru or '无'}"
+        for i, lc in enumerate(existing_locals)
+    ])
+    oz_lines = "\n".join([
+        f"{i}. {oz['name_ru']} (path: {oz.get('path','')})"
+        for i, oz in enumerate(ozon_cats)
+    ])
+    prompt = f"""你是跨境电商分类归一专家。任务：判断每个 OZON 分类是否对应已有本地分类。
+
+已有本地分类（按 idx 标识）：
+{local_lines}
+
+OZON 分类（按顺序，共 {len(ozon_cats)} 个）：
+{oz_lines}
+
+请按 OZON 顺序返回 JSON 数组（不含其他文字），每项标明对应的本地 idx 或 null：
+[
+  {{"local_idx": 0}} 或 {{"local_idx": null}} 或 {{"local_idx": 2}},
+  ...
+]
+
+要求：
+- 数组长度必须等于 {len(ozon_cats)}
+- 只在**明确对应**同一类商品时才给 idx（如都是"项链"）；有疑义或差异明显就给 null
+- 俄文名完全一致（如 Ожерелья = Ожерелья）必须匹配
+- 宁可 null 让用户确认，也不要乱匹配
+"""
+    result = await _call_ai(prompt, max_tokens=1000)
+    if not result or not isinstance(result, list) or len(result) != len(ozon_cats):
+        logger.warning("AI 归一返回格式错误，全部视为新建")
+        return [None] * len(ozon_cats)
+    out = []
+    for item in result:
+        idx = item.get("local_idx") if isinstance(item, dict) else None
+        if isinstance(idx, int) and 0 <= idx < len(existing_locals):
+            out.append(existing_locals[idx].id)
+        else:
+            out.append(None)
+    return out
+
+
 # ==================== 从本地批量匹配 Ozon ====================
 
 async def match_ozon_from_local(
