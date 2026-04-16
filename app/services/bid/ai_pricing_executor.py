@@ -1,34 +1,36 @@
-"""AI调价执行器（025_ai_pricing_margin 升级版）
+"""AI调价执行器 v2（2026-04-16 规则重构）
 
-核心逻辑变更（对比旧版）：
-  旧版：target_roas / min_roas → AI判断加降价
-  新版：net_margin + client_price → 算max_cpa → 算target_cpa → 直接输出最优CPM/CPC
+出价公式：
+  WB  → 目标CPM = target_cpa × CTR × CR × 1000 × 小时系数 × 星期系数
+  Ozon → 目标CPC = target_cpa × CR × 小时系数 × 星期系数
 
 计算链路：
   net_margin   优先读 products.net_margin，兜底读 ai_pricing_configs.gross_margin
   client_price 优先读 platform_listings.discount_price，其次 price，兜底 default_client_price
-  max_cpa      = client_price × net_margin  ← 每单广告费绝对上限（保本线）
-  breakeven_roas = 1 / net_margin           ← 保本ROAS（每个商品不同）
-  target_cpa   = max_cpa × 调价系数         ← 甜蜜点
+  max_cpa      = client_price × net_margin  ← 保本线
+  breakeven_roas = 1 / net_margin           ← 保本ROAS
+  target_cpa   = max_cpa × cpa_ratio        ← 甜蜜点
 
-  WB  → 目标CPM = target_cpa × CTR × CR × 1000 × 时段系数
-  Ozon → 目标CPC = target_cpa × CR × 时段系数
-
-数据可信度（按数据天数）：
-  0-6天   → 店铺均值，target_cpa = max_cpa × 50%
-  7-13天  → 均值70%+自身30%，target_cpa = max_cpa × 55%
-  14-20天 → 自身60%+均值40%，target_cpa = max_cpa × 58%
-  ≥21天   → 完全自身，target_cpa = max_cpa × 60%
+CTR/CR 取值（按数据天数）：
+  Day 0      → shop_avg × 40% / 20%（冷启动）
+  Day 1-6    → 初始系数 × 1.1^growth_count（棘轮，SKU级impressions环比增长才计数）
+  Day 7-13   → 均值60% + 自身40%，cpa_ratio=0.55
+  Day 14-20  → 自身70% + 均值30%，cpa_ratio=0.58
+               A'保护：偏离>50% + ROAS<保本线 → 回退60/40
+  ≥21天      → 纯自身，cpa_ratio动态试探（起步0.60，每3天±0.05，范围0.35-0.85）
+               ROAS门控：加价前查last3/prev3疗效
+               利润试探：spend×(ROAS×net_margin-1) 最大化
 
 时段系数（莫斯科时间）：
-  00-05 → 45%  05-07 → 60%  07-10 → 105%
-  10-14 → 120% 14-19 → 100% 19-23 → 130%  23-24 → 65%
+  00-04 → 50%  05-06 → 60%  07-09 → 105%
+  10-13 → 110% 14-18 → 100% 19-22 → 120%  23 → 65%
 
-生命周期管理：
-  data_days > losing_days_threshold
-  AND 21-30天均值ROAS < breakeven_roas（1/net_margin）
-  AND auto_remove_losing_sku=1
-  → 调平台API删除该SKU出价，写 bid_adjustment_logs(execute_type='auto_remove')
+星期系数：
+  周一-周四 → 100%  周五 → 105%  周六-周日 → 110%
+
+生命周期管理（亏损检测永远执行）：
+  auto_remove ON  → 自动删除 + 写日志
+  auto_remove OFF → 写建议列表（建议删除，用户确认）
 """
 
 import asyncio as _asyncio
@@ -42,7 +44,7 @@ from sqlalchemy import text
 from app.config import get_settings
 from app.utils.errors import ErrorCode
 from app.utils.logger import setup_logger
-from app.utils.moscow_time import moscow_hour, moscow_today
+from app.utils.moscow_time import moscow_hour, moscow_today, now_moscow
 
 logger = setup_logger("bid.ai_pricing_executor")
 settings = get_settings()
@@ -53,13 +55,20 @@ ANALYZE_LOCK_TTL = 60
 
 # 时段系数表（莫斯科时间，24小时）
 TIME_SLOT_MULTIPLIERS = {
-    0: 0.45, 1: 0.45, 2: 0.45, 3: 0.45, 4: 0.45,
+    0: 0.50, 1: 0.50, 2: 0.50, 3: 0.50, 4: 0.50,
     5: 0.60, 6: 0.60,
     7: 1.05, 8: 1.05, 9: 1.05,
-    10: 1.20, 11: 1.20, 12: 1.20, 13: 1.20,
+    10: 1.10, 11: 1.10, 12: 1.10, 13: 1.10,
     14: 1.00, 15: 1.00, 16: 1.00, 17: 1.00, 18: 1.00,
-    19: 1.30, 20: 1.30, 21: 1.30, 22: 1.30,
+    19: 1.20, 20: 1.20, 21: 1.20, 22: 1.20,
     23: 0.65,
+}
+
+# 星期系数表（0=周一，6=周日）
+DAY_OF_WEEK_MULTIPLIERS = {
+    0: 1.00, 1: 1.00, 2: 1.00, 3: 1.00,  # 周一-周四
+    4: 1.05,                                # 周五
+    5: 1.10, 6: 1.10,                       # 周六-周日
 }
 
 # target_cpa系数（按数据天数）
@@ -80,7 +89,14 @@ def _get_time_slot_multiplier() -> float:
     return TIME_SLOT_MULTIPLIERS.get(h, 1.0)
 
 
-def _get_cpa_ratio(data_days: int) -> tuple:
+def _get_day_of_week_multiplier() -> float:
+    """莫斯科时间的星期系数"""
+    msk = now_moscow()
+    return DAY_OF_WEEK_MULTIPLIERS.get(msk.weekday(), 1.0)
+
+
+def _get_cpa_ratio(data_days: int, sku_cpa_ratio: float = None) -> tuple:
+    """≥21天时优先使用 SKU 自己的动态 cpa_ratio"""
     if data_days < 7:
         return CPA_RATIO_BY_DAYS["0_6"], f"数据不足{data_days}天，使用店铺均值，保守执行"
     elif data_days < 14:
@@ -88,7 +104,210 @@ def _get_cpa_ratio(data_days: int) -> tuple:
     elif data_days < 21:
         return CPA_RATIO_BY_DAYS["14_20"], f"数据较充足{data_days}天，精准计算"
     else:
-        return CPA_RATIO_BY_DAYS["21p"], ""
+        ratio = sku_cpa_ratio if sku_cpa_ratio is not None else CPA_RATIO_BY_DAYS["21p"]
+        return ratio, ""
+
+
+def _get_sku_cpa_ratio(db, tenant_id: int, campaign_id: int, sku: str) -> Optional[float]:
+    """读取 SKU 级动态 cpa_ratio（≥21天利润试探用）"""
+    row = db.execute(text("""
+        SELECT cpa_ratio FROM ad_groups
+        WHERE campaign_id = :cid AND platform_group_id = :sku
+          AND tenant_id = :tid
+        LIMIT 1
+    """), {"cid": campaign_id, "sku": sku, "tid": tenant_id}).fetchone()
+    if row and row.cpa_ratio is not None:
+        return float(row.cpa_ratio)
+    return None
+
+
+# ==================== growth_count 冷启动期增长计数 ====================
+
+def _get_growth_count(db, campaign_id: int, sku: str, tenant_id: int,
+                      platform: str, data_days: int) -> int:
+    """Day 1-6：统计 SKU 级 impressions 环比增长的天数（棘轮）"""
+    if data_days < 1:
+        return 0
+
+    sku_col = "s.ad_group_id" if platform == "wb" else "COALESCE(s.ad_group_id, 0)"
+    lookback = min(data_days, 6) + 1  # 多取一天用于环比
+
+    rows = db.execute(text(f"""
+        SELECT s.stat_date, SUM(s.impressions) AS imp
+        FROM ad_stats s
+        WHERE s.campaign_id = :cid AND {sku_col} = :sku
+          AND s.tenant_id = :tid AND s.platform = :platform
+          AND s.stat_date >= DATE_SUB(CURDATE(), INTERVAL :days DAY)
+        GROUP BY s.stat_date
+        ORDER BY s.stat_date ASC
+    """), {"cid": campaign_id, "sku": sku, "tid": tenant_id,
+           "platform": platform, "days": lookback}).fetchall()
+
+    if len(rows) < 2:
+        return 0
+
+    count = 0
+    for i in range(1, len(rows)):
+        if int(rows[i].imp or 0) > int(rows[i - 1].imp or 0):
+            count += 1
+    return min(count, 6)
+
+
+# ==================== A' 偏离保护（14-20天） ====================
+
+def _check_a_prime_protection(sku_stat: dict, shop_avg: dict,
+                              breakeven_roas: float) -> bool:
+    """14-20天 A' 保护：偏离>50% + ROAS<保本线 → 回退60/40
+    返回 True 表示需要触发保护。
+    """
+    sku_ctr = sku_stat.get("ctr") or 0
+    sku_cr  = sku_stat.get("cr") or 0
+    avg_ctr = shop_avg.get("ctr", 0)
+    avg_cr  = shop_avg.get("cr", 0)
+
+    # 条件①：CTR 或 CR 任一偏离 >50%（开区间）
+    deviation_triggered = False
+    if avg_ctr > 0 and abs(sku_ctr - avg_ctr) / avg_ctr > 0.50:
+        deviation_triggered = True
+    if avg_cr > 0 and abs(sku_cr - avg_cr) / avg_cr > 0.50:
+        deviation_triggered = True
+
+    if not deviation_triggered:
+        return False
+
+    # 条件②：自身 ROAS < 保本线
+    sku_roas = sku_stat.get("roas") or 0
+    return sku_roas < breakeven_roas
+
+
+# ==================== ROAS 门控（≥21天） ====================
+
+def _roas_gate(db, campaign_id: int, sku: str, tenant_id: int,
+               platform: str, breakeven_roas: float,
+               optimal_bid: float, current_bid: float) -> float:
+    """≥21天加价前查疗效。返回调整后的 optimal_bid。
+    - ROAS < 保本线 → 禁止加价，返回 current_bid（让后续逻辑走降价）
+    - ROAS 趋势下跌>10% → 加价幅度砍半
+    - 降价 → 直接放行
+    """
+    if optimal_bid <= current_bid:
+        return optimal_bid  # 降价直接放行
+
+    sku_col = "s.ad_group_id" if platform == "wb" else "COALESCE(s.ad_group_id, 0)"
+    today = date.today()
+    last3_from = today - timedelta(days=3)
+    prev3_from = today - timedelta(days=6)
+
+    row = db.execute(text(f"""
+        SELECT
+            SUM(CASE WHEN s.stat_date >= :l3 THEN s.spend ELSE 0 END) AS l3_spend,
+            SUM(CASE WHEN s.stat_date >= :l3 THEN s.revenue ELSE 0 END) AS l3_revenue,
+            SUM(CASE WHEN s.stat_date >= :p3 AND s.stat_date < :l3 THEN s.spend ELSE 0 END) AS p3_spend,
+            SUM(CASE WHEN s.stat_date >= :p3 AND s.stat_date < :l3 THEN s.revenue ELSE 0 END) AS p3_revenue
+        FROM ad_stats s
+        WHERE s.campaign_id = :cid AND {sku_col} = :sku
+          AND s.tenant_id = :tid AND s.platform = :platform
+          AND s.stat_date >= :p3
+    """), {"cid": campaign_id, "sku": sku, "tid": tenant_id,
+           "platform": platform, "l3": last3_from, "p3": prev3_from}).fetchone()
+
+    if not row:
+        return optimal_bid
+
+    l3_spend = float(row.l3_spend or 0)
+    l3_revenue = float(row.l3_revenue or 0)
+    p3_spend = float(row.p3_spend or 0)
+    p3_revenue = float(row.p3_revenue or 0)
+
+    l3_roas = round(l3_revenue / l3_spend, 2) if l3_spend > 0 else 0
+    p3_roas = round(p3_revenue / p3_spend, 2) if p3_spend > 0 else 0
+
+    # 检查1：last3 ROAS < 保本线 → 禁止加价
+    if l3_roas < breakeven_roas:
+        logger.info(f"ROAS门控：sku={sku} last3 ROAS={l3_roas} < 保本线{breakeven_roas}，禁止加价")
+        return current_bid  # 不加价，保持当前
+
+    # 检查2：last3 ROAS < prev3 ROAS × 0.9 → 加价幅度砍半
+    if p3_roas > 0 and l3_roas < p3_roas * 0.9:
+        half_increase = (optimal_bid - current_bid) * 0.5
+        adjusted = current_bid + half_increase
+        logger.info(f"ROAS门控：sku={sku} ROAS下跌{l3_roas}/{p3_roas}，加价砍半→{adjusted:.2f}")
+        return round(adjusted, 2)
+
+    return optimal_bid
+
+
+# ==================== 利润试探（≥21天） ====================
+
+def _evaluate_profit_trial(db, tenant_id: int, campaign_id: int, sku: str,
+                           platform: str, net_margin: float,
+                           current_cpa_ratio: float) -> float:
+    """每3天评估 last3 vs prev3 利润，调整 cpa_ratio ±0.05。
+    返回新的 cpa_ratio。
+    """
+    CPA_STEP = 0.05
+    CPA_MIN  = 0.35
+    CPA_MAX  = 0.85
+
+    sku_col = "s.ad_group_id" if platform == "wb" else "COALESCE(s.ad_group_id, 0)"
+    today = date.today()
+    last3_from = today - timedelta(days=3)
+    prev3_from = today - timedelta(days=6)
+
+    row = db.execute(text(f"""
+        SELECT
+            SUM(CASE WHEN s.stat_date >= :l3 THEN s.spend ELSE 0 END) AS l3_spend,
+            SUM(CASE WHEN s.stat_date >= :l3 THEN s.revenue ELSE 0 END) AS l3_revenue,
+            SUM(CASE WHEN s.stat_date >= :p3 AND s.stat_date < :l3 THEN s.spend ELSE 0 END) AS p3_spend,
+            SUM(CASE WHEN s.stat_date >= :p3 AND s.stat_date < :l3 THEN s.revenue ELSE 0 END) AS p3_revenue
+        FROM ad_stats s
+        WHERE s.campaign_id = :cid AND {sku_col} = :sku
+          AND s.tenant_id = :tid AND s.platform = :platform
+          AND s.stat_date >= :p3
+    """), {"cid": campaign_id, "sku": sku, "tid": tenant_id,
+           "platform": platform, "l3": last3_from, "p3": prev3_from}).fetchone()
+
+    if not row:
+        return current_cpa_ratio
+
+    l3_spend = float(row.l3_spend or 0)
+    l3_revenue = float(row.l3_revenue or 0)
+    p3_spend = float(row.p3_spend or 0)
+    p3_revenue = float(row.p3_revenue or 0)
+
+    if l3_spend <= 0 or p3_spend <= 0:
+        return current_cpa_ratio
+
+    l3_roas = l3_revenue / l3_spend
+    p3_roas = p3_revenue / p3_spend
+
+    l3_profit = l3_spend * (l3_roas * net_margin - 1)
+    p3_profit = p3_spend * (p3_roas * net_margin - 1)
+
+    if l3_profit > p3_profit:
+        # 利润涨了，继续同方向
+        new_ratio = current_cpa_ratio + CPA_STEP
+    else:
+        # 利润跌了，反向回退
+        new_ratio = current_cpa_ratio - CPA_STEP
+
+    new_ratio = max(CPA_MIN, min(CPA_MAX, round(new_ratio, 2)))
+    logger.info(
+        f"利润试探：sku={sku} l3_profit={l3_profit:.0f} p3_profit={p3_profit:.0f} "
+        f"cpa_ratio {current_cpa_ratio}→{new_ratio}"
+    )
+    return new_ratio
+
+
+def _save_sku_cpa_ratio(db, tenant_id: int, campaign_id: int,
+                        sku: str, new_ratio: float):
+    """保存 SKU 级动态 cpa_ratio 到 ad_groups"""
+    db.execute(text("""
+        UPDATE ad_groups
+        SET cpa_ratio = :ratio, cpa_ratio_updated = NOW()
+        WHERE campaign_id = :cid AND platform_group_id = :sku
+          AND tenant_id = :tid
+    """), {"ratio": new_ratio, "cid": campaign_id, "sku": sku, "tid": tenant_id})
 
 
 # ==================== 净毛利率和客单价读取 ====================
@@ -198,10 +417,11 @@ def _get_shop_avg(db, shop_id: int, tenant_id: int, platform: str) -> dict:
 # ==================== 目标出价计算（核心） ====================
 
 def _calc_optimal_bid(platform: str, target_cpa: float, ctr: float,
-                      cr: float, time_multiplier: float, max_cpa: float) -> Optional[float]:
+                      cr: float, time_multiplier: float, day_multiplier: float,
+                      max_cpa: float) -> Optional[float]:
     """
-    WB:   目标CPM = target_cpa × CTR × CR × 1000 × 时段系数
-    Ozon: 目标CPC = target_cpa × CR × 时段系数
+    WB:   目标CPM = target_cpa × CTR × CR × 1000 × 小时系数 × 星期系数
+    Ozon: 目标CPC = target_cpa × CR × 小时系数 × 星期系数
     安全验证不超过保本线
     """
     if ctr <= 0 or cr <= 0:
@@ -209,17 +429,18 @@ def _calc_optimal_bid(platform: str, target_cpa: float, ctr: float,
 
     ctr_dec = ctr / 100.0
     cr_dec  = cr / 100.0
+    combined_multiplier = time_multiplier * day_multiplier
 
     if platform == "wb":
-        raw_bid = target_cpa * ctr_dec * cr_dec * 1000 * time_multiplier
+        raw_bid = target_cpa * ctr_dec * cr_dec * 1000 * combined_multiplier
         actual_cpa = raw_bid / (ctr_dec * cr_dec * 1000)
         if actual_cpa > max_cpa:
-            raw_bid = max_cpa * ctr_dec * cr_dec * 1000 * time_multiplier
+            raw_bid = max_cpa * ctr_dec * cr_dec * 1000 * combined_multiplier
     else:
-        raw_bid = target_cpa * cr_dec * time_multiplier
+        raw_bid = target_cpa * cr_dec * combined_multiplier
         actual_cpa = raw_bid / cr_dec
         if actual_cpa > max_cpa:
-            raw_bid = max_cpa * cr_dec * time_multiplier
+            raw_bid = max_cpa * cr_dec * combined_multiplier
 
     return round(raw_bid, 2)
 
@@ -544,8 +765,9 @@ async def _analyze_now_inner(db, tenant_id: int, shop_id: int,
     # ── 查询SKU历史数据 ──
     sku_stats = _query_sku_history(db, shop_id, tenant_id, platform)
 
-    # ── 时段系数 ──
+    # ── 时段系数 + 星期系数 ──
     time_multiplier = _get_time_slot_multiplier()
+    day_multiplier  = _get_day_of_week_multiplier()
     current_hour    = moscow_hour()
 
     # ── 过期旧建议 ──
@@ -584,14 +806,19 @@ async def _analyze_now_inner(db, tenant_id: int, shop_id: int,
             sku_stat  = sku_stats.get(stats_key, {})
             data_days = int(sku_stat.get("days", 0) or 0)
 
-            # ── 生命周期管理：检查亏损条件 ──
-            if cfg.auto_remove_losing_sku and data_days > cfg.losing_days_threshold:
-                is_losing, roas_21_30, breakeven_roas, net_margin_losing = _is_losing_sku(
+            # ── Step 1: 生命周期管理：亏损检测（永远执行） ──
+            net_margin   = _get_net_margin(db, tenant_id, shop_id, sku)
+            client_price = _get_client_price(db, tenant_id, shop_id, sku)
+            max_cpa          = client_price * net_margin
+            breakeven_roas   = 1.0 / net_margin if net_margin > 0 else 0
+
+            if data_days > (cfg.losing_days_threshold or 21):
+                is_losing, roas_21_30, be_roas_l, net_margin_l = _is_losing_sku(
                     db, tenant_id, shop_id, camp.id, platform, sku,
                 )
                 if is_losing:
-                    if cfg.auto_execute:
-                        # 全自动模式：直接调平台 API 删除
+                    if cfg.auto_remove_losing_sku and cfg.auto_execute:
+                        # 全自动删除
                         removed = await _check_and_remove_losing_sku(
                             db, client, shop, camp, sku, sku_name,
                             current_bid, tenant_id, sku_stat,
@@ -600,10 +827,10 @@ async def _analyze_now_inner(db, tenant_id: int, shop_id: int,
                             auto_removed += 1
                             continue
                     else:
-                        # 建议模式：写一条"建议删除"到 suggestions 表，交用户确认
+                        # 写建议列表（无论 auto_remove/auto_execute 设置）
                         reason_txt = (
                             f"[亏损删除建议] 21-30天ROAS={roas_21_30:.2f}x "
-                            f"低于保本线{breakeven_roas:.2f}x (净毛利率={net_margin_losing})，"
+                            f"低于保本线{be_roas_l:.2f}x (净毛利率={net_margin_l})，"
                             f"数据天数{data_days}天，建议从活动中移除该 SKU"
                         )
                         ins = db.execute(text("""
@@ -643,27 +870,33 @@ async def _analyze_now_inner(db, tenant_id: int, shop_id: int,
                         })
                         continue
 
-            # ── 净毛利率和客单价 ──
-            net_margin   = _get_net_margin(db, tenant_id, shop_id, sku)
-            client_price = _get_client_price(db, tenant_id, shop_id, sku)
-            max_cpa          = client_price * net_margin
-            breakeven_roas   = 1.0 / net_margin if net_margin > 0 else 0
-
-            # ── 数据可信度 → target_cpa ──
-            cpa_ratio, data_note = _get_cpa_ratio(data_days)
-            target_cpa = max_cpa * cpa_ratio
-
-            # ── 选取CTR/CR来源 ──
-            if data_days < 7:
-                ctr = shop_avg.get("ctr", 0)
-                cr  = shop_avg.get("cr", 0)
+            # ── Step 2: 选取 CTR/CR 来源（新规则） ──
+            if data_days == 0:
+                # 冷启动：shop_avg × 40%/20%
+                ctr = shop_avg.get("ctr", 0) * 0.40
+                cr  = shop_avg.get("cr", 0)  * 0.20
+            elif data_days <= 6:
+                # Day 1-6：growth_count 棘轮
+                growth_count = _get_growth_count(
+                    db, camp.id, sku, tenant_id, platform, data_days)
+                ctr = shop_avg.get("ctr", 0) * 0.40 * (1.1 ** growth_count)
+                cr  = shop_avg.get("cr", 0)  * 0.20 * (1.1 ** growth_count)
             elif data_days < 14:
-                ctr = shop_avg.get("ctr", 0) * 0.7 + (sku_stat.get("ctr") or 0) * 0.3
-                cr  = shop_avg.get("cr", 0)  * 0.7 + (sku_stat.get("cr") or 0)  * 0.3
+                # Day 7-13：均值60% + 自身40%
+                ctr = shop_avg.get("ctr", 0) * 0.6 + (sku_stat.get("ctr") or 0) * 0.4
+                cr  = shop_avg.get("cr", 0)  * 0.6 + (sku_stat.get("cr") or 0)  * 0.4
             elif data_days < 21:
-                ctr = (sku_stat.get("ctr") or 0) * 0.6 + shop_avg.get("ctr", 0) * 0.4
-                cr  = (sku_stat.get("cr") or 0)  * 0.6 + shop_avg.get("cr", 0)  * 0.4
+                # Day 14-20：自身70% + 均值30%，A'保护可能回退到60/40
+                self_weight = 0.70
+                avg_weight  = 0.30
+                if _check_a_prime_protection(sku_stat, shop_avg, breakeven_roas):
+                    self_weight = 0.40
+                    avg_weight  = 0.60
+                    logger.info(f"A'保护触发: sku={sku} 回退60/40")
+                ctr = (sku_stat.get("ctr") or 0) * self_weight + shop_avg.get("ctr", 0) * avg_weight
+                cr  = (sku_stat.get("cr") or 0)  * self_weight + shop_avg.get("cr", 0)  * avg_weight
             else:
+                # ≥21天：纯自身
                 ctr = sku_stat.get("ctr") or 0
                 cr  = sku_stat.get("cr") or 0
 
@@ -677,12 +910,31 @@ async def _analyze_now_inner(db, tenant_id: int, shop_id: int,
                     logger.info(f"sku={sku} CR=0且均值CR=0，跳过")
                     continue
 
-            # ── 计算最优出价 ──
+            # ── Step 3: 确定 cpa_ratio ──
+            sku_cpa_ratio = None
+            if data_days >= 21:
+                sku_cpa_ratio = _get_sku_cpa_ratio(db, tenant_id, camp.id, sku)
+            cpa_ratio, data_note = _get_cpa_ratio(data_days, sku_cpa_ratio)
+            target_cpa = max_cpa * cpa_ratio
+
+            # ── Step 4: 计算最优出价 ──
             optimal_bid = _calc_optimal_bid(
                 platform=platform, target_cpa=target_cpa,
                 ctr=ctr, cr=cr,
-                time_multiplier=time_multiplier, max_cpa=max_cpa,
+                time_multiplier=time_multiplier,
+                day_multiplier=day_multiplier,
+                max_cpa=max_cpa,
             )
+
+            # ── Step 5: 平台最低出价校验 ──
+            # （留空：WB get_min_bid 未实现，暂用 MIN_BID 兜底）
+
+            # ── Step 6: ROAS 门控（≥21天） ──
+            if optimal_bid is not None and data_days >= 21:
+                optimal_bid = _roas_gate(
+                    db, camp.id, sku, tenant_id, platform,
+                    breakeven_roas, optimal_bid, current_bid,
+                )
             if optimal_bid is None:
                 continue
 
@@ -702,7 +954,9 @@ async def _analyze_now_inner(db, tenant_id: int, shop_id: int,
                 client_price=client_price, max_cpa=max_cpa,
                 target_cpa=target_cpa, ctr=ctr, cr=cr,
                 current_bid=current_bid, optimal_bid=optimal_bid,
-                time_multiplier=time_multiplier, current_hour=current_hour,
+                time_multiplier=time_multiplier,
+                day_multiplier=day_multiplier,
+                current_hour=current_hour,
                 data_days=data_days, data_note=data_note,
                 breakeven_roas=breakeven_roas, current_roas=current_roas,
             )
@@ -757,6 +1011,46 @@ async def _analyze_now_inner(db, tenant_id: int, shop_id: int,
     auto_executed = 0
     if cfg.auto_execute and saved:
         auto_executed = await _auto_execute(db, tenant_id, shop, saved)
+
+    # ── Step 9: 利润试探评估（≥21天，每3天） ──
+    for camp in campaigns:
+        products = products_by_campaign.get(camp.id) or []
+        for p in products:
+            sku = str(p.get("sku") or "")
+            if not sku:
+                continue
+            stats_key = f"{camp.id}_{sku}"
+            sku_stat_t = sku_stats.get(stats_key, {})
+            dd = int(sku_stat_t.get("days", 0) or 0)
+            if dd < 21:
+                continue
+
+            # 检查是否到了3天评估节点
+            ag_row = db.execute(text("""
+                SELECT cpa_ratio, cpa_ratio_updated FROM ad_groups
+                WHERE campaign_id = :cid AND platform_group_id = :sku
+                  AND tenant_id = :tid LIMIT 1
+            """), {"cid": camp.id, "sku": sku, "tid": tenant_id}).fetchone()
+
+            current_ratio = float(ag_row.cpa_ratio) if ag_row and ag_row.cpa_ratio else 0.60
+            last_updated = ag_row.cpa_ratio_updated if ag_row else None
+
+            # 每3天评估一次
+            if last_updated:
+                try:
+                    lu = last_updated if hasattr(last_updated, 'date') else datetime.fromisoformat(str(last_updated))
+                    days_since = (datetime.now(timezone.utc).replace(tzinfo=None) - lu.replace(tzinfo=None)).days
+                except Exception:
+                    days_since = 999
+                if days_since < 3:
+                    continue
+
+            nm = _get_net_margin(db, tenant_id, shop_id, sku)
+            new_ratio = _evaluate_profit_trial(
+                db, tenant_id, camp.id, sku, platform, nm, current_ratio)
+            if new_ratio != current_ratio:
+                _save_sku_cpa_ratio(db, tenant_id, camp.id, sku, new_ratio)
+    db.commit()
 
     elapsed = int((_utc_now() - start).total_seconds() * 1000)
     summary = (f"分析{len(campaigns)}个活动 生成{len(saved)}条建议 "
@@ -1230,10 +1524,15 @@ def _get_product_stage(data_days: int) -> str:
 
 def _build_reason(platform, net_margin, client_price, max_cpa,
                   target_cpa, ctr, cr, current_bid, optimal_bid,
-                  time_multiplier, current_hour, data_days, data_note,
+                  time_multiplier, day_multiplier, current_hour,
+                  data_days, data_note,
                   breakeven_roas, current_roas) -> str:
     direction   = "加价" if optimal_bid > current_bid else "降价"
-    time_desc   = f"莫斯科{current_hour}时×{int(time_multiplier*100)}%"
+    weekday_names = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"]
+    msk = now_moscow()
+    weekday_name = weekday_names[msk.weekday()]
+    time_desc = (f"莫斯科{current_hour}时×{int(time_multiplier*100)}% "
+                 f"{weekday_name}×{int(day_multiplier*100)}%")
     output_type = "CPM" if platform == "wb" else "CPC"
     parts = [
         f"净毛利率{int(net_margin*100)}%·客单价₽{client_price:.0f}",
