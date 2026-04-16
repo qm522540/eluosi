@@ -14,6 +14,8 @@ import {
   MenuUnfoldOutlined,
   AppstoreOutlined,
   PartitionOutlined,
+  NotificationOutlined,
+  DollarOutlined,
 } from '@ant-design/icons'
 import { useAuthStore } from '@/stores/authStore'
 
@@ -27,9 +29,13 @@ const menuItems = [
     label: '首页大盘',
   },
   {
-    key: '/ads',
+    key: 'ads-group',
     icon: <FundOutlined />,
     label: '广告管理',
+    children: [
+      { key: '/ads', icon: <NotificationOutlined />, label: '推广信息' },
+      { key: '/ads/bid-management', icon: <DollarOutlined />, label: '出价管理' },
+    ],
   },
   {
     key: 'products-group',
@@ -115,7 +121,10 @@ const AppLayout = () => {
         <Menu
           mode="inline"
           selectedKeys={[location.pathname]}
-          defaultOpenKeys={location.pathname.startsWith('/products') ? ['products-group'] : []}
+          defaultOpenKeys={[
+            location.pathname.startsWith('/products') && 'products-group',
+            location.pathname.startsWith('/ads') && 'ads-group',
+          ].filter(Boolean)}
           items={menuItems}
           onClick={handleMenuClick}
           style={{ borderRight: 0 }}

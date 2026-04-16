@@ -24,6 +24,7 @@ const App = () => {
       >
         <Route index element={<Dashboard />} />
         <Route path="ads" element={<Ads />} />
+        <Route path="ads/bid-management" element={<Ads />} />
         <Route path="products" element={<Products />} />
         <Route path="products/mapping" element={<MappingManagement />} />
         <Route path="seo" element={<Seo />} />

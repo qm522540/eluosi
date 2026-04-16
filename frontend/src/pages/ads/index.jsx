@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
+import { useLocation, useNavigate } from 'react-router-dom'
 import {
   Typography, Button, Space, Select, Tabs, Tooltip, message,
 } from 'antd'
@@ -22,9 +23,23 @@ dayjs.locale('zh-cn')
 
 const { Title } = Typography
 
+// 左侧菜单的"推广信息 / 出价管理"两项通过 URL 反推 mainTab
+// 其他 Tab（规则/数据分析/预算）不在菜单里，点击后 URL 回落到 /ads 维持"推广信息"高亮
+const PATH_TO_TAB = {
+  '/ads': 'overview',
+  '/ads/bid-management': 'bid-management',
+}
+const TAB_TO_PATH = {
+  overview: '/ads',
+  'bid-management': '/ads/bid-management',
+}
+
 const Ads = () => {
+  const location = useLocation()
+  const navigate = useNavigate()
+
   const [searched, setSearched] = useState(false)
-  const [mainTab, setMainTab] = useState('overview')
+  const [mainTab, setMainTab] = useState(PATH_TO_TAB[location.pathname] || 'overview')
   const [syncing, setSyncing] = useState(false)
   const [lastSyncTime, setLastSyncTime] = useState(null)
 
@@ -48,6 +63,19 @@ const Ads = () => {
       setShops(res.data.items || [])
     }).catch(() => {})
   }, [])
+
+  // URL 变化（左侧菜单点击）时同步 Tab
+  useEffect(() => {
+    const tab = PATH_TO_TAB[location.pathname]
+    if (tab && tab !== mainTab) setMainTab(tab)
+  }, [location.pathname])
+
+  // Tab 切换时回写 URL（仅两个有菜单入口的 Tab 改变 URL，其他回落到 /ads）
+  const handleTabChange = (newTab) => {
+    setMainTab(newTab)
+    const targetPath = TAB_TO_PATH[newTab] || '/ads'
+    if (targetPath !== location.pathname) navigate(targetPath, { replace: true })
+  }
 
   // 已确认店铺后获取上次同步时间，超过30分钟自动同步
   // 仅"广告概览" Tab 下触发，其他 Tab（规则/出价管理/数据分析/预算）不自动同步
@@ -149,7 +177,7 @@ const Ads = () => {
       {/* 主功能Tab */}
       <Tabs
         activeKey={mainTab}
-        onChange={setMainTab}
+        onChange={handleTabChange}
         tabBarExtraContent={{ right: tabBarExtra }}
         items={[
           {
