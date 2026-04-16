@@ -1190,6 +1190,66 @@ const AdsOverview = ({ shopId, platform, shops, searched, syncing, lastSyncTime,
               label: `商品出价 (${campaignProducts.length})`,
               children: (
                 <div>
+                  {/* 顶部汇总条 */}
+                  {campaignProducts.length > 0 && (
+                    <Card size="small" style={{ marginBottom: 12, background: '#fafbfe', borderColor: '#e6ecf5' }}>
+                      <Row gutter={24}>
+                        <Col span={6}>
+                          <Statistic
+                            title="商品数"
+                            value={campaignProducts.length}
+                            valueStyle={{ fontSize: 20 }}
+                          />
+                        </Col>
+                        {detailData.platform === 'ozon' ? (
+                          <Col span={9}>
+                            <Statistic
+                              title="平均出价"
+                              value={Math.round(
+                                campaignProducts.reduce((s, p) => s + Number(p.bid || 0), 0)
+                                / Math.max(campaignProducts.length, 1) / 1000000
+                              )}
+                              suffix="₽"
+                              valueStyle={{ fontSize: 20, color: '#1677ff' }}
+                            />
+                          </Col>
+                        ) : (
+                          <>
+                            <Col span={6}>
+                              <Statistic
+                                title="搜索均价"
+                                value={(
+                                  campaignProducts.reduce((s, p) => s + Number(p.bid_search || 0), 0)
+                                  / Math.max(campaignProducts.length, 1)
+                                ).toFixed(0)}
+                                suffix="₽"
+                                valueStyle={{ fontSize: 20, color: '#1677ff' }}
+                              />
+                            </Col>
+                            <Col span={6}>
+                              <Statistic
+                                title="推荐均价"
+                                value={(
+                                  campaignProducts.reduce((s, p) => s + Number(p.bid_recommendations || 0), 0)
+                                  / Math.max(campaignProducts.length, 1)
+                                ).toFixed(0)}
+                                suffix="₽"
+                                valueStyle={{ fontSize: 20, color: '#722ed1' }}
+                              />
+                            </Col>
+                          </>
+                        )}
+                        <Col span={detailData.platform === 'ozon' ? 9 : 6}>
+                          <Statistic
+                            title="已绑定广告组"
+                            value={campaignProducts.filter(p => getAdGroupIdBySku(p.sku)).length}
+                            suffix={`/ ${campaignProducts.length}`}
+                            valueStyle={{ fontSize: 20, color: '#52c41a' }}
+                          />
+                        </Col>
+                      </Row>
+                    </Card>
+                  )}
                   <Alert
                     type="info"
                     showIcon
