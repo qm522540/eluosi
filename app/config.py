@@ -44,6 +44,14 @@ class Settings(BaseSettings):
     OZON_RATE_LIMIT_PER_MINUTE: int = 60
     YANDEX_RATE_LIMIT_PER_MINUTE: int = 60
 
+    # 阿里云 OSS（用于商品图片归档）
+    OSS_ENDPOINT: str = ""
+    OSS_ACCESS_KEY_ID: str = ""
+    OSS_ACCESS_KEY_SECRET: str = ""
+    OSS_BUCKET: str = ""
+    # CDN 加速域名（可选）；不填则用 OSS 默认域名
+    OSS_CDN_DOMAIN: str = ""
+
     # 环境
     ENV: str = "development"
     DEBUG: bool = True
