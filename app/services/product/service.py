@@ -387,8 +387,10 @@ def check_sync_needed(db: Session, shop_id: int, tenant_id: int,
     """), {"shop_id": shop_id, "tenant_id": tenant_id}).fetchone()
     if not row or not row.last_sync_at:
         return {"need_sync": True, "reason": "首次同步"}
-    now = datetime.now(timezone.utc).replace(tzinfo=None)
-    elapsed = (now - row.last_sync_at).total_seconds() / 60
+    last_sync = row.last_sync_at
+    if last_sync.tzinfo is None:
+        last_sync = last_sync.replace(tzinfo=timezone.utc)
+    elapsed = (datetime.now(timezone.utc) - last_sync).total_seconds() / 60
     if elapsed >= SYNC_INTERVAL_MINUTES:
         return {"need_sync": True, "reason": f"上次同步{int(elapsed)}分钟前"}
     return {"need_sync": False, "elapsed_minutes": int(elapsed)}
@@ -499,8 +501,8 @@ def _sync_ozon_products(db: Session, shop, tenant_id: int) -> dict:
                 for it in all_items
             }
             infos = []
-            for i in range(0, len(product_ids), 200):
-                chunk = product_ids[i:i + 200]
+            for i in range(0, len(product_ids), 500):
+                chunk = product_ids[i:i + 500]
                 infos.extend(await client.fetch_product_info(chunk))
             return infos, archived_map, stock_map
         finally:
