@@ -527,10 +527,15 @@ def _sync_wb_products(db: Session, shop, tenant_id: int) -> dict:
             updated += 1
         else:
             vendor_code = p.get("vendorCode") or f"WB-{nm_id}"
+            # WB 重量：dimensions.weightBrutto 单位 kg → 转 g
+            dims = p.get("dimensions") or {}
+            weight_kg = dims.get("weightBrutto") if isinstance(dims, dict) else None
+            weight_g = int(round(float(weight_kg) * 1000)) if weight_kg else None
             product = _get_or_create_product(
                 db, tenant_id, name_ru=data["title_ru"], sku=vendor_code,
                 shop_id=shop.id,
                 brand=p.get("brand"), image_url=image_url,
+                weight_g=weight_g,
                 local_category_id=local_cat_id)
             listing = PlatformListing(
                 tenant_id=tenant_id, product_id=product.id,
@@ -652,10 +657,14 @@ def _sync_ozon_products(db: Session, shop, tenant_id: int) -> dict:
             updated += 1
         else:
             offer_id = p.get("offer_id") or f"OZ-{pid_str}"
+            # OZON 重量：volume_weight（体积重，kg）→ g
+            vw = p.get("volume_weight")
+            ozon_weight_g = int(round(float(vw) * 1000)) if vw else None
             product = _get_or_create_product(
                 db, tenant_id, name_ru=title, sku=offer_id,
                 shop_id=shop.id,
                 image_url=primary,
+                weight_g=ozon_weight_g,
                 local_category_id=local_cat_id)
             listing = PlatformListing(
                 tenant_id=tenant_id, product_id=product.id,
@@ -674,6 +683,7 @@ def _get_or_create_product(db: Session, tenant_id: int,
                            shop_id: Optional[int] = None,
                            brand: Optional[str] = None,
                            image_url: Optional[str] = None,
+                           weight_g: Optional[int] = None,
                            local_category_id: Optional[int] = None):
     # 按 (tenant_id, shop_id, sku) 查重 —— 同一 SKU 在不同店铺是独立 product
     query = db.query(Product).filter(
@@ -686,6 +696,9 @@ def _get_or_create_product(db: Session, tenant_id: int,
     if existing:
         if local_category_id and not existing.local_category_id:
             existing.local_category_id = local_category_id
+        # 重量：已有不覆盖（尊重用户手动改的值）
+        if weight_g and not existing.weight_g:
+            existing.weight_g = weight_g
         return existing
     product = Product(
         tenant_id=tenant_id, shop_id=shop_id, sku=sku,
@@ -693,6 +706,7 @@ def _get_or_create_product(db: Session, tenant_id: int,
         name_ru=name_ru[:200] if name_ru else None,
         brand=brand,
         image_url=image_url,
+        weight_g=weight_g,
         local_category_id=local_category_id,
         status="active",
     )
