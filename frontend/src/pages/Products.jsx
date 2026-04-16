@@ -239,6 +239,17 @@ const Products = () => {
               {v || record.name_zh || record.sku}
             </div>
             <div style={{ fontSize: 11, color: 'var(--color-text-tertiary)' }}>
+              {(record.listings || []).map((l, i) => (
+                <span key={l.id}>
+                  {i > 0 && <span style={{ margin: '0 4px' }}>·</span>}
+                  <span style={{ color: PLATFORM_COLOR[l.platform]?.color || 'inherit' }}>
+                    {PLATFORM_COLOR[l.platform]?.label}: {l.platform_product_id}
+                  </span>
+                </span>
+              ))}
+              {(record.listings?.length > 0) && (
+                <span style={{ margin: '0 4px' }}>·</span>
+              )}
               {record.sku}
             </div>
           </div>
