@@ -373,8 +373,15 @@ async def suggest_attribute_value_mappings(
 ) -> dict:
     """AI 推荐本地属性值 → 平台枚举值的映射
 
-    前置条件：属性是枚举类型（value_type=enum 且 platform_dict_id 存在）
+    流程:
+    1. 查属性映射 → 拿到 platform + platform_attr_id + value_type
+    2. 查同分类同平台的品类映射 → 拿到 platform_category_id + extra_id
+    3. 拉平台该属性的枚举值字典
+    4. 让 AI 为每个本地值匹配最接近的平台枚举值
+    5. 批量 upsert attribute_value_mappings
     """
+    from app.models.category import CategoryPlatformMapping
+
     attr_mapping = db.query(AttributeMapping).filter(
         AttributeMapping.id == attribute_mapping_id,
         AttributeMapping.tenant_id == tenant_id,
@@ -383,7 +390,131 @@ async def suggest_attribute_value_mappings(
         return {"code": ErrorCode.PARAM_ERROR, "msg": "属性映射不存在"}
     if attr_mapping.value_type != "enum":
         return {"code": ErrorCode.PARAM_ERROR, "msg": "仅枚举类型属性支持属性值映射"}
+    if not local_values:
+        return {"code": ErrorCode.PARAM_ERROR, "msg": "请提供本地属性值列表"}
 
-    # TODO: 拉取平台枚举值（需 WB charcs 里的 dictionary 或 Ozon attribute/values）
-    # 这里先实现框架，具体拉取逻辑与平台强相关，放到后续迭代
-    return {"code": 0, "data": {"msg": "属性值推荐功能框架已就绪，等后续接入平台枚举值拉取"}}
+    cat_mapping = db.query(CategoryPlatformMapping).filter(
+        CategoryPlatformMapping.tenant_id == tenant_id,
+        CategoryPlatformMapping.local_category_id == attr_mapping.local_category_id,
+        CategoryPlatformMapping.platform == attr_mapping.platform,
+    ).first()
+    if not cat_mapping:
+        return {"code": ErrorCode.PARAM_ERROR, "msg": "请先完成品类映射"}
+
+    shop = db.query(Shop).filter(
+        Shop.id == shop_id, Shop.tenant_id == tenant_id,
+    ).first()
+    if not shop:
+        return {"code": ErrorCode.SHOP_NOT_FOUND, "msg": "店铺不存在"}
+
+    # 拉平台枚举值
+    enum_values = await _fetch_platform_enum_values(
+        shop, attr_mapping.platform, attr_mapping.platform_attr_id,
+        cat_mapping.platform_category_id, cat_mapping.platform_category_extra_id,
+    )
+    if not enum_values:
+        return {"code": ErrorCode.UNKNOWN_ERROR, "msg": "拉取平台枚举值失败或该属性不是字典类型"}
+
+    # AI 批量匹配
+    suggestions = await _ai_match_values(
+        attr_mapping.local_attr_name, local_values, enum_values,
+    )
+    if not suggestions:
+        return {"code": ErrorCode.UNKNOWN_ERROR, "msg": "AI 未能推荐"}
+
+    # 写入
+    created = 0
+    for local_val, sug in zip(local_values, suggestions):
+        if not sug or sug.get("idx") is None or sug["idx"] < 0 or sug["idx"] >= len(enum_values):
+            continue
+        picked = enum_values[sug["idx"]]
+        upsert_attribute_value_mapping(db, tenant_id, {
+            "attribute_mapping_id": attribute_mapping_id,
+            "local_value": local_val,
+            "platform_value": picked["value"],
+            "platform_value_id": str(picked.get("id")) if picked.get("id") else None,
+            "ai_suggested": 1,
+            "ai_confidence": int(sug.get("confidence", 0)),
+        })
+        created += 1
+    return {"code": 0, "data": {"count": created, "total": len(local_values)}}
+
+
+async def _fetch_platform_enum_values(
+    shop: Shop, platform: str, platform_attr_id: str,
+    platform_category_id: str, extra_id: Optional[str],
+) -> list:
+    """拉取平台枚举值字典，返回 [{id, value}, ...]"""
+    if platform == "wb":
+        from app.services.platform.wb import WBClient
+        client = WBClient(shop_id=shop.id, api_key=shop.api_key)
+        try:
+            charcs = await client.fetch_subject_charcs(int(platform_category_id))
+            # 找到目标 charcID 的 dictionary
+            for c in charcs:
+                if str(c.get("charcID")) == str(platform_attr_id):
+                    dict_items = c.get("dictionary") or []
+                    # WB dictionary 项格式：{name: "...", id: 0}（部分属性只有 name）
+                    return [{
+                        "id": d.get("id"),
+                        "value": d.get("name", ""),
+                    } for d in dict_items if d.get("name")]
+            return []
+        finally:
+            await client.close()
+    elif platform == "ozon":
+        if not extra_id:
+            return []
+        from app.services.platform.ozon import OzonClient
+        client = OzonClient(
+            shop_id=shop.id, api_key=shop.api_key, client_id=shop.client_id,
+            perf_client_id=shop.perf_client_id or "",
+            perf_client_secret=shop.perf_client_secret or "",
+        )
+        try:
+            values = await client.fetch_attribute_values(
+                int(platform_category_id), int(extra_id), int(platform_attr_id),
+            )
+            return [{
+                "id": v.get("id"),
+                "value": v.get("value", ""),
+            } for v in values if v.get("value")]
+        finally:
+            await client.close()
+    return []
+
+
+async def _ai_match_values(attr_name: str, local_values: list, enum_values: list) -> list:
+    """为每个本地值匹配最接近的平台枚举值，返回等长数组"""
+    # 候选太多时截断，避免 token 超限
+    candidates = enum_values[:300]
+    cand_lines = "\n".join([
+        f"{i}. {c['value']}"
+        for i, c in enumerate(candidates)
+    ])
+    local_lines = "\n".join([f"- {v}" for v in local_values])
+    prompt = f"""你是跨境电商属性值映射专家。现在需要把一组本地属性值匹配到平台字典的枚举值。
+
+属性名：{attr_name}
+
+本地值（共 {len(local_values)} 个）：
+{local_lines}
+
+平台枚举候选（按 idx 标识，共 {len(candidates)} 个）：
+{cand_lines}
+
+请按**本地值的顺序**返回 JSON 数组（不要任何其他文字）：
+[
+  {{"idx": 候选序号, "confidence": 置信度0-100}},
+  ...
+]
+
+要求：
+- 数组长度必须等于本地值数量（{len(local_values)}）
+- 找不到匹配时返回 {{"idx": -1, "confidence": 0}}
+- confidence >= 80 高度自信，60-79 可能需人工核对
+"""
+    result = await _call_ai(prompt, max_tokens=2000)
+    if not result or not isinstance(result, list):
+        return []
+    return result

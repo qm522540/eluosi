@@ -103,3 +103,10 @@ class AISuggestAttributesRequest(BaseModel):
     local_category_id: int
     shop_id: int
     platform: str
+
+
+class AISuggestValuesRequest(BaseModel):
+    """AI 推荐属性值映射"""
+    attribute_mapping_id: int
+    local_values: List[str] = Field(..., min_length=1)
+    shop_id: int

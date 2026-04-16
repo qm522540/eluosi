@@ -384,7 +384,38 @@ Ozon 示例：
 
 ### 7.3 AI 推荐属性值映射
 
-**⚠ 后端框架就绪，但平台枚举值拉取逻辑尚未接入**。本期不做，等平台对接完成再通知前端。
+**POST** `/api/v1/mapping/ai-suggest/values`
+```json
+{
+  "attribute_mapping_id": 100,
+  "local_values": ["925银", "18K金", "合金"],
+  "shop_id": 5
+}
+```
+
+**前置条件**：
+- 属性映射的 `value_type` 必须是 `enum`（非枚举类型报 `10002`）
+- 该属性对应的品类映射必须存在（否则报 `10002 请先完成品类映射`）
+
+**响应 data**：
+```json
+{ "count": 3, "total": 3 }
+```
+
+`count` = AI 成功匹配的数量，`total` = 请求的本地值总数。未匹配到的跳过（不写入）。
+
+后端流程：
+1. 查属性映射拿 `platform_attr_id` + `value_type`
+2. 查品类映射拿 `platform_category_id` + `extra_id`
+3. 拉平台字典值（WB 从 charcs 的 dictionary 字段，Ozon 调 attribute/values）
+4. AI 按本地值的顺序，为每个值匹配 top-1 枚举候选 + 置信度
+5. 批量 upsert 到 `attribute_value_mappings`，`ai_suggested=1`
+
+**前端交互建议**：
+- 在属性值映射 Drawer 底部加"AI 推荐"按钮
+- 用户先输入/粘贴一组本地值（如"925银\n18K金\n合金"），点按钮触发
+- Loading...（5-15 秒）
+- 完成后刷新 §6.1 列表，未确认的标橙色
 
 ---
 

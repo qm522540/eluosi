@@ -9,7 +9,7 @@ from app.schemas.category_mapping import (
     CategoryMappingCreate, CategoryMappingUpdate,
     AttributeMappingCreate, AttributeMappingUpdate,
     AttributeValueMappingCreate, AttributeValueMappingUpdate,
-    AISuggestCategoryRequest, AISuggestAttributesRequest,
+    AISuggestCategoryRequest, AISuggestAttributesRequest, AISuggestValuesRequest,
 )
 from app.services.category_mapping.service import (
     list_local_categories, get_local_category_tree,
@@ -284,6 +284,25 @@ async def ai_suggest_attributes(
     from app.services.category_mapping.ai_suggester import suggest_attribute_mappings
     result = await suggest_attribute_mappings(
         db, tenant_id, req.local_category_id, req.shop_id, req.platform,
+    )
+    if result["code"] != 0:
+        return error(result["code"], result["msg"])
+    return success(result["data"], msg="AI 推荐完成，请人工确认")
+
+
+@router.post("/ai-suggest/values")
+async def ai_suggest_values(
+    req: AISuggestValuesRequest,
+    db: Session = Depends(get_db),
+    tenant_id: int = Depends(get_tenant_id),
+):
+    """AI 推荐属性值映射：本地枚举值 → 平台字典枚举值
+
+    前置：属性映射 value_type=enum + 对应品类映射存在
+    """
+    from app.services.category_mapping.ai_suggester import suggest_attribute_value_mappings
+    result = await suggest_attribute_value_mappings(
+        db, tenant_id, req.attribute_mapping_id, req.local_values, req.shop_id,
     )
     if result["code"] != 0:
         return error(result["code"], result["msg"])
