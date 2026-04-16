@@ -25,6 +25,22 @@ const PLATFORM_COLOR = {
   yandex: { bg: '#FAEEDA', color: '#633806', label: 'YM' },
 }
 
+// 根据平台 + 平台商品ID 生成前台商品详情页链接
+const platformProductUrl = (platform, platformProductId, listing) => {
+  if (listing?.url) return listing.url
+  if (!platformProductId) return null
+  if (platform === 'wb') {
+    return `https://www.wildberries.ru/catalog/${platformProductId}/detail.aspx`
+  }
+  if (platform === 'ozon') {
+    return `https://www.ozon.ru/product/${platformProductId}/`
+  }
+  if (platform === 'yandex') {
+    return `https://market.yandex.ru/product/${platformProductId}`
+  }
+  return null
+}
+
 const STATUS_MAP = {
   active: { color: 'success', label: '在售' },
   inactive: { color: 'default', label: '停售' },
@@ -232,39 +248,60 @@ const Products = () => {
       title: '商品',
       dataIndex: 'name_ru',
       width: 220,
-      render: (v, record) => (
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-          {record.image_url ? (
-            <img src={record.image_url} alt=""
-              style={{ width: 40, height: 40, objectFit: 'cover',
-                borderRadius: 6, border: '0.5px solid var(--color-border-tertiary)' }} />
-          ) : (
-            <div style={{ width: 40, height: 40, background: 'var(--color-background-secondary)',
-              borderRadius: 6, border: '0.5px solid var(--color-border-tertiary)',
-              display: 'flex', alignItems: 'center', justifyContent: 'center',
-              fontSize: 10, color: 'var(--color-text-tertiary)' }}>图</div>
-          )}
-          <div>
-            <div style={{ fontWeight: 500, fontSize: 13 }}>
-              {v || record.name_zh || record.sku}
-            </div>
-            <div style={{ fontSize: 11, color: 'var(--color-text-tertiary)' }}>
-              {(record.listings || []).map((l, i) => (
-                <span key={l.id}>
-                  {i > 0 && <span style={{ margin: '0 4px' }}>·</span>}
-                  <span style={{ color: PLATFORM_COLOR[l.platform]?.color || 'inherit' }}>
-                    {PLATFORM_COLOR[l.platform]?.label}: {l.platform_product_id}
+      render: (v, record) => {
+        // 当前列表已按店铺过滤，每个 product 只对应该店铺的一个 listing
+        const firstListing = (record.listings || [])[0]
+        const url = firstListing ? platformProductUrl(
+          firstListing.platform, firstListing.platform_product_id, firstListing
+        ) : null
+        const imgElement = record.image_url ? (
+          <img src={record.image_url} alt=""
+            style={{ width: 40, height: 40, objectFit: 'cover',
+              borderRadius: 6, border: '0.5px solid var(--color-border-tertiary)' }} />
+        ) : (
+          <div style={{ width: 40, height: 40, background: 'var(--color-background-secondary)',
+            borderRadius: 6, border: '0.5px solid var(--color-border-tertiary)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            fontSize: 10, color: 'var(--color-text-tertiary)' }}>图</div>
+        )
+        const title = v || record.name_zh || record.sku
+        return (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            {url ? (
+              <a href={url} target="_blank" rel="noopener noreferrer"
+                 style={{ display: 'inline-block', lineHeight: 0 }}
+                 title="打开平台商品页">
+                {imgElement}
+              </a>
+            ) : imgElement}
+            <div>
+              <div style={{ fontWeight: 500, fontSize: 13 }}>
+                {url ? (
+                  <a href={url} target="_blank" rel="noopener noreferrer"
+                     style={{ color: 'inherit' }}
+                     title="打开平台商品页">
+                    {title}
+                  </a>
+                ) : title}
+              </div>
+              <div style={{ fontSize: 11, color: 'var(--color-text-tertiary)' }}>
+                {(record.listings || []).map((l, i) => (
+                  <span key={l.id}>
+                    {i > 0 && <span style={{ margin: '0 4px' }}>·</span>}
+                    <span style={{ color: PLATFORM_COLOR[l.platform]?.color || 'inherit' }}>
+                      {PLATFORM_COLOR[l.platform]?.label}: {l.platform_product_id}
+                    </span>
                   </span>
-                </span>
-              ))}
-              {(record.listings?.length > 0) && (
-                <span style={{ margin: '0 4px' }}>·</span>
-              )}
-              {record.sku}
+                ))}
+                {(record.listings?.length > 0) && (
+                  <span style={{ margin: '0 4px' }}>·</span>
+                )}
+                {record.sku}
+              </div>
             </div>
           </div>
-        </div>
-      ),
+        )
+      },
     },
     {
       title: '分类',
