@@ -15,11 +15,38 @@
 SET NAMES utf8mb4;
 SET FOREIGN_KEY_CHECKS = 0;
 
--- Step 1: products 加 shop_id 字段（暂时可空，数据迁移后再置非空）
-ALTER TABLE `products`
-    ADD COLUMN `shop_id` BIGINT UNSIGNED DEFAULT NULL
-        COMMENT '所属店铺ID（同一SKU在不同店铺独立记录）' AFTER `tenant_id`,
-    ADD INDEX `idx_tenant_shop_sku` (`tenant_id`, `shop_id`, `sku`);
+-- Step 1: products 加 shop_id 字段（幂等，列存在则跳过）
+SET @has_col := (
+    SELECT COUNT(*) FROM information_schema.COLUMNS
+    WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'products'
+      AND COLUMN_NAME = 'shop_id'
+);
+SET @add_col_sql := IF(@has_col = 0,
+    "ALTER TABLE `products` ADD COLUMN `shop_id` BIGINT UNSIGNED DEFAULT NULL COMMENT '所属店铺ID（同一SKU在不同店铺独立记录）' AFTER `tenant_id`",
+    'SELECT 1');
+PREPARE s1 FROM @add_col_sql; EXECUTE s1; DEALLOCATE PREPARE s1;
+
+-- Step 1a: 加辅助索引（幂等）
+SET @has_idx := (
+    SELECT COUNT(*) FROM information_schema.STATISTICS
+    WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'products'
+      AND INDEX_NAME = 'idx_tenant_shop_sku'
+);
+SET @add_idx_sql := IF(@has_idx = 0,
+    'ALTER TABLE `products` ADD INDEX `idx_tenant_shop_sku` (`tenant_id`, `shop_id`, `sku`)',
+    'SELECT 1');
+PREPARE s2 FROM @add_idx_sql; EXECUTE s2; DEALLOCATE PREPARE s2;
+
+-- Step 1b: 删除旧唯一键 (tenant_id, sku) —— 它阻止同一 SKU 跨店铺复制
+SET @has_old_uk := (
+    SELECT COUNT(*) FROM information_schema.STATISTICS
+    WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'products'
+      AND INDEX_NAME = 'uk_products_tenant_sku'
+);
+SET @drop_sql := IF(@has_old_uk > 0,
+    'ALTER TABLE `products` DROP INDEX `uk_products_tenant_sku`',
+    'SELECT 1');
+PREPARE s3 FROM @drop_sql; EXECUTE s3; DEALLOCATE PREPARE s3;
 
 -- Step 2: 数据迁移：按 listing.shop_id 拆分共用的 product
 --
@@ -93,17 +120,31 @@ DELIMITER ;
 CALL split_products_by_shop();
 DROP PROCEDURE split_products_by_shop;
 
--- Step 3: 置 shop_id 为非空 + 加正式唯一索引（旧的不唯一，新的唯一）
+-- Step 3: 置 shop_id 为非空（MODIFY 幂等）
 ALTER TABLE `products`
     MODIFY COLUMN `shop_id` BIGINT UNSIGNED NOT NULL
         COMMENT '所属店铺ID（同一SKU在不同店铺独立记录）';
 
--- 新增唯一键：(tenant_id, shop_id, sku)
--- 注意：旧的 idx_tenant_shop_sku 已经是普通索引，这里加唯一索引
-ALTER TABLE `products`
-    ADD UNIQUE KEY `uk_tenant_shop_sku` (`tenant_id`, `shop_id`, `sku`);
+-- Step 3a: 新增唯一键 uk_tenant_shop_sku（幂等）
+SET @has_new_uk := (
+    SELECT COUNT(*) FROM information_schema.STATISTICS
+    WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'products'
+      AND INDEX_NAME = 'uk_tenant_shop_sku'
+);
+SET @add_new_uk := IF(@has_new_uk = 0,
+    'ALTER TABLE `products` ADD UNIQUE KEY `uk_tenant_shop_sku` (`tenant_id`, `shop_id`, `sku`)',
+    'SELECT 1');
+PREPARE s4 FROM @add_new_uk; EXECUTE s4; DEALLOCATE PREPARE s4;
 
--- 可选：删除之前的普通索引（唯一键已覆盖查询）
-ALTER TABLE `products` DROP INDEX `idx_tenant_shop_sku`;
+-- Step 3b: 删除辅助普通索引（唯一键已覆盖查询，幂等）
+SET @has_aux_idx := (
+    SELECT COUNT(*) FROM information_schema.STATISTICS
+    WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'products'
+      AND INDEX_NAME = 'idx_tenant_shop_sku'
+);
+SET @drop_aux := IF(@has_aux_idx > 0,
+    'ALTER TABLE `products` DROP INDEX `idx_tenant_shop_sku`',
+    'SELECT 1');
+PREPARE s5 FROM @drop_aux; EXECUTE s5; DEALLOCATE PREPARE s5;
 
 SET FOREIGN_KEY_CHECKS = 1;
