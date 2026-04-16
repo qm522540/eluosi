@@ -955,9 +955,10 @@ async def _analyze_now_inner(db, tenant_id: int, shop_id: int,
             )
 
             # ── Step 5: 平台最低出价校验 ──
-            # 最低价是"竞争阈值"不是硬卡（update时WB/Ozon内部都有硬卡 fallback）
-            # 策略：算法值低于阈值时，标注警告但不强拉（保留利润最大化判断）
+            # 做法 B：建议=执行一致。optimal<min 时直接把 optimal 拉到 min，
+            # reason 标注"算法原值 X，被平台最低 Y 锁定"，保持透明度
             min_bid_warning = ""
+            original_optimal = optimal_bid  # 记录算法原值用于 reason 展示
             if optimal_bid is not None and platform == "wb":
                 try:
                     min_rub = await client.fetch_min_bid(
@@ -965,21 +966,26 @@ async def _analyze_now_inner(db, tenant_id: int, shop_id: int,
                         nm_id=int(sku),
                     )
                     if min_rub and optimal_bid < min_rub:
-                        min_bid_warning = f"⚠ 低于WB推荐竞争价₽{int(min_rub)}，曝光可能不足"
-                        logger.info(
-                            f"WB推荐价提示：sku={sku} optimal={optimal_bid}"
-                            f"<推荐竞争价={min_rub}，保留算法值+加警告"
+                        min_bid_warning = (
+                            f"⚠ 算法原值₽{int(original_optimal)}，"
+                            f"被WB推荐竞争价₽{int(min_rub)}锁定"
                         )
+                        logger.info(
+                            f"WB推荐价锁定：sku={sku} optimal={optimal_bid}→{min_rub}"
+                        )
+                        optimal_bid = int(round(min_rub))
                 except Exception as e:
                     logger.warning(f"WB 最低价查询异常 sku={sku}: {e}")
             elif optimal_bid is not None and platform == "ozon":
-                # Ozon: 用分析开始时预取的全局最低 CPC
                 if ozon_min_cpc and optimal_bid < ozon_min_cpc:
-                    min_bid_warning = f"⚠ 低于Ozon最低CPC₽{int(ozon_min_cpc)}，曝光可能不足"
-                    logger.info(
-                        f"Ozon最低CPC提示：sku={sku} optimal={optimal_bid}"
-                        f"<min={ozon_min_cpc}，保留算法值+加警告"
+                    min_bid_warning = (
+                        f"⚠ 算法原值₽{int(original_optimal)}，"
+                        f"被Ozon最低CPC₽{int(ozon_min_cpc)}锁定"
                     )
+                    logger.info(
+                        f"Ozon最低CPC锁定：sku={sku} optimal={optimal_bid}→{ozon_min_cpc}"
+                    )
+                    optimal_bid = int(round(ozon_min_cpc))
 
             # ── Step 6: ROAS 门控（≥21天） ──
             if optimal_bid is not None and data_days >= 21:
