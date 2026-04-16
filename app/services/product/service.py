@@ -460,34 +460,45 @@ def _sync_wb_products(db: Session, shop, tenant_id: int) -> dict:
     import asyncio
     from app.services.platform.wb import WBClient
     async def _fetch():
+        # 同时拉商品内容 + 价格（两个 API 独立，并行）
         client = WBClient(shop_id=shop.id, api_key=shop.api_key)
         try:
-            return await client.fetch_products(limit=100)
+            cards_task = client.fetch_products(limit=100)
+            prices_task = client.fetch_prices(limit=1000)
+            cards_res, prices_res = await asyncio.gather(cards_task, prices_task)
+            return cards_res, prices_res
         finally:
             await client.close()
     loop = asyncio.new_event_loop()
     try:
-        result = loop.run_until_complete(_fetch())
+        result, price_map = loop.run_until_complete(_fetch())
     finally:
         loop.close()
     cards = (result or {}).get("cards", []) if isinstance(result, dict) else []
     cat_map = _load_platform_category_map(db, tenant_id, "wb")  # subjectID → local_category_id
     synced = created = updated = 0
     for p in cards:
-        nm_id = str(p.get("nmID") or "")
-        if not nm_id:
+        nm_id_int = p.get("nmID")
+        if not nm_id_int:
             continue
+        nm_id = str(nm_id_int)
         listing = db.query(PlatformListing).filter(
             PlatformListing.tenant_id == tenant_id,
             PlatformListing.shop_id == shop.id,
             PlatformListing.platform == "wb",
             PlatformListing.platform_product_id == nm_id,
         ).first()
+        # 从 price_map 取价格（内容 API 的 sizes 不含 price，必须用 discounts-prices API）
+        price_info = price_map.get(nm_id_int) if isinstance(price_map, dict) else None
         price = None
-        for sz in (p.get("sizes") or []):
-            if sz.get("price"):
-                price = float(sz["price"])
-                break
+        discount_price = None
+        if price_info:
+            raw_price = price_info.get("price")
+            raw_disc = price_info.get("discountedPrice")
+            if raw_price:
+                price = float(raw_price)
+            if raw_disc and raw_price and float(raw_disc) != float(raw_price):
+                discount_price = float(raw_disc)
         photos = p.get("photos") or []
         image_url = (photos[0].get("big") or photos[0].get("tm")) if photos and isinstance(photos[0], dict) else None
         subject_id = p.get("subjectID") or p.get("subjectId")
@@ -498,6 +509,7 @@ def _sync_wb_products(db: Session, shop, tenant_id: int) -> dict:
             "title_ru": (p.get("title") or subject_name or "")[:500],
             "description_ru": p.get("description"),
             "price": price,
+            "discount_price": discount_price,
             "platform_category_id": subject_id_str,
             "platform_category_name": subject_name[:300] if subject_name else None,
             "status": "active",

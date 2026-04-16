@@ -27,6 +27,7 @@ WB_ADVERT_API = "https://advert-api.wildberries.ru"
 WB_STATISTICS_API = "https://statistics-api.wildberries.ru"
 WB_CONTENT_API = "https://content-api.wildberries.ru"
 WB_COMMON_API = "https://common-api.wildberries.ru"
+WB_PRICES_API = "https://discounts-prices-api.wildberries.ru"
 
 # 限速控制：两次请求之间的最小间隔(秒)
 MIN_REQUEST_INTERVAL = 60.0 / settings.WB_RATE_LIMIT_PER_MINUTE
@@ -749,6 +750,50 @@ class WBClient(BasePlatformClient):
         except Exception as e:
             logger.error(f"WB 拉取商品失败，shop_id={self.shop_id}: {e}")
             raise
+
+    async def fetch_prices(self, limit: int = 1000) -> dict:
+        """拉取全量商品价格/折扣（discounts-prices API）
+
+        返回 {nm_id_int: {price, discountedPrice, discount}}
+        - price: 原价（商家定价）
+        - discountedPrice: 折后价（商家折后价，仍非到手价）
+        - discount: 折扣百分比
+
+        API: GET /api/v2/list/goods/filter?limit=1000&offset=0
+        分页：limit/offset，自动翻页到末尾
+        """
+        try:
+            url = f"{WB_PRICES_API}/api/v2/list/goods/filter"
+            price_map = {}
+            offset = 0
+            for _ in range(100):  # 最多 100 页 × 1000 = 10 万
+                result = await self._request(
+                    "GET", url, params={"limit": limit, "offset": offset},
+                )
+                goods = (result or {}).get("data", {}).get("listGoods") or []
+                if not goods:
+                    break
+                for g in goods:
+                    nm_id = g.get("nmID")
+                    if not nm_id:
+                        continue
+                    sizes = g.get("sizes") or []
+                    if not sizes:
+                        continue
+                    s0 = sizes[0]
+                    price_map[nm_id] = {
+                        "price": s0.get("price"),
+                        "discountedPrice": s0.get("discountedPrice"),
+                        "discount": g.get("discount", 0),
+                    }
+                if len(goods) < limit:
+                    break
+                offset += limit
+            logger.info(f"WB 拉取价格完成 shop_id={self.shop_id} total={len(price_map)}")
+            return price_map
+        except Exception as e:
+            logger.error(f"WB 拉取价格失败，shop_id={self.shop_id}: {e}")
+            return {}
 
     async def remove_campaign_product(self, advert_id: str, nm_id: int) -> dict:
         """从 WB 广告活动中移除指定商品
