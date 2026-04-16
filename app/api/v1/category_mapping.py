@@ -9,6 +9,7 @@ from app.schemas.category_mapping import (
     CategoryMappingCreate, CategoryMappingUpdate,
     AttributeMappingCreate, AttributeMappingUpdate,
     AttributeValueMappingCreate, AttributeValueMappingUpdate,
+    AISuggestCategoryRequest, AISuggestAttributesRequest,
 )
 from app.services.category_mapping.service import (
     list_local_categories, get_local_category_tree,
@@ -253,3 +254,37 @@ def attribute_value_mapping_delete(
     if result["code"] != 0:
         return error(result["code"], result["msg"])
     return success(msg="属性值映射已删除")
+
+
+# ==================== AI 辅助映射推荐 ====================
+
+@router.post("/ai-suggest/category")
+async def ai_suggest_category(
+    req: AISuggestCategoryRequest,
+    db: Session = Depends(get_db),
+    tenant_id: int = Depends(get_tenant_id),
+):
+    """AI 推荐品类映射：本地分类 → 各平台分类"""
+    from app.services.category_mapping.ai_suggester import suggest_category_mappings
+    result = await suggest_category_mappings(
+        db, tenant_id, req.local_category_id, req.shop_id, req.platforms,
+    )
+    if result["code"] != 0:
+        return error(result["code"], result["msg"])
+    return success(result["data"], msg="AI 推荐完成，请人工确认")
+
+
+@router.post("/ai-suggest/attributes")
+async def ai_suggest_attributes(
+    req: AISuggestAttributesRequest,
+    db: Session = Depends(get_db),
+    tenant_id: int = Depends(get_tenant_id),
+):
+    """AI 推荐属性映射：拉平台属性 → AI 推本地属性名"""
+    from app.services.category_mapping.ai_suggester import suggest_attribute_mappings
+    result = await suggest_attribute_mappings(
+        db, tenant_id, req.local_category_id, req.shop_id, req.platform,
+    )
+    if result["code"] != 0:
+        return error(result["code"], result["msg"])
+    return success(result["data"], msg="AI 推荐完成，请人工确认")
