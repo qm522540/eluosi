@@ -371,6 +371,8 @@ def _listing_to_dict(l: PlatformListing) -> dict:
         "title_ru": l.title_ru,
         "price": float(l.price) if l.price else None,
         "discount_price": float(l.discount_price) if l.discount_price else None,
+        "stock": l.stock or 0,
+        "stock_updated_at": l.stock_updated_at.isoformat() if l.stock_updated_at else None,
         "commission_rate": float(l.commission_rate) if l.commission_rate else None,
         "url": l.url,
         "rating": float(l.rating) if l.rating else None,
@@ -459,20 +461,38 @@ def _sync_wb_products(db: Session, shop, tenant_id: int) -> dict:
     import asyncio
     from app.services.platform.wb import WBClient
     async def _fetch():
-        # 同时拉商品内容 + 价格（两个 API 独立，并行）
+        # 并行拉：内容卡片 + 价格 + 库存
         client = WBClient(shop_id=shop.id, api_key=shop.api_key)
         try:
             cards_task = client.fetch_products(limit=100)
             prices_task = client.fetch_prices(limit=1000)
-            cards_res, prices_res = await asyncio.gather(cards_task, prices_task)
-            return cards_res, prices_res
+            inv_task = client.fetch_inventory()
+            cards_res, prices_res, inv_res = await asyncio.gather(
+                cards_task, prices_task, inv_task,
+                return_exceptions=True,
+            )
+            # 库存失败不阻塞主流程
+            if isinstance(inv_res, Exception):
+                logger.warning(f"WB 库存拉取失败 shop={shop.id}: {inv_res}")
+                inv_res = []
+            return cards_res, prices_res, inv_res
         finally:
             await client.close()
     loop = asyncio.new_event_loop()
     try:
-        result, price_map = loop.run_until_complete(_fetch())
+        result, price_map, inv_rows = loop.run_until_complete(_fetch())
     finally:
         loop.close()
+    # 聚合库存：按 nm_id 求和（一个 SKU 分布在多个仓库）
+    stock_map = {}
+    for row in (inv_rows or []):
+        if not isinstance(row, dict):
+            continue
+        nm_id = row.get("nmId")
+        qty = row.get("quantity") or 0
+        if nm_id is None:
+            continue
+        stock_map[int(nm_id)] = stock_map.get(int(nm_id), 0) + int(qty)
     cards = (result or {}).get("cards", []) if isinstance(result, dict) else []
     cat_map = _load_platform_category_map(db, tenant_id, "wb")  # subjectID → local_category_id
     synced = created = updated = 0
@@ -504,11 +524,14 @@ def _sync_wb_products(db: Session, shop, tenant_id: int) -> dict:
         subject_name = p.get("subjectName") or ""
         subject_id_str = str(subject_id) if subject_id else None
         local_cat_id = cat_map.get(subject_id_str) if subject_id_str else None
+        from datetime import datetime, timezone
         data = {
             "title_ru": (p.get("title") or subject_name or "")[:500],
             "description_ru": p.get("description"),
             "price": price,
             "discount_price": discount_price,
+            "stock": stock_map.get(int(nm_id_int), 0),
+            "stock_updated_at": datetime.now(timezone.utc),
             # WB 的 sku_id 和 product_id 都是 nm_id，冗余写入方便广告 API 反查
             "platform_sku_id": nm_id,
             "platform_category_id": subject_id_str,
@@ -635,11 +658,19 @@ def _sync_ozon_products(db: Session, shop, tenant_id: int) -> dict:
 
         # OZON 的 sku_id（广告 API 返回的 sku 字段），与 product_id 是两套 ID
         ozon_sku = p.get("sku")
+        # 库存：info.stocks.stocks[].present 聚合所有源（fbo/fbs）
+        stocks_obj = p.get("stocks") or {}
+        stocks_list = stocks_obj.get("stocks") or []
+        ozon_stock = sum(int(s.get("present") or 0) for s in stocks_list if isinstance(s, dict))
+
+        from datetime import datetime, timezone
         data = {
             "title_ru": title,
             "price": old_price or price,
             "discount_price": price if (old_price and price and old_price != price) else None,
             "barcode": barcode,
+            "stock": ozon_stock,
+            "stock_updated_at": datetime.now(timezone.utc),
             "platform_sku_id": str(ozon_sku) if ozon_sku else None,
             "platform_category_id": category_id_str,
             # OZON info/list 不返回分类名称，此字段留空，init-from-ozon 里从分类树反查
