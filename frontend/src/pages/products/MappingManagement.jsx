@@ -16,6 +16,7 @@ import CategoryMappingTab from './mapping/CategoryMappingTab'
 import AISuggestCategoryButton from './mapping/AISuggestCategoryButton'
 import AttributeMappingTab from './mapping/AttributeMappingTab'
 import AISuggestAttributesButton from './mapping/AISuggestAttributesButton'
+import AttributeValueMappingDrawer from './mapping/AttributeValueMappingDrawer'
 
 const { Title, Paragraph, Text } = Typography
 
@@ -104,6 +105,9 @@ const MappingManagement = () => {
   const [editing, setEditing] = useState(null)
   const [form] = Form.useForm()
   const [saving, setSaving] = useState(false)
+
+  // 属性值映射 Drawer 当前打开的属性映射
+  const [valueDrawerAttr, setValueDrawerAttr] = useState(null)
 
   const loadTree = useCallback(async (keepSelectedKey) => {
     setTreeLoading(true)
@@ -236,7 +240,7 @@ const MappingManagement = () => {
           key={selectedNode.id}
           localCategoryId={selectedNode.id}
           localCategoryName={selectedNode.name}
-          onManageValues={(row) => message.info(`"管理值映射" Drawer 待 Task 8 实现（attr: ${row.local_attr_name}）`)}
+          onManageValues={(row) => setValueDrawerAttr(row)}
         />
       )
     }
@@ -245,10 +249,10 @@ const MappingManagement = () => {
         <Text type="secondary">
           当前选中：<Text strong>{selectedNode.name}</Text>
           {selectedNode.name_ru && <Text type="secondary"> · {selectedNode.name_ru}</Text>}
-          <Text type="secondary"> · 第 {selectedNode.level} 级</Text>
         </Text>
         <Paragraph style={{ marginTop: 12, marginBottom: 0 }} type="secondary">
-          属性值映射 Tab：请回 <Text strong>属性映射</Text> Tab，点 enum 类型属性行的 <Text strong>值映射</Text> 按钮进入（Task 8）
+          属性值映射按属性绑定，请切到 <Text strong>属性映射</Text> Tab，点 enum 类型属性行的
+          <Text strong> 值映射 </Text> 按钮，从右侧抽屉管理。
         </Paragraph>
       </Card>
     )
@@ -360,6 +364,12 @@ const MappingManagement = () => {
           </Card>
         </Col>
       </Row>
+
+      <AttributeValueMappingDrawer
+        open={!!valueDrawerAttr}
+        attributeMapping={valueDrawerAttr}
+        onClose={() => setValueDrawerAttr(null)}
+      />
 
       <Modal
         open={!!editing}
