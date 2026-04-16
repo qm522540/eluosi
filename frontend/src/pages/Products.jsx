@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import {
   Typography, Card, Table, Button, Tag, Space, Row, Col,
   Input, Select, InputNumber, Modal, Form, Tooltip, Empty,
-  Badge, message, Alert, Spin, Drawer, Divider, Image,
+  Badge, message, Alert, Spin, Drawer, Divider, Image, Switch,
 } from 'antd'
 import {
   SyncOutlined, PlusOutlined, EditOutlined,
@@ -405,8 +405,10 @@ const Products = () => {
         src_listing_ids: spreadItems.map(l => l.id),
         dst_shop_ids: values.dst_shop_ids,
         price_mode: values.price_mode || 'original',
+        manual_price: values.manual_price,
         ai_rewrite_title: values.ai_rewrite_title || false,
-        ai_change_bg: values.ai_change_bg || false,
+        ai_rewrite_desc: values.ai_rewrite_desc || false,
+        use_oss_images: values.use_oss_images || false,
       })
       message.success(`铺货任务已提交，共${spreadItems.length}个商品`)
       setSpreadModal(false)
@@ -1178,52 +1180,246 @@ const Products = () => {
         </Form>
       </Drawer>
 
-      {/* 铺货弹窗 */}
-      <Modal
-        title={`铺货（${spreadItems.length}个商品）`}
+      {/* ==================== 铺货抽屉 ==================== */}
+      <Drawer
+        title={
+          <Space>
+            <SendOutlined style={{ color: '#1677ff' }} />
+            <span>铺货到其他店铺</span>
+            <Tag color="blue" style={{ marginLeft: 4 }}>共 {spreadItems.length} 个商品</Tag>
+          </Space>
+        }
         open={spreadModal}
-        onOk={handleSpreadSubmit}
-        onCancel={() => setSpreadModal(false)}
-        confirmLoading={spreading}
-        okText="开始铺货"
-        width={480}
+        onClose={() => { setSpreadModal(false); spreadForm.resetFields() }}
+        width="85%"
         destroyOnClose
+        extra={
+          <Space>
+            <Button onClick={() => { setSpreadModal(false); spreadForm.resetFields() }}>
+              取消
+            </Button>
+            <Button type="primary" loading={spreading}
+              icon={<SendOutlined />} onClick={handleSpreadSubmit}>
+              开始铺货
+            </Button>
+          </Space>
+        }
       >
-        <Form form={spreadForm} layout="vertical" style={{ marginTop: 16 }}>
-          <Form.Item name="dst_shop_ids" label="目标店铺"
-            rules={[{ required: true, message: '请选择目标店铺' }]}>
-            <Select mode="multiple" placeholder="选择要铺货到的店铺">
-              <Option value={1}>WB 店铺B</Option>
-              <Option value={2}>Ozon 店铺C</Option>
-            </Select>
-          </Form.Item>
-          <Form.Item name="price_mode" label="价格设置" initialValue="original">
-            <Select>
-              <Option value="original">原价复制</Option>
-              <Option value="auto">按佣金自动调整</Option>
-              <Option value="manual">手动设置</Option>
-            </Select>
-          </Form.Item>
-          <Form.Item
-            noStyle
-            shouldUpdate={(prev, curr) => prev.price_mode !== curr.price_mode}
-          >
-            {({ getFieldValue }) =>
-              getFieldValue('price_mode') === 'manual' ? (
-                <Form.Item name="manual_price" label="目标价格(₽)">
-                  <InputNumber min={1} style={{ width: '100%' }} addonBefore="₽" />
-                </Form.Item>
-              ) : null
-            }
-          </Form.Item>
-          <Alert
-            type="info"
-            showIcon={false}
-            style={{ fontSize: 12, marginTop: 8 }}
-            message="铺货任务将在后台异步执行，完成后推送企业微信通知"
-          />
-        </Form>
-      </Modal>
+        <Row gutter={24}>
+          {/* 左栏：铺货配置（14） */}
+          <Col span={14}>
+            <Form
+              form={spreadForm} layout="vertical"
+              initialValues={{
+                price_mode: 'original',
+                ai_rewrite_title: true,
+                ai_rewrite_desc: true,
+                use_oss_images: true,
+              }}
+            >
+              <SectionTitle>目标店铺</SectionTitle>
+              <Form.Item
+                name="dst_shop_ids" label="选择要铺货到的店铺"
+                rules={[{ required: true, message: '请至少选择一个目标店铺' }]}
+                extra="支持多选，会并行铺到每个选中的店铺。已有该 SKU 的店铺会显示为灰色不可选"
+              >
+                <Select
+                  mode="multiple" placeholder="选择要铺货到的店铺"
+                  style={{ width: '100%' }}
+                  optionFilterProp="children" showSearch
+                >
+                  {['wb', 'ozon', 'yandex'].map(plat => {
+                    const list = shops.filter(s => s.platform === plat && s.status === 'active')
+                    if (!list.length) return null
+                    const cfg = PLATFORM_COLOR[plat] || {}
+                    // 排除当前商品已在其中的店铺
+                    const existingShopIds = new Set(
+                      spreadItems.flatMap(l => l.shop_id ? [l.shop_id] : [])
+                    )
+                    return (
+                      <Select.OptGroup key={plat} label={cfg.label}>
+                        {list.map(s => (
+                          <Option key={s.id} value={s.id}
+                            disabled={existingShopIds.has(s.id)}>
+                            {cfg.label} · {s.name}
+                            {existingShopIds.has(s.id) && ' （已铺过）'}
+                          </Option>
+                        ))}
+                      </Select.OptGroup>
+                    )
+                  })}
+                </Select>
+              </Form.Item>
+
+              <Divider style={{ margin: '8px 0 16px' }} />
+
+              <SectionTitle>价格策略</SectionTitle>
+              <Row gutter={16}>
+                <Col span={12}>
+                  <Form.Item name="price_mode" label="价格模式">
+                    <Select>
+                      <Option value="original">原价复制（使用源店铺售价）</Option>
+                      <Option value="auto">按目标平台佣金自动调整</Option>
+                      <Option value="manual">手动设置目标价</Option>
+                    </Select>
+                  </Form.Item>
+                </Col>
+                <Col span={12}>
+                  <Form.Item noStyle shouldUpdate={(p, c) => p.price_mode !== c.price_mode}>
+                    {({ getFieldValue }) =>
+                      getFieldValue('price_mode') === 'manual' ? (
+                        <Form.Item name="manual_price" label="目标价"
+                          rules={[{ required: true, message: '请填目标价' }]}>
+                          <InputNumber min={1} style={{ width: '100%' }} addonBefore="₽" />
+                        </Form.Item>
+                      ) : (
+                        <Form.Item label=" " colon={false}>
+                          <div style={{
+                            padding: '6px 10px', fontSize: 12,
+                            color: '#666', background: '#fafafa',
+                            border: '1px solid #f0f0f0', borderRadius: 4,
+                          }}>
+                            {getFieldValue('price_mode') === 'auto'
+                              ? 'WB 15% / Ozon 12% 佣金差会自动折算'
+                              : '直接复用源店铺当前售价'}
+                          </div>
+                        </Form.Item>
+                      )
+                    }
+                  </Form.Item>
+                </Col>
+              </Row>
+
+              <Divider style={{ margin: '8px 0 16px' }} />
+
+              <SectionTitle tip="铺货时自动按目标平台风格处理内容">
+                智能调整
+              </SectionTitle>
+              <Card size="small" style={{ marginBottom: 12, background: '#fafbff', borderColor: '#e6edff' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 10 }}>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontSize: 13, fontWeight: 500 }}>
+                      <RobotOutlined style={{ color: '#1677ff', marginRight: 6 }} />
+                      标题 AI 智能调整
+                    </div>
+                    <div style={{ fontSize: 12, color: '#888', marginTop: 2 }}>
+                      按目标平台风格（WB 关键词前置 / Ozon SEO）自动优化标题
+                    </div>
+                  </div>
+                  <Form.Item name="ai_rewrite_title" valuePropName="checked" noStyle>
+                    <Switch />
+                  </Form.Item>
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 10 }}>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontSize: 13, fontWeight: 500 }}>
+                      <RobotOutlined style={{ color: '#1677ff', marginRight: 6 }} />
+                      描述 AI 智能调整
+                    </div>
+                    <div style={{ fontSize: 12, color: '#888', marginTop: 2 }}>
+                      按目标平台风格重写详情描述（WB 简洁 / Ozon 结构化）
+                    </div>
+                  </div>
+                  <Form.Item name="ai_rewrite_desc" valuePropName="checked" noStyle>
+                    <Switch />
+                  </Form.Item>
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontSize: 13, fontWeight: 500 }}>
+                      <RobotOutlined style={{ color: '#1677ff', marginRight: 6 }} />
+                      图片调整（使用 OSS 归档图）
+                    </div>
+                    <div style={{ fontSize: 12, color: '#888', marginTop: 2 }}>
+                      优先上传 OSS 归档的图片（未归档则用平台原图链接）
+                    </div>
+                  </div>
+                  <Form.Item name="use_oss_images" valuePropName="checked" noStyle>
+                    <Switch />
+                  </Form.Item>
+                </div>
+              </Card>
+
+              <Alert
+                type="info"
+                showIcon
+                style={{ fontSize: 12 }}
+                message="铺货任务异步执行，完成后推送企业微信通知。AI 改写单商品约 3-10 秒"
+              />
+            </Form>
+          </Col>
+
+          {/* 右栏：来源商品预览 */}
+          <Col span={10}>
+            <SectionTitle>
+              来源商品
+              {spreadItems.length > 1 && (
+                <Tag style={{ marginLeft: 8 }}>{spreadItems.length} 个</Tag>
+              )}
+            </SectionTitle>
+            <div style={{
+              padding: 12, background: '#fafafa',
+              border: '1px solid #f0f0f0', borderRadius: 8,
+              maxHeight: 'calc(100vh - 240px)', overflowY: 'auto',
+            }}>
+              {spreadItems.length === 0 ? (
+                <Empty description="无商品" />
+              ) : (
+                spreadItems.map((l, idx) => {
+                  const url = platformProductUrl(l.platform, l.platform_product_id, l)
+                  const plat = PLATFORM_COLOR[l.platform] || {}
+                  const displayPrice = l.discount_price || l.price
+                  return (
+                    <div key={l.id} style={{
+                      display: 'flex', gap: 12,
+                      padding: 10, background: '#fff',
+                      borderRadius: 6, marginBottom: idx === spreadItems.length - 1 ? 0 : 10,
+                      border: '1px solid #f0f0f0',
+                    }}>
+                      <Image
+                        src={(l.oss_images && l.oss_images[0]) || ''}
+                        fallback="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='80' height='80'%3E%3Crect width='80' height='80' fill='%23f5f5f5'/%3E%3Ctext x='50%25' y='50%25' font-size='11' fill='%23999' text-anchor='middle' dy='.3em'%3E无图%3C/text%3E%3C/svg%3E"
+                        width={80} height={80}
+                        style={{ objectFit: 'cover', borderRadius: 4, flexShrink: 0 }}
+                        preview={{ mask: <span style={{ fontSize: 11 }}>预览</span> }}
+                      />
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ fontSize: 13, fontWeight: 500,
+                          overflow: 'hidden', textOverflow: 'ellipsis',
+                          display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical' }}>
+                          {l.title_ru || '(无标题)'}
+                        </div>
+                        <div style={{ fontSize: 11, color: '#888', marginTop: 4, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                          <Tag color={plat.color} style={{ margin: 0, fontSize: 10, padding: '0 4px', lineHeight: '16px' }}>
+                            {plat.label}
+                          </Tag>
+                          <span>ID: {l.platform_product_id}</span>
+                          {displayPrice != null && (
+                            <span style={{ color: '#cf1322', fontWeight: 500 }}>
+                              ₽{Math.round(displayPrice)}
+                            </span>
+                          )}
+                          {l.oss_images?.length > 0 && (
+                            <Tag color="success" style={{ margin: 0, fontSize: 10, padding: '0 4px', lineHeight: '16px' }}>
+                              OSS {l.oss_images.length} 张
+                            </Tag>
+                          )}
+                        </div>
+                        {url && (
+                          <a href={url} target="_blank" rel="noopener noreferrer"
+                             style={{ fontSize: 11, marginTop: 4, display: 'inline-block' }}>
+                            在平台查看 →
+                          </a>
+                        )}
+                      </div>
+                    </div>
+                  )
+                })
+              )}
+            </div>
+          </Col>
+        </Row>
+      </Drawer>
 
       {/* AI改写描述抽屉 */}
       <Drawer
