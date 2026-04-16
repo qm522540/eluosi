@@ -51,7 +51,18 @@ def list_products(db: Session, tenant_id: int, keyword: str = None,
             (page - 1) * page_size
         ).limit(page_size).all()
 
-        items = [_product_to_dict(p) for p in products]
+        # 批量查本地分类名，避免 N+1
+        cat_ids = [p.local_category_id for p in products if p.local_category_id]
+        cat_name_map = {}
+        if cat_ids:
+            from app.models.category import LocalCategory
+            for r in db.query(LocalCategory.id, LocalCategory.name).filter(
+                LocalCategory.id.in_(set(cat_ids)),
+                LocalCategory.tenant_id == tenant_id,
+            ).all():
+                cat_name_map[r.id] = r.name
+
+        items = [_product_to_dict(p, cat_name_map=cat_name_map) for p in products]
         return {
             "code": ErrorCode.SUCCESS,
             "data": {
@@ -305,7 +316,8 @@ def delete_listing(db: Session, listing_id: int, tenant_id: int) -> dict:
 
 # ==================== 辅助函数 ====================
 
-def _product_to_dict(p: Product) -> dict:
+def _product_to_dict(p: Product, cat_name_map: dict = None) -> dict:
+    cat_name_map = cat_name_map or {}
     return {
         "id": p.id,
         "tenant_id": p.tenant_id,
@@ -314,6 +326,8 @@ def _product_to_dict(p: Product) -> dict:
         "name_ru": p.name_ru,
         "brand": p.brand,
         "category": p.category,
+        "local_category_id": p.local_category_id,
+        "local_category_name": cat_name_map.get(p.local_category_id) if p.local_category_id else None,
         "cost_price": float(p.cost_price) if p.cost_price else None,
         "net_margin": float(p.net_margin) if p.net_margin else None,
         "weight_g": p.weight_g,
@@ -398,6 +412,19 @@ def check_sync_needed(db: Session, shop_id: int, tenant_id: int,
     return {"need_sync": False, "elapsed_minutes": int(elapsed)}
 
 
+def _load_platform_category_map(db: Session, tenant_id: int, platform: str) -> dict:
+    """预加载平台分类 → 本地分类的映射字典，{platform_category_id_str: local_category_id}"""
+    from app.models.category import CategoryPlatformMapping
+    rows = db.query(
+        CategoryPlatformMapping.platform_category_id,
+        CategoryPlatformMapping.local_category_id,
+    ).filter(
+        CategoryPlatformMapping.tenant_id == tenant_id,
+        CategoryPlatformMapping.platform == platform,
+    ).all()
+    return {str(r.platform_category_id): r.local_category_id for r in rows}
+
+
 def sync_products_from_platform(db: Session, shop_id: int, tenant_id: int) -> dict:
     from app.models.shop import Shop
     shop = db.query(Shop).filter(
@@ -427,6 +454,7 @@ def _sync_wb_products(db: Session, shop, tenant_id: int) -> dict:
     finally:
         loop.close()
     cards = (result or {}).get("cards", []) if isinstance(result, dict) else []
+    cat_map = _load_platform_category_map(db, tenant_id, "wb")  # subjectID → local_category_id
     synced = created = updated = 0
     for p in cards:
         nm_id = str(p.get("nmID") or "")
@@ -447,11 +475,13 @@ def _sync_wb_products(db: Session, shop, tenant_id: int) -> dict:
         image_url = (photos[0].get("big") or photos[0].get("tm")) if photos and isinstance(photos[0], dict) else None
         subject_id = p.get("subjectID") or p.get("subjectId")
         subject_name = p.get("subjectName") or ""
+        subject_id_str = str(subject_id) if subject_id else None
+        local_cat_id = cat_map.get(subject_id_str) if subject_id_str else None
         data = {
             "title_ru": (p.get("title") or subject_name or "")[:500],
             "description_ru": p.get("description"),
             "price": price,
-            "platform_category_id": str(subject_id) if subject_id else None,
+            "platform_category_id": subject_id_str,
             "platform_category_name": subject_name[:300] if subject_name else None,
             "status": "active",
         }
@@ -459,12 +489,18 @@ def _sync_wb_products(db: Session, shop, tenant_id: int) -> dict:
             for k, v in data.items():
                 if v is not None:
                     setattr(listing, k, v)
+            # 回填 product 的本地分类（若已有就不覆盖，避免跨店铺冲突）
+            if local_cat_id and listing.product_id:
+                prod = db.query(Product).filter(Product.id == listing.product_id).first()
+                if prod and not prod.local_category_id:
+                    prod.local_category_id = local_cat_id
             updated += 1
         else:
             vendor_code = p.get("vendorCode") or f"WB-{nm_id}"
             product = _get_or_create_product(
                 db, tenant_id, name_ru=data["title_ru"], sku=vendor_code,
-                brand=p.get("brand"), image_url=image_url)
+                brand=p.get("brand"), image_url=image_url,
+                local_category_id=local_cat_id)
             listing = PlatformListing(
                 tenant_id=tenant_id, product_id=product.id,
                 shop_id=shop.id, platform="wb",
@@ -520,6 +556,7 @@ def _sync_ozon_products(db: Session, shop, tenant_id: int) -> dict:
     finally:
         loop.close()
 
+    cat_map = _load_platform_category_map(db, tenant_id, "ozon")  # description_category_id → local_category_id
     synced = created = updated = 0
     for p in infos:
         pid = p.get("id") or p.get("product_id")
@@ -555,17 +592,18 @@ def _sync_ozon_products(db: Session, shop, tenant_id: int) -> dict:
         title = (p.get("name") or "")[:500]
         price = _to_float(p.get("price"))
         old_price = _to_float(p.get("old_price"))
-        # Ozon v3 info/list 返回的分类字段
+        # Ozon v3 info/list 分类字段：优先 description_category_id
         category_id = p.get("description_category_id") or p.get("type_id")
-        category_name = p.get("type_name") or p.get("category_name")
+        category_id_str = str(category_id) if category_id else None
+        local_cat_id = cat_map.get(category_id_str) if category_id_str else None
 
         data = {
             "title_ru": title,
             "price": old_price or price,
             "discount_price": price if (old_price and price and old_price != price) else None,
             "barcode": barcode,
-            "platform_category_id": str(category_id) if category_id else None,
-            "platform_category_name": category_name[:300] if category_name else None,
+            "platform_category_id": category_id_str,
+            # OZON info/list 不返回分类名称，此字段留空，init-from-ozon 里从分类树反查
             "status": status,
         }
 
@@ -573,11 +611,16 @@ def _sync_ozon_products(db: Session, shop, tenant_id: int) -> dict:
             for k, v in data.items():
                 if v is not None:
                     setattr(listing, k, v)
+            if local_cat_id and listing.product_id:
+                prod = db.query(Product).filter(Product.id == listing.product_id).first()
+                if prod and not prod.local_category_id:
+                    prod.local_category_id = local_cat_id
             updated += 1
         else:
             offer_id = p.get("offer_id") or f"OZ-{pid_str}"
             product = _get_or_create_product(
-                db, tenant_id, name_ru=title, sku=offer_id, image_url=primary)
+                db, tenant_id, name_ru=title, sku=offer_id, image_url=primary,
+                local_category_id=local_cat_id)
             listing = PlatformListing(
                 tenant_id=tenant_id, product_id=product.id,
                 shop_id=shop.id, platform="ozon",
@@ -593,12 +636,16 @@ def _sync_ozon_products(db: Session, shop, tenant_id: int) -> dict:
 def _get_or_create_product(db: Session, tenant_id: int,
                            name_ru: str, sku: str,
                            brand: Optional[str] = None,
-                           image_url: Optional[str] = None):
+                           image_url: Optional[str] = None,
+                           local_category_id: Optional[int] = None):
     existing = db.query(Product).filter(
         Product.tenant_id == tenant_id,
         Product.sku == sku,
     ).first()
     if existing:
+        # 如果本地分类还没关联，这次有映射就顺便回填
+        if local_category_id and not existing.local_category_id:
+            existing.local_category_id = local_category_id
         return existing
     product = Product(
         tenant_id=tenant_id, sku=sku,
@@ -606,6 +653,7 @@ def _get_or_create_product(db: Session, tenant_id: int,
         name_ru=name_ru[:200] if name_ru else None,
         brand=brand,
         image_url=image_url,
+        local_category_id=local_category_id,
         status="active",
     )
     db.add(product)
