@@ -543,13 +543,54 @@ def budget_overview(
     return success(result["data"])
 
 
+def _enrich_products_with_listing_id(
+    db, tenant_id: int, shop_id: int, platform: str, products: list
+) -> list:
+    """为 campaign-products 返回的每条商品挂上 listing_id，
+    前端可直接用 listing_id 定位广告组和关键词，无需额外拉 listings 列表。
+
+    - WB: 返回的 sku 是 nm_id，直接匹配 platform_listings.platform_product_id
+    - Ozon: 返回的 sku 是 Ozon 的 sku_id（和商家 product_id 不同），
+            当前 platform_listings 没有 platform_sku_id 字段，匹配不上，
+            返回 listing_id=None（待后续加字段回填）
+    """
+    from app.models.product import PlatformListing
+    if not products:
+        return products
+    skus = list({str(p.get("sku") or "") for p in products if p.get("sku")})
+    if not skus:
+        for p in products:
+            p["listing_id"] = None
+        return products
+    listing_map = {}
+    if platform == "wb":
+        rows = db.query(
+            PlatformListing.id, PlatformListing.platform_product_id,
+        ).filter(
+            PlatformListing.tenant_id == tenant_id,
+            PlatformListing.shop_id == shop_id,
+            PlatformListing.platform == "wb",
+            PlatformListing.platform_product_id.in_(skus),
+            PlatformListing.status != "deleted",
+        ).all()
+        listing_map = {str(r.platform_product_id): r.id for r in rows}
+    # Ozon 暂未实现（需要 platform_sku_id 字段）
+    for p in products:
+        p["listing_id"] = listing_map.get(str(p.get("sku") or ""))
+    return products
+
+
 @router.get("/campaign-products/{campaign_id}")
 async def campaign_products(
     campaign_id: int,
     db: Session = Depends(get_db),
     tenant_id: int = Depends(get_tenant_id),
 ):
-    """获取广告活动关联的商品列表及出价（Ozon）"""
+    """获取广告活动关联的商品列表及出价（Ozon / WB）
+
+    每条 product 额外带 listing_id 字段，前端可直接 join
+    广告组/关键词，不需要再拉整店 listings 列表。
+    """
     from app.models.ad import AdCampaign
     from app.models.shop import Shop
 
@@ -572,6 +613,9 @@ async def campaign_products(
         )
         try:
             products = await client.fetch_campaign_products(camp.platform_campaign_id)
+            products = _enrich_products_with_listing_id(
+                db, tenant_id, shop.id, "ozon", products
+            )
             return success(products)
         finally:
             await client.close()
@@ -580,6 +624,9 @@ async def campaign_products(
         client = WBClient(shop_id=shop.id, api_key=shop.api_key)
         try:
             products = await client.fetch_campaign_products(camp.platform_campaign_id)
+            products = _enrich_products_with_listing_id(
+                db, tenant_id, shop.id, "wb", products
+            )
             return success(products)
         finally:
             await client.close()
