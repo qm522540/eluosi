@@ -659,10 +659,19 @@ const Products = () => {
               </Form.Item>
             </Col>
           </Row>
-          <Form.Item name="name_zh" label="中文名（本地备注，列表主显示）" rules={[{ required: true, message: '请填中文名' }]}>
+          <Form.Item
+            name="name_zh"
+            label="中文名"
+            extra="本地备注使用，不同步平台。列表和搜索会用到，填一个方便自己识别的名字就行"
+            rules={[{ required: true, message: '请填中文名' }]}
+          >
             <Input placeholder="方便自己识别的中文名称" />
           </Form.Item>
-          <Form.Item name="name_ru" label="俄文名（平台标题，只读）">
+          <Form.Item
+            name="name_ru"
+            label="商品标题（平台）"
+            extra="平台上显示给俄罗斯买家看的标题，本地只读。如需修改请到平台后台操作（后续会加 AI 优化标题功能）"
+          >
             <Input disabled />
           </Form.Item>
           <Form.Item name="local_category_id" label="本地分类">
@@ -688,13 +697,18 @@ const Products = () => {
             <Col span={8}>
               <Form.Item
                 name="net_margin"
-                label={<Tooltip title="此店铺下该 SKU 的净毛利率（不同店铺独立）">净毛利率 <span style={{ fontSize: 11, color: '#999' }}>ⓘ</span></Tooltip>}
+                label="净毛利率"
+                extra="AI 自主调价会依据此参数决定出价上限"
               >
                 <InputNumber min={1} max={99} step={1} style={{ width: '100%' }} addonAfter="%" />
               </Form.Item>
             </Col>
             <Col span={8}>
-              <Form.Item name="weight_g" label="重量（克）">
+              <Form.Item
+                name="weight_g"
+                label="重量"
+                extra="同步时从平台自动拉取（WB 毛重 / OZON 体积重），可手动覆盖"
+              >
                 <InputNumber min={0} step={1} style={{ width: '100%' }} addonAfter="g" />
               </Form.Item>
             </Col>
