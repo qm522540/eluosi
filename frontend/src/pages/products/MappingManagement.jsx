@@ -12,6 +12,7 @@ import {
   updateLocalCategory,
   deleteLocalCategory,
 } from '@/api/mapping'
+import CategoryMappingTab from './mapping/CategoryMappingTab'
 
 const { Title, Paragraph, Text } = Typography
 
@@ -179,6 +180,15 @@ const MappingManagement = () => {
     if (!selectedNode) {
       return <Empty description="请先在左侧选择一个本地分类" />
     }
+    if (activeTab === 'category') {
+      return (
+        <CategoryMappingTab
+          key={selectedNode.id}
+          localCategoryId={selectedNode.id}
+          localCategoryName={selectedNode.name}
+        />
+      )
+    }
     return (
       <Card size="small" bordered>
         <Text type="secondary">
@@ -187,7 +197,6 @@ const MappingManagement = () => {
           <Text type="secondary"> · 第 {selectedNode.level} 级</Text>
         </Text>
         <Paragraph style={{ marginTop: 12, marginBottom: 0 }} type="secondary">
-          {activeTab === 'category' && '品类映射 Tab 待填充（Task 5）'}
           {activeTab === 'attribute' && '属性映射 Tab 待填充（Task 7）'}
           {activeTab === 'value' && '属性值映射 Tab 待填充（Task 8）'}
         </Paragraph>
