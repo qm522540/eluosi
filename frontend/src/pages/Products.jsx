@@ -66,6 +66,11 @@ const Products = () => {
   const [selectedRowKeys, setSelectedRowKeys] = useState([])
 
   const fetchProducts = useCallback(async (p = 1) => {
+    if (!filters.shop_id) {
+      setProducts([])
+      setTotal(0)
+      return
+    }
     setLoading(true)
     setPage(p)
     try {
@@ -84,8 +89,13 @@ const Products = () => {
   }, [filters, pageSize])
 
   useEffect(() => {
-    fetchProducts(1)
-  }, [fetchProducts])
+    if (filters.shop_id) {
+      fetchProducts(1)
+    } else {
+      setProducts([])
+      setTotal(0)
+    }
+  }, [fetchProducts, filters.shop_id])
 
   useEffect(() => {
     getShops({ page: 1, page_size: 100 }).then(res => {
@@ -525,13 +535,15 @@ const Products = () => {
           locale={{
             emptyText: (
               <Empty
-                description="暂无商品数据"
+                description={filters.shop_id ? '该店铺暂无商品，可点"手动同步"拉取' : '请先在上方选择店铺'}
                 style={{ padding: '40px 0' }}
               >
-                <Button type="primary" icon={<SyncOutlined />}
-                  onClick={() => handleSync(true)}>
-                  立即同步平台商品
-                </Button>
+                {filters.shop_id ? (
+                  <Button type="primary" icon={<SyncOutlined />}
+                    onClick={() => handleSync(true)}>
+                    立即同步平台商品
+                  </Button>
+                ) : null}
               </Empty>
             )
           }}
