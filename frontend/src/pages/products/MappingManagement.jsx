@@ -17,6 +17,8 @@ import AISuggestCategoryButton from './mapping/AISuggestCategoryButton'
 import AttributeMappingTab from './mapping/AttributeMappingTab'
 import AISuggestAttributesButton from './mapping/AISuggestAttributesButton'
 import AttributeValueMappingDrawer from './mapping/AttributeValueMappingDrawer'
+import InitFromWBButton from './mapping/InitFromWBButton'
+import MatchOzonButton from './mapping/MatchOzonButton'
 
 const { Title, Paragraph, Text } = Typography
 
@@ -108,6 +110,13 @@ const MappingManagement = () => {
 
   // 属性值映射 Drawer 当前打开的属性映射
   const [valueDrawerAttr, setValueDrawerAttr] = useState(null)
+
+  // 顶部长任务（从 WB 初始化 / AI 匹配 Ozon）完成后，触发右侧 Tab 重新拉取
+  const [tabsRefreshKey, setTabsRefreshKey] = useState(0)
+  const bumpTabsRefresh = () => setTabsRefreshKey((k) => k + 1)
+
+  // 本地分类数量（给 MatchOzonButton 做 disabled 判断）
+  const localCategoryCount = collectKeys(treeData).length
 
   const loadTree = useCallback(async (keepSelectedKey) => {
     setTreeLoading(true)
@@ -228,7 +237,7 @@ const MappingManagement = () => {
     if (activeTab === 'category') {
       return (
         <CategoryMappingTabWithAI
-          key={selectedNode.id}
+          key={`${selectedNode.id}-${tabsRefreshKey}`}
           localCategoryId={selectedNode.id}
           localCategoryName={selectedNode.name}
         />
@@ -237,7 +246,7 @@ const MappingManagement = () => {
     if (activeTab === 'attribute') {
       return (
         <AttributeMappingTabWithAI
-          key={selectedNode.id}
+          key={`${selectedNode.id}-${tabsRefreshKey}`}
           localCategoryId={selectedNode.id}
           localCategoryName={selectedNode.name}
           onManageValues={(row) => setValueDrawerAttr(row)}
@@ -261,11 +270,32 @@ const MappingManagement = () => {
 
   return (
     <div>
-      <Title level={3}>
-        <PartitionOutlined /> 映射管理
-      </Title>
+      <Row justify="space-between" align="middle" style={{ marginBottom: 8 }} wrap>
+        <Col>
+          <Title level={3} style={{ margin: 0 }}>
+            <PartitionOutlined /> 映射管理
+          </Title>
+        </Col>
+        <Col>
+          <Space wrap>
+            <InitFromWBButton
+              onSuccess={async () => {
+                await loadTree(selectedKey)
+                bumpTabsRefresh()
+              }}
+            />
+            <MatchOzonButton
+              localCategoryCount={localCategoryCount}
+              onSuccess={() => {
+                bumpTabsRefresh()
+              }}
+            />
+          </Space>
+        </Col>
+      </Row>
       <Paragraph type="secondary">
-        本地统一分类 → WB / Ozon 分类 / 属性 / 属性值 映射。节奏：<Text strong>①建本地分类 → ②品类映射 → ③属性映射 → ④属性值映射</Text>。每条映射 AI 推荐后需人工确认，详见
+        本地统一分类 → WB / Ozon 分类 / 属性 / 属性值 映射。推荐入口：<Text strong>从 WB 初始化</Text>（一次建好本地分类 + WB 映射） →
+        <Text strong> AI 匹配 Ozon </Text>（对所有本地分类生成 Ozon 待确认映射）。详见
         <Text code>docs/api/category_mapping.md</Text>
       </Paragraph>
 
