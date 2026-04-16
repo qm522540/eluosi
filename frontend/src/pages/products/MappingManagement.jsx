@@ -13,10 +13,30 @@ import {
   deleteLocalCategory,
 } from '@/api/mapping'
 import CategoryMappingTab from './mapping/CategoryMappingTab'
+import AISuggestCategoryButton from './mapping/AISuggestCategoryButton'
 
 const { Title, Paragraph, Text } = Typography
 
 const MAX_LEVEL = 3
+
+// CategoryMappingTab + AI 推荐按钮组合：按钮塞到 aiSlot，通过 refreshKey 让表格刷新
+const CategoryMappingTabWithAI = ({ localCategoryId, localCategoryName }) => {
+  const [refreshKey, setRefreshKey] = useState(0)
+  return (
+    <CategoryMappingTab
+      key={`${localCategoryId}-${refreshKey}`}
+      localCategoryId={localCategoryId}
+      localCategoryName={localCategoryName}
+      aiSlot={
+        <AISuggestCategoryButton
+          localCategoryId={localCategoryId}
+          localCategoryName={localCategoryName}
+          onSuccess={() => setRefreshKey((k) => k + 1)}
+        />
+      }
+    />
+  )
+}
 
 const toTreeData = (nodes) =>
   (nodes || []).map((n) => ({
@@ -182,7 +202,7 @@ const MappingManagement = () => {
     }
     if (activeTab === 'category') {
       return (
-        <CategoryMappingTab
+        <CategoryMappingTabWithAI
           key={selectedNode.id}
           localCategoryId={selectedNode.id}
           localCategoryName={selectedNode.name}
