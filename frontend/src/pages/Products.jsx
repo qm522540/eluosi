@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import {
   Typography, Card, Table, Button, Tag, Space, Row, Col,
   Input, Select, InputNumber, Modal, Form, Tooltip, Empty,
-  Badge, message, Alert, Spin, Drawer,
+  Badge, message, Alert, Spin, Drawer, Divider, Image,
 } from 'antd'
 import {
   SyncOutlined, PlusOutlined, EditOutlined,
@@ -48,6 +48,76 @@ const STATUS_MAP = {
   inactive: { color: 'default', label: '停售' },
   out_of_stock: { color: 'warning', label: '缺货' },
   blocked: { color: 'error', label: '封禁' },
+}
+
+// ========== 编辑弹窗辅助组件 ==========
+
+const SectionTitle = ({ children, right, tip }) => (
+  <div style={{
+    display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+    marginBottom: 12, paddingBottom: 6,
+    borderBottom: '2px solid #f0f0f0',
+  }}>
+    <div style={{ fontSize: 14, fontWeight: 600, color: '#1f1f1f' }}>
+      {children}
+      {tip && (
+        <span style={{ marginLeft: 8, fontSize: 12, color: '#888', fontWeight: 400 }}>
+          {tip}
+        </span>
+      )}
+    </div>
+    {right}
+  </div>
+)
+
+const FieldLabelWithAI = ({ title, onClick, loading, aiText }) => (
+  <Space size={8}>
+    <span>{title}</span>
+    <Button
+      size="small" type="link" icon={<RobotOutlined />}
+      onClick={onClick} loading={loading}
+      style={{ padding: 0, height: 'auto' }}
+    >
+      {aiText}
+    </Button>
+  </Space>
+)
+
+const AISuggestionCard = ({ color, platform, text, onRegenerate, regenerating, onClose, scrollable }) => {
+  const scheme = color === 'green'
+    ? { bg: '#f6ffed', border: '#b7eb8f', headColor: '#389e0d' }
+    : { bg: '#f0f7ff', border: '#bae0ff', headColor: '#0958d9' }
+  return (
+    <div style={{
+      marginTop: 8, padding: '10px 12px',
+      background: scheme.bg, border: `1px solid ${scheme.border}`,
+      borderRadius: 6,
+    }}>
+      <div style={{
+        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+        fontSize: 12, color: scheme.headColor, marginBottom: 6, fontWeight: 500,
+      }}>
+        <span>🤖 AI 优化建议（{platform?.toUpperCase() || ''} 风格）— 已填入上方</span>
+        <Space size={4}>
+          <Button size="small" type="text" onClick={onRegenerate} loading={regenerating}
+            style={{ fontSize: 11, height: 22, padding: '0 6px' }}>
+            重新生成
+          </Button>
+          <Button size="small" type="text" onClick={onClose}
+            style={{ fontSize: 11, height: 22, padding: '0 6px', color: '#888' }}>
+            关闭
+          </Button>
+        </Space>
+      </div>
+      <div style={{
+        fontSize: 12, lineHeight: 1.6, color: '#1f1f1f',
+        whiteSpace: 'pre-wrap',
+        ...(scrollable ? { maxHeight: 180, overflow: 'auto' } : {}),
+      }}>
+        {text}
+      </div>
+    </div>
+  )
 }
 
 // 简易相对时间：UTC 字符串 → "x 分钟前 / x 小时前 / YYYY-MM-DD HH:mm"
@@ -782,85 +852,105 @@ const Products = () => {
 
       {/* 商品编辑弹窗 */}
       <Modal
-        title="编辑商品"
+        title={
+          <Space>
+            <EditOutlined style={{ color: '#1677ff' }} />
+            <span>编辑商品</span>
+            {editingProduct && (
+              <Tag color="default" style={{ fontSize: 11, marginLeft: 4 }}>
+                {editingProduct.sku}
+              </Tag>
+            )}
+          </Space>
+        }
         open={editModal}
         onOk={handleEditSubmit}
         onCancel={() => { setEditModal(false); editForm.resetFields() }}
         confirmLoading={editSubmitting}
         okText="保存"
         cancelText="取消"
-        width={560}
+        width={720}
         destroyOnClose
+        styles={{ body: { maxHeight: 'calc(100vh - 200px)', overflowY: 'auto', padding: '16px 24px' } }}
       >
-        <Form form={editForm} layout="vertical" style={{ marginTop: 12 }}>
-          <Form.Item name="sku" label="SKU（只读）">
-            <Input disabled />
-          </Form.Item>
+        <Form form={editForm} layout="vertical">
+
+          {/* ========== 分组 1：基本信息 ========== */}
+          <SectionTitle>基本信息</SectionTitle>
+          <Row gutter={16}>
+            <Col span={12}>
+              <Form.Item name="sku" label="SKU">
+                <Input disabled />
+              </Form.Item>
+            </Col>
+            <Col span={12}>
+              <Form.Item name="local_category_id" label="本地分类">
+                <Select
+                  allowClear showSearch optionFilterProp="children"
+                  placeholder="选择本地统一分类"
+                >
+                  {localCategories.map(c => (
+                    <Option key={c.id} value={c.id}>
+                      {c.name} {c.name_ru ? `（${c.name_ru}）` : ''}
+                    </Option>
+                  ))}
+                </Select>
+              </Form.Item>
+            </Col>
+          </Row>
           <Form.Item
-            name="name_zh"
-            label="中文名"
-            extra="本地备注使用，不同步平台。列表和搜索会用到，填一个方便自己识别的名字就行"
+            name="name_zh" label="中文名"
+            extra="本地备注，不同步平台。列表主显示 + 搜索关键字匹配"
             rules={[{ required: true, message: '请填中文名' }]}
           >
             <Input placeholder="方便自己识别的中文名称" />
           </Form.Item>
+
+          <Divider style={{ margin: '8px 0 16px' }} />
+
+          {/* ========== 分组 2：平台文案 ========== */}
+          <SectionTitle
+            tip={editingProduct?.listings?.[0]?.platform
+              ? `${editingProduct.listings[0].platform.toUpperCase()} 平台文案`
+              : '平台文案'}
+          >
+            平台文案
+          </SectionTitle>
           <Form.Item
             label={
-              <Space size={8}>
-                <span>商品标题</span>
-                <Button
-                  size="small" type="link" icon={<RobotOutlined />}
-                  onClick={handleOptimizeTitle}
-                  loading={titleOptimizing}
-                  style={{ padding: 0, height: 'auto' }}
-                >
-                  AI 优化标题
-                </Button>
-              </Space>
+              <FieldLabelWithAI
+                title="商品标题"
+                onClick={handleOptimizeTitle}
+                loading={titleOptimizing}
+                aiText="AI 优化标题"
+              />
             }
-            extra="平台上给买家看的俄文标题。AI 优化会按当前店铺平台（WB / OZON）风格重写并直接填入，可再手动调整后保存。保存后会同步到 listing，下次从平台拉取可能被覆盖"
+            extra="平台上给买家看的俄文标题"
           >
             <Form.Item name="name_ru" noStyle>
               <Input.TextArea autoSize={{ minRows: 2, maxRows: 4 }} placeholder="商品俄文标题" />
             </Form.Item>
             {optimizedTitle && (
-              <div style={{
-                marginTop: 8, padding: '8px 12px',
-                background: '#f0f7ff', border: '1px solid #bae0ff',
-                borderRadius: 6,
-              }}>
-                <div style={{ fontSize: 12, color: '#0958d9', marginBottom: 4, fontWeight: 500 }}>
-                  🤖 AI 优化建议（{editingProduct?.listings?.[0]?.platform?.toUpperCase() || ''} 风格）— 已填入上方，可保存或继续编辑
-                </div>
-                <div style={{ fontSize: 13, lineHeight: 1.5, color: '#1f1f1f' }}>
-                  {optimizedTitle}
-                </div>
-                <Space size={6} style={{ marginTop: 6 }}>
-                  <Button size="small" onClick={handleOptimizeTitle} loading={titleOptimizing}>
-                    重新生成
-                  </Button>
-                  <Button size="small" type="link" onClick={() => setOptimizedTitle(null)}>
-                    关闭建议
-                  </Button>
-                </Space>
-              </div>
+              <AISuggestionCard
+                color="blue"
+                platform={editingProduct?.listings?.[0]?.platform}
+                text={optimizedTitle}
+                onRegenerate={handleOptimizeTitle}
+                regenerating={titleOptimizing}
+                onClose={() => setOptimizedTitle(null)}
+              />
             )}
           </Form.Item>
           <Form.Item
             label={
-              <Space size={8}>
-                <span>商品描述</span>
-                <Button
-                  size="small" type="link" icon={<RobotOutlined />}
-                  onClick={handleOptimizeDesc}
-                  loading={descOptimizing}
-                  style={{ padding: 0, height: 'auto' }}
-                >
-                  AI 优化描述
-                </Button>
-              </Space>
+              <FieldLabelWithAI
+                title="商品描述"
+                onClick={handleOptimizeDesc}
+                loading={descOptimizing}
+                aiText="AI 优化描述"
+              />
             }
-            extra="平台上的详细描述（俄文）。AI 优化按当前店铺平台风格重写并直接填入。保存后同步到 listing，下次从平台拉取可能被覆盖"
+            extra="平台详细描述（俄文）。保存后同步到 listing，下次同步可能被平台值覆盖"
           >
             <Form.Item name="description_ru" noStyle>
               <Input.TextArea
@@ -869,123 +959,130 @@ const Products = () => {
               />
             </Form.Item>
             {optimizedDesc && (
-              <div style={{
-                marginTop: 8, padding: '8px 12px',
-                background: '#f6ffed', border: '1px solid #b7eb8f',
-                borderRadius: 6,
-              }}>
-                <div style={{ fontSize: 12, color: '#389e0d', marginBottom: 4, fontWeight: 500 }}>
-                  🤖 AI 优化建议（{editingProduct?.listings?.[0]?.platform?.toUpperCase() || ''} 风格）— 已填入上方，可保存或继续编辑
-                </div>
-                <div style={{
-                  fontSize: 12, lineHeight: 1.6, color: '#1f1f1f',
-                  maxHeight: 180, overflow: 'auto',
-                  whiteSpace: 'pre-wrap',
-                }}>
-                  {optimizedDesc}
-                </div>
-                <Space size={6} style={{ marginTop: 6 }}>
-                  <Button size="small" onClick={handleOptimizeDesc} loading={descOptimizing}>
-                    重新生成
-                  </Button>
-                  <Button size="small" type="link" onClick={() => setOptimizedDesc(null)}>
-                    关闭建议
-                  </Button>
-                </Space>
-              </div>
+              <AISuggestionCard
+                color="green"
+                platform={editingProduct?.listings?.[0]?.platform}
+                text={optimizedDesc}
+                onRegenerate={handleOptimizeDesc}
+                regenerating={descOptimizing}
+                onClose={() => setOptimizedDesc(null)}
+                scrollable
+              />
             )}
           </Form.Item>
-          <Form.Item name="local_category_id" label="本地分类">
-            <Select
-              allowClear
-              showSearch
-              optionFilterProp="children"
-              placeholder="选择本地统一分类"
-            >
-              {localCategories.map(c => (
-                <Option key={c.id} value={c.id}>
-                  {c.name} {c.name_ru ? `（${c.name_ru}）` : ''}
-                </Option>
-              ))}
-            </Select>
-          </Form.Item>
-          <Row gutter={12}>
+
+          <Divider style={{ margin: '8px 0 16px' }} />
+
+          {/* ========== 分组 3：定价和物流 ========== */}
+          <SectionTitle>定价与物流</SectionTitle>
+          <Row gutter={16}>
             <Col span={8}>
-              <Form.Item name="cost_price" label="成本价（₽）">
+              <Form.Item name="cost_price" label="成本价">
                 <InputNumber min={0} step={0.01} style={{ width: '100%' }} addonBefore="₽" />
               </Form.Item>
             </Col>
             <Col span={8}>
               <Form.Item
-                name="net_margin"
-                label="净毛利率"
-                extra="AI 自主调价会依据此参数决定出价上限"
+                name="net_margin" label="净毛利率"
+                extra="AI 自主调价会依据此参数"
               >
                 <InputNumber min={1} max={99} step={1} style={{ width: '100%' }} addonAfter="%" />
               </Form.Item>
             </Col>
             <Col span={8}>
               <Form.Item
-                name="weight_g"
-                label="重量"
-                extra="同步时从平台自动拉取（WB 毛重 / OZON 体积重），可手动覆盖"
+                name="weight_g" label="重量"
+                extra="同步自动拉取，可手动覆盖"
               >
                 <InputNumber min={0} step={1} style={{ width: '100%' }} addonAfter="g" />
               </Form.Item>
             </Col>
           </Row>
-          <Form.Item
-            label={
-              <Space size={8}>
-                <span>商品图片</span>
-                <Button
-                  size="small" type="link" icon={<RobotOutlined />}
-                  onClick={handleArchiveImages}
-                  loading={imagesArchiving}
-                  style={{ padding: 0, height: 'auto' }}
-                >
-                  {archivedImages?.length ? '重新归档到 OSS' : '归档到阿里云 OSS'}
-                </Button>
-              </Space>
+
+          <Divider style={{ margin: '8px 0 16px' }} />
+
+          {/* ========== 分组 4：图片 ========== */}
+          <SectionTitle
+            right={
+              <Button
+                size="small" icon={<RobotOutlined />}
+                onClick={handleArchiveImages}
+                loading={imagesArchiving}
+                type={archivedImages?.length ? 'default' : 'primary'}
+                ghost={!!archivedImages?.length}
+              >
+                {archivedImages?.length ? '重新归档' : '归档到 OSS'}
+              </Button>
             }
-            extra="点击按钮下载平台全部图片到 OSS（归档后铺货/展示不受平台链接失效影响）。耗时按图片数量 3-5 秒/张"
           >
-            <Form.Item name="image_url" noStyle>
-              <Input placeholder="首图 URL（归档后自动改为 OSS 地址）" />
-            </Form.Item>
-            {archivedImages?.length > 0 && (
-              <div style={{
-                marginTop: 8, padding: 10,
-                background: '#fafafa', border: '1px solid #f0f0f0', borderRadius: 6,
-              }}>
-                <div style={{ fontSize: 12, color: '#389e0d', marginBottom: 8, fontWeight: 500 }}>
-                  ✓ OSS 已归档 {archivedImages.length} 张
-                </div>
-                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-                  {archivedImages.slice(0, 10).map((url, i) => (
-                    <a key={i} href={url} target="_blank" rel="noopener noreferrer">
-                      <img src={url} alt={`img-${i}`}
-                        style={{ width: 56, height: 56, objectFit: 'cover',
-                          borderRadius: 4, border: '1px solid #eee' }} />
-                    </a>
-                  ))}
-                  {archivedImages.length > 10 && (
-                    <div style={{ width: 56, height: 56, borderRadius: 4,
-                      background: '#f5f5f5', display: 'flex',
-                      alignItems: 'center', justifyContent: 'center',
-                      fontSize: 12, color: '#888' }}>
-                      +{archivedImages.length - 10}
-                    </div>
-                  )}
-                </div>
-              </div>
+            商品图片 {archivedImages?.length > 0 && (
+              <Tag color="success" style={{ marginLeft: 8 }}>
+                已归档 {archivedImages.length} 张
+              </Tag>
             )}
+          </SectionTitle>
+          {archivedImages?.length > 0 ? (
+            <div style={{
+              padding: 12, background: '#fafafa',
+              border: '1px solid #f0f0f0', borderRadius: 8,
+              marginBottom: 12,
+            }}>
+              <Image.PreviewGroup>
+                <div style={{ display: 'grid',
+                  gridTemplateColumns: 'repeat(auto-fill, minmax(96px, 1fr))',
+                  gap: 10 }}>
+                  {archivedImages.map((url, i) => (
+                    <div key={i} style={{ position: 'relative' }}>
+                      <Image
+                        src={url}
+                        alt={`img-${i}`}
+                        width="100%"
+                        height={96}
+                        style={{ objectFit: 'cover', borderRadius: 6,
+                          border: '1px solid #e8e8e8', background: '#fff' }}
+                        preview={{ mask: <span style={{ fontSize: 12 }}>预览</span> }}
+                      />
+                      {i === 0 && (
+                        <Tag color="blue" style={{
+                          position: 'absolute', top: 4, left: 4,
+                          fontSize: 10, margin: 0, padding: '0 4px',
+                          lineHeight: '16px',
+                        }}>主图</Tag>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </Image.PreviewGroup>
+              <div style={{ fontSize: 12, color: 'var(--color-text-tertiary)', marginTop: 10 }}>
+                已上传阿里云 OSS，铺货和外部展示可直接使用。点击缩略图查看大图
+              </div>
+            </div>
+          ) : (
+            <div style={{
+              padding: '20px 12px', textAlign: 'center',
+              background: '#fafafa', border: '1px dashed #d9d9d9',
+              borderRadius: 8, marginBottom: 12,
+            }}>
+              <div style={{ fontSize: 13, color: 'var(--color-text-secondary)', marginBottom: 8 }}>
+                还未归档 — 当前只在平台 CDN 上
+              </div>
+              <div style={{ fontSize: 12, color: 'var(--color-text-tertiary)' }}>
+                点击右上「归档到 OSS」按钮，自动下载平台全部图片到阿里云 OSS
+              </div>
+            </div>
+          )}
+          <Form.Item name="image_url" label="主图 URL" style={{ marginBottom: 0 }}
+            extra="归档后自动改为 OSS 地址，也可手动填外部 URL">
+            <Input placeholder="https://..." size="small" />
           </Form.Item>
+
+          <Divider style={{ margin: '16px 0 0' }} />
+
           <Alert
             type="info"
-            showIcon={false}
-            style={{ fontSize: 12, marginTop: -8 }}
-            message="平台商品ID、售价、状态等由同步决定，本页不可编辑"
+            showIcon
+            style={{ fontSize: 12, marginTop: 16 }}
+            message="平台商品 ID、售价、库存、状态由同步自动更新，本页不可编辑"
           />
         </Form>
       </Modal>
