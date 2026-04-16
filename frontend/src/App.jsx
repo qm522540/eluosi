@@ -3,6 +3,7 @@ import Login from '@/pages/Login'
 import Dashboard from '@/pages/Dashboard'
 import Ads from '@/pages/ads'
 import Products from '@/pages/Products'
+import MappingManagement from '@/pages/products/MappingManagement'
 import Seo from '@/pages/Seo'
 import Reports from '@/pages/Reports'
 import Settings from '@/pages/Settings'
@@ -24,6 +25,7 @@ const App = () => {
         <Route index element={<Dashboard />} />
         <Route path="ads" element={<Ads />} />
         <Route path="products" element={<Products />} />
+        <Route path="products/mapping" element={<MappingManagement />} />
         <Route path="seo" element={<Seo />} />
         <Route path="reports" element={<Reports />} />
         <Route path="settings" element={<Settings />} />

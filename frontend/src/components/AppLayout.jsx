@@ -12,6 +12,8 @@ import {
   UserOutlined,
   MenuFoldOutlined,
   MenuUnfoldOutlined,
+  AppstoreOutlined,
+  PartitionOutlined,
 } from '@ant-design/icons'
 import { useAuthStore } from '@/stores/authStore'
 
@@ -30,9 +32,13 @@ const menuItems = [
     label: '广告管理',
   },
   {
-    key: '/products',
+    key: 'products-group',
     icon: <ShoppingOutlined />,
     label: '商品管理',
+    children: [
+      { key: '/products', icon: <AppstoreOutlined />, label: '商品列表' },
+      { key: '/products/mapping', icon: <PartitionOutlined />, label: '映射管理' },
+    ],
   },
   {
     key: '/seo',
@@ -59,6 +65,7 @@ const AppLayout = () => {
   const { token: { colorBgContainer, borderRadiusLG } } = theme.useToken()
 
   const handleMenuClick = ({ key }) => {
+    if (!key.startsWith('/')) return
     navigate(key)
   }
 
@@ -108,6 +115,7 @@ const AppLayout = () => {
         <Menu
           mode="inline"
           selectedKeys={[location.pathname]}
+          defaultOpenKeys={location.pathname.startsWith('/products') ? ['products-group'] : []}
           items={menuItems}
           onClick={handleMenuClick}
           style={{ borderRight: 0 }}
