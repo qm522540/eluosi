@@ -24,6 +24,9 @@ class Product(BaseMixin, Base):
         comment="商品净毛利率(0-1)，为空则使用店铺默认配置gross_margin"
     )
     weight_g: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    length_mm: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, comment="长(毫米)")
+    width_mm: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, comment="宽(毫米)")
+    height_mm: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, comment="高(毫米)")
     image_url: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
     status: Mapped[str] = mapped_column(
         Enum("active", "inactive", "deleted", name="product_status"),

@@ -347,6 +347,9 @@ def _product_to_dict(p: Product, cat_name_map: dict = None) -> dict:
         "cost_price": float(p.cost_price) if p.cost_price else None,
         "net_margin": float(p.net_margin) if p.net_margin else None,
         "weight_g": p.weight_g,
+        "length_mm": p.length_mm,
+        "width_mm": p.width_mm,
+        "height_mm": p.height_mm,
         "image_url": p.image_url,
         "status": p.status,
         "created_at": p.created_at.isoformat() if p.created_at else None,
@@ -550,15 +553,26 @@ def _sync_wb_products(db: Session, shop, tenant_id: int) -> dict:
             updated += 1
         else:
             vendor_code = p.get("vendorCode") or f"WB-{nm_id}"
-            # WB 重量：dimensions.weightBrutto 单位 kg → 转 g
+            # WB 重量/尺寸：dimensions 字段，cm/kg → mm/g
             dims = p.get("dimensions") or {}
-            weight_kg = dims.get("weightBrutto") if isinstance(dims, dict) else None
+            if not isinstance(dims, dict):
+                dims = {}
+            weight_kg = dims.get("weightBrutto")
             weight_g = int(round(float(weight_kg) * 1000)) if weight_kg else None
+            def _cm_to_mm(v):
+                try:
+                    return int(round(float(v) * 10)) if v else None
+                except (TypeError, ValueError):
+                    return None
+            length_mm = _cm_to_mm(dims.get("length"))
+            width_mm = _cm_to_mm(dims.get("width"))
+            height_mm = _cm_to_mm(dims.get("height"))
             product = _get_or_create_product(
                 db, tenant_id, name_ru=data["title_ru"], sku=vendor_code,
                 shop_id=shop.id,
                 brand=p.get("brand"), image_url=image_url,
                 weight_g=weight_g,
+                length_mm=length_mm, width_mm=width_mm, height_mm=height_mm,
                 local_category_id=local_cat_id)
             listing = PlatformListing(
                 tenant_id=tenant_id, product_id=product.id,
@@ -715,6 +729,9 @@ def _get_or_create_product(db: Session, tenant_id: int,
                            brand: Optional[str] = None,
                            image_url: Optional[str] = None,
                            weight_g: Optional[int] = None,
+                           length_mm: Optional[int] = None,
+                           width_mm: Optional[int] = None,
+                           height_mm: Optional[int] = None,
                            local_category_id: Optional[int] = None):
     # 按 (tenant_id, shop_id, sku) 查重 —— 同一 SKU 在不同店铺是独立 product
     query = db.query(Product).filter(
@@ -727,9 +744,15 @@ def _get_or_create_product(db: Session, tenant_id: int,
     if existing:
         if local_category_id and not existing.local_category_id:
             existing.local_category_id = local_category_id
-        # 重量：已有不覆盖（尊重用户手动改的值）
+        # 尺寸/重量：已有不覆盖（尊重用户手动改的值）
         if weight_g and not existing.weight_g:
             existing.weight_g = weight_g
+        if length_mm and not existing.length_mm:
+            existing.length_mm = length_mm
+        if width_mm and not existing.width_mm:
+            existing.width_mm = width_mm
+        if height_mm and not existing.height_mm:
+            existing.height_mm = height_mm
         return existing
     product = Product(
         tenant_id=tenant_id, shop_id=shop_id, sku=sku,
@@ -738,6 +761,9 @@ def _get_or_create_product(db: Session, tenant_id: int,
         brand=brand,
         image_url=image_url,
         weight_g=weight_g,
+        length_mm=length_mm,
+        width_mm=width_mm,
+        height_mm=height_mm,
         local_category_id=local_category_id,
         status="active",
     )
