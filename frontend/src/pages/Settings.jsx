@@ -287,27 +287,17 @@ const Settings = () => {
 
         {/* ===== Yandex ===== */}
         {platform === 'yandex' && (
-          <>
-            <Form.Item
-              name="oauth_token"
-              label="OAuth Token"
-              rules={editingShop ? [] : [{ required: true, message: '请输入OAuth Token' }]}
-              extra="获取路径：Yandex Market 合作伙伴后台 → 设置 → API → OAuth Token"
-            >
-              <Input.Password
-                placeholder={editingShop ? '不修改请留空' : '请输入Yandex OAuth Token'}
-                iconRender={() => <EyeInvisibleOutlined />}
-              />
-            </Form.Item>
-            <Form.Item name="oauth_refresh_token" label="Refresh Token"
-              extra="选填，用于自动刷新过期的Token"
-            >
-              <Input.Password
-                placeholder="选填"
-                iconRender={() => <EyeInvisibleOutlined />}
-              />
-            </Form.Item>
-          </>
+          <Form.Item
+            name="api_key"
+            label="API Key"
+            rules={editingShop ? [] : [{ required: true, message: '请输入API Key' }]}
+            extra="获取路径：Yandex Market 合作伙伴后台 → 设置 → API → 生成 Api-Key"
+          >
+            <Input.Password
+              placeholder={editingShop ? '不修改请留空' : '请输入Yandex API Key'}
+              iconRender={() => <EyeInvisibleOutlined />}
+            />
+          </Form.Item>
         )}
       </>
     )
