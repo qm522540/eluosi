@@ -935,8 +935,10 @@ const AdsOverview = ({ shopId, platform, shops, searched, syncing, lastSyncTime,
             <Tag style={{ marginRight: 0, fontFamily: 'ui-monospace, monospace', fontSize: 11 }}>
               {detailData?.platform === 'wb' ? `nm_id ${sku}` : `SKU ${sku}`}
             </Tag>
-            {record.subject_name && detailData?.platform === 'wb' && (
-              <Tag color="default" style={{ fontSize: 11 }}>{record.subject_name}</Tag>
+            {record.product_code && (
+              <Tag color="blue" style={{ fontSize: 11, fontFamily: 'ui-monospace, monospace' }}>
+                编码 {record.product_code}
+              </Tag>
             )}
           </Space>
         </div>
@@ -984,12 +986,31 @@ const AdsOverview = ({ shopId, platform, shops, searched, syncing, lastSyncTime,
               { title: '关键词', dataIndex: 'keyword', key: 'keyword', ellipsis: true,
                 render: v => <Tooltip title={v} placement="topLeft"><span>{v}</span></Tooltip> },
               { title: '曝光', dataIndex: 'views', key: 'views', width: 80, align: 'right',
+                sorter: (a, b) => (a.views||0) - (b.views||0),
                 render: v => (v || 0).toLocaleString() },
-              { title: '点击', dataIndex: 'clicks', key: 'clicks', width: 80, align: 'right',
+              { title: '点击', dataIndex: 'clicks', key: 'clicks', width: 70, align: 'right',
+                sorter: (a, b) => (a.clicks||0) - (b.clicks||0),
                 render: v => (v || 0).toLocaleString() },
-              { title: 'CTR', dataIndex: 'ctr', key: 'ctr', width: 90, align: 'right',
+              { title: 'CTR', dataIndex: 'ctr', key: 'ctr', width: 80, align: 'right',
+                sorter: (a, b) => (a.ctr||0) - (b.ctr||0),
                 render: v => v > 0 ? `${v}%` : '-' },
+              { title: 'CPC', key: 'cpc', width: 90, align: 'right',
+                sorter: (a, b) => {
+                  const ac = a.clicks > 0 ? a.sum/a.clicks : 0
+                  const bc = b.clicks > 0 ? b.sum/b.clicks : 0
+                  return ac - bc
+                },
+                render: (_, r) => r.clicks > 0 ? `₽${(r.sum/r.clicks).toFixed(2)}` : '-' },
+              { title: 'CPM', key: 'cpm', width: 90, align: 'right',
+                sorter: (a, b) => {
+                  const am = a.views > 0 ? a.sum/a.views*1000 : 0
+                  const bm = b.views > 0 ? b.sum/b.views*1000 : 0
+                  return am - bm
+                },
+                render: (_, r) => r.views > 0 ? `₽${(r.sum/r.views*1000).toFixed(2)}` : '-' },
               { title: '花费', dataIndex: 'sum', key: 'sum', width: 100, align: 'right',
+                sorter: (a, b) => (a.sum||0) - (b.sum||0),
+                defaultSortOrder: 'descend',
                 render: v => v > 0 ? `₽${v.toFixed(2)}` : '-' },
             ]}
           />

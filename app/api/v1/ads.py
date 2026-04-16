@@ -554,17 +554,22 @@ def _enrich_products_with_listing_id(
             当前 platform_listings 没有 platform_sku_id 字段，匹配不上，
             返回 listing_id=None（待后续加字段回填）
     """
-    from app.models.product import PlatformListing
+    from app.models.product import PlatformListing, Product
     if not products:
         return products
     skus = list({str(p.get("sku") or "") for p in products if p.get("sku")})
     if not skus:
         for p in products:
             p["listing_id"] = None
+            p["product_code"] = None
         return products
-    # 统一按 platform_sku_id 反查（WB nm_id / OZON sku_id 都是这个字段）
+    # 统一按 platform_sku_id 反查 + JOIN products 拿商家编码 (products.sku)
     rows = db.query(
-        PlatformListing.id, PlatformListing.platform_sku_id,
+        PlatformListing.id.label("listing_id"),
+        PlatformListing.platform_sku_id,
+        Product.sku.label("product_code"),
+    ).outerjoin(
+        Product, Product.id == PlatformListing.product_id
     ).filter(
         PlatformListing.tenant_id == tenant_id,
         PlatformListing.shop_id == shop_id,
@@ -572,9 +577,14 @@ def _enrich_products_with_listing_id(
         PlatformListing.platform_sku_id.in_(skus),
         PlatformListing.status != "deleted",
     ).all()
-    listing_map = {str(r.platform_sku_id): r.id for r in rows}
+    info_map = {
+        str(r.platform_sku_id): {"listing_id": r.listing_id, "product_code": r.product_code}
+        for r in rows
+    }
     for p in products:
-        p["listing_id"] = listing_map.get(str(p.get("sku") or ""))
+        info = info_map.get(str(p.get("sku") or ""), {})
+        p["listing_id"] = info.get("listing_id")
+        p["product_code"] = info.get("product_code")
     return products
 
 
