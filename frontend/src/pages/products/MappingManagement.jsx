@@ -14,6 +14,8 @@ import {
 } from '@/api/mapping'
 import CategoryMappingTab from './mapping/CategoryMappingTab'
 import AISuggestCategoryButton from './mapping/AISuggestCategoryButton'
+import AttributeMappingTab from './mapping/AttributeMappingTab'
+import AISuggestAttributesButton from './mapping/AISuggestAttributesButton'
 
 const { Title, Paragraph, Text } = Typography
 
@@ -29,6 +31,25 @@ const CategoryMappingTabWithAI = ({ localCategoryId, localCategoryName }) => {
       localCategoryName={localCategoryName}
       aiSlot={
         <AISuggestCategoryButton
+          localCategoryId={localCategoryId}
+          localCategoryName={localCategoryName}
+          onSuccess={() => setRefreshKey((k) => k + 1)}
+        />
+      }
+    />
+  )
+}
+
+const AttributeMappingTabWithAI = ({ localCategoryId, localCategoryName, onManageValues }) => {
+  const [refreshKey, setRefreshKey] = useState(0)
+  return (
+    <AttributeMappingTab
+      key={`${localCategoryId}-${refreshKey}`}
+      localCategoryId={localCategoryId}
+      localCategoryName={localCategoryName}
+      onManageValues={onManageValues}
+      aiSlot={
+        <AISuggestAttributesButton
           localCategoryId={localCategoryId}
           localCategoryName={localCategoryName}
           onSuccess={() => setRefreshKey((k) => k + 1)}
@@ -209,6 +230,16 @@ const MappingManagement = () => {
         />
       )
     }
+    if (activeTab === 'attribute') {
+      return (
+        <AttributeMappingTabWithAI
+          key={selectedNode.id}
+          localCategoryId={selectedNode.id}
+          localCategoryName={selectedNode.name}
+          onManageValues={(row) => message.info(`"管理值映射" Drawer 待 Task 8 实现（attr: ${row.local_attr_name}）`)}
+        />
+      )
+    }
     return (
       <Card size="small" bordered>
         <Text type="secondary">
@@ -217,8 +248,7 @@ const MappingManagement = () => {
           <Text type="secondary"> · 第 {selectedNode.level} 级</Text>
         </Text>
         <Paragraph style={{ marginTop: 12, marginBottom: 0 }} type="secondary">
-          {activeTab === 'attribute' && '属性映射 Tab 待填充（Task 7）'}
-          {activeTab === 'value' && '属性值映射 Tab 待填充（Task 8）'}
+          属性值映射 Tab：请回 <Text strong>属性映射</Text> Tab，点 enum 类型属性行的 <Text strong>值映射</Text> 按钮进入（Task 8）
         </Paragraph>
       </Card>
     )
