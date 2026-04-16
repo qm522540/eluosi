@@ -1,11 +1,9 @@
 import { useState, useEffect, useCallback } from 'react'
-import { useLocation, useNavigate } from 'react-router-dom'
+import { useLocation } from 'react-router-dom'
 import {
-  Typography, Button, Space, Select, Tabs, Tooltip, message,
+  Typography, Button, Space, Select, message,
 } from 'antd'
-import {
-  SearchOutlined, SyncOutlined,
-} from '@ant-design/icons'
+import { SearchOutlined } from '@ant-design/icons'
 import dayjs from 'dayjs'
 import relativeTime from 'dayjs/plugin/relativeTime'
 import 'dayjs/locale/zh-cn'
@@ -20,39 +18,33 @@ dayjs.extend(relativeTime)
 dayjs.locale('zh-cn')
 
 const { Title } = Typography
+const { Option } = Select
 
-// 左侧菜单的"推广信息 / 出价管理"两项通过 URL 反推 mainTab
-// 其他 Tab（规则/数据分析/预算）不在菜单里，点击后 URL 回落到 /ads 维持"推广信息"高亮
-const PATH_TO_TAB = {
-  '/ads': 'overview',
-  '/ads/bid-management': 'bid-management',
-}
-const TAB_TO_PATH = {
-  overview: '/ads',
-  'bid-management': '/ads/bid-management',
+// 平台配色（与 Products.jsx 保持一致的视觉语言）
+const PLATFORM_COLOR = {
+  wb: { label: 'WB' },
+  ozon: { label: 'Ozon' },
+  yandex: { label: 'YM' },
 }
 
 const Ads = () => {
   const location = useLocation()
-  const navigate = useNavigate()
+  const isBidMgmt = location.pathname === '/ads/bid-management'
+  const pageTitle = isBidMgmt ? '出价管理' : '推广信息'
 
   const [searched, setSearched] = useState(false)
-  const [mainTab, setMainTab] = useState(PATH_TO_TAB[location.pathname] || 'overview')
   const [syncing, setSyncing] = useState(false)
   const [lastSyncTime, setLastSyncTime] = useState(null)
 
-  // 筛选（下拉框当前值，随时变化）
-  const [filterPlatform, setFilterPlatform] = useState(null)
+  // 合并为单选：shop_id 带出 platform（从 Option 的 platform 属性取）
   const [filterShopId, setFilterShopId] = useState(null)
+  const [filterPlatform, setFilterPlatform] = useState(null)
 
-  // 已确认的查询参数（只在点击"确定"时更新，驱动下方Tab内容）
-  const [committedPlatform, setCommittedPlatform] = useState(null)
   const [committedShopId, setCommittedShopId] = useState(null)
+  const [committedPlatform, setCommittedPlatform] = useState(null)
 
-  // 店铺列表
   const [shops, setShops] = useState([])
 
-  // tenantId
   const tenant = useAuthStore(s => s.tenant)
   const tenantId = tenant?.id
 
@@ -62,24 +54,11 @@ const Ads = () => {
     }).catch(() => {})
   }, [])
 
-  // URL 变化（左侧菜单点击）时同步 Tab
+  // "推广信息"页：有数据则检查 30 分钟自动同步
+  // "出价管理"页：不自动同步（走自己的 bid-management 调度）
   useEffect(() => {
-    const tab = PATH_TO_TAB[location.pathname]
-    if (tab && tab !== mainTab) setMainTab(tab)
-  }, [location.pathname])
-
-  // Tab 切换时回写 URL（仅两个有菜单入口的 Tab 改变 URL，其他回落到 /ads）
-  const handleTabChange = (newTab) => {
-    setMainTab(newTab)
-    const targetPath = TAB_TO_PATH[newTab] || '/ads'
-    if (targetPath !== location.pathname) navigate(targetPath, { replace: true })
-  }
-
-  // 已确认店铺后获取上次同步时间，超过30分钟自动同步
-  // 仅"广告概览" Tab 下触发，其他 Tab（规则/出价管理/数据分析/预算）不自动同步
-  useEffect(() => {
-    const needAutoSync = mainTab === 'overview'
-    if (committedShopId && committedPlatform && needAutoSync) {
+    if (isBidMgmt) return
+    if (committedShopId && committedPlatform) {
       getLastSyncTime(committedShopId).then(res => {
         if (res.data?.last_sync_at) {
           const syncTime = new Date(res.data.last_sync_at)
@@ -106,17 +85,16 @@ const Ads = () => {
     } else if (!committedShopId) {
       setLastSyncTime(null)
     }
-  }, [committedShopId, committedPlatform, mainTab])
+  }, [committedShopId, committedPlatform, isBidMgmt])
 
-  const canSearch = filterPlatform && filterShopId
+  const canSearch = !!filterShopId
 
   const handleSearch = () => {
-    setCommittedPlatform(filterPlatform)
     setCommittedShopId(filterShopId)
+    setCommittedPlatform(filterPlatform)
     setSearched(true)
   }
 
-  // 刷新当前Tab数据：通过切换searched状态触发子组件重新加载
   const refreshCurrentTab = useCallback(() => {
     setSearched(false)
     setTimeout(() => setSearched(true), 0)
@@ -129,9 +107,7 @@ const Ads = () => {
       await syncData(committedShopId)
       setLastSyncTime(new Date())
       message.success('同步任务已提交，数据将在后台更新')
-      if (searched) {
-        refreshCurrentTab()
-      }
+      if (searched) refreshCurrentTab()
     } catch {
       message.error('同步失败，请稍后重试')
     } finally {
@@ -139,57 +115,62 @@ const Ads = () => {
     }
   }
 
-  const tabBarExtra = null
-
   return (
     <div>
       {/* 顶部操作栏 */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 }}>
-        <Title level={4} style={{ margin: 0 }}>广告管理</Title>
+        <Title level={4} style={{ margin: 0 }}>{pageTitle}</Title>
         <Space>
           <Select
-            placeholder="选择平台"
-            allowClear
-            style={{ width: 150 }}
-            value={filterPlatform}
-            onChange={(v) => { setFilterPlatform(v); setFilterShopId(null) }}
-            options={[
-              { value: 'wb', label: 'Wildberries' },
-              { value: 'ozon', label: 'Ozon' },
-              { value: 'yandex', label: 'Yandex Market' },
-            ]}
-          />
-          <Select
-            placeholder="选择店铺"
-            allowClear
-            style={{ width: 160 }}
+            style={{ width: 260 }}
             value={filterShopId}
-            onChange={(v) => setFilterShopId(v)}
-            disabled={!filterPlatform}
-            options={shops.filter(s => s.platform === filterPlatform).map(s => ({ value: s.id, label: s.name }))}
-          />
-          <Button type="primary" icon={<SearchOutlined />} disabled={!canSearch} onClick={handleSearch}>确定</Button>
+            onChange={(shopId, opt) => {
+              setFilterShopId(shopId ?? null)
+              setFilterPlatform(opt?.platform || null)
+            }}
+            placeholder="选择平台 · 店铺"
+            allowClear
+            showSearch
+            optionFilterProp="children"
+          >
+            {['wb', 'ozon', 'yandex'].map(plat => {
+              const list = shops.filter(s => s.platform === plat)
+              if (!list.length) return null
+              const cfg = PLATFORM_COLOR[plat] || { label: plat }
+              return (
+                <Select.OptGroup key={plat} label={cfg.label}>
+                  {list.map(s => (
+                    <Option key={s.id} value={s.id} platform={plat}>
+                      {cfg.label} · {s.name}
+                    </Option>
+                  ))}
+                </Select.OptGroup>
+              )
+            })}
+          </Select>
+          <Button type="primary" icon={<SearchOutlined />} disabled={!canSearch} onClick={handleSearch}>
+            确定
+          </Button>
         </Space>
       </div>
 
-      {/* 主功能Tab */}
-      <Tabs
-        activeKey={mainTab}
-        onChange={handleTabChange}
-        tabBarExtraContent={{ right: tabBarExtra }}
-        items={[
-          {
-            key: 'overview',
-            label: '推广信息',
-            children: <AdsOverview shopId={committedShopId} platform={committedPlatform} shops={shops} searched={searched} syncing={syncing} lastSyncTime={lastSyncTime} onSync={handleSync} />,
-          },
-          {
-            key: 'bid-management',
-            label: <Space size={4}><span>💰</span><span>出价管理</span></Space>,
-            children: <BidManagement shopId={committedShopId} platform={committedPlatform} tenantId={tenantId} />,
-          },
-        ]}
-      />
+      {isBidMgmt ? (
+        <BidManagement
+          shopId={committedShopId}
+          platform={committedPlatform}
+          tenantId={tenantId}
+        />
+      ) : (
+        <AdsOverview
+          shopId={committedShopId}
+          platform={committedPlatform}
+          shops={shops}
+          searched={searched}
+          syncing={syncing}
+          lastSyncTime={lastSyncTime}
+          onSync={handleSync}
+        />
+      )}
     </div>
   )
 }
