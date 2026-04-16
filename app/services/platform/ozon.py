@@ -709,6 +709,93 @@ class OzonClient(BasePlatformClient):
             logger.error(f"Ozon 拉取库存失败，shop_id={self.shop_id}: {e}")
             raise
 
+    # ==================== 分类/属性（用于铺货映射） ====================
+
+    async def fetch_category_tree(self, language: str = "DEFAULT") -> list:
+        """拉取 Ozon 分类树（description-category）
+
+        返回格式：树形结构，叶子节点含 type_id（铺货时必须用 type_id）
+        [{description_category_id, category_name, disabled, children: [
+            {type_id, type_name, disabled, children: [...]}
+         ]}, ...]
+        API: POST /v1/description-category/tree
+        """
+        try:
+            url = f"{OZON_SELLER_API}/v1/description-category/tree"
+            payload = {"language": language}
+            result = await self._request("POST", url, json=payload)
+            return (result or {}).get("result") or []
+        except Exception as e:
+            logger.error(f"Ozon 拉取分类树失败，shop_id={self.shop_id}: {e}")
+            raise
+
+    async def fetch_category_attributes(
+        self, description_category_id: int, type_id: int,
+        language: str = "DEFAULT"
+    ) -> list:
+        """拉取 Ozon 分类的属性定义
+
+        返回格式：[{id, name, description, type, is_collection, is_required,
+                   dictionary_id, group_id, category_dependent}, ...]
+        dictionary_id != 0 时是枚举类型，需要再调 attribute/values 拉枚举值
+        API: POST /v1/description-category/attribute
+        """
+        try:
+            url = f"{OZON_SELLER_API}/v1/description-category/attribute"
+            payload = {
+                "description_category_id": description_category_id,
+                "type_id": type_id,
+                "language": language,
+            }
+            result = await self._request("POST", url, json=payload)
+            return (result or {}).get("result") or []
+        except Exception as e:
+            logger.error(
+                f"Ozon 拉取分类属性失败 cat={description_category_id} type={type_id}: {e}"
+            )
+            raise
+
+    async def fetch_attribute_values(
+        self, description_category_id: int, type_id: int, attribute_id: int,
+        limit: int = 500, language: str = "DEFAULT"
+    ) -> list:
+        """拉取 Ozon 属性的枚举值（按字典）
+
+        返回格式：[{id, value, info?, picture?}, ...]
+        支持 last_value_id 游标分页，这里一次拉到尽（limit=500）
+        API: POST /v1/description-category/attribute/values
+        """
+        try:
+            url = f"{OZON_SELLER_API}/v1/description-category/attribute/values"
+            all_values = []
+            last_value_id = 0
+            for _ in range(20):  # 最多 20 页 = 1 万枚举值
+                payload = {
+                    "description_category_id": description_category_id,
+                    "type_id": type_id,
+                    "attribute_id": attribute_id,
+                    "last_value_id": last_value_id,
+                    "limit": limit,
+                    "language": language,
+                }
+                result = await self._request("POST", url, json=payload)
+                values = (result or {}).get("result") or []
+                if not values:
+                    break
+                all_values.extend(values)
+                has_next = (result or {}).get("has_next", False)
+                if not has_next:
+                    break
+                last_value_id = values[-1].get("id", 0)
+                if not last_value_id:
+                    break
+            return all_values
+        except Exception as e:
+            logger.error(
+                f"Ozon 拉取属性值失败 attr_id={attribute_id}: {e}"
+            )
+            raise
+
     async def close(self):
         """关闭HTTP客户端"""
         if self._http_client and not self._http_client.is_closed:

@@ -771,6 +771,39 @@ class WBClient(BasePlatformClient):
             logger.error(f"WB 拉取库存失败，shop_id={self.shop_id}: {e}")
             raise
 
+    # ==================== 分类/属性（用于铺货映射） ====================
+
+    async def fetch_all_subjects(self, locale: str = "ru") -> list:
+        """拉取 WB 全量分类列表（subjects）
+
+        返回格式：[{subjectID, subjectName, parentID, parentName}, ...]
+        API: GET /content/v2/object/all?locale=ru
+        """
+        try:
+            url = f"{WB_CONTENT_API}/content/v2/object/all"
+            params = {"locale": locale, "limit": 5000}
+            result = await self._request("GET", url, params=params)
+            return (result or {}).get("data") or []
+        except Exception as e:
+            logger.error(f"WB 拉取全量分类失败，shop_id={self.shop_id}: {e}")
+            raise
+
+    async def fetch_subject_charcs(self, subject_id: int, locale: str = "ru") -> list:
+        """拉取 WB 指定分类的特性/属性定义
+
+        返回格式：[{charcID, name, required, unitName, charcType, popular,
+                   dictionary?: [{name, id}]}, ...]
+        API: GET /content/v2/object/charcs/{subjectId}?locale=ru
+        """
+        try:
+            url = f"{WB_CONTENT_API}/content/v2/object/charcs/{subject_id}"
+            params = {"locale": locale}
+            result = await self._request("GET", url, params=params)
+            return (result or {}).get("data") or []
+        except Exception as e:
+            logger.error(f"WB 拉取分类属性失败 subject_id={subject_id}: {e}")
+            raise
+
     async def close(self):
         """关闭HTTP客户端"""
         if self._http_client and not self._http_client.is_closed:
