@@ -954,11 +954,14 @@ async def _analyze_now_inner(db, tenant_id: int, shop_id: int,
                 max_cpa=max_cpa,
             )
 
-            # ── Step 5: 平台最低出价校验 ──
-            # 做法 B：建议=执行一致。optimal<min 时直接把 optimal 拉到 min，
-            # reason 标注"算法原值 X，被平台最低 Y 锁定"，保持透明度
+            # ── Step 5: 平台"推荐竞争价"警告（做法 C） ──
+            # /bids/min API 返回的是"推荐竞争价"不是"硬最低"（硬最低只能从 update
+            # 错误消息获取）。策略：
+            #   - 不拉升 suggested_bid（保留算法值）
+            #   - 低于推荐价时加警告"低于推荐价 ₽X，曝光可能不足"
+            #   - 真正低于硬最低由 update_campaign_cpm/bid 内部 fallback 兜底
+            #   - bid_adjustment_logs 写 actual_bid_rub（执行真实值，非建议值）
             min_bid_warning = ""
-            original_optimal = optimal_bid  # 记录算法原值用于 reason 展示
             if optimal_bid is not None and platform == "wb":
                 try:
                     min_rub = await client.fetch_min_bid(
@@ -967,25 +970,25 @@ async def _analyze_now_inner(db, tenant_id: int, shop_id: int,
                     )
                     if min_rub and optimal_bid < min_rub:
                         min_bid_warning = (
-                            f"⚠ 算法原值₽{int(original_optimal)}，"
-                            f"被WB推荐竞争价₽{int(min_rub)}锁定"
+                            f"⚠ 低于WB推荐竞争价₽{int(min_rub)}，曝光可能不足"
+                            f"（执行时若低于硬最低会自动拉升）"
                         )
                         logger.info(
-                            f"WB推荐价锁定：sku={sku} optimal={optimal_bid}→{min_rub}"
+                            f"WB推荐价警告：sku={sku} optimal={optimal_bid}"
+                            f"<推荐价={min_rub}"
                         )
-                        optimal_bid = int(round(min_rub))
                 except Exception as e:
                     logger.warning(f"WB 最低价查询异常 sku={sku}: {e}")
             elif optimal_bid is not None and platform == "ozon":
                 if ozon_min_cpc and optimal_bid < ozon_min_cpc:
                     min_bid_warning = (
-                        f"⚠ 算法原值₽{int(original_optimal)}，"
-                        f"被Ozon最低CPC₽{int(ozon_min_cpc)}锁定"
+                        f"⚠ 低于Ozon最低CPC₽{int(ozon_min_cpc)}，曝光可能不足"
+                        f"（执行时若低于硬最低会自动拉升）"
                     )
                     logger.info(
-                        f"Ozon最低CPC锁定：sku={sku} optimal={optimal_bid}→{ozon_min_cpc}"
+                        f"Ozon最低CPC警告：sku={sku} optimal={optimal_bid}"
+                        f"<min={ozon_min_cpc}"
                     )
-                    optimal_bid = int(round(ozon_min_cpc))
 
             # ── Step 6: ROAS 门控（≥21天） ──
             if optimal_bid is not None and data_days >= 21:
@@ -1280,9 +1283,19 @@ async def _auto_execute(db, tenant_id: int, shop, suggestions: list) -> int:
                     _write_bidlog(db, campaign, s, "ai_auto",
                                   success=False, error=api_result.get("error"))
                     continue
+
+                # 关键：用实际执行价（可能被平台硬最低拉升）
+                actual_bid = api_result.get("actual_bid_rub") or s["suggested_bid"]
+                s_for_log = {
+                    **s,
+                    "suggested_bid": actual_bid,
+                    "adjust_pct": round(
+                        (actual_bid - s["current_bid"]) / s["current_bid"] * 100, 2
+                    ) if s.get("current_bid") else 0,
+                }
                 _upsert_group_last_auto(
                     db, campaign, s["platform_sku_id"],
-                    s.get("sku_name") or "", s["suggested_bid"],
+                    s.get("sku_name") or "", actual_bid,
                 )
                 db.execute(text("""
                     UPDATE ai_pricing_suggestions
@@ -1290,7 +1303,7 @@ async def _auto_execute(db, tenant_id: int, shop, suggestions: list) -> int:
                     WHERE id = :id AND tenant_id = :tenant_id
                 """), {"id": s["id"], "tenant_id": tenant_id,
                        "now": _utc_now().replace(tzinfo=None)})
-                _write_bidlog(db, campaign, s, "ai_auto", success=True)
+                _write_bidlog(db, campaign, s_for_log, "ai_auto", success=True)
                 executed += 1
             except Exception as e:
                 logger.error(f"auto execute 异常 sku={s['platform_sku_id']}: {e}")
@@ -1367,12 +1380,18 @@ async def approve_suggestion(db, tenant_id: int, suggestion_id: int,
     campaign = db.query(AdCampaign).filter(
         AdCampaign.id == row.campaign_id, AdCampaign.tenant_id == tenant_id,
     ).first()
+
+    # 关键：用实际执行价（可能被平台硬最低拉升）
+    if is_delete:
+        actual_bid = 0
+    else:
+        actual_bid = api_result.get("actual_bid_rub") or final_bid
     final_adjust_pct = -100 if is_delete else (
-        round((final_bid - float(row.current_bid)) / float(row.current_bid) * 100, 2)
+        round((actual_bid - float(row.current_bid)) / float(row.current_bid) * 100, 2)
         if float(row.current_bid) > 0 else 0
     )
     if not is_delete:
-        _upsert_group_last_auto(db, campaign, row.platform_sku_id, row.sku_name or "", final_bid)
+        _upsert_group_last_auto(db, campaign, row.platform_sku_id, row.sku_name or "", actual_bid)
     else:
         # 删除操作：给 ad_groups 打 user_managed=1 锁，避免下次分析又对此 SKU 重复出建议
         db.execute(text("""
@@ -1387,7 +1406,7 @@ async def approve_suggestion(db, tenant_id: int, suggestion_id: int,
         })
     _write_bidlog(db, campaign, {
         "platform_sku_id": row.platform_sku_id, "sku_name": row.sku_name,
-        "current_bid": float(row.current_bid), "suggested_bid": final_bid,
+        "current_bid": float(row.current_bid), "suggested_bid": actual_bid,
         "adjust_pct": final_adjust_pct, "product_stage": row.product_stage,
     }, "auto_remove" if is_delete else "ai_manual", success=True)
     db.commit()
