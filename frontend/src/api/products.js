@@ -48,6 +48,13 @@ export function generateDescription(listingId, targetPlatform) {
   })
 }
 
+/** AI 标题优化（按 listing 所在平台风格优化俄文标题，仅返回建议） */
+export function optimizeTitle(listingId) {
+  return request.post(`/products/listings/${listingId}/optimize-title`, null, {
+    timeout: 60000,
+  })
+}
+
 /** 提交铺货任务 */
 export function spreadProducts(data) {
   return request.post('/products/spread', data)

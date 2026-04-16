@@ -14,6 +14,7 @@ from app.services.product.service import (
     update_product, update_product_margin, delete_product,
     list_listings, create_listing, update_listing, delete_listing,
     check_sync_needed, sync_products_from_platform, generate_description,
+    optimize_title,
 )
 from app.utils.response import success, error
 
@@ -201,6 +202,19 @@ async def listing_generate_description(
     tenant_id: int = Depends(get_tenant_id),
 ):
     result = await generate_description(db, listing_id, tenant_id, req.target_platform)
+    if result["code"] != 0:
+        return error(result["code"], result["msg"])
+    return success(result["data"])
+
+
+@router.post("/listings/{listing_id}/optimize-title")
+async def listing_optimize_title(
+    listing_id: int,
+    db: Session = Depends(get_db),
+    tenant_id: int = Depends(get_tenant_id),
+):
+    """AI 标题优化：按 listing 所在平台风格生成优化建议（不修改 listing）"""
+    result = await optimize_title(db, listing_id, tenant_id)
     if result["code"] != 0:
         return error(result["code"], result["msg"])
     return success(result["data"])

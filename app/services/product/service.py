@@ -723,6 +723,77 @@ def _update_sync_time(db: Session, shop_id: int, tenant_id: int):
     db.commit()
 
 
+async def optimize_title(db: Session, listing_id: int, tenant_id: int) -> dict:
+    """AI 标题优化：根据当前 listing 所在平台的风格优化俄文标题
+
+    不修改 listing，仅返回建议文本让用户手动到平台后台改。
+    """
+    from app.config import get_settings
+    from app.services.ai.kimi import KimiClient
+    listing = db.query(PlatformListing).filter(
+        PlatformListing.id == listing_id,
+        PlatformListing.tenant_id == tenant_id,
+    ).first()
+    if not listing:
+        return {"code": ErrorCode.LISTING_NOT_FOUND, "msg": "Listing不存在"}
+    if not listing.title_ru:
+        return {"code": ErrorCode.PARAM_ERROR, "msg": "商品暂无标题"}
+
+    # 取商品关联的中文名 + 本地分类名作为上下文
+    product = db.query(Product).filter(Product.id == listing.product_id).first()
+    zh_context = product.name_zh if product else ""
+
+    platform_style = {
+        "wb": (
+            "WB（Wildberries）标题风格：60-100 字符，关键词前置，"
+            "强调用途/材质/尺寸/适用场景，常见套路如"
+            "「商品类型 + 关键属性 + 用途场景 + 受众」"
+        ),
+        "ozon": (
+            "Ozon 标题风格：60-120 字符，SEO 导向，关键词自然融入，"
+            "突出产品名、品牌、型号、核心规格"
+        ),
+        "yandex": (
+            "Yandex Market 标题风格：品牌 + 型号 + 关键规格，"
+            "简洁精准，40-80 字符"
+        ),
+    }
+    style_desc = platform_style.get(listing.platform, platform_style["ozon"])
+
+    prompt = f"""你是俄罗斯电商标题优化专家。请针对 {listing.platform.upper()} 平台的搜索算法和展示特点优化下面的商品标题。
+
+目标平台风格：{style_desc}
+
+中文参考（商品实际是什么）：{zh_context}
+当前俄文标题：{listing.title_ru}
+
+要求：
+- 只返回优化后的俄文标题，一行，不要加任何解释、编号、引号
+- 保留核心商品信息，不要增加虚假属性
+- 长度符合平台风格要求
+- 关键词靠前
+"""
+    settings = get_settings()
+    client = KimiClient(api_key=settings.KIMI_API_KEY)
+    try:
+        result = await client.chat(
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.5, max_tokens=400,
+        )
+        content = (result.get("content") or "").strip()
+        # 清理可能的引号/前缀
+        if content.startswith(('"', '“', '«')):
+            content = content.lstrip('"“«').rstrip('"”»').strip()
+        return {"code": 0, "data": {
+            "optimized_title": content,
+            "original_title": listing.title_ru,
+            "platform": listing.platform,
+        }}
+    except Exception as e:
+        logger.error(f"Kimi 标题优化失败: {e}")
+        return {"code": ErrorCode.UNKNOWN_ERROR, "msg": "AI 标题优化失败"}
+
+
 async def generate_description(db: Session, listing_id: int,
                                tenant_id: int, target_platform: str) -> dict:
     from app.config import get_settings

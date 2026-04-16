@@ -10,7 +10,7 @@ import {
 } from '@ant-design/icons'
 import {
   getProducts, syncProducts, checkSyncNeeded,
-  updateProductMargin, generateDescription,
+  updateProductMargin, generateDescription, optimizeTitle,
   spreadProducts, getSpreadRecords, updateProduct,
 } from '@/api/products'
 import { getShops } from '@/api/shops'
@@ -88,6 +88,9 @@ const Products = () => {
   const [editForm] = Form.useForm()
   const [editSubmitting, setEditSubmitting] = useState(false)
   const [localCategories, setLocalCategories] = useState([])
+  // AI 标题优化
+  const [titleOptimizing, setTitleOptimizing] = useState(false)
+  const [optimizedTitle, setOptimizedTitle] = useState(null)
 
   const fetchProducts = useCallback(async (p = 1) => {
     if (!filters.shop_id) {
@@ -166,6 +169,7 @@ const Products = () => {
 
   const handleEdit = (record) => {
     setEditingProduct(record)
+    setOptimizedTitle(null)
     editForm.setFieldsValue({
       sku: record.sku,
       name_zh: record.name_zh,
@@ -178,6 +182,34 @@ const Products = () => {
       image_url: record.image_url,
     })
     setEditModal(true)
+  }
+
+  const handleOptimizeTitle = async () => {
+    const firstListing = (editingProduct?.listings || [])[0]
+    if (!firstListing) {
+      message.warning('此商品没有关联 listing，无法优化')
+      return
+    }
+    setTitleOptimizing(true)
+    setOptimizedTitle(null)
+    try {
+      const res = await optimizeTitle(firstListing.id)
+      setOptimizedTitle(res.data?.optimized_title || '')
+    } catch {
+      message.error('AI 标题优化失败')
+    } finally {
+      setTitleOptimizing(false)
+    }
+  }
+
+  const handleCopyOptimized = () => {
+    if (!optimizedTitle) return
+    try {
+      navigator.clipboard.writeText(optimizedTitle)
+      message.success('已复制，粘贴到平台后台即可')
+    } catch {
+      message.error('复制失败，请手动选中文本复制')
+    }
   }
 
   const handleEditSubmit = async () => {
@@ -668,11 +700,51 @@ const Products = () => {
             <Input placeholder="方便自己识别的中文名称" />
           </Form.Item>
           <Form.Item
-            name="name_ru"
-            label="商品标题（平台）"
-            extra="平台上显示给俄罗斯买家看的标题，本地只读。如需修改请到平台后台操作（后续会加 AI 优化标题功能）"
+            label={
+              <Space size={8}>
+                <span>商品标题（平台）</span>
+                <Button
+                  size="small" type="link" icon={<RobotOutlined />}
+                  onClick={handleOptimizeTitle}
+                  loading={titleOptimizing}
+                  style={{ padding: 0, height: 'auto' }}
+                >
+                  AI 优化标题
+                </Button>
+              </Space>
+            }
+            extra="平台上给俄罗斯买家看的标题，本地只读。AI 优化会按当前店铺平台（WB / OZON）的风格给出建议，复制后到平台后台修改"
           >
-            <Input disabled />
+            <Form.Item name="name_ru" noStyle>
+              <Input disabled />
+            </Form.Item>
+            {optimizedTitle !== null && (
+              <div style={{
+                marginTop: 8, padding: '8px 12px',
+                background: '#f0f7ff', border: '1px solid #bae0ff',
+                borderRadius: 6,
+              }}>
+                <div style={{ fontSize: 12, color: '#0958d9', marginBottom: 4, fontWeight: 500 }}>
+                  🤖 AI 优化建议（{editingProduct?.listings?.[0]?.platform?.toUpperCase() || ''} 风格）
+                </div>
+                <div style={{ fontSize: 13, lineHeight: 1.5, color: '#1f1f1f' }}>
+                  {optimizedTitle || <span style={{ color: '#999' }}>AI 未返回内容</span>}
+                </div>
+                {optimizedTitle && (
+                  <Space size={6} style={{ marginTop: 6 }}>
+                    <Button size="small" type="primary" ghost onClick={handleCopyOptimized}>
+                      复制
+                    </Button>
+                    <Button size="small" onClick={handleOptimizeTitle} loading={titleOptimizing}>
+                      重新生成
+                    </Button>
+                    <Button size="small" type="link" onClick={() => setOptimizedTitle(null)}>
+                      关闭
+                    </Button>
+                  </Space>
+                )}
+              </div>
+            )}
           </Form.Item>
           <Form.Item name="local_category_id" label="本地分类">
             <Select
