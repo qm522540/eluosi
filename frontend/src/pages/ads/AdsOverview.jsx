@@ -14,7 +14,7 @@ import {
   getCampaigns, getCampaign, createCampaign, updateCampaign, deleteCampaign,
   getAdGroups, createAdGroup, updateAdGroup, deleteAdGroup,
   getKeywords, createKeyword, batchCreateKeywords, updateKeyword, deleteKeyword,
-  getAdStats, getAdSummary, syncAds,
+  getAdStats, getAdSummary,
   exportAdStats, getAlerts, getAlertConfig, updateAlertConfig,
   getCampaignProducts, updateCampaignBid, getCampaignBudget,
   getShopSummary,

@@ -85,16 +85,6 @@ export function getShopSummary(shopId) {
   return request.get(`/ads/shop-summary/${shopId}`)
 }
 
-/** 手动触发广告数据同步 */
-export function syncAds() {
-  return request.post('/tasks/sync-ads')
-}
-
-/** 手动触发指定平台广告数据同步 */
-export function syncAdsByPlatform(platform) {
-  return request.post(`/tasks/sync-ads/${platform}`)
-}
-
 /** 获取店铺上次同步时间（通过店铺详情） */
 export function getLastSyncTime(shopId) {
   return request.get(`/shops/${shopId}`)

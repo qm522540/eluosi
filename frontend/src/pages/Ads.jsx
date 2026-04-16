@@ -17,7 +17,7 @@ import {
   getCampaigns, getCampaign, createCampaign, updateCampaign, deleteCampaign,
   getAdGroups, createAdGroup, updateAdGroup, deleteAdGroup,
   getKeywords, createKeyword, batchCreateKeywords, updateKeyword, deleteKeyword,
-  getAdStats, getAdSummary, syncAds,
+  getAdStats, getAdSummary,
   getOptimizeSuggestions, applyBidSuggestions,
   exportAdStats, getAlerts, getAlertConfig, updateAlertConfig,
   getPlatformComparison, getCampaignRanking, getProductRoi,
@@ -532,8 +532,7 @@ const Ads = () => {
   const handleSync = async () => {
     setSyncing(true)
     try {
-      await syncAds()
-      message.success('同步任务已提交，数据将在1-2分钟内更新')
+      message.info('请使用新版广告管理页面进行同步操作')
       if (searched) {
         setTimeout(() => { fetchCampaigns(); fetchSummary(); fetchStats() }, 10000)
       }

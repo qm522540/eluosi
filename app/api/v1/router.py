@@ -1,6 +1,6 @@
 from fastapi import APIRouter
 
-from app.api.v1 import system, auth, shops, products, ads, finance, notifications, tasks, bid_management
+from app.api.v1 import system, auth, shops, products, ads, finance, notifications, bid_management
 
 api_router = APIRouter()
 
@@ -24,9 +24,6 @@ api_router.include_router(finance.router, prefix="/finance", tags=["财务"])
 
 # 通知管理
 api_router.include_router(notifications.router, prefix="/notifications", tags=["通知"])
-
-# 数据采集任务
-api_router.include_router(tasks.router, prefix="/tasks", tags=["任务"])
 
 # 出价管理（分时调价 + AI调价 统一入口）
 api_router.include_router(bid_management.router, prefix="/bid-management", tags=["出价管理"])
