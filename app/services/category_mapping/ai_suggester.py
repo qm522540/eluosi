@@ -92,6 +92,7 @@ async def suggest_category_mappings(
                     "local_category_id": local_category_id,
                     "platform": platform,
                     "platform_category_id": str(suggestion["id"]),
+                    "platform_category_extra_id": str(suggestion["extra_id"]) if suggestion.get("extra_id") else None,
                     "platform_category_name": suggestion["name"],
                     "platform_parent_path": suggestion.get("path"),
                     "ai_suggested": 1,
@@ -139,29 +140,37 @@ async def _fetch_platform_categories(shop: Shop, platform: str) -> list:
     return []
 
 
-def _flatten_ozon_tree(nodes: list, path: list, flat: list):
-    """递归展平 Ozon 分类树，只收集叶子（有 type_id 的节点）"""
+def _flatten_ozon_tree(nodes: list, path: list, flat: list, parent_cat_id: int = None):
+    """递归展平 Ozon 分类树，只收集叶子（有 type_id 的节点）
+
+    Ozon 发布需要 description_category_id + type_id 两个值。
+    展平时：
+    - id 存 description_category_id（祖先节点中最近的 category_id）
+    - extra_id 存 type_id
+    """
     for node in nodes or []:
         name = node.get("category_name") or node.get("type_name") or ""
         cur_path = path + [name]
+        cur_cat_id = node.get("description_category_id") or parent_cat_id
         type_id = node.get("type_id")
         children = node.get("children") or []
         if type_id and not children:
             flat.append({
-                "id": type_id,
+                "id": cur_cat_id,
+                "extra_id": type_id,
                 "name": name,
                 "path": " > ".join(cur_path),
             })
         elif children:
-            _flatten_ozon_tree(children, cur_path, flat)
+            _flatten_ozon_tree(children, cur_path, flat, parent_cat_id=cur_cat_id)
 
 
 async def _ai_match_category(local_cat: LocalCategory, platform: str, platform_cats: list) -> Optional[dict]:
     """让 AI 从 platform_cats 里挑最匹配本地分类的一条"""
-    # 为了节省 token，只发前 500 条候选（实际分类一般足够）
     candidates = platform_cats[:500]
+    # Ozon 候选展示 id+extra_id，WB 只有 id
     cand_lines = "\n".join([
-        f"{i+1}. id={c['id']} name={c['name']} path={c.get('path','')}"
+        f"{i+1}. idx={i} name={c['name']} path={c.get('path','')}"
         for i, c in enumerate(candidates)
     ])
     prompt = f"""你是跨境电商分类映射专家。我有一个本地分类，需要在{platform.upper()}平台找到最匹配的分类。
@@ -170,29 +179,32 @@ async def _ai_match_category(local_cat: LocalCategory, platform: str, platform_c
 - 中文名：{local_cat.name}
 - 俄文名：{local_cat.name_ru or '无'}
 
-{platform.upper()}候选分类列表（共{len(candidates)}条）：
+{platform.upper()}候选分类列表（共{len(candidates)}条，按序号 idx 标识）：
 {cand_lines}
 
 请返回 JSON 格式（不要任何其他文字）：
 {{
-  "id": "最匹配的候选 id",
-  "name": "候选名称",
-  "path": "候选路径",
+  "idx": 最匹配候选的序号（上面的 idx 数字）,
   "confidence": 置信度0-100,
   "reason": "为什么选这个，一句话"
 }}
 
 要求：
 - confidence >= 80 表示高度自信，60-79 表示可能对但需人工确认，< 60 表示不确定
-- 完全找不到合适的返回 {{"id": null, "confidence": 0, "reason": "找不到匹配"}}
+- 完全找不到合适的返回 {{"idx": -1, "confidence": 0, "reason": "找不到匹配"}}
 """
-    result = await _call_ai(prompt, max_tokens=500)
-    if not result or not isinstance(result, dict) or not result.get("id"):
+    result = await _call_ai(prompt, max_tokens=300)
+    if not result or not isinstance(result, dict):
         return None
+    idx = result.get("idx")
+    if idx is None or idx < 0 or idx >= len(candidates):
+        return None
+    picked = candidates[idx]
     return {
-        "id": result["id"],
-        "name": result.get("name", ""),
-        "path": result.get("path", ""),
+        "id": picked["id"],
+        "extra_id": picked.get("extra_id"),
+        "name": picked.get("name", ""),
+        "path": picked.get("path", ""),
         "confidence": int(result.get("confidence", 0)),
         "reason": result.get("reason", ""),
     }
@@ -229,6 +241,7 @@ async def suggest_attribute_mappings(
 
     platform_attrs = await _fetch_platform_attributes(
         shop, platform, cat_mapping.platform_category_id,
+        extra_id=cat_mapping.platform_category_extra_id,
     )
     if not platform_attrs:
         return {"code": ErrorCode.UNKNOWN_ERROR, "msg": "拉取平台属性失败"}
@@ -257,28 +270,70 @@ async def suggest_attribute_mappings(
     return {"code": 0, "data": {"count": created}}
 
 
-async def _fetch_platform_attributes(shop: Shop, platform: str, platform_category_id: str) -> list:
-    """拉取平台分类下的属性列表，返回 [{id, name, is_required, value_type, dict_id}]"""
+async def _fetch_platform_attributes(
+    shop: Shop, platform: str, platform_category_id: str,
+    extra_id: Optional[str] = None,
+) -> list:
+    """拉取平台分类下的属性列表，返回 [{id, name, is_required, value_type, dict_id}]
+
+    - WB: platform_category_id = subjectID
+    - Ozon: platform_category_id = description_category_id, extra_id = type_id
+    """
     if platform == "wb":
         from app.services.platform.wb import WBClient
         client = WBClient(shop_id=shop.id, api_key=shop.api_key)
         try:
             charcs = await client.fetch_subject_charcs(int(platform_category_id))
+            # WB charcs 返回的枚举值在 dictionary 字段里（直接嵌入）
             return [{
                 "id": c.get("charcID"),
                 "name": c.get("name", ""),
                 "is_required": c.get("required", False),
-                "value_type": c.get("charcType") or "string",
-                "dict_id": None,  # WB 字典值在 charcs 返回里的 dictionary 字段
+                "value_type": "enum" if c.get("dictionary") else (c.get("charcType") or "string"),
+                "dict_id": str(c.get("charcID")) if c.get("dictionary") else None,
+                "dictionary": c.get("dictionary") or [],  # WB 直接返回枚举值列表
             } for c in charcs]
         finally:
             await client.close()
     elif platform == "ozon":
-        # Ozon 需要 description_category_id 和 type_id，我们存的是 type_id
-        # 但 attribute 接口需要两者，暂时通过 category_tree 反查（或让用户保存时也存 description_category_id）
-        # 这里简化：从 listing 回填的 type_id 推断
-        logger.warning("Ozon 属性拉取需 description_category_id + type_id，当前映射只存了一个值，暂不支持")
-        return []
+        if not extra_id:
+            logger.warning(
+                f"Ozon 属性拉取缺少 type_id（extra_id），shop={shop.id} "
+                f"cat={platform_category_id}"
+            )
+            return []
+        from app.services.platform.ozon import OzonClient
+        client = OzonClient(
+            shop_id=shop.id, api_key=shop.api_key, client_id=shop.client_id,
+            perf_client_id=shop.perf_client_id or "",
+            perf_client_secret=shop.perf_client_secret or "",
+        )
+        try:
+            attrs = await client.fetch_category_attributes(
+                int(platform_category_id), int(extra_id),
+            )
+            # Ozon: type=Enum 或 dictionary_id != 0 表示枚举类型，需要另拉字典值
+            def _ozon_value_type(a: dict) -> str:
+                t = (a.get("type") or "").lower()
+                if t in ("string", "multiline"):
+                    return "string"
+                if t in ("integer", "decimal"):
+                    return "number"
+                if t == "boolean":
+                    return "boolean"
+                if a.get("dictionary_id", 0):
+                    return "enum"
+                return "string"
+            return [{
+                "id": a.get("id"),
+                "name": a.get("name", ""),
+                "is_required": a.get("is_required", False),
+                "value_type": _ozon_value_type(a),
+                "dict_id": str(a.get("dictionary_id")) if a.get("dictionary_id") else None,
+                "dictionary": [],  # Ozon 字典值要另拉
+            } for a in attrs]
+        finally:
+            await client.close()
     return []
 
 

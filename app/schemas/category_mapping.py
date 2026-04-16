@@ -27,6 +27,7 @@ class CategoryMappingCreate(BaseModel):
     local_category_id: int
     platform: str = Field(..., pattern="^(wb|ozon|yandex)$")
     platform_category_id: str
+    platform_category_extra_id: Optional[str] = None
     platform_category_name: Optional[str] = None
     platform_parent_path: Optional[str] = None
     ai_suggested: int = 0
@@ -35,6 +36,7 @@ class CategoryMappingCreate(BaseModel):
 
 class CategoryMappingUpdate(BaseModel):
     platform_category_id: Optional[str] = None
+    platform_category_extra_id: Optional[str] = None
     platform_category_name: Optional[str] = None
     platform_parent_path: Optional[str] = None
     is_confirmed: Optional[int] = None

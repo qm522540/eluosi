@@ -167,6 +167,7 @@
   "local_category_id": 1,
   "platform": "wb",
   "platform_category_id": "123",
+  "platform_category_extra_id": null,
   "platform_category_name": "Ожерелья",
   "platform_parent_path": "Украшения > Ожерелья",
   "ai_suggested": 1,
@@ -174,6 +175,20 @@
   "is_confirmed": 0,
   "confirmed_at": null,
   "created_at": "2026-04-16T08:10:00Z"
+}
+```
+
+**字段说明**：
+- `platform_category_id`：WB=subjectID / Ozon=description_category_id
+- `platform_category_extra_id`：仅 Ozon 使用，存 type_id。WB 场景为 null
+
+Ozon 示例：
+```json
+{
+  "platform": "ozon",
+  "platform_category_id": "17028922",
+  "platform_category_extra_id": "93080",
+  "platform_category_name": "Колье и бусы"
 }
 ```
 

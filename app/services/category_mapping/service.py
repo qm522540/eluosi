@@ -419,6 +419,7 @@ def _cat_mapping_to_dict(m: CategoryPlatformMapping) -> dict:
         "local_category_id": m.local_category_id,
         "platform": m.platform,
         "platform_category_id": m.platform_category_id,
+        "platform_category_extra_id": m.platform_category_extra_id,
         "platform_category_name": m.platform_category_name,
         "platform_parent_path": m.platform_parent_path,
         "ai_suggested": m.ai_suggested,
