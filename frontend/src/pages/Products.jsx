@@ -49,6 +49,20 @@ const STATUS_MAP = {
   blocked: { color: 'error', label: '封禁' },
 }
 
+// 简易相对时间：UTC 字符串 → "x 分钟前 / x 小时前 / YYYY-MM-DD HH:mm"
+const dayjsLike = (iso) => {
+  if (!iso) return ''
+  const t = new Date(iso).getTime()
+  if (Number.isNaN(t)) return ''
+  const diff = (Date.now() - t) / 1000
+  if (diff < 60) return '刚刚'
+  if (diff < 3600) return `${Math.round(diff / 60)} 分钟前`
+  if (diff < 86400) return `${Math.round(diff / 3600)} 小时前`
+  const d = new Date(iso)
+  const pad = n => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
+}
+
 const Products = () => {
   const tenant = useAuthStore(s => s.tenant)
   const tenantId = tenant?.id
@@ -430,6 +444,38 @@ const Products = () => {
               Ozon: ₽{Math.round(ozL.discount_price || ozL.price || 0)}
             </div>}
           </div>
+        )
+      },
+    },
+    {
+      title: (
+        <Tooltip title="平台同步的可售库存，只读。WB 聚合多仓库 quantity，OZON 聚合 FBO/FBS 的 present。">
+          <span>库存 <span style={{ color: 'var(--color-text-tertiary)', fontSize: 11 }}>ⓘ</span></span>
+        </Tooltip>
+      ),
+      width: 80,
+      render: (_, record) => {
+        const listing = (record.listings || [])[0]
+        if (!listing) return <Text style={{ color: 'var(--color-text-tertiary)' }}>-</Text>
+        const stock = listing.stock || 0
+        const tipTime = listing.stock_updated_at
+          ? dayjsLike(listing.stock_updated_at)
+          : ''
+        const tip = tipTime ? `库存更新：${tipTime}` : '暂未同步库存'
+        if (stock === 0) {
+          return (
+            <Tooltip title={tip}>
+              <Tag color="red" style={{ fontSize: 11, margin: 0 }}>无货</Tag>
+            </Tooltip>
+          )
+        }
+        const color = stock < 10 ? '#d46b08' : '#389e0d'
+        return (
+          <Tooltip title={tip}>
+            <span style={{ color, fontWeight: 500, fontSize: 13 }}>
+              {stock.toLocaleString()}
+            </span>
+          </Tooltip>
         )
       },
     },
