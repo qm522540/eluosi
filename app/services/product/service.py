@@ -754,6 +754,128 @@ def _update_sync_time(db: Session, shop_id: int, tenant_id: int):
     db.commit()
 
 
+async def download_listing_images_to_oss(
+    db: Session, product_id: int, tenant_id: int,
+) -> dict:
+    """下载平台全量图片到阿里云 OSS，写入 listing.oss_images
+
+    流程：
+    1. 查 product → 拿到当前店铺的 listing
+    2. 按 listing.platform 调对应 API 拉全量图片 URL 列表
+       - WB: cards/list 的 photos[].big
+       - OZON: info/list 的 images[]
+    3. 串行下载上传 OSS，返回 URL 列表
+    4. 写入 listing.oss_images（JSON 数组）
+    """
+    from app.utils.oss_client import download_images_batch, is_configured
+    from app.models.shop import Shop
+
+    if not is_configured():
+        return {"code": ErrorCode.UNKNOWN_ERROR,
+                "msg": "OSS 未配置，请联系管理员在 .env 配置 OSS 凭证"}
+
+    product = db.query(Product).filter(
+        Product.id == product_id, Product.tenant_id == tenant_id,
+    ).first()
+    if not product:
+        return {"code": ErrorCode.PRODUCT_NOT_FOUND, "msg": "商品不存在"}
+    listings = db.query(PlatformListing).filter(
+        PlatformListing.tenant_id == tenant_id,
+        PlatformListing.product_id == product_id,
+        PlatformListing.status != "deleted",
+    ).all()
+    if not listings:
+        return {"code": ErrorCode.LISTING_NOT_FOUND, "msg": "商品未关联任何 listing"}
+
+    listing = listings[0]  # product 已按店铺拆分，一个 product 只有一条 listing
+    shop = db.query(Shop).filter(Shop.id == listing.shop_id).first()
+    if not shop:
+        return {"code": ErrorCode.SHOP_NOT_FOUND, "msg": "店铺不存在"}
+
+    # 1. 从平台拉全量图片 URL
+    source_urls = await _fetch_platform_image_urls(shop, listing)
+    if not source_urls:
+        return {"code": ErrorCode.UNKNOWN_ERROR, "msg": "平台未返回任何图片"}
+
+    # 2. 批量下载 + 上传 OSS
+    prefix = f"products/{tenant_id}/{shop.id}/{listing.platform_product_id}"
+    oss_urls = await download_images_batch(source_urls, prefix)
+    if not oss_urls:
+        return {"code": ErrorCode.UNKNOWN_ERROR, "msg": "所有图片下载或上传失败"}
+
+    # 3. 写入 listing.oss_images
+    listing.oss_images = oss_urls
+    # 同时更新 product.image_url 指向 OSS 首图（替换平台外链，避免链接失效）
+    if not product.image_url or product.image_url.startswith(("http://basket", "https://basket", "https://cdn1.ozone.ru")):
+        product.image_url = oss_urls[0]
+    db.commit()
+
+    return {"code": 0, "data": {
+        "total_source": len(source_urls),
+        "uploaded": len(oss_urls),
+        "oss_images": oss_urls,
+    }}
+
+
+async def _fetch_platform_image_urls(shop, listing) -> list:
+    """从平台拉全量图片 URL，返回 ['https://...', ...]"""
+    if listing.platform == "wb":
+        from app.services.platform.wb import WBClient
+        client = WBClient(shop_id=shop.id, api_key=shop.api_key)
+        try:
+            res = await client.fetch_products(limit=100)
+            cards = (res or {}).get("cards") or []
+            target = next((c for c in cards if str(c.get("nmID")) == str(listing.platform_product_id)), None)
+            if not target:
+                return []
+            photos = target.get("photos") or []
+            urls = []
+            for p in photos:
+                if isinstance(p, dict):
+                    # 优先取 big/hq 大图
+                    u = p.get("big") or p.get("hq") or p.get("c516x688") or p.get("tm")
+                    if u:
+                        urls.append(u)
+            return urls
+        finally:
+            await client.close()
+    elif listing.platform == "ozon":
+        from app.services.platform.ozon import OzonClient
+        client = OzonClient(
+            shop_id=shop.id, api_key=shop.api_key, client_id=shop.client_id,
+            perf_client_id=shop.perf_client_id or "",
+            perf_client_secret=shop.perf_client_secret or "",
+        )
+        try:
+            infos = await client.fetch_product_info([int(listing.platform_product_id)])
+            if not infos:
+                return []
+            info = infos[0]
+            images = info.get("images") or []
+            # OZON images 可能是字符串数组或对象数组
+            urls = []
+            for img in images:
+                if isinstance(img, str):
+                    urls.append(img)
+                elif isinstance(img, dict):
+                    u = img.get("url") or img.get("file_name")
+                    if u:
+                        urls.append(u)
+            # 补上 primary_image
+            primary = info.get("primary_image")
+            if primary:
+                if isinstance(primary, list):
+                    for p in primary:
+                        if isinstance(p, str) and p not in urls:
+                            urls.insert(0, p)
+                elif isinstance(primary, str) and primary not in urls:
+                    urls.insert(0, primary)
+            return urls
+        finally:
+            await client.close()
+    return []
+
+
 async def optimize_title(db: Session, listing_id: int, tenant_id: int) -> dict:
     """AI 标题优化：根据当前 listing 所在平台的风格优化俄文标题
 

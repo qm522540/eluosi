@@ -14,7 +14,7 @@ from app.services.product.service import (
     update_product, update_product_margin, delete_product,
     list_listings, create_listing, update_listing, delete_listing,
     check_sync_needed, sync_products_from_platform, generate_description,
-    optimize_title,
+    optimize_title, download_listing_images_to_oss,
 )
 from app.utils.response import success, error
 
@@ -218,6 +218,23 @@ async def listing_optimize_title(
     if result["code"] != 0:
         return error(result["code"], result["msg"])
     return success(result["data"])
+
+
+@router.post("/{product_id}/download-images")
+async def product_download_images(
+    product_id: int,
+    db: Session = Depends(get_db),
+    tenant_id: int = Depends(get_tenant_id),
+):
+    """下载商品在平台的全部图片到阿里云 OSS，写入 listing.oss_images
+
+    耗时：图片数量 × 平均 3-5 秒（串行下载+上传）。
+    建议前端 timeout 设 120s。
+    """
+    result = await download_listing_images_to_oss(db, product_id, tenant_id)
+    if result["code"] != 0:
+        return error(result["code"], result["msg"])
+    return success(result["data"], msg=f"已归档 {result['data']['uploaded']} 张图片")
 
 
 @router.post("/spread")
