@@ -28,8 +28,8 @@ from app.utils.logger import setup_logger
 logger = setup_logger("data.ozon_collector")
 
 SYNC_DAYS = 7        # 增量同步单次最多拉 7 天
-FIRST_SYNC_DAYS = 14 # 首次同步（无历史）拉 14 天
-MAX_KEEP_DAYS = 40   # 数据保留天数
+FIRST_SYNC_DAYS = 30 # 首次同步（无历史）拉 30 天，AI 算法基数足够
+MAX_KEEP_DAYS = 45   # 数据保留天数（首拉30+15缓冲）
 SELLER_API = "https://api-seller.ozon.ru"
 PERF_API = "https://api-performance.ozon.ru"
 
