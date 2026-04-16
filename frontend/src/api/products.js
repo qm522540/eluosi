@@ -55,6 +55,13 @@ export function optimizeTitle(listingId) {
   })
 }
 
+/** 下载商品平台图片全量归档到阿里云 OSS */
+export function downloadProductImages(productId) {
+  return request.post(`/products/${productId}/download-images`, null, {
+    timeout: 180000,
+  })
+}
+
 /** 提交铺货任务 */
 export function spreadProducts(data) {
   return request.post('/products/spread', data)

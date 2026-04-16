@@ -12,6 +12,7 @@ import {
   getProducts, syncProducts, checkSyncNeeded,
   updateProductMargin, generateDescription, optimizeTitle,
   spreadProducts, getSpreadRecords, updateProduct, updateListing,
+  downloadProductImages,
 } from '@/api/products'
 import { getShops } from '@/api/shops'
 import { listLocalCategories } from '@/api/mapping'
@@ -108,6 +109,9 @@ const Products = () => {
   // AI 描述优化
   const [descOptimizing, setDescOptimizing] = useState(false)
   const [optimizedDesc, setOptimizedDesc] = useState(null)
+  // OSS 图片归档
+  const [imagesArchiving, setImagesArchiving] = useState(false)
+  const [archivedImages, setArchivedImages] = useState(null)
 
   const fetchProducts = useCallback(async (p = 1) => {
     if (!filters.shop_id) {
@@ -188,6 +192,9 @@ const Products = () => {
     setEditingProduct(record)
     setOptimizedTitle(null)
     setOptimizedDesc(null)
+    // 若 listing.oss_images 已有归档数据，直接展示
+    const firstL = (record.listings || [])[0]
+    setArchivedImages(firstL?.oss_images || null)
     const firstListing = (record.listings || [])[0]
     editForm.setFieldsValue({
       sku: record.sku,
@@ -267,6 +274,25 @@ const Products = () => {
       message.error('更新失败')
     } finally {
       setEditSubmitting(false)
+    }
+  }
+
+  const handleArchiveImages = async () => {
+    if (!editingProduct) return
+    setImagesArchiving(true)
+    try {
+      const res = await downloadProductImages(editingProduct.id)
+      const urls = res.data?.oss_images || []
+      setArchivedImages(urls)
+      message.success(`已归档 ${urls.length} 张图片到 OSS`)
+      // 刷新编辑的 product 对象（让第一张 OSS 图变成新的 image_url）
+      if (urls[0]) {
+        editForm.setFieldsValue({ image_url: urls[0] })
+      }
+    } catch (e) {
+      message.error(e?.response?.data?.msg || '图片归档失败')
+    } finally {
+      setImagesArchiving(false)
     }
   }
 
@@ -908,8 +934,52 @@ const Products = () => {
               </Form.Item>
             </Col>
           </Row>
-          <Form.Item name="image_url" label="图片 URL">
-            <Input placeholder="https://..." />
+          <Form.Item
+            label={
+              <Space size={8}>
+                <span>商品图片</span>
+                <Button
+                  size="small" type="link" icon={<RobotOutlined />}
+                  onClick={handleArchiveImages}
+                  loading={imagesArchiving}
+                  style={{ padding: 0, height: 'auto' }}
+                >
+                  {archivedImages?.length ? '重新归档到 OSS' : '归档到阿里云 OSS'}
+                </Button>
+              </Space>
+            }
+            extra="点击按钮下载平台全部图片到 OSS（归档后铺货/展示不受平台链接失效影响）。耗时按图片数量 3-5 秒/张"
+          >
+            <Form.Item name="image_url" noStyle>
+              <Input placeholder="首图 URL（归档后自动改为 OSS 地址）" />
+            </Form.Item>
+            {archivedImages?.length > 0 && (
+              <div style={{
+                marginTop: 8, padding: 10,
+                background: '#fafafa', border: '1px solid #f0f0f0', borderRadius: 6,
+              }}>
+                <div style={{ fontSize: 12, color: '#389e0d', marginBottom: 8, fontWeight: 500 }}>
+                  ✓ OSS 已归档 {archivedImages.length} 张
+                </div>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                  {archivedImages.slice(0, 10).map((url, i) => (
+                    <a key={i} href={url} target="_blank" rel="noopener noreferrer">
+                      <img src={url} alt={`img-${i}`}
+                        style={{ width: 56, height: 56, objectFit: 'cover',
+                          borderRadius: 4, border: '1px solid #eee' }} />
+                    </a>
+                  ))}
+                  {archivedImages.length > 10 && (
+                    <div style={{ width: 56, height: 56, borderRadius: 4,
+                      background: '#f5f5f5', display: 'flex',
+                      alignItems: 'center', justifyContent: 'center',
+                      fontSize: 12, color: '#888' }}>
+                      +{archivedImages.length - 10}
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
           </Form.Item>
           <Alert
             type="info"

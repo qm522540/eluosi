@@ -45,15 +45,25 @@ def is_configured() -> bool:
     ])
 
 
+def _public_endpoint(endpoint: str) -> str:
+    """把内网 endpoint 转成公网 endpoint（去掉 -internal）
+
+    阿里云 OSS 同地域内网访问用 xxx-internal.aliyuncs.com，免流量费且更快；
+    但浏览器外部访问必须用公网域名 xxx.aliyuncs.com。
+    """
+    return endpoint.replace("-internal.aliyuncs.com", ".aliyuncs.com")
+
+
 def _build_public_url(object_key: str) -> str:
-    """拼 OSS 公网访问 URL（优先走 CDN，否则用 OSS 默认域名）"""
+    """拼 OSS 公网访问 URL（优先走 CDN，否则用 OSS 公网域名）"""
     settings = get_settings()
     if settings.OSS_CDN_DOMAIN:
         base = settings.OSS_CDN_DOMAIN.rstrip("/")
         if not base.startswith("http"):
             base = f"https://{base}"
         return f"{base}/{object_key}"
-    return f"https://{settings.OSS_BUCKET}.{settings.OSS_ENDPOINT}/{object_key}"
+    public_ep = _public_endpoint(settings.OSS_ENDPOINT)
+    return f"https://{settings.OSS_BUCKET}.{public_ep}/{object_key}"
 
 
 def _infer_ext(url: str, content_type: Optional[str] = None) -> str:
