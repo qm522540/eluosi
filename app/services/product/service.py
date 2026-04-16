@@ -780,6 +780,144 @@ def _update_sync_time(db: Session, shop_id: int, tenant_id: int):
     db.commit()
 
 
+async def get_platform_attributes(
+    db: Session, product_id: int, tenant_id: int,
+) -> dict:
+    """拉取商品在平台上的属性列表（只读展示）
+
+    WB: cards/list 的 characteristics 字段，自带 name + value
+    OZON: /v4/product/info/attributes 返回 id + values，需要从 attribute_mappings
+          反查属性名称（如果该分类做过 init-from-ozon 或手动映射过）
+    """
+    from app.models.shop import Shop
+    from app.models.category import AttributeMapping
+
+    product = db.query(Product).filter(
+        Product.id == product_id, Product.tenant_id == tenant_id,
+    ).first()
+    if not product:
+        return {"code": ErrorCode.PRODUCT_NOT_FOUND, "msg": "商品不存在"}
+    listing = db.query(PlatformListing).filter(
+        PlatformListing.tenant_id == tenant_id,
+        PlatformListing.product_id == product_id,
+        PlatformListing.status != "deleted",
+    ).first()
+    if not listing:
+        return {"code": ErrorCode.LISTING_NOT_FOUND, "msg": "商品未关联任何 listing"}
+    shop = db.query(Shop).filter(Shop.id == listing.shop_id).first()
+    if not shop:
+        return {"code": ErrorCode.SHOP_NOT_FOUND, "msg": "店铺不存在"}
+
+    if listing.platform == "wb":
+        return await _wb_attributes(shop, listing)
+    elif listing.platform == "ozon":
+        return await _ozon_attributes(db, tenant_id, shop, listing)
+    else:
+        return {"code": 0, "data": {"platform": listing.platform, "attributes": []}}
+
+
+async def _wb_attributes(shop, listing) -> dict:
+    """WB: 从 cards/list 找到这个 nm_id 的 characteristics"""
+    from app.services.platform.wb import WBClient
+    client = WBClient(shop_id=shop.id, api_key=shop.api_key)
+    try:
+        res = await client.fetch_products(limit=100)
+        cards = (res or {}).get("cards") or []
+        target = next((c for c in cards
+                       if str(c.get("nmID")) == str(listing.platform_product_id)), None)
+        if not target:
+            return {"code": 0, "data": {"platform": "wb", "attributes": []}}
+        chars = target.get("characteristics") or []
+        attrs = []
+        for c in chars:
+            value = c.get("value")
+            if isinstance(value, list):
+                value = ", ".join(str(v) for v in value)
+            attrs.append({
+                "id": c.get("id"),
+                "name": c.get("name", ""),
+                "value": str(value) if value is not None else "",
+            })
+        return {"code": 0, "data": {"platform": "wb", "attributes": attrs}}
+    finally:
+        await client.close()
+
+
+async def _ozon_attributes(db, tenant_id, shop, listing) -> dict:
+    """OZON: /v4/product/info/attributes，从 attribute_mappings 反查属性名"""
+    import httpx
+    from app.models.category import AttributeMapping, CategoryPlatformMapping
+    url = "https://api-seller.ozon.ru/v4/product/info/attributes"
+    headers = {
+        "Client-Id": shop.client_id, "Api-Key": shop.api_key,
+        "Content-Type": "application/json",
+    }
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await client.post(url, headers=headers, json={
+                "filter": {
+                    "product_id": [str(listing.platform_product_id)],
+                    "visibility": "ALL",
+                },
+                "limit": 100,
+            })
+            if resp.status_code != 200:
+                logger.warning(f"OZON 属性接口 {resp.status_code}: {resp.text[:200]}")
+                return {"code": ErrorCode.UNKNOWN_ERROR, "msg": f"OZON 属性拉取失败 {resp.status_code}"}
+            data = resp.json()
+            items = data.get("result") or []
+            if not items:
+                return {"code": 0, "data": {"platform": "ozon", "attributes": []}}
+            ozon_attrs = items[0].get("attributes") or []
+    except Exception as e:
+        logger.error(f"OZON 属性拉取异常: {e}")
+        return {"code": ErrorCode.UNKNOWN_ERROR, "msg": "OZON 属性拉取异常"}
+
+    # 尝试从 attribute_mappings 反查属性名
+    # 先找到该 listing 对应的 local_category_id
+    name_map = {}
+    cat_mapping = db.query(CategoryPlatformMapping).filter(
+        CategoryPlatformMapping.tenant_id == tenant_id,
+        CategoryPlatformMapping.platform == "ozon",
+        CategoryPlatformMapping.platform_category_id == listing.platform_category_id,
+    ).first()
+    if cat_mapping:
+        attr_rows = db.query(
+            AttributeMapping.platform_attr_id,
+            AttributeMapping.platform_attr_name,
+            AttributeMapping.local_attr_name,
+        ).filter(
+            AttributeMapping.tenant_id == tenant_id,
+            AttributeMapping.local_category_id == cat_mapping.local_category_id,
+            AttributeMapping.platform == "ozon",
+        ).all()
+        for r in attr_rows:
+            name_map[str(r.platform_attr_id)] = {
+                "ru": r.platform_attr_name,
+                "zh": r.local_attr_name,
+            }
+
+    attrs = []
+    for a in ozon_attrs:
+        attr_id = str(a.get("id", ""))
+        values = a.get("values") or []
+        # 组装值文本
+        val_parts = []
+        for v in values:
+            if isinstance(v, dict):
+                val = v.get("value") or v.get("dictionary_value_id", "")
+                if val:
+                    val_parts.append(str(val))
+        name_info = name_map.get(attr_id, {})
+        attrs.append({
+            "id": int(attr_id) if attr_id.isdigit() else attr_id,
+            "name": name_info.get("zh") or name_info.get("ru") or f"属性 #{attr_id}",
+            "name_ru": name_info.get("ru", ""),
+            "value": " | ".join(val_parts)[:500],
+        })
+    return {"code": 0, "data": {"platform": "ozon", "attributes": attrs}}
+
+
 async def download_listing_images_to_oss(
     db: Session, product_id: int, tenant_id: int,
 ) -> dict:

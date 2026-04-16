@@ -14,7 +14,7 @@ from app.services.product.service import (
     update_product, update_product_margin, delete_product,
     list_listings, create_listing, update_listing, delete_listing,
     check_sync_needed, sync_products_from_platform, generate_description,
-    optimize_title, download_listing_images_to_oss,
+    optimize_title, download_listing_images_to_oss, get_platform_attributes,
 )
 from app.utils.response import success, error
 
@@ -215,6 +215,24 @@ async def listing_optimize_title(
 ):
     """AI 标题优化：按 listing 所在平台风格生成优化建议（不修改 listing）"""
     result = await optimize_title(db, listing_id, tenant_id)
+    if result["code"] != 0:
+        return error(result["code"], result["msg"])
+    return success(result["data"])
+
+
+@router.get("/{product_id}/platform-attributes")
+async def product_platform_attributes(
+    product_id: int,
+    db: Session = Depends(get_db),
+    tenant_id: int = Depends(get_tenant_id),
+):
+    """拉取商品在平台上的全部属性（只读，实时拉平台 API）
+
+    WB: characteristics 自带名字；
+    OZON: attribute_mappings 反查名字（需要该分类做过映射），
+    否则返回 "属性 #id"。
+    """
+    result = await get_platform_attributes(db, product_id, tenant_id)
     if result["code"] != 0:
         return error(result["code"], result["msg"])
     return success(result["data"])
