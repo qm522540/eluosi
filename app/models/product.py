@@ -58,6 +58,8 @@ class PlatformListing(BaseMixin, Base):
         nullable=False, default="published"
     )
     price: Mapped[Optional[float]] = mapped_column(DECIMAL(10, 2), nullable=True)
+    stock: Mapped[int] = mapped_column(Integer, nullable=False, default=0, comment="当前可售库存")
+    stock_updated_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     discount_price: Mapped[Optional[float]] = mapped_column(DECIMAL(10, 2), nullable=True)
     commission_rate: Mapped[Optional[float]] = mapped_column(DECIMAL(5, 2), nullable=True)
     url: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
