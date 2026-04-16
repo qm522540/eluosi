@@ -742,7 +742,7 @@ async def _analyze_now_inner(db, tenant_id: int, shop_id: int,
         return {"status": "success", "message": "无活跃活动",
                 "analyzed_count": 0, "suggestion_count": 0, "auto_executed_count": 0}
 
-    # ── 拉取平台商品出价 ──
+    # ── 拉取平台商品出价（client 保持开启用于后续 min bid 查询） ──
     client = _create_platform_client(shop)
     products_by_campaign = {}
     try:
@@ -754,10 +754,12 @@ async def _analyze_now_inner(db, tenant_id: int, shop_id: int,
                 logger.warning(f"campaign={camp.id} 拉商品失败: {e}")
                 products = []
             products_by_campaign[camp.id] = products
-    finally:
+    except Exception:
         await client.close()
+        raise
 
     if not any(products_by_campaign.values()):
+        await client.close()
         _update_status(db, tenant_id, shop_id, "success", "活跃活动下无商品")
         return {"status": "success", "message": "无商品数据",
                 "analyzed_count": len(campaigns),
@@ -928,8 +930,21 @@ async def _analyze_now_inner(db, tenant_id: int, shop_id: int,
             )
 
             # ── Step 5: 平台最低出价校验 ──
-            # 预判阶段用 MIN_BID 兜底；实际执行阶段 update_campaign_bid/cpm
-            # 内部有 min bid fallback（从平台错误消息或 /limits/list 自动重试）
+            if optimal_bid is not None and platform == "wb":
+                # WB: 调 /api/advert/v1/bids/min 查 SKU 最低出价
+                try:
+                    min_rub = await client.fetch_min_bid(
+                        advert_id=str(camp.platform_campaign_id),
+                        nm_id=int(sku),
+                    )
+                    if min_rub and optimal_bid < min_rub:
+                        logger.info(
+                            f"WB最低价校验：sku={sku} optimal={optimal_bid}"
+                            f"<min={min_rub}，拉到最低价"
+                        )
+                        optimal_bid = int(round(min_rub))
+                except Exception as e:
+                    logger.warning(f"WB 最低价查询异常 sku={sku}: {e}")
 
             # ── Step 6: ROAS 门控（≥21天） ──
             if optimal_bid is not None and data_days >= 21:
@@ -1009,6 +1024,9 @@ async def _analyze_now_inner(db, tenant_id: int, shop_id: int,
             })
 
     db.commit()
+
+    # SKU 处理完成，关闭 client（auto_execute 内部会新建 client）
+    await client.close()
 
     auto_executed = 0
     if cfg.auto_execute and saved:

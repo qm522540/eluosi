@@ -622,6 +622,38 @@ class WBClient(BasePlatformClient):
             "skipped": skipped,
         }
 
+    async def fetch_min_bid(self, advert_id: str, nm_id: int,
+                             placement: str = "combined") -> Optional[float]:
+        """查询 WB 广告活动下某 SKU 的最低 CPM 出价（卢布）
+
+        调 POST /api/advert/v1/bids/min，返回 kopecks，转卢布。
+        失败时返回 None（不抛异常，让调用方走默认逻辑）。
+        """
+        try:
+            url = f"{WB_ADVERT_API}/api/advert/v1/bids/min"
+            params = {
+                "id": int(advert_id),
+                "nm": int(nm_id),
+                "param": 6,
+                "type": placement,
+            }
+            resp = await self._request("GET", url, params=params)
+        except Exception as e:
+            logger.warning(
+                f"WB 查询最低出价失败 advert={advert_id} nm={nm_id}: {e}"
+            )
+            return None
+
+        if not isinstance(resp, dict):
+            return None
+        min_kopecks = resp.get("min") or resp.get("minBid") or resp.get("value")
+        if min_kopecks is None:
+            return None
+        try:
+            return int(min_kopecks) / 100.0
+        except (ValueError, TypeError):
+            return None
+
     async def fetch_campaign_products(self, advert_id: str) -> list:
         """拉取 WB 广告活动下的商品列表及出价
 
