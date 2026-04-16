@@ -92,3 +92,18 @@ export function aiSuggestCategory(data) {
 export function aiSuggestAttributes(data) {
   return request.post(`${BASE}/ai-suggest/attributes`, data, { timeout: 30000 })
 }
+
+// §7.3 AI 推荐属性值映射（enum 属性）
+export function aiSuggestValues(data) {
+  return request.post(`${BASE}/ai-suggest/values`, data, { timeout: 30000 })
+}
+
+// §7.4 一键从 WB 初始化 —— 耗时 30-120 秒
+export function initFromWB(data) {
+  return request.post(`${BASE}/init-from-wb`, data, { timeout: 180000 })
+}
+
+// §7.5 AI 批量匹配 Ozon —— 耗时 60-300 秒
+export function matchOzon(data) {
+  return request.post(`${BASE}/match-ozon`, data, { timeout: 360000 })
+}
