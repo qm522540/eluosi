@@ -237,19 +237,23 @@ async def _fetch_perf_data(
 
         all_ids = list(camp_map.keys())
 
-        async def _submit_and_fetch(batch_ids: list, batch_label: str) -> Optional[dict]:
+        async def _submit_and_fetch(batch_ids: list, batch_label: str,
+                                     chunk_from: date, chunk_to: date) -> Optional[dict]:
             """提交一个 statistics 任务，轮询直到 OK，返回报表 dict
             groupBy=DATE 让返回按天 × SKU 拆分（否则是整区间汇总，stat_date 取不到正确值）
             """
             try:
-                logger.info(f"Performance API {batch_label}: 提交 {len(batch_ids)} 个活动")
+                logger.info(
+                    f"Performance API {batch_label}: 提交 {len(batch_ids)} 个活动 "
+                    f"({chunk_from}~{chunk_to})"
+                )
                 submit = await ozon._request("POST",
                     f"{PERF_API}/api/client/statistics/json",
                     use_perf=True,
                     json={
                         "campaigns": batch_ids,
-                        "dateFrom": date_from.strftime("%Y-%m-%d"),
-                        "dateTo": date_to.strftime("%Y-%m-%d"),
+                        "dateFrom": chunk_from.strftime("%Y-%m-%d"),
+                        "dateTo": chunk_to.strftime("%Y-%m-%d"),
                         "groupBy": "DATE",
                     },
                 )
@@ -293,14 +297,32 @@ async def _fetch_perf_data(
         #   ① POST /api/client/statistics/json 单次最多 10 个活动（超则 400）
         #   ② 同时只允许 1 个活跃 UUID，前一个必须完成才能提交下一个（否则 429）
         # 所以：每批 ≤ 10 个，严格串行（await _submit_and_fetch 自然保证）
+        # 额外：日期范围 > 15 天时拆分，降低 Ozon 单次报告生成超时风险
         OZON_PERF_BATCH_MAX = 10
-        batches = [all_ids[i:i+OZON_PERF_BATCH_MAX] for i in range(0, len(all_ids), OZON_PERF_BATCH_MAX)]
-        logger.info(f"Performance API 分 {len(batches)} 批，每批 ≤ {OZON_PERF_BATCH_MAX} 个活动")
+        OZON_PERF_DAYS_PER_CHUNK = 15
+        batches = [all_ids[i:i+OZON_PERF_BATCH_MAX]
+                   for i in range(0, len(all_ids), OZON_PERF_BATCH_MAX)]
+
+        # 日期分片
+        date_chunks = []
+        chunk_from = date_from
+        while chunk_from <= date_to:
+            chunk_to = min(chunk_from + timedelta(days=OZON_PERF_DAYS_PER_CHUNK - 1), date_to)
+            date_chunks.append((chunk_from, chunk_to))
+            chunk_from = chunk_to + timedelta(days=1)
+
+        logger.info(
+            f"Performance API 分 {len(batches)} 批活动 × {len(date_chunks)} 段日期"
+            f"，每段 ≤ {OZON_PERF_DAYS_PER_CHUNK} 天"
+        )
         reports = []
-        for idx, batch in enumerate(batches):
-            r = await _submit_and_fetch(batch, f"batch {idx+1}/{len(batches)}")
-            if r:
-                reports.append(r)
+        for d_idx, (cf, ct) in enumerate(date_chunks):
+            for idx, batch in enumerate(batches):
+                label = (f"chunk {d_idx+1}/{len(date_chunks)} "
+                         f"batch {idx+1}/{len(batches)}")
+                r = await _submit_and_fetch(batch, label, cf, ct)
+                if r:
+                    reports.append(r)
 
         total_updated = 0
         for report_idx, report in enumerate(reports):
