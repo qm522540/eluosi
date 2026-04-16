@@ -940,10 +940,10 @@ async def _analyze_now_inner(db, tenant_id: int, shop_id: int,
                         nm_id=int(sku),
                     )
                     if min_rub and optimal_bid < min_rub:
-                        min_bid_warning = f"⚠ 低于平台最低 ₽{int(min_rub)}，曝光可能不足"
+                        min_bid_warning = f"⚠ 低于WB推荐竞争价₽{int(min_rub)}，曝光可能不足"
                         logger.info(
-                            f"WB最低价提示：sku={sku} optimal={optimal_bid}"
-                            f"<min={min_rub}，保留算法值+加警告"
+                            f"WB推荐价提示：sku={sku} optimal={optimal_bid}"
+                            f"<推荐竞争价={min_rub}，保留算法值+加警告"
                         )
                 except Exception as e:
                     logger.warning(f"WB 最低价查询异常 sku={sku}: {e}")
@@ -979,6 +979,8 @@ async def _analyze_now_inner(db, tenant_id: int, shop_id: int,
                 data_days=data_days, data_note=data_note,
                 breakeven_roas=breakeven_roas, current_roas=current_roas,
             )
+            if min_bid_warning:
+                reason = f"{reason} | {min_bid_warning}"
 
             result = db.execute(text("""
                 INSERT INTO ai_pricing_suggestions (
@@ -1007,8 +1009,16 @@ async def _analyze_now_inner(db, tenant_id: int, shop_id: int,
                           else "history_data"),
                 "current_roas": round(current_roas, 2) if current_roas else None,
                 "expected_roas": (
-                    round(client_price / optimal_bid, 2)
-                    if optimal_bid > 0 and client_price > 0 else None
+                    # WB: ROAS = CTR × CR × client_price × 1000 / CPM
+                    # Ozon: ROAS = CR × client_price / CPC
+                    round(
+                        (ctr / 100) * (cr / 100) * client_price * 1000 / optimal_bid
+                        if platform == "wb"
+                        else (cr / 100) * client_price / optimal_bid,
+                        2,
+                    )
+                    if optimal_bid > 0 and client_price > 0 and ctr > 0 and cr > 0
+                    else None
                 ),
                 "data_days": data_days,
                 "reason": reason[:500],
