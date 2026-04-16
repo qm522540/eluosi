@@ -1009,7 +1009,10 @@ const Products = () => {
               <SectionTitle>定价与物流</SectionTitle>
               <Row gutter={16}>
                 <Col span={8}>
-                  <Form.Item name="cost_price" label="成本价">
+                  <Form.Item
+                    name="cost_price" label="成本价"
+                    extra="本地字段，不同步平台；供毛利/ROAS 计算用"
+                  >
                     <InputNumber min={0} step={0.01} style={{ width: '100%' }} addonBefore="₽" />
                   </Form.Item>
                 </Col>
