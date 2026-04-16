@@ -907,14 +907,39 @@ const OzonAIPricing = ({ shopId, platform = 'ozon' }) => {
     }
   }
 
-  const handleIgnore = async (id) => {
-    try {
-      await ignoreAIPricingSuggestion(id)
-      message.success('已忽略该 SKU，不再参与自动调价')
-      fetchSuggestions(suggestionsPage)
-    } catch (err) {
-      message.error(err.message || '操作失败')
-    }
+  const handleIgnore = (id) => {
+    const record = suggestions.find(s => s.id === id)
+    const skuName = record?.sku_name || record?.platform_sku_id || id
+    Modal.confirm({
+      title: '确认忽略该 SKU？',
+      icon: <ExclamationCircleOutlined style={{ color: '#faad14' }} />,
+      width: 460,
+      content: (
+        <div style={{ fontSize: 13, lineHeight: 1.8 }}>
+          <div>
+            商品：<strong>{skuName}</strong>
+            {record?.platform_sku_id && (
+              <span style={{ color: '#999', marginLeft: 6 }}>SKU：{record.platform_sku_id}</span>
+            )}
+          </div>
+          <div style={{ marginTop: 10, padding: 10, background: '#fffbe6', borderRadius: 4, color: '#874d00' }}>
+            忽略后该 SKU <strong>长期不参与</strong> AI 自动调价和自动删除。<br />
+            仍会在建议列表中显示 AI 推荐供参考，可随时点"恢复"重新启用。
+          </div>
+        </div>
+      ),
+      okText: '确认忽略',
+      cancelText: '取消',
+      onOk: async () => {
+        try {
+          await ignoreAIPricingSuggestion(id)
+          message.success('已忽略该 SKU，不再参与自动调价')
+          fetchSuggestions(suggestionsPage)
+        } catch (err) {
+          message.error(err.message || '操作失败')
+        }
+      },
+    })
   }
 
   const handleRestore = async (id) => {
