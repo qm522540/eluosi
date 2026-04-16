@@ -268,6 +268,7 @@ const Products = () => {
     const firstListing = (record.listings || [])[0]
     editForm.setFieldsValue({
       sku: record.sku,
+      platform_product_id: firstListing?.platform_product_id || '',
       name_zh: record.name_zh,
       name_ru: record.name_ru || firstListing?.title_ru || '',
       description_ru: firstListing?.description_ru || '',
@@ -878,12 +879,27 @@ const Products = () => {
           {/* ========== 分组 1：基本信息 ========== */}
           <SectionTitle>基本信息</SectionTitle>
           <Row gutter={16}>
-            <Col span={12}>
-              <Form.Item name="sku" label="SKU">
+            <Col span={8}>
+              <Form.Item name="sku" label="卖家商品编码">
                 <Input disabled />
               </Form.Item>
             </Col>
-            <Col span={12}>
+            <Col span={8}>
+              <Form.Item
+                name="platform_product_id"
+                label={
+                  <Space size={4}>
+                    <span>平台编码</span>
+                    <span style={{ fontSize: 11, color: '#888', fontWeight: 'normal' }}>
+                      ({editingProduct?.listings?.[0]?.platform?.toUpperCase() || ''})
+                    </span>
+                  </Space>
+                }
+              >
+                <Input disabled />
+              </Form.Item>
+            </Col>
+            <Col span={8}>
               <Form.Item name="local_category_id" label="本地分类">
                 <Select
                   allowClear showSearch optionFilterProp="children"
