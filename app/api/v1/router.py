@@ -1,6 +1,6 @@
 from fastapi import APIRouter
 
-from app.api.v1 import system, auth, shops, products, ads, finance, notifications, bid_management
+from app.api.v1 import system, auth, shops, products, ads, finance, notifications, bid_management, category_mapping
 
 api_router = APIRouter()
 
@@ -27,6 +27,9 @@ api_router.include_router(notifications.router, prefix="/notifications", tags=["
 
 # 出价管理（分时调价 + AI调价 统一入口）
 api_router.include_router(bid_management.router, prefix="/bid-management", tags=["出价管理"])
+
+# 映射管理（本地分类 + 品类/属性/属性值映射）
+api_router.include_router(category_mapping.router, prefix="/mapping", tags=["映射管理"])
 
 # 后续模块:
 # from app.api.v1 import seo, inventory
