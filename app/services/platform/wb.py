@@ -666,18 +666,35 @@ class WBClient(BasePlatformClient):
 
     # ==================== 商品 ====================
 
-    async def fetch_products(self, page: int = 1, limit: int = 100) -> dict:
-        """拉取商品列表 (使用内容API)"""
+    async def fetch_products(self, limit: int = 100) -> dict:
+        """拉取商品列表 (使用内容API，自动 cursor 分页拉取全部)"""
         try:
             url = f"{WB_CONTENT_API}/content/v2/get/cards/list"
-            payload = {
-                "settings": {
-                    "cursor": {"limit": limit},
-                    "filter": {"withPhoto": -1},
+            all_cards = []
+            cursor = {"limit": limit}
+            for _ in range(100):  # 最多 100 页 = 10000 商品
+                payload = {
+                    "settings": {
+                        "cursor": cursor,
+                        "filter": {"withPhoto": -1},
+                    }
                 }
-            }
-            result = await self._request("POST", url, json=payload)
-            return result
+                result = await self._request("POST", url, json=payload)
+                cards = (result or {}).get("cards", [])
+                all_cards.extend(cards)
+                resp_cursor = (result or {}).get("cursor", {})
+                total = resp_cursor.get("total", 0)
+                if len(cards) < limit or total <= len(cards):
+                    break
+                cursor = {
+                    "limit": limit,
+                    "updatedAt": resp_cursor.get("updatedAt", ""),
+                    "nmID": resp_cursor.get("nmID", 0),
+                }
+                if not cursor["updatedAt"]:
+                    break
+            logger.info(f"WB 拉取商品完成 shop_id={self.shop_id} total={len(all_cards)}")
+            return {"cards": all_cards}
         except Exception as e:
             logger.error(f"WB 拉取商品失败，shop_id={self.shop_id}: {e}")
             raise
