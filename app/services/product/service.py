@@ -62,7 +62,24 @@ def list_products(db: Session, tenant_id: int, keyword: str = None,
             ).all():
                 cat_name_map[r.id] = r.name
 
-        items = [_product_to_dict(p, cat_name_map=cat_name_map) for p in products]
+        # 批量查 listings（前端列表行需要 listings[] 渲染销售价/平台/展开行）
+        product_ids = [p.id for p in products]
+        listings_map = {}
+        if product_ids:
+            all_listings = db.query(PlatformListing).filter(
+                PlatformListing.tenant_id == tenant_id,
+                PlatformListing.product_id.in_(product_ids),
+                PlatformListing.status != "deleted",
+            ).all()
+            for l in all_listings:
+                listings_map.setdefault(l.product_id, []).append(_listing_to_dict(l))
+
+        items = []
+        for p in products:
+            d = _product_to_dict(p, cat_name_map=cat_name_map)
+            d["listings"] = listings_map.get(p.id, [])
+            d["platforms"] = sorted(set(l["platform"] for l in d["listings"]))
+            items.append(d)
         return {
             "code": ErrorCode.SUCCESS,
             "data": {
