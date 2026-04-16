@@ -164,6 +164,49 @@ const Products = () => {
     }
   }
 
+  const handleEdit = (record) => {
+    setEditingProduct(record)
+    editForm.setFieldsValue({
+      sku: record.sku,
+      name_zh: record.name_zh,
+      name_ru: record.name_ru,
+      brand: record.brand,
+      local_category_id: record.local_category_id,
+      cost_price: record.cost_price,
+      net_margin: record.net_margin ? Math.round(record.net_margin * 100) : null,
+      weight_g: record.weight_g,
+      image_url: record.image_url,
+    })
+    setEditModal(true)
+  }
+
+  const handleEditSubmit = async () => {
+    try {
+      const values = await editForm.validateFields()
+      setEditSubmitting(true)
+      const payload = {
+        name_zh: values.name_zh,
+        name_ru: values.name_ru,
+        brand: values.brand,
+        local_category_id: values.local_category_id,
+        cost_price: values.cost_price,
+        net_margin: values.net_margin ? values.net_margin / 100 : null,
+        weight_g: values.weight_g,
+        image_url: values.image_url,
+      }
+      await updateProduct(editingProduct.id, payload)
+      message.success('商品已更新')
+      setEditModal(false)
+      editForm.resetFields()
+      fetchProducts(page)
+    } catch (e) {
+      if (e.errorFields) return
+      message.error('更新失败')
+    } finally {
+      setEditSubmitting(false)
+    }
+  }
+
   const handleSpread = (listings) => {
     setSpreadItems(listings)
     setSpreadModal(true)
@@ -364,7 +407,7 @@ const Products = () => {
       render: (_, record) => (
         <Space size={4}>
           <Button size="small" icon={<EditOutlined />}
-            onClick={() => {}}>编辑</Button>
+            onClick={() => handleEdit(record)}>编辑</Button>
           <Button size="small" type="primary"
             style={{ background: '#185FA5', borderColor: '#185FA5' }}
             icon={<SendOutlined />}
@@ -580,6 +623,83 @@ const Products = () => {
           }}
         />
       </Card>
+
+      {/* 商品编辑弹窗 */}
+      <Modal
+        title="编辑商品"
+        open={editModal}
+        onOk={handleEditSubmit}
+        onCancel={() => { setEditModal(false); editForm.resetFields() }}
+        confirmLoading={editSubmitting}
+        okText="保存"
+        cancelText="取消"
+        width={560}
+        destroyOnClose
+      >
+        <Form form={editForm} layout="vertical" style={{ marginTop: 12 }}>
+          <Row gutter={12}>
+            <Col span={12}>
+              <Form.Item name="sku" label="SKU（只读）">
+                <Input disabled />
+              </Form.Item>
+            </Col>
+            <Col span={12}>
+              <Form.Item name="brand" label="品牌">
+                <Input placeholder="品牌名" />
+              </Form.Item>
+            </Col>
+          </Row>
+          <Form.Item name="name_zh" label="中文名" rules={[{ required: true, message: '请填中文名' }]}>
+            <Input placeholder="商品中文名称" />
+          </Form.Item>
+          <Form.Item name="name_ru" label="俄文名">
+            <Input placeholder="商品俄文名称" />
+          </Form.Item>
+          <Form.Item name="local_category_id" label="本地分类">
+            <Select
+              allowClear
+              showSearch
+              optionFilterProp="children"
+              placeholder="选择本地统一分类"
+            >
+              {localCategories.map(c => (
+                <Option key={c.id} value={c.id}>
+                  {c.name} {c.name_ru ? `（${c.name_ru}）` : ''}
+                </Option>
+              ))}
+            </Select>
+          </Form.Item>
+          <Row gutter={12}>
+            <Col span={8}>
+              <Form.Item name="cost_price" label="成本价（₽）">
+                <InputNumber min={0} step={0.01} style={{ width: '100%' }} addonBefore="₽" />
+              </Form.Item>
+            </Col>
+            <Col span={8}>
+              <Form.Item
+                name="net_margin"
+                label={<Tooltip title="此店铺下该 SKU 的净毛利率（不同店铺独立）">净毛利率 <span style={{ fontSize: 11, color: '#999' }}>ⓘ</span></Tooltip>}
+              >
+                <InputNumber min={1} max={99} step={1} style={{ width: '100%' }} addonAfter="%" />
+              </Form.Item>
+            </Col>
+            <Col span={8}>
+              <Form.Item name="weight_g" label="重量（克）">
+                <InputNumber min={0} step={1} style={{ width: '100%' }} addonAfter="g" />
+              </Form.Item>
+            </Col>
+          </Row>
+          <Form.Item name="image_url" label="图片 URL">
+            <Input placeholder="https://..." />
+          </Form.Item>
+          <Alert
+            type="info"
+            showIcon={false}
+            style={{ fontSize: 12, marginTop: -8 }}
+            message="平台商品ID、售价、状态等由同步决定，本页不可编辑"
+          />
+        </Form>
+      </Modal>
 
       {/* 铺货弹窗 */}
       <Modal

@@ -24,6 +24,7 @@ class ProductUpdate(BaseModel):
     name_ru: Optional[str] = Field(None, max_length=200)
     brand: Optional[str] = Field(None, max_length=100)
     category: Optional[str] = Field(None, max_length=200)
+    local_category_id: Optional[int] = Field(None, description="本地统一分类ID")
     cost_price: Optional[float] = Field(None, ge=0)
     weight_g: Optional[int] = Field(None, ge=0)
     image_url: Optional[str] = Field(None, max_length=500)
