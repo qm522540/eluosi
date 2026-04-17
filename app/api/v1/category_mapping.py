@@ -156,6 +156,39 @@ def category_mapping_delete(
 
 # ==================== 跨平台建议（全局 hints 驱动） ====================
 
+@router.get("/category-hint")
+def category_hint_preview(
+    platform: str = Query(..., pattern="^(wb|ozon|yandex)$"),
+    platform_category_id: str = Query(...),
+    db: Session = Depends(get_db),
+    tenant_id: int = Depends(get_tenant_id),  # 仅鉴权，hint 数据跨租户共享
+):
+    """手动添加映射时预览这个 (platform, category_id) 的全局 hint
+
+    返回: {
+        hint: {suggested_local_name_zh, total_confirmed_count, platform_category_name_ru, top_name_count} | null,
+        cross_hints: [{target_platform, target_platform_category_id, target_platform_category_name_ru, co_confirmed_count}]
+    }
+    """
+    from app.services.global_hints.service import preview_platform_category_hint
+    from app.models.global_hints import GlobalCategoryHint
+    from app.utils.logger import logger
+    from app.utils.errors import ErrorCode
+    try:
+        result = preview_platform_category_hint(db, platform, platform_category_id)
+        if result["hint"]:
+            row = db.query(GlobalCategoryHint).filter(
+                GlobalCategoryHint.platform == platform,
+                GlobalCategoryHint.platform_category_id == str(platform_category_id),
+            ).first()
+            if row:
+                result["hint"]["platform_category_name_ru"] = row.platform_category_name_ru
+        return success(result)
+    except Exception as e:
+        logger.error(f"查 category-hint 失败: {e}")
+        return error(ErrorCode.UNKNOWN_ERROR, "查询失败")
+
+
 @router.get("/cross-platform-suggestions")
 def cross_platform_suggestions(
     local_category_id: int = Query(...),

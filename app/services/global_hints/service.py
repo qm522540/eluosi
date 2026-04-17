@@ -172,6 +172,39 @@ def get_cross_platform_hint(
     }
 
 
+def preview_platform_category_hint(
+    db: Session, platform: str, platform_category_id: str,
+    cross_targets: tuple = ("wb", "ozon", "yandex"),
+) -> dict:
+    """手动添加/编辑品类映射时，预览这个 (platform, category_id) 的全局 hint
+
+    返回：
+    - hint: 单平台 hint（有 N 个租户确认过、常用本地名、俄文名）或 None
+    - cross_hints: 对每个其他平台的 top1 共现建议（有 co_count 才返回）
+    """
+    single = get_category_hint(db, platform, platform_category_id)
+    cross_hints = []
+    for target in cross_targets:
+        if target == platform:
+            continue
+        h = get_cross_platform_hint(db, platform, platform_category_id, target)
+        if not h:
+            continue
+        name_row = db.query(GlobalCategoryHint).filter(
+            GlobalCategoryHint.platform == target,
+            GlobalCategoryHint.platform_category_id == str(h["target_category_id"]),
+        ).first()
+        cross_hints.append({
+            "target_platform": target,
+            "target_platform_category_id": h["target_category_id"],
+            "target_platform_category_name_ru": (
+                name_row.platform_category_name_ru if name_row else None
+            ),
+            "co_confirmed_count": h["co_confirmed_count"],
+        })
+    return {"hint": single, "cross_hints": cross_hints}
+
+
 def get_cross_platform_suggestions(
     db: Session, tenant_id: int, local_category_id: int,
     supported_platforms: tuple = ("wb", "ozon"),
