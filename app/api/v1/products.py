@@ -5,13 +5,14 @@ from sqlalchemy.orm import Session
 
 from app.dependencies import get_db, get_current_user, get_tenant_id
 from app.schemas.product import (
-    ProductCreate, ProductUpdate, ProductMarginUpdate,
+    ProductCreate, ProductUpdate, ProductMarginUpdate, CostCopyRequest,
     ListingCreate, ListingUpdate,
     ProductSyncRequest, GenerateDescriptionRequest, SpreadRequest,
 )
 from app.services.product.service import (
     list_products, create_product, get_product,
     update_product, update_product_margin, delete_product,
+    copy_cost_to_other_shops,
     list_listings, create_listing, update_listing, delete_listing,
     check_sync_needed, sync_products_from_platform, generate_description,
     optimize_title, download_listing_images_to_oss, get_platform_attributes,
@@ -168,6 +169,25 @@ def product_margin_update(
     if result["code"] != 0:
         return error(result["code"], result["msg"])
     return success(result["data"])
+
+
+@router.post("/{product_id}/copy-cost-to-other-shops")
+def product_copy_cost(
+    product_id: int,
+    req: CostCopyRequest,
+    db: Session = Depends(get_db),
+    tenant_id: int = Depends(get_tenant_id),
+):
+    """把成本/毛利等本地字段复制到同租户下其他店铺的同 SKU 商品。
+    默认复制 cost_price + net_margin；target_shop_ids 不传 = 所有同 SKU 其他店铺。
+    """
+    result = copy_cost_to_other_shops(
+        db, product_id, tenant_id,
+        fields=req.fields, target_shop_ids=req.target_shop_ids,
+    )
+    if result["code"] != 0:
+        return error(result["code"], result["msg"])
+    return success(result["data"], msg=f"已复制到 {result['data']['copied']} 个店铺")
 
 
 @router.get("/sync/check")

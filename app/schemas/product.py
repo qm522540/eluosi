@@ -82,6 +82,17 @@ class ProductMarginUpdate(BaseModel):
     net_margin: Optional[float] = Field(None, ge=0, le=1)
 
 
+# ========== 成本/毛利复制到其他店铺 ==========
+
+class CostCopyRequest(BaseModel):
+    fields: Optional[List[str]] = Field(
+        None, description="待复制字段，默认 ['cost_price', 'net_margin']"
+    )
+    target_shop_ids: Optional[List[int]] = Field(
+        None, description="目标店铺 ID 列表；不传 = 所有同 SKU 其他店铺"
+    )
+
+
 # ========== 描述AI改写 ==========
 
 class GenerateDescriptionRequest(BaseModel):

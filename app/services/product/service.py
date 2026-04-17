@@ -414,6 +414,63 @@ def update_product_margin(db: Session, product_id: int, tenant_id: int,
         return {"code": ErrorCode.UNKNOWN_ERROR, "msg": "更新净毛利率失败"}
 
 
+def copy_cost_to_other_shops(db: Session, product_id: int, tenant_id: int,
+                             fields: list = None,
+                             target_shop_ids: Optional[list] = None) -> dict:
+    """把商品的 cost_price / net_margin / weight_g / length_mm/width_mm/height_mm
+    复制到同租户下其他店铺的同名 SKU（按 sku 匹配）。
+    - fields 限定复制的字段白名单；默认只复制 cost_price + net_margin
+    - target_shop_ids 指定目标店铺；不传 = 所有同 SKU 其他店铺
+    - 按 (tenant_id, sku) 匹配 Product 记录
+    """
+    allowed_fields = {"cost_price", "net_margin", "weight_g",
+                      "length_mm", "width_mm", "height_mm"}
+    if not fields:
+        fields = ["cost_price", "net_margin"]
+    fields = [f for f in fields if f in allowed_fields]
+    if not fields:
+        return {"code": ErrorCode.PARAM_ERROR, "msg": "无有效字段"}
+    try:
+        src = db.query(Product).filter(
+            Product.id == product_id,
+            Product.tenant_id == tenant_id,
+            Product.status != "deleted",
+        ).first()
+        if not src:
+            return {"code": ErrorCode.PRODUCT_NOT_FOUND, "msg": "商品不存在"}
+        if not src.sku:
+            return {"code": ErrorCode.PARAM_ERROR, "msg": "源商品无 SKU"}
+
+        q = db.query(Product).filter(
+            Product.tenant_id == tenant_id,
+            Product.sku == src.sku,
+            Product.id != src.id,
+            Product.status != "deleted",
+        )
+        if target_shop_ids:
+            q = q.filter(Product.shop_id.in_(target_shop_ids))
+        targets = q.all()
+
+        copied = 0
+        copied_ids = []
+        for t in targets:
+            for f in fields:
+                setattr(t, f, getattr(src, f))
+            copied += 1
+            copied_ids.append(t.id)
+        db.commit()
+        logger.info(
+            f"成本/毛利复制 sku={src.sku} src_product={product_id} "
+            f"fields={fields} copied={copied} tenant={tenant_id}")
+        return {"code": ErrorCode.SUCCESS,
+                "data": {"copied": copied, "target_ids": copied_ids,
+                         "fields": fields}}
+    except Exception as e:
+        db.rollback()
+        logger.error(f"复制成本到其他店铺失败 product_id={product_id}: {e}")
+        return {"code": ErrorCode.UNKNOWN_ERROR, "msg": "复制失败"}
+
+
 def check_sync_needed(db: Session, shop_id: int, tenant_id: int,
                       force: bool = False) -> dict:
     if force:
