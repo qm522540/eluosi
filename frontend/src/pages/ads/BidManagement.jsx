@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from 'react'
 import { useAuthStore } from '../../stores/authStore'
 import { formatMoscowTime, formatMoscowHourMinute } from '@/utils/time'
 import AdsAIPricing from './AdsAIPricing'
+import WbProductImg from '@/components/WbProductImg'
 import {
   Button, Modal, message, Switch, Empty,
   Table, Tag, Tooltip, Space,
@@ -59,80 +60,6 @@ const STAGE_CONFIG = {
   growing:    { color: 'green', label: '放量期', tip: 'CTR和CR均达标' },
   declining:  { color: 'red', label: '衰退预警', tip: 'ROAS持续下滑' },
   unknown:    { color: 'default', label: '数据不足', tip: '历史数据不足' },
-}
-
-// WB 商品图片：basket 编号不确定，用 onError 自动尝试相邻 basket
-const _wbImgCache = {}
-const getWbImageInfo = (nmId) => {
-  const id = Number(nmId)
-  if (!id) return null
-  const vol = Math.floor(id / 100000)
-  const part = Math.floor(id / 1000)
-  return { id, vol, part }
-}
-const buildWbImgUrl = (vol, part, id, basket) =>
-  `https://basket-${String(basket).padStart(2,'0')}.wbbasket.ru/vol${vol}/part${part}/${id}/images/c246x328/1.webp`
-
-// 根据 vol 估算起始 basket（实测校准的映射表）
-const guessBasket = (vol) => {
-  // 低段（vol 0-2837）用密集映射，高段用实测稀疏映射
-  const thresholds = [
-    143,287,431,719,1007,1061,1115,1169,1313,1601,  // 1-10
-    1655,1919,2045,2189,2405,2621,2837,              // 11-17
-  ]
-  for (let i = 0; i < thresholds.length; i++) {
-    if (vol <= thresholds[i]) return i + 1
-  }
-  // 高段（vol > 2837）：实测每 ~350 vol 一个 basket，从 basket 18 开始
-  // 校准点：vol 5207→28, vol 4826→26, vol 7678→35, vol 8951→39, vol 9237→40
-  const highBasket = 18 + Math.floor((vol - 2838) / 350)
-  return Math.min(highBasket, 60)
-}
-
-// WB 商品图片组件：从估算 basket 开始，失败自动探测相邻 basket
-const WbProductImg = ({ nmId, style }) => {
-  const [src, setSrc] = useState(null)
-  const [loaded, setLoaded] = useState(false)
-  const [failed, setFailed] = useState(false)
-  const triedRef = useRef(0)
-  const infoRef = useRef(null)
-
-  useEffect(() => {
-    const info = getWbImageInfo(nmId)
-    if (!info) { setFailed(true); return }
-    infoRef.current = info
-    triedRef.current = 0
-    setLoaded(false)
-    setFailed(false)
-    if (_wbImgCache[nmId]) {
-      setSrc(_wbImgCache[nmId])
-      setLoaded(true)
-    } else {
-      setSrc(buildWbImgUrl(info.vol, info.part, info.id, guessBasket(info.vol)))
-    }
-  }, [nmId])
-
-  if (failed || !src) return null
-
-  return (
-    <img
-      src={src}
-      alt=""
-      style={{ ...style, display: loaded ? 'block' : 'none' }}
-      onError={() => {
-        triedRef.current++
-        const info = infoRef.current
-        if (!info) { setFailed(true); return }
-        const base = guessBasket(info.vol)
-        const offsets = [0, -1, 1, -2, 2, -3, 3, -4, 4, -5, 5, -6, 6, -7, 7, -8, 8]
-        if (triedRef.current >= offsets.length) { setFailed(true); return }
-        const next = base + offsets[triedRef.current]
-        if (next < 1 || next > 65) { setFailed(true); return }
-        setSrc(buildWbImgUrl(info.vol, info.part, info.id, next))
-      }}
-      onLoad={() => { setLoaded(true); _wbImgCache[nmId] = src }}
-    />
-  )
 }
 
 const BASIS_CONFIG = {
@@ -1363,14 +1290,7 @@ const AIPricingConfig = ({ shopId, platform, onSaved }) => {
             style={{ flexShrink: 0 }}
           />
           {platform === 'wb' && (
-            <WbProductImg
-              nmId={r.platform_sku_id}
-              style={{
-                width: 36, height: 36, borderRadius: 4,
-                objectFit: 'cover', flexShrink: 0,
-                background: '#f5f5f5',
-              }}
-            />
+            <WbProductImg nmId={r.platform_sku_id} size={36} />
           )}
           <div>
             <Tooltip title={r.sku_name}>
