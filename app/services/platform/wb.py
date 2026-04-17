@@ -1149,6 +1149,37 @@ class WBClient(BasePlatformClient):
 
     # ==================== 分类/属性（用于铺货映射） ====================
 
+    async def fetch_commissions(self, locale: str = "ru") -> dict:
+        """拉 WB 佣金表（按 subjectID 分类级），返回 {subject_id: kgvp_marketplace}。
+        API: GET /api/v1/tariffs/commission?locale=ru（common-api）
+        WB 佣金是按分类给，不是按 SKU；同一分类所有商品佣金相同。
+        """
+        try:
+            url = f"{WB_COMMON_API}/api/v1/tariffs/commission"
+            params = {"locale": locale}
+            result = await self._request("GET", url, params=params)
+            report = (result or {}).get("report") or []
+            out: dict = {}
+            for r in report:
+                sid = r.get("subjectID") or r.get("subjectId")
+                if sid is None:
+                    continue
+                # kgvpMarketplace = 卖家发货到仓储到客户的佣金率（最常用）
+                rate = (
+                    r.get("kgvpMarketplace")
+                    or r.get("kgvpSupplier")
+                    or r.get("paidStorageKgvp")
+                )
+                try:
+                    if rate is not None:
+                        out[int(sid)] = float(rate)
+                except (TypeError, ValueError):
+                    continue
+            return out
+        except Exception as e:
+            logger.warning(f"WB 拉取佣金表失败 shop_id={self.shop_id}: {e}")
+            return {}
+
     async def fetch_all_subjects(self, locale: str = "ru") -> list:
         """拉取 WB 全量分类列表（subjects）
 

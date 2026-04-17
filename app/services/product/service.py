@@ -488,26 +488,30 @@ def _sync_wb_products(db: Session, shop, tenant_id: int) -> dict:
     import asyncio
     from app.services.platform.wb import WBClient
     async def _fetch():
-        # 并行拉：内容卡片 + 价格 + 库存
+        # 并行拉：内容卡片 + 价格 + 库存 + 佣金表
         client = WBClient(shop_id=shop.id, api_key=shop.api_key)
         try:
             cards_task = client.fetch_products(limit=100)
             prices_task = client.fetch_prices(limit=1000)
             inv_task = client.fetch_inventory()
-            cards_res, prices_res, inv_res = await asyncio.gather(
-                cards_task, prices_task, inv_task,
+            commission_task = client.fetch_commissions()
+            cards_res, prices_res, inv_res, commission_res = await asyncio.gather(
+                cards_task, prices_task, inv_task, commission_task,
                 return_exceptions=True,
             )
-            # 库存失败不阻塞主流程
+            # 库存/佣金失败不阻塞主流程
             if isinstance(inv_res, Exception):
                 logger.warning(f"WB 库存拉取失败 shop={shop.id}: {inv_res}")
                 inv_res = []
-            return cards_res, prices_res, inv_res
+            if isinstance(commission_res, Exception):
+                logger.warning(f"WB 佣金拉取失败 shop={shop.id}: {commission_res}")
+                commission_res = {}
+            return cards_res, prices_res, inv_res, commission_res
         finally:
             await client.close()
     loop = asyncio.new_event_loop()
     try:
-        result, price_map, inv_rows = loop.run_until_complete(_fetch())
+        result, price_map, inv_rows, commission_map = loop.run_until_complete(_fetch())
     finally:
         loop.close()
     # 聚合库存：按 nm_id 求和（一个 SKU 分布在多个仓库）
@@ -566,6 +570,10 @@ def _sync_wb_products(db: Session, shop, tenant_id: int) -> dict:
         width_mm = _cm_to_mm(dims.get("width"))
         height_mm = _cm_to_mm(dims.get("height"))
         from datetime import datetime, timezone
+        # WB 佣金按 subjectID 查（分类级，同分类所有商品佣金相同）
+        commission = None
+        if subject_id and isinstance(commission_map, dict):
+            commission = commission_map.get(int(subject_id))
         data = {
             "title_ru": (p.get("title") or subject_name or "")[:500],
             "description_ru": p.get("description"),
@@ -577,6 +585,7 @@ def _sync_wb_products(db: Session, shop, tenant_id: int) -> dict:
             "platform_sku_id": nm_id,
             "platform_category_id": subject_id_str,
             "platform_category_name": subject_name[:300] if subject_name else None,
+            "commission_rate": commission,
             "status": "active",
         }
         if listing:
@@ -648,28 +657,32 @@ def _sync_ozon_products(db: Session, shop, tenant_id: int) -> dict:
                 it["product_id"]: (it.get("has_fbo_stocks") or it.get("has_fbs_stocks"))
                 for it in all_items
             }
-            # 并行：info 拉详情 + 分类树（名称反查用）
+            # 并行：info 拉详情 + 分类树（名称反查）+ 佣金
             info_task = asyncio.gather(*[
                 client.fetch_product_info(product_ids[i:i + 500])
                 for i in range(0, len(product_ids), 500)
             ])
             tree_task = client.fetch_category_tree()
-            info_chunks, tree = await asyncio.gather(
-                info_task, tree_task, return_exceptions=True,
+            commission_task = client.fetch_commissions(product_ids)
+            info_chunks, tree, commissions = await asyncio.gather(
+                info_task, tree_task, commission_task, return_exceptions=True,
             )
             if isinstance(info_chunks, Exception):
                 raise info_chunks
             if isinstance(tree, Exception):
                 logger.warning(f"Ozon 分类树拉取失败 shop={shop.id}: {tree}")
                 tree = []
+            if isinstance(commissions, Exception):
+                logger.warning(f"Ozon 佣金拉取失败 shop={shop.id}: {commissions}")
+                commissions = {}
             infos = [it for chunk in info_chunks for it in chunk]
-            return infos, archived_map, stock_map, tree
+            return infos, archived_map, stock_map, tree, commissions
         finally:
             await client.close()
 
     loop = asyncio.new_event_loop()
     try:
-        infos, archived_map, stock_map, tree = loop.run_until_complete(_fetch_all())
+        infos, archived_map, stock_map, tree, commission_map = loop.run_until_complete(_fetch_all())
     finally:
         loop.close()
 
@@ -731,6 +744,10 @@ def _sync_ozon_products(db: Session, shop, tenant_id: int) -> dict:
         ozon_stock = sum(int(s.get("present") or 0) for s in stocks_list if isinstance(s, dict))
 
         from datetime import datetime, timezone
+        # Ozon 佣金：按 product_id 从 v5/product/info/prices 查
+        ozon_commission = None
+        if isinstance(commission_map, dict) and pid:
+            ozon_commission = commission_map.get(int(pid))
         data = {
             "title_ru": title,
             "price": old_price or price,
@@ -742,6 +759,7 @@ def _sync_ozon_products(db: Session, shop, tenant_id: int) -> dict:
             "platform_category_id": category_id_str,
             "platform_category_name": category_name[:300] if category_name else None,
             "platform_category_extra_id": type_id_str,
+            "commission_rate": ozon_commission,
             "status": status,
         }
 

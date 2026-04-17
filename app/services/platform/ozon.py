@@ -738,6 +738,53 @@ class OzonClient(BasePlatformClient):
             logger.error(f"Ozon 拉取库存失败，shop_id={self.shop_id}: {e}")
             raise
 
+    # ==================== 佣金 ====================
+
+    async def fetch_commissions(self, product_ids: list) -> dict:
+        """批量拉佣金率（v5/product/info/prices）。
+        返回 {product_id: commission_percent}，取 FBO/FBS 中较高值（更严格）。
+        API: POST /v5/product/info/prices
+        """
+        if not product_ids:
+            return {}
+        result_map: dict = {}
+        try:
+            url = f"{OZON_SELLER_API}/v5/product/info/prices"
+            cursor = ""
+            for _ in range(20):
+                payload = {
+                    "filter": {
+                        "product_id": [str(pid) for pid in product_ids],
+                        "visibility": "ALL",
+                    },
+                    "cursor": cursor,
+                    "limit": 1000,
+                }
+                result = await self._request("POST", url, json=payload)
+                items = (result or {}).get("items") or (result or {}).get("result", {}).get("items") or []
+                for it in items:
+                    pid = it.get("product_id")
+                    commissions = it.get("commissions") or {}
+                    fbo = commissions.get("sales_percent_fbo") or commissions.get("fbo_sales_percent")
+                    fbs = commissions.get("sales_percent_fbs") or commissions.get("fbs_sales_percent")
+                    rate = None
+                    for v in (fbo, fbs):
+                        try:
+                            fv = float(v)
+                            if rate is None or fv > rate:
+                                rate = fv
+                        except (TypeError, ValueError):
+                            continue
+                    if pid and rate is not None:
+                        result_map[int(pid)] = rate
+                cursor = (result or {}).get("cursor") or ""
+                if not cursor:
+                    break
+            return result_map
+        except Exception as e:
+            logger.warning(f"Ozon 拉取佣金失败 shop_id={self.shop_id}: {e}")
+            return {}
+
     # ==================== 分类/属性（用于铺货映射） ====================
 
     async def fetch_category_tree(self, language: str = "DEFAULT") -> list:
