@@ -185,7 +185,7 @@ const PlatformAttributesBlock = ({ productId }) => {
 
 // ========== 铺货品类/属性映射预览（选了目标店铺后展示） ==========
 
-const SpreadMappingPreview = ({ localCategoryId, srcPlatform, dstShopIds, shops: allShops }) => {
+const SpreadMappingPreview = ({ localCategoryId, srcPlatform, dstShopIds, shops: allShops, spreadItems }) => {
   const [catMappings, setCatMappings] = useState([])
   const [attrMappings, setAttrMappings] = useState([])
   const [loading, setLoading] = useState(false)
@@ -220,17 +220,30 @@ const SpreadMappingPreview = ({ localCategoryId, srcPlatform, dstShopIds, shops:
       let cats = catRes.data?.items || []
       let attrs = attrRes.data?.items || []
 
-      // 检测目标平台是否缺品类/属性映射
-      const missingCatPlatforms = dstPlatforms.filter(p => !cats.some(c => c.platform === p))
-      const missingAttrPlatforms = dstPlatforms.filter(p => !attrs.some(a => a.platform === p))
+      // 检测所有需要的平台（源+目标）是否缺品类/属性映射
+      const allNeededPlatforms = [...new Set([srcPlatform, ...dstPlatforms].filter(Boolean))]
+      const missingCatPlatforms = allNeededPlatforms.filter(p => !cats.some(c => c.platform === p))
+      const missingAttrPlatforms = allNeededPlatforms.filter(p => !attrs.some(a => a.platform === p))
+      const allMissing = [...new Set([...missingCatPlatforms, ...missingAttrPlatforms])]
 
-      if (missingCatPlatforms.length > 0 || missingAttrPlatforms.length > 0) {
+      if (allMissing.length > 0) {
         setAiFixing(true)
-        setAiFixMsg(`AI 正在自动对接 ${[...new Set([...missingCatPlatforms, ...missingAttrPlatforms])].map(p => p.toUpperCase()).join('/')} 映射...`)
+        setAiFixMsg(`AI 正在自动对接 ${allMissing.map(p => p.toUpperCase()).join(' / ')} 映射...`)
+
+        // 需要每个缺失平台的 shop_id（源平台用源商品的 shop，目标平台用选的 shop）
+        const getShopId = (platform) => {
+          if (dstShopByPlatform[platform]) return dstShopByPlatform[platform]
+          // 源平台：从 spreadItems 取 shop_id
+          const srcItem = spreadItems?.[0]
+          if (srcItem?.shop_id && platform === srcPlatform) return srcItem.shop_id
+          // fallback：从 shops 列表取该平台任一 active shop
+          const s = allShops?.find(s => s.platform === platform && s.status === 'active')
+          return s?.id
+        }
 
         // 逐平台补品类映射
         for (const p of missingCatPlatforms) {
-          const shopId = dstShopByPlatform[p]
+          const shopId = getShopId(p)
           if (!shopId) continue
           try {
             await aiSuggestCategory({
@@ -243,9 +256,9 @@ const SpreadMappingPreview = ({ localCategoryId, srcPlatform, dstShopIds, shops:
           }
         }
 
-        // 逐平台补属性映射（需要品类映射先建好）
-        for (const p of [...new Set([...missingCatPlatforms, ...missingAttrPlatforms])]) {
-          const shopId = dstShopByPlatform[p]
+        // 逐平台补属性映射
+        for (const p of allMissing) {
+          const shopId = getShopId(p)
           if (!shopId) continue
           try {
             await aiSuggestAttributes({
@@ -345,54 +358,73 @@ const SpreadMappingPreview = ({ localCategoryId, srcPlatform, dstShopIds, shops:
         </div>
       </div>
 
-      {/* 属性对照 */}
+      {/* 属性映射：按目标平台展示"本地属性 → 目标平台属性"映射状态 */}
       {dstPlatforms.map(dp => {
         const dstAttrs = dstAttrsByPlatform[dp] || []
-        if (!srcAttrs.length && !dstAttrs.length) return null
-        // 按 local_attr_name 匹配源→目标
-        const attrMap = {}
-        for (const sa of srcAttrs) {
-          attrMap[sa.local_attr_name] = { src: sa, dst: null }
-        }
-        for (const da of dstAttrs) {
-          if (attrMap[da.local_attr_name]) {
-            attrMap[da.local_attr_name].dst = da
-          } else {
-            attrMap[da.local_attr_name] = { src: null, dst: da }
-          }
-        }
-        const entries = Object.entries(attrMap)
-        if (!entries.length) return null
+        if (!dstAttrs.length) return (
+          <div key={dp} style={{
+            padding: 10, background: '#fff7e6', border: '1px solid #ffd591',
+            borderRadius: 6, marginBottom: 8, fontSize: 12,
+          }}>
+            <span style={{ color: '#d46b08' }}>
+              {PLATFORM_COLOR[dp]?.label} 属性映射为空 — AI 正在对接或对接失败
+            </span>
+          </div>
+        )
+        const confirmed = dstAttrs.filter(a => a.is_confirmed).length
+        const required = dstAttrs.filter(a => a.is_required).length
         return (
           <div key={dp} style={{
             padding: 10, background: '#fafafa', border: '1px solid #f0f0f0',
             borderRadius: 6, marginBottom: 8, fontSize: 12,
           }}>
-            <div style={{ fontWeight: 500, marginBottom: 6, color: '#333' }}>
-              属性映射 → <span style={{ color: PLATFORM_COLOR[dp]?.color }}>{PLATFORM_COLOR[dp]?.label}</span>
-              <span style={{ fontWeight: 400, color: '#999', marginLeft: 6 }}>
-                {entries.length} 项（{entries.filter(([, v]) => v.src && v.dst).length} 已配对）
+            <div style={{
+              fontWeight: 500, marginBottom: 6, color: '#333',
+              display: 'flex', justifyContent: 'space-between',
+            }}>
+              <span>
+                属性映射 → <span style={{ color: PLATFORM_COLOR[dp]?.color }}>
+                  {PLATFORM_COLOR[dp]?.label}
+                </span>
+              </span>
+              <span style={{ fontWeight: 400, color: '#888' }}>
+                {dstAttrs.length} 项 · {confirmed} 已确认 · {required} 必填
               </span>
             </div>
-            <div style={{ maxHeight: 200, overflowY: 'auto' }}>
-              {entries.slice(0, 20).map(([name, { src, dst }]) => (
-                <div key={name} style={{
-                  display: 'flex', gap: 6, padding: '3px 0',
+            <div style={{ maxHeight: 220, overflowY: 'auto' }}>
+              {dstAttrs.slice(0, 30).map(a => (
+                <div key={a.id} style={{
+                  display: 'flex', gap: 8, padding: '4px 0',
                   borderBottom: '1px solid #f5f5f5',
+                  alignItems: 'center',
                 }}>
-                  <div style={{ width: 120, color: '#333', fontWeight: 500 }}>{name}</div>
-                  <div style={{ width: 140, color: PLATFORM_COLOR[srcPlatform]?.color || '#666' }}>
-                    {src?.platform_attr_name || '-'}
+                  <div style={{
+                    width: 140, color: '#333', fontWeight: 500,
+                    overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                  }} title={a.local_attr_name}>
+                    {a.local_attr_name}
                   </div>
-                  <span style={{ color: '#ccc' }}>→</span>
-                  <div style={{ flex: 1, color: dst ? (PLATFORM_COLOR[dp]?.color || '#333') : '#cf1322' }}>
-                    {dst ? dst.platform_attr_name : '未映射'}
-                    {dst && !dst.is_confirmed && <span style={{ color: '#faad14' }}> ⚠</span>}
+                  <span style={{ color: '#ccc', flexShrink: 0 }}>→</span>
+                  <div style={{
+                    flex: 1, color: PLATFORM_COLOR[dp]?.color || '#333',
+                    overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                  }} title={a.platform_attr_name}>
+                    {a.platform_attr_name}
+                  </div>
+                  <div style={{ flexShrink: 0 }}>
+                    {a.is_required ? (
+                      <Tag color="red" style={{ margin: 0, fontSize: 10, padding: '0 3px', lineHeight: '15px' }}>必填</Tag>
+                    ) : null}
+                    {a.is_confirmed ? (
+                      <Tag color="success" style={{ margin: 0, fontSize: 10, padding: '0 3px', lineHeight: '15px' }}>✓</Tag>
+                    ) : (
+                      <Tag color="warning" style={{ margin: 0, fontSize: 10, padding: '0 3px', lineHeight: '15px' }}>AI</Tag>
+                    )}
                   </div>
                 </div>
               ))}
-              {entries.length > 20 && (
-                <div style={{ color: '#999', padding: '4px 0' }}>...还有 {entries.length - 20} 项</div>
+              {dstAttrs.length > 30 && (
+                <div style={{ color: '#999', padding: '4px 0' }}>...还有 {dstAttrs.length - 30} 项</div>
               )}
             </div>
           </div>
@@ -1790,6 +1822,7 @@ const Products = () => {
                     srcPlatform={srcPlatform}
                     dstShopIds={dstIds}
                     shops={shops}
+                    spreadItems={spreadItems}
                   />
                 )
               }}
