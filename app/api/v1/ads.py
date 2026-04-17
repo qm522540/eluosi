@@ -681,13 +681,40 @@ async def campaign_keywords(
     from app.services.platform.wb import WBClient
     client = WBClient(shop_id=shop.id, api_key=shop.api_key)
     try:
-        keywords = await client.fetch_campaign_keywords(
-            advert_id=camp.platform_campaign_id,
-            date_from=date_from.strftime("%Y-%m-%d"),
-            date_to=date_to.strftime("%Y-%m-%d"),
-        )
+        # 并行拉关键词统计 + 活动汇总
+        df = date_from.strftime("%Y-%m-%d")
+        dt = date_to.strftime("%Y-%m-%d")
+        import asyncio as _aio
+        kw_task = client.fetch_campaign_keywords(
+            advert_id=camp.platform_campaign_id, date_from=df, date_to=dt)
+        summary_task = client.fetch_campaign_summary(
+            advert_id=camp.platform_campaign_id, date_from=df, date_to=dt)
+        keywords, summary = await _aio.gather(kw_task, summary_task)
     finally:
         await client.close()
+
+    # 关键词级订单归因估算：按点击占比分摊活动总订单/营收
+    total_clicks = summary.get("clicks", 0)
+    total_orders = summary.get("orders", 0)
+    total_revenue = summary.get("sum_price", 0)
+    total_atbs = summary.get("atbs", 0)
+
+    for kw in keywords:
+        kw_clicks = kw.get("clicks", 0)
+        if total_clicks > 0 and kw_clicks > 0:
+            ratio = kw_clicks / total_clicks
+            kw["est_orders"] = round(total_orders * ratio, 1)
+            kw["est_revenue"] = round(total_revenue * ratio, 2)
+            kw["est_atbs"] = round(total_atbs * ratio, 1)
+            kw_sum = kw.get("sum", 0)
+            kw["est_roas"] = (
+                round(kw["est_revenue"] / kw_sum, 2) if kw_sum > 0 else 0
+            )
+        else:
+            kw["est_orders"] = 0
+            kw["est_revenue"] = 0
+            kw["est_atbs"] = 0
+            kw["est_roas"] = 0
 
     return success({
         "campaign_id": campaign_id,
@@ -695,6 +722,7 @@ async def campaign_keywords(
         "date_to": str(date_to),
         "days": days,
         "total": len(keywords),
+        "summary": summary,
         "keywords": keywords,
     })
 

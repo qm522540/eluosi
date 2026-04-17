@@ -1012,6 +1012,22 @@ const AdsOverview = ({ shopId, platform, shops, searched, syncing, lastSyncTime,
                 sorter: (a, b) => (a.sum||0) - (b.sum||0),
                 defaultSortOrder: 'descend',
                 render: v => v > 0 ? `₽${v.toFixed(2)}` : '-' },
+              { title: <Tooltip title="按点击占比估算（非精确归因）">估算订单</Tooltip>,
+                dataIndex: 'est_orders', key: 'est_orders', width: 90, align: 'right',
+                sorter: (a, b) => (a.est_orders||0) - (b.est_orders||0),
+                render: v => v > 0 ? v.toFixed(1) : '-' },
+              { title: <Tooltip title="按点击占比估算（非精确归因）">估算加购</Tooltip>,
+                dataIndex: 'est_atbs', key: 'est_atbs', width: 90, align: 'right',
+                sorter: (a, b) => (a.est_atbs||0) - (b.est_atbs||0),
+                render: v => v > 0 ? v.toFixed(1) : '-' },
+              { title: <Tooltip title="估算营收 / 花费（按点击占比归因）">估算ROAS</Tooltip>,
+                dataIndex: 'est_roas', key: 'est_roas', width: 100, align: 'right',
+                sorter: (a, b) => (a.est_roas||0) - (b.est_roas||0),
+                render: v => {
+                  if (!v || v <= 0) return '-'
+                  const color = v >= 5 ? '#52c41a' : v >= 3 ? '#faad14' : '#ff4d4f'
+                  return <span style={{ color, fontWeight: 500 }}>{v.toFixed(1)}x</span>
+                }},
             ]}
           />
         </div>

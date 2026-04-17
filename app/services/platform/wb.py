@@ -677,6 +677,48 @@ class WBClient(BasePlatformClient):
 
         return None
 
+    async def fetch_campaign_summary(
+        self, advert_id: str,
+        date_from: str, date_to: str,
+    ) -> dict:
+        """拉活动汇总统计（fullstats 顶层字段）
+
+        返回: {views, clicks, orders, atbs, sum, sum_price, cpc, ctr, cr}
+        用于关键词级订单归因估算（按点击占比分摊活动总订单）。
+        """
+        try:
+            url = f"{WB_ADVERT_API}/adv/v3/fullstats"
+            result = await self._request(
+                "GET", url,
+                params={"ids": str(advert_id), "beginDate": date_from, "endDate": date_to},
+            )
+        except Exception as e:
+            logger.warning(f"WB fullstats 失败 advert={advert_id}: {e}")
+            return {}
+
+        if not result:
+            return {}
+
+        # v3 返回 list，取第一个活动的顶层汇总
+        if isinstance(result, list) and result:
+            top = result[0]
+        elif isinstance(result, dict):
+            top = result
+        else:
+            return {}
+
+        return {
+            "views": int(top.get("views") or 0),
+            "clicks": int(top.get("clicks") or 0),
+            "orders": int(top.get("orders") or 0),
+            "atbs": int(top.get("atbs") or 0),
+            "sum": float(top.get("sum") or 0),
+            "sum_price": float(top.get("sum_price") or 0),
+            "cpc": float(top.get("cpc") or 0),
+            "ctr": float(top.get("ctr") or 0),
+            "cr": float(top.get("cr") or 0),
+        }
+
     async def fetch_campaign_keywords(
         self, advert_id: str,
         date_from: Optional[str] = None,
