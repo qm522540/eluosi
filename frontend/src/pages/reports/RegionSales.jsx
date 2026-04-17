@@ -141,7 +141,11 @@ const RegionSales = () => {
             { title: 'SKU', dataIndex: 'sa', width: 120,
               render: (sa, r) => <Text code style={{ fontSize: 11 }}>{sa || r.nm_id}</Text> },
             { title: '商品', dataIndex: 'name_zh', ellipsis: true,
-              render: (v, r) => v || <Text type="secondary">WB nm_id: {r.nm_id}</Text> },
+              render: (v, r) => v || (
+                <Text type="secondary">
+                  {shopPlatform === 'ozon' ? 'Ozon sku_id' : 'WB nm_id'}: {r.nm_id}
+                </Text>
+              ) },
             { title: '订单', dataIndex: 'orders', width: 70, align: 'right' },
             { title: '销售额', dataIndex: 'revenue', width: 100, align: 'right',
               render: v => `${Number(v).toLocaleString()} ₽` },
@@ -486,6 +490,20 @@ const RegionSales = () => {
               <Text type="secondary" style={{ fontWeight: 400, fontSize: 13 }}>
                 {rankingData?.date_from} ~ {rankingData?.date_to}
               </Text>
+              {shopPlatform && (
+                <Tooltip title={
+                  shopPlatform === 'wb'
+                    ? 'WB region-sale API 以联邦主体（州/共和国/边疆区）为单位聚合，如"莫斯科州""鞑靼斯坦"'
+                    : shopPlatform === 'ozon'
+                      ? 'Ozon posting API 以城市为单位聚合（如"莫斯科""圣彼得堡"），粒度比 WB 更细；同一联邦主体内多个城市会拆成多行'
+                      : ''
+                }>
+                  <Tag color={shopPlatform === 'wb' ? 'blue' : 'cyan'} style={{ fontWeight: 400 }}>
+                    {shopPlatform === 'wb' ? '按联邦主体' : '按城市'}
+                    <InfoCircleOutlined style={{ marginLeft: 4, color: '#999' }} />
+                  </Tag>
+                </Tooltip>
+              )}
             </Space>
           }
           extra={
@@ -509,7 +527,7 @@ const RegionSales = () => {
             loading={loading}
             expandable={{
               expandedRowRender: renderRegionDetail,
-              rowExpandable: r => shopPlatform === 'wb' && r.orders > 0,
+              rowExpandable: r => ['wb', 'ozon'].includes(shopPlatform) && r.orders > 0,
               onExpand: (expanded, r) => { if (expanded) loadRegionDetail(r.region_name) },
             }}
             pagination={items.length > 20 ? { pageSize: 20, showTotal: t => `共 ${t} 个地区` } : false}
