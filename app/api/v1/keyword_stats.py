@@ -210,6 +210,28 @@ async def keyword_campaigns(
                             "spend": float(sr.sp or 0),
                         }
 
+                # 批量查 nm_id → SKU(卖家编码) + 中文名
+                from app.models.product import PlatformListing, Product
+                nm_product_info = {}
+                if nm_ids:
+                    listing_rows = db.query(
+                        PlatformListing.platform_product_id,
+                        PlatformListing.product_id,
+                    ).filter(
+                        PlatformListing.shop_id == shop.id,
+                        PlatformListing.platform == "wb",
+                        PlatformListing.platform_product_id.in_([str(n) for n in nm_ids]),
+                    ).all()
+                    pid_map = {r.platform_product_id: r.product_id for r in listing_rows}
+                    if pid_map:
+                        prod_rows = db.query(
+                            Product.id, Product.sku, Product.name_zh,
+                        ).filter(Product.id.in_(list(pid_map.values()))).all()
+                        prod_info = {r.id: {"sku": r.sku, "name_zh": r.name_zh} for r in prod_rows}
+                        for pp_id, prod_id in pid_map.items():
+                            info = prod_info.get(prod_id, {})
+                            nm_product_info[int(pp_id)] = info
+
                 products = []
                 kw_lower = keyword.lower().strip()
                 for p in prods:
@@ -218,16 +240,15 @@ async def keyword_campaigns(
                         continue
                     ex_words = excluded.get(nm, [])
                     is_exc = kw_lower in [w.lower().strip() for w in ex_words]
-                    s = nm_stats.get(nm, {})
+                    pinfo = nm_product_info.get(nm, {})
                     products.append({
                         "nm_id": nm,
                         "name": p.get("subject_name", ""),
+                        "sku": pinfo.get("sku", ""),
+                        "name_zh": pinfo.get("name_zh", ""),
                         "is_excluded": is_exc,
-                        "impressions": s.get("impressions", 0),
-                        "clicks": s.get("clicks", 0),
-                        "spend": s.get("spend", 0),
                     })
-                products.sort(key=lambda x: (x["is_excluded"], -x["spend"]))
+                products.sort(key=lambda x: (x["is_excluded"], x["nm_id"]))
                 entry["products"] = products
             except Exception as e:
                 logger.warning(f"查活动 {camp.id} 商品失败: {e}")

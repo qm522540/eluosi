@@ -713,10 +713,16 @@ const KeywordStats = () => {
                               opacity: isExcluded ? 0.5 : 1,
                             }}>
                               <div style={{ flex: 1 }}>
-                                <Text style={{ fontSize: 13, fontWeight: 500 }}>{nmId}</Text>
-                                {name && (
-                                  <Text style={{ marginLeft: 8, fontSize: 12, color: '#666' }}>{name}</Text>
-                                )}
+                                <div>
+                                  <Text style={{ fontSize: 13, fontWeight: 500 }}>商品ID: {nmId}</Text>
+                                  {p.sku && (
+                                    <Text style={{ marginLeft: 10, fontSize: 12, color: '#1677ff' }}>SKU: {p.sku}</Text>
+                                  )}
+                                </div>
+                                <div style={{ fontSize: 11, color: '#888', marginTop: 1 }}>
+                                  {p.name_zh && <span style={{ color: '#333', marginRight: 8 }}>{p.name_zh}</span>}
+                                  {name && <span>{name}</span>}
+                                </div>
                               </div>
                               <Space size={6}>
                                 {!isExcluded && kwDetailEfficiency === 'waste' && (
