@@ -446,6 +446,30 @@ def _load_platform_category_map(db: Session, tenant_id: int, platform: str) -> d
     return {str(r.platform_category_id): r.local_category_id for r in rows}
 
 
+def _flatten_ozon_category_tree(tree: list) -> dict:
+    """把 Ozon 分类树压平为 {(description_category_id, type_id): "面包屑名称"}。
+    叶子节点才含 type_id；用 (desc_cat_id, type_id) 双键唯一标识。
+    """
+    result: dict = {}
+
+    def _walk(nodes, trail):
+        for n in nodes or []:
+            if not isinstance(n, dict):
+                continue
+            desc_cat_id = n.get("description_category_id")
+            type_id = n.get("type_id")
+            name = n.get("category_name") or n.get("type_name") or ""
+            new_trail = trail + [name] if name else trail
+            if desc_cat_id is not None and type_id is not None:
+                result[(int(desc_cat_id), int(type_id))] = " / ".join(new_trail)
+            children = n.get("children") or []
+            if children:
+                _walk(children, new_trail)
+
+    _walk(tree, [])
+    return result
+
+
 def sync_products_from_platform(db: Session, shop_id: int, tenant_id: int) -> dict:
     from app.models.shop import Shop
     shop = db.query(Shop).filter(
@@ -624,19 +648,32 @@ def _sync_ozon_products(db: Session, shop, tenant_id: int) -> dict:
                 it["product_id"]: (it.get("has_fbo_stocks") or it.get("has_fbs_stocks"))
                 for it in all_items
             }
-            infos = []
-            for i in range(0, len(product_ids), 500):
-                chunk = product_ids[i:i + 500]
-                infos.extend(await client.fetch_product_info(chunk))
-            return infos, archived_map, stock_map
+            # 并行：info 拉详情 + 分类树（名称反查用）
+            info_task = asyncio.gather(*[
+                client.fetch_product_info(product_ids[i:i + 500])
+                for i in range(0, len(product_ids), 500)
+            ])
+            tree_task = client.fetch_category_tree()
+            info_chunks, tree = await asyncio.gather(
+                info_task, tree_task, return_exceptions=True,
+            )
+            if isinstance(info_chunks, Exception):
+                raise info_chunks
+            if isinstance(tree, Exception):
+                logger.warning(f"Ozon 分类树拉取失败 shop={shop.id}: {tree}")
+                tree = []
+            infos = [it for chunk in info_chunks for it in chunk]
+            return infos, archived_map, stock_map, tree
         finally:
             await client.close()
 
     loop = asyncio.new_event_loop()
     try:
-        infos, archived_map, stock_map = loop.run_until_complete(_fetch_all())
+        infos, archived_map, stock_map, tree = loop.run_until_complete(_fetch_all())
     finally:
         loop.close()
+
+    cat_name_map = _flatten_ozon_category_tree(tree)  # {(desc_cat_id, type_id): name}
 
     cat_map = _load_platform_category_map(db, tenant_id, "ozon")  # description_category_id → local_category_id
     synced = created = updated = 0
@@ -674,10 +711,17 @@ def _sync_ozon_products(db: Session, shop, tenant_id: int) -> dict:
         title = (p.get("name") or "")[:500]
         price = _to_float(p.get("price"))
         old_price = _to_float(p.get("old_price"))
-        # Ozon v3 info/list 分类字段：优先 description_category_id
-        category_id = p.get("description_category_id") or p.get("type_id")
-        category_id_str = str(category_id) if category_id else None
+        # Ozon v3 info/list 分类字段：description_category_id + type_id 双 ID
+        desc_cat_id = p.get("description_category_id")
+        type_id = p.get("type_id")
+        category_id_str = str(desc_cat_id) if desc_cat_id else (
+            str(type_id) if type_id else None)
+        type_id_str = str(type_id) if type_id else None
         local_cat_id = cat_map.get(category_id_str) if category_id_str else None
+        # 从分类树反查面包屑名称（info/list 不返回）
+        category_name = None
+        if desc_cat_id and type_id:
+            category_name = cat_name_map.get((int(desc_cat_id), int(type_id)))
 
         # OZON 的 sku_id（广告 API 返回的 sku 字段），与 product_id 是两套 ID
         ozon_sku = p.get("sku")
@@ -696,7 +740,8 @@ def _sync_ozon_products(db: Session, shop, tenant_id: int) -> dict:
             "stock_updated_at": datetime.now(timezone.utc),
             "platform_sku_id": str(ozon_sku) if ozon_sku else None,
             "platform_category_id": category_id_str,
-            # OZON info/list 不返回分类名称，此字段留空，init-from-ozon 里从分类树反查
+            "platform_category_name": category_name[:300] if category_name else None,
+            "platform_category_extra_id": type_id_str,
             "status": status,
         }
 

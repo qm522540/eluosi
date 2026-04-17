@@ -47,6 +47,7 @@ class PlatformListing(BaseMixin, Base):
     platform_sku_id: Mapped[Optional[str]] = mapped_column(String(100), nullable=True, comment="OZON sku_id / WB nm_id（广告 API 返回的 sku）")
     platform_category_id: Mapped[Optional[str]] = mapped_column(String(100), nullable=True, comment="平台分类ID")
     platform_category_name: Mapped[Optional[str]] = mapped_column(String(300), nullable=True, comment="平台分类名称")
+    platform_category_extra_id: Mapped[Optional[str]] = mapped_column(String(100), nullable=True, comment="Ozon=type_id, WB/Yandex 为空")
     barcode: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
     title_ru: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
     description_ru: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
