@@ -10,6 +10,7 @@ from app.schemas.category_mapping import (
     AttributeMappingCreate, AttributeMappingUpdate,
     AttributeValueMappingCreate, AttributeValueMappingUpdate,
     AISuggestCategoryRequest, AISuggestAttributesRequest, AISuggestValuesRequest,
+    AdoptCrossPlatformSuggestionRequest,
     InitFromWBRequest, MatchOzonRequest, InitFromOzonRequest,
 )
 from app.services.category_mapping.service import (
@@ -17,6 +18,7 @@ from app.services.category_mapping.service import (
     create_local_category, update_local_category, delete_local_category,
     list_category_mappings, upsert_category_mapping,
     confirm_category_mapping, delete_category_mapping,
+    list_cross_platform_suggestions, adopt_cross_platform_suggestion,
     list_attribute_mappings, upsert_attribute_mapping,
     confirm_attribute_mapping, delete_attribute_mapping,
     list_attribute_value_mappings, upsert_attribute_value_mapping,
@@ -150,6 +152,43 @@ def category_mapping_delete(
     if result["code"] != 0:
         return error(result["code"], result["msg"])
     return success(msg="映射已删除")
+
+
+# ==================== 跨平台建议（全局 hints 驱动） ====================
+
+@router.get("/cross-platform-suggestions")
+def cross_platform_suggestions(
+    local_category_id: int = Query(...),
+    db: Session = Depends(get_db),
+    tenant_id: int = Depends(get_tenant_id),
+):
+    """对某本地分类查"其他平台还没绑、但别的租户常绑"的建议
+
+    前置：该 local_cat 至少有一个平台映射（否则无从推断）
+    返回: {items: [{target_platform, target_platform_category_id,
+                    target_platform_category_name_ru, co_confirmed_count,
+                    source_platform, source_platform_category_id, ...}]}
+    """
+    result = list_cross_platform_suggestions(db, tenant_id, local_category_id)
+    if result["code"] != 0:
+        return error(result["code"], result["msg"])
+    return success(result["data"])
+
+
+@router.post("/cross-platform-suggestions/adopt")
+def cross_platform_suggestion_adopt(
+    req: AdoptCrossPlatformSuggestionRequest,
+    db: Session = Depends(get_db),
+    tenant_id: int = Depends(get_tenant_id),
+):
+    """采纳一条跨平台建议，创建 is_confirmed=0 的待确认映射"""
+    result = adopt_cross_platform_suggestion(
+        db, tenant_id,
+        req.local_category_id, req.target_platform, req.target_platform_category_id,
+    )
+    if result["code"] != 0:
+        return error(result["code"], result["msg"])
+    return success(result["data"], msg="已采纳建议，请在列表中确认")
 
 
 # ==================== 属性映射 ====================

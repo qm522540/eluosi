@@ -230,6 +230,70 @@ def confirm_category_mapping(db: Session, tenant_id: int, mapping_id: int, data:
         return {"code": ErrorCode.UNKNOWN_ERROR, "msg": "确认品类映射失败"}
 
 
+def list_cross_platform_suggestions(db: Session, tenant_id: int, local_category_id: int) -> dict:
+    """查"此本地分类还没绑、但其他租户常绑"的跨平台建议"""
+    from app.services.global_hints.service import get_cross_platform_suggestions
+    try:
+        items = get_cross_platform_suggestions(db, tenant_id, local_category_id)
+        return {"code": 0, "data": {"items": items}}
+    except Exception as e:
+        logger.error(f"查询跨平台建议失败: {e}")
+        return {"code": ErrorCode.UNKNOWN_ERROR, "msg": "查询跨平台建议失败"}
+
+
+def adopt_cross_platform_suggestion(
+    db: Session, tenant_id: int, local_category_id: int,
+    target_platform: str, target_platform_category_id: str,
+) -> dict:
+    """采纳跨平台建议：用全局 hint 中的名称创建一条 is_confirmed=0 的待确认映射
+
+    幂等：若目标平台已有映射 → 返回 PARAM_ERROR，让前端引导用户走"修改"
+    限制：Ozon 的 type_id 我们不存 cross hint，所以 platform_category_extra_id 留空，
+    用户确认前可编辑补上（编辑 Modal 已支持）
+    """
+    from app.models.global_hints import GlobalCategoryHint
+    try:
+        local_cat = db.query(LocalCategory).filter(
+            LocalCategory.id == local_category_id,
+            LocalCategory.tenant_id == tenant_id,
+        ).first()
+        if not local_cat:
+            return {"code": ErrorCode.PARAM_ERROR, "msg": "本地分类不存在"}
+
+        existing = db.query(CategoryPlatformMapping).filter(
+            CategoryPlatformMapping.tenant_id == tenant_id,
+            CategoryPlatformMapping.local_category_id == local_category_id,
+            CategoryPlatformMapping.platform == target_platform,
+        ).first()
+        if existing:
+            return {"code": ErrorCode.PARAM_ERROR, "msg": "该平台已有映射，请直接编辑或删除后重试"}
+
+        name_row = db.query(GlobalCategoryHint).filter(
+            GlobalCategoryHint.platform == target_platform,
+            GlobalCategoryHint.platform_category_id == str(target_platform_category_id),
+        ).first()
+        platform_category_name = name_row.platform_category_name_ru if name_row else None
+
+        mapping = CategoryPlatformMapping(
+            tenant_id=tenant_id,
+            local_category_id=local_category_id,
+            platform=target_platform,
+            platform_category_id=str(target_platform_category_id),
+            platform_category_name=platform_category_name,
+            ai_suggested=0,
+            ai_confidence=0,
+            is_confirmed=0,
+        )
+        db.add(mapping)
+        db.commit()
+        db.refresh(mapping)
+        return {"code": 0, "data": _cat_mapping_to_dict(mapping)}
+    except Exception as e:
+        db.rollback()
+        logger.error(f"采纳跨平台建议失败: {e}")
+        return {"code": ErrorCode.UNKNOWN_ERROR, "msg": "采纳跨平台建议失败"}
+
+
 def delete_category_mapping(db: Session, tenant_id: int, mapping_id: int) -> dict:
     try:
         mapping = db.query(CategoryPlatformMapping).filter(

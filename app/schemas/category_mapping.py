@@ -112,6 +112,13 @@ class AISuggestValuesRequest(BaseModel):
     shop_id: int
 
 
+class AdoptCrossPlatformSuggestionRequest(BaseModel):
+    """采纳跨平台建议创建映射"""
+    local_category_id: int
+    target_platform: str = Field(..., pattern="^(wb|ozon|yandex)$")
+    target_platform_category_id: str
+
+
 class InitFromWBRequest(BaseModel):
     """从 WB 店铺初始化本地分类+属性+枚举值"""
     shop_id: int

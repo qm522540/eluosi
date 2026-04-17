@@ -172,6 +172,64 @@ def get_cross_platform_hint(
     }
 
 
+def get_cross_platform_suggestions(
+    db: Session, tenant_id: int, local_category_id: int,
+    supported_platforms: tuple = ("wb", "ozon"),
+) -> list:
+    """对某本地分类，找出"其他租户绑了但当前租户还没绑"的平台建议
+
+    算法：
+    1. 查该 local_cat 当前已有的平台映射（不必 is_confirmed，已是本租户意图）
+    2. 对每个 supported_platforms 里"未覆盖"的目标平台 T：
+       - 对每个已覆盖的源平台 S 的 mapping，查 S→T 的 cross hint
+       - 取 co_confirmed_count 最大的那一条作为 T 的 top1 建议
+    3. name 补全：GlobalCategoryHint 查 target 平台+id 的俄文名/中文建议名
+    """
+    existing = db.query(CategoryPlatformMapping).filter(
+        CategoryPlatformMapping.tenant_id == tenant_id,
+        CategoryPlatformMapping.local_category_id == local_category_id,
+    ).all()
+    if not existing:
+        return []
+
+    covered = {m.platform for m in existing}
+    suggestions = []
+    for target in supported_platforms:
+        if target in covered:
+            continue
+        best = None  # (co_count, source_mapping, target_id)
+        for src in existing:
+            hint = get_cross_platform_hint(
+                db, src.platform, str(src.platform_category_id), target,
+            )
+            if not hint:
+                continue
+            if best is None or hint["co_confirmed_count"] > best[0]:
+                best = (hint["co_confirmed_count"], src, hint["target_category_id"])
+        if best is None:
+            continue
+        count, src_mapping, target_id = best
+        target_name_row = db.query(GlobalCategoryHint).filter(
+            GlobalCategoryHint.platform == target,
+            GlobalCategoryHint.platform_category_id == str(target_id),
+        ).first()
+        suggestions.append({
+            "target_platform": target,
+            "target_platform_category_id": target_id,
+            "target_platform_category_name_ru": (
+                target_name_row.platform_category_name_ru if target_name_row else None
+            ),
+            "target_suggested_local_name_zh": (
+                target_name_row.suggested_local_name_zh if target_name_row else None
+            ),
+            "co_confirmed_count": count,
+            "source_platform": src_mapping.platform,
+            "source_platform_category_id": src_mapping.platform_category_id,
+            "source_platform_category_name": src_mapping.platform_category_name,
+        })
+    return suggestions
+
+
 def get_attribute_hint(
     db: Session, platform: str, platform_attr_id: str,
 ) -> Optional[dict]:
