@@ -25,6 +25,14 @@ export function updateProductMargin(id, netMargin) {
   return request.patch(`/products/${id}/margin`, { net_margin: netMargin })
 }
 
+/** 把成本/毛利复制到同 SKU 其他店铺 */
+export function copyCostToOtherShops(id, { fields, target_shop_ids } = {}) {
+  return request.post(`/products/${id}/copy-cost-to-other-shops`, {
+    fields: fields || null,
+    target_shop_ids: target_shop_ids || null,
+  })
+}
+
 /** 删除商品 */
 export function deleteProduct(id) {
   return request.delete(`/products/${id}`)

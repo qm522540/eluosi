@@ -13,6 +13,7 @@ import {
   updateProductMargin, generateDescription, optimizeTitle,
   spreadProducts, getSpreadRecords, updateProduct, updateListing,
   downloadProductImages, getProductPlatformAttributes,
+  copyCostToOtherShops,
 } from '@/api/products'
 import { getShops } from '@/api/shops'
 import {
@@ -125,8 +126,9 @@ const AISuggestionCard = ({ color, platform, text, onRegenerate, regenerating, o
 
 // ========== 实时毛利率块（按表单成本 + 平台销售价 + 佣金实时计算） ==========
 
-const RealtimeMarginBlock = ({ form, listing }) => {
+const RealtimeMarginBlock = ({ form, listing, productId, sku, onCopied }) => {
   const costPrice = Form.useWatch('cost_price', form)
+  const [copying, setCopying] = useState(false)
   const salePrice = Number(listing?.discount_price || listing?.price) || 0
   const commissionPct = Number(listing?.commission_rate) || 0  // 佣金率（%）
 
@@ -134,6 +136,35 @@ const RealtimeMarginBlock = ({ form, listing }) => {
 
   const hasCost = costPrice != null && costPrice !== '' && Number(costPrice) > 0
   const hasSale = salePrice > 0
+
+  const handleCopy = async () => {
+    if (!productId) return
+    Modal.confirm({
+      title: `复制成本 / 毛利到同 SKU 其他店铺?`,
+      content: `将把当前商品（SKU: ${sku || '-'}) 的成本价、净毛利率复制到同租户下其他店铺的同名 SKU 商品。先保存当前编辑再复制。`,
+      okText: '确认复制',
+      cancelText: '取消',
+      onOk: async () => {
+        setCopying(true)
+        try {
+          const res = await copyCostToOtherShops(productId, {
+            fields: ['cost_price', 'net_margin'],
+          })
+          const n = res.data?.copied ?? 0
+          if (n === 0) {
+            message.info('未找到同 SKU 的其他店铺商品')
+          } else {
+            message.success(`已复制到 ${n} 个店铺`)
+            onCopied?.()
+          }
+        } catch (e) {
+          message.error(e?.response?.data?.msg || '复制失败')
+        } finally {
+          setCopying(false)
+        }
+      },
+    })
+  }
 
   let content
   if (!hasSale) {
@@ -167,8 +198,22 @@ const RealtimeMarginBlock = ({ form, listing }) => {
       background: '#f6ffed', border: '1px solid #d9f7be',
       borderRadius: 8,
     }}>
-      <div style={{ fontSize: 11, color: '#52c41a', marginBottom: 4, fontWeight: 500 }}>
-        实时毛利率（当前平台销售价 − 成本 − 佣金）
+      <div style={{
+        display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+        marginBottom: 4,
+      }}>
+        <div style={{ fontSize: 11, color: '#52c41a', fontWeight: 500 }}>
+          实时毛利率（当前平台销售价 − 成本 − 佣金）
+        </div>
+        <Tooltip title="把当前商品的成本价+净毛利率复制到同 SKU 其他店铺">
+          <Button
+            size="small" type="link" loading={copying}
+            disabled={!hasCost || !productId}
+            onClick={handleCopy}
+          >
+            复制到其他店铺
+          </Button>
+        </Tooltip>
       </div>
       <div>{content}</div>
     </div>
@@ -1532,7 +1577,13 @@ const Products = () => {
               </Row>
 
               {/* 实时毛利率（按成本 + 销售价 + 佣金实时计算） */}
-              <RealtimeMarginBlock form={editForm} listing={editingProduct?.listings?.[0]} />
+              <RealtimeMarginBlock
+                form={editForm}
+                listing={editingProduct?.listings?.[0]}
+                productId={editingProduct?.id}
+                sku={editingProduct?.sku}
+                onCopied={fetchProducts}
+              />
 
               <Row gutter={16}>
                 <Col span={8}>
