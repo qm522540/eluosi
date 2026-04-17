@@ -14,6 +14,7 @@ import {
   deleteCategoryMapping,
   listCrossPlatformSuggestions,
   adoptCrossPlatformSuggestion,
+  getCategoryHintPreview,
 } from '@/api/mapping'
 import ConfidenceBadge from './ConfidenceBadge'
 
@@ -357,41 +358,137 @@ const CategoryMappingTab = ({ localCategoryId, localCategoryName, aiSlot = null 
         confirmLoading={saving}
         destroyOnClose
       >
-        <Form form={form} layout="vertical" preserve={false}>
-          <Form.Item name="platform" label="平台" rules={[{ required: true }]}>
-            <Select
-              disabled={editing?.mode === 'edit'}
-              options={[
-                { value: 'wb', label: 'Wildberries' },
-                { value: 'ozon', label: 'Ozon' },
-              ]}
-            />
-          </Form.Item>
-          <Form.Item
-            name="platform_category_id"
-            label="平台分类 ID"
-            rules={[{ required: true, message: '平台分类 ID 必填' }]}
-          >
-            <Input placeholder="如：123（WB subjectID / Ozon type_id）" />
-          </Form.Item>
-          <Form.Item
-            name="platform_category_name"
-            label="平台分类名"
-            rules={[{ required: true, message: '平台分类名必填' }]}
-          >
-            <Input placeholder="如：Ожерелья" />
-          </Form.Item>
-          <Form.Item name="platform_parent_path" label="面包屑（可选）">
-            <Input placeholder="如：Украшения > Ожерелья" />
-          </Form.Item>
-          {editing?.mode === 'edit' && (
-            <Text type="secondary" style={{ fontSize: 12 }}>
-              注：修改保存后会自动置为"已确认"状态
-            </Text>
-          )}
-        </Form>
+        <CategoryMappingForm form={form} isEdit={editing?.mode === 'edit'} />
       </Modal>
     </div>
+  )
+}
+
+// 带 debounce hint 预览的表单体
+const CategoryMappingForm = ({ form, isEdit }) => {
+  const platform = Form.useWatch('platform', form)
+  const categoryId = Form.useWatch('platform_category_id', form)
+  const [hintData, setHintData] = useState(null)
+  const [hintLoading, setHintLoading] = useState(false)
+
+  useEffect(() => {
+    if (!platform || !categoryId || String(categoryId).trim().length === 0) {
+      setHintData(null)
+      return undefined
+    }
+    const trimmed = String(categoryId).trim()
+    setHintLoading(true)
+    const timer = setTimeout(async () => {
+      try {
+        const res = await getCategoryHintPreview(platform, trimmed)
+        setHintData(res.data || null)
+      } catch {
+        setHintData(null)
+      } finally {
+        setHintLoading(false)
+      }
+    }, 500)
+    return () => {
+      clearTimeout(timer)
+      setHintLoading(false)
+    }
+  }, [platform, categoryId])
+
+  const useSuggestedName = () => {
+    if (hintData?.hint?.platform_category_name_ru) {
+      form.setFieldsValue({ platform_category_name: hintData.hint.platform_category_name_ru })
+    }
+  }
+
+  const hint = hintData?.hint
+  const crossHints = hintData?.cross_hints || []
+  const hasAny = !!hint || crossHints.length > 0
+
+  return (
+    <Form form={form} layout="vertical" preserve={false}>
+      <Form.Item name="platform" label="平台" rules={[{ required: true }]}>
+        <Select
+          disabled={isEdit}
+          options={[
+            { value: 'wb', label: 'Wildberries' },
+            { value: 'ozon', label: 'Ozon' },
+          ]}
+        />
+      </Form.Item>
+      <Form.Item
+        name="platform_category_id"
+        label="平台分类 ID"
+        rules={[{ required: true, message: '平台分类 ID 必填' }]}
+        extra={hintLoading ? <Text type="secondary" style={{ fontSize: 12 }}>查询全局建议中...</Text> : null}
+      >
+        <Input placeholder="如：123（WB subjectID / Ozon type_id）" />
+      </Form.Item>
+
+      {hasAny && (
+        <Alert
+          type="info"
+          showIcon
+          icon={<StarFilled style={{ color: '#faad14' }} />}
+          style={{ marginBottom: 12 }}
+          message={<Text strong style={{ fontSize: 13 }}>全局建议</Text>}
+          description={
+            <Space direction="vertical" size={4} style={{ width: '100%' }}>
+              {hint && (
+                <div>
+                  <Text>
+                    此分类已被 <Text strong>{hint.total_confirmed_count}</Text> 个租户确认使用
+                  </Text>
+                  {hint.platform_category_name_ru && (
+                    <Text type="secondary" style={{ fontSize: 12, marginLeft: 8 }}>
+                      俄文名：{hint.platform_category_name_ru}
+                    </Text>
+                  )}
+                  {hint.suggested_local_name_zh && (
+                    <Text type="secondary" style={{ fontSize: 12, marginLeft: 8 }}>
+                      常用本地名：{hint.suggested_local_name_zh}
+                    </Text>
+                  )}
+                  {hint.platform_category_name_ru && (
+                    <Button
+                      size="small"
+                      type="link"
+                      style={{ padding: 0, marginLeft: 8 }}
+                      onClick={useSuggestedName}
+                    >
+                      用此俄文名填入
+                    </Button>
+                  )}
+                </div>
+              )}
+              {crossHints.map((c) => (
+                <div key={`${c.target_platform}:${c.target_platform_category_id}`}>
+                  <Text type="secondary" style={{ fontSize: 12 }}>
+                    常与 {PLATFORM_LABEL[c.target_platform]}「{c.target_platform_category_name_ru || `ID ${c.target_platform_category_id}`}」
+                    （ID {c.target_platform_category_id}）同时绑定 —— {c.co_confirmed_count} 个租户确认
+                  </Text>
+                </div>
+              ))}
+            </Space>
+          }
+        />
+      )}
+
+      <Form.Item
+        name="platform_category_name"
+        label="平台分类名"
+        rules={[{ required: true, message: '平台分类名必填' }]}
+      >
+        <Input placeholder="如：Ожерелья" />
+      </Form.Item>
+      <Form.Item name="platform_parent_path" label="面包屑（可选）">
+        <Input placeholder="如：Украшения > Ожерелья" />
+      </Form.Item>
+      {isEdit && (
+        <Text type="secondary" style={{ fontSize: 12 }}>
+          注：修改保存后会自动置为"已确认"状态
+        </Text>
+      )}
+    </Form>
   )
 }
 

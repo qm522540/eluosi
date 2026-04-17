@@ -53,6 +53,13 @@ export function adoptCrossPlatformSuggestion(data) {
   return request.post(`${BASE}/cross-platform-suggestions/adopt`, data)
 }
 
+// 手动添加品类映射 Modal 里 debounce 用 —— 返回单平台 hint + 跨平台 hint 集合
+export function getCategoryHintPreview(platform, platformCategoryId) {
+  return request.get(`${BASE}/category-hint`, {
+    params: { platform, platform_category_id: platformCategoryId },
+  })
+}
+
 // ========== §5 属性映射 ==========
 
 export function listAttributeMappings(params = {}) {
