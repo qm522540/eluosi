@@ -483,15 +483,14 @@ const KeywordStats = () => {
             <Space>
               <Select
                 size="small"
-                style={{ width: 100 }}
-                placeholder="搜索"
+                style={{ width: 140 }}
+                placeholder="搜索关键词"
                 allowClear
                 showSearch
                 value={keywordSearch || undefined}
                 onChange={v => { setKeywordSearch(v || ''); setPage(1) }}
                 onSearch={v => { setKeywordSearch(v || ''); setPage(1) }}
                 open={false}
-                placeholder="搜索关键词"
               />
               <Button size="small" icon={<DownloadOutlined />} disabled>导出 Excel</Button>
             </Space>
