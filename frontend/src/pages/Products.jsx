@@ -470,8 +470,11 @@ const Products = () => {
       await spreadProducts({
         src_listing_ids: spreadItems.map(l => l.id),
         dst_shop_ids: values.dst_shop_ids,
-        price_mode: values.price_mode || 'original',
+        price_mode: values.price_mode || 'auto',
         manual_price: values.manual_price,
+        commission_wb: values.commission_wb,
+        commission_ozon: values.commission_ozon,
+        commission_yandex: values.commission_yandex,
         ai_rewrite_title: values.ai_rewrite_title || false,
         ai_rewrite_desc: values.ai_rewrite_desc || false,
         use_oss_images: values.use_oss_images || false,
@@ -1292,7 +1295,10 @@ const Products = () => {
             <Form
               form={spreadForm} layout="vertical"
               initialValues={{
-                price_mode: 'original',
+                price_mode: 'auto',
+                commission_wb: 15,
+                commission_ozon: 12,
+                commission_yandex: 10,
                 ai_rewrite_title: true,
                 ai_rewrite_desc: true,
                 use_oss_images: true,
@@ -1335,41 +1341,68 @@ const Products = () => {
               <Divider style={{ margin: '8px 0 16px' }} />
 
               <SectionTitle>价格策略</SectionTitle>
-              <Row gutter={16}>
-                <Col span={12}>
-                  <Form.Item name="price_mode" label="价格模式">
-                    <Select>
-                      <Option value="original">原价复制（使用源店铺售价）</Option>
-                      <Option value="auto">按目标平台佣金自动调整</Option>
-                      <Option value="manual">手动设置目标价</Option>
-                    </Select>
-                  </Form.Item>
-                </Col>
-                <Col span={12}>
-                  <Form.Item noStyle shouldUpdate={(p, c) => p.price_mode !== c.price_mode}>
-                    {({ getFieldValue }) =>
-                      getFieldValue('price_mode') === 'manual' ? (
-                        <Form.Item name="manual_price" label="目标价"
-                          rules={[{ required: true, message: '请填目标价' }]}>
-                          <InputNumber min={1} style={{ width: '100%' }} addonBefore="₽" />
-                        </Form.Item>
-                      ) : (
-                        <Form.Item label=" " colon={false}>
-                          <div style={{
-                            padding: '6px 10px', fontSize: 12,
-                            color: '#666', background: '#fafafa',
-                            border: '1px solid #f0f0f0', borderRadius: 4,
-                          }}>
-                            {getFieldValue('price_mode') === 'auto'
-                              ? '按目标平台实时佣金率（按品类浮动）折算，保持毛利相同'
-                              : '直接复用源店铺当前售价'}
-                          </div>
-                        </Form.Item>
-                      )
-                    }
-                  </Form.Item>
-                </Col>
-              </Row>
+              <Form.Item name="price_mode" label="价格模式">
+                <Select>
+                  <Option value="auto">按目标平台佣金自动调整（推荐）</Option>
+                  <Option value="original">原价复制（使用源店铺售价）</Option>
+                  <Option value="manual">手动设置目标价</Option>
+                </Select>
+              </Form.Item>
+              <Form.Item noStyle shouldUpdate={(p, c) => p.price_mode !== c.price_mode}>
+                {({ getFieldValue }) => {
+                  const mode = getFieldValue('price_mode')
+                  if (mode === 'auto') return (
+                    <Card size="small" style={{ marginBottom: 16, background: '#fafbff', borderColor: '#e6edff' }}>
+                      <div style={{ fontSize: 12, color: '#666', marginBottom: 10 }}>
+                        填入各平台佣金比例，系统按「保持毛利相同」原则自动折算目标售价。
+                        佣金率按品类不同浮动（WB 4-25% / OZON 5-20% / Yandex 3-15%），请填你店铺实际类目的佣金
+                      </div>
+                      <Row gutter={12}>
+                        <Col span={8}>
+                          <Form.Item name="commission_wb" label={
+                            <span style={{ color: PLATFORM_COLOR.wb.color }}>WB 佣金</span>
+                          } style={{ marginBottom: 0 }}>
+                            <InputNumber min={0} max={50} step={0.5}
+                              style={{ width: '100%' }} addonAfter="%" />
+                          </Form.Item>
+                        </Col>
+                        <Col span={8}>
+                          <Form.Item name="commission_ozon" label={
+                            <span style={{ color: PLATFORM_COLOR.ozon.color }}>OZON 佣金</span>
+                          } style={{ marginBottom: 0 }}>
+                            <InputNumber min={0} max={50} step={0.5}
+                              style={{ width: '100%' }} addonAfter="%" />
+                          </Form.Item>
+                        </Col>
+                        <Col span={8}>
+                          <Form.Item name="commission_yandex" label={
+                            <span style={{ color: PLATFORM_COLOR.yandex.color }}>Yandex 佣金</span>
+                          } style={{ marginBottom: 0 }}>
+                            <InputNumber min={0} max={50} step={0.5}
+                              style={{ width: '100%' }} addonAfter="%" />
+                          </Form.Item>
+                        </Col>
+                      </Row>
+                    </Card>
+                  )
+                  if (mode === 'manual') return (
+                    <Form.Item name="manual_price" label="目标价"
+                      rules={[{ required: true, message: '请填目标价' }]}
+                      style={{ marginBottom: 16 }}>
+                      <InputNumber min={1} style={{ width: '100%' }} addonBefore="₽" />
+                    </Form.Item>
+                  )
+                  return (
+                    <div style={{
+                      padding: '8px 12px', fontSize: 12, marginBottom: 16,
+                      color: '#666', background: '#fafafa',
+                      border: '1px solid #f0f0f0', borderRadius: 6,
+                    }}>
+                      直接复用源店铺当前售价，不做折算
+                    </div>
+                  )
+                }}
+              </Form.Item>
 
               <Divider style={{ margin: '8px 0 16px' }} />
 
