@@ -687,7 +687,7 @@ const Products = () => {
 
   const handleEdit = (record) => {
     setEditingProduct(record)
-    setOptimizedTitle(null)
+    setTitleSuggestions(null)
     setOptimizedDesc(null)
     // 若 listing.oss_images 已有归档数据，直接展示
     const firstL = (record.listings || [])[0]
