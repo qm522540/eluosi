@@ -47,11 +47,21 @@ const AISuggestCategoryButton = ({ localCategoryId, localCategoryName, onSuccess
       const suggestions = res.data?.suggestions || []
       const ok = suggestions.filter((s) => !s.error)
       const fail = suggestions.filter((s) => s.error)
+      const fromHint = ok.filter((s) => s.source === 'global_hint')
       if (ok.length) {
-        message.success(
-          `AI 推荐成功：${ok.map((s) => `${s.platform.toUpperCase()} ${s.confidence}%`).join(' · ')}`,
-          5,
-        )
+        const parts = ok.map((s) => {
+          const tag = s.source === 'global_hint'
+            ? `⭐全局(${s.co_confirmed_count}次确认)`
+            : 'AI'
+          return `${s.platform.toUpperCase()} ${Math.round((s.confidence || 0) * 100)}% [${tag}]`
+        })
+        message.success(`推荐成功：${parts.join(' · ')}`, 6)
+        if (fromHint.length) {
+          message.info(
+            `${fromHint.length} 条来自全局经验，未调用 AI（省 token）`,
+            5,
+          )
+        }
       }
       if (fail.length) {
         message.warning(
