@@ -123,6 +123,58 @@ const AISuggestionCard = ({ color, platform, text, onRegenerate, regenerating, o
   )
 }
 
+// ========== 实时毛利率块（按表单成本 + 平台销售价 + 佣金实时计算） ==========
+
+const RealtimeMarginBlock = ({ form, listing }) => {
+  const costPrice = Form.useWatch('cost_price', form)
+  const salePrice = Number(listing?.discount_price || listing?.price) || 0
+  const commissionPct = Number(listing?.commission_rate) || 0  // 佣金率（%）
+
+  if (!listing) return null
+
+  const hasCost = costPrice != null && costPrice !== '' && Number(costPrice) > 0
+  const hasSale = salePrice > 0
+
+  let content
+  if (!hasSale) {
+    content = <span style={{ color: '#999' }}>平台销售价缺失，无法计算</span>
+  } else if (!hasCost) {
+    content = <span style={{ color: '#999' }}>填写成本价后自动计算</span>
+  } else {
+    const cost = Number(costPrice)
+    const commissionAmt = salePrice * commissionPct / 100
+    const profit = salePrice - cost - commissionAmt
+    const marginPct = (profit / salePrice) * 100
+    const color = marginPct > 20 ? '#389e0d' : marginPct > 5 ? '#d46b08' : '#cf1322'
+    content = (
+      <>
+        <span style={{ fontSize: 22, fontWeight: 600, color }}>
+          {marginPct.toFixed(1)}%
+        </span>
+        <span style={{ marginLeft: 12, fontSize: 12, color: '#666' }}>
+          单件利润 <b style={{ color }}>₽ {profit.toFixed(2)}</b>
+          {' '} = 售价 ₽{salePrice.toFixed(2)} − 成本 ₽{cost.toFixed(2)}
+          {commissionPct > 0 && <> − 佣金 ₽{commissionAmt.toFixed(2)}（{commissionPct}%）</>}
+          {commissionPct === 0 && <>（佣金率未回填，暂不扣除）</>}
+        </span>
+      </>
+    )
+  }
+
+  return (
+    <div style={{
+      padding: '10px 14px', marginBottom: 16,
+      background: '#f6ffed', border: '1px solid #d9f7be',
+      borderRadius: 8,
+    }}>
+      <div style={{ fontSize: 11, color: '#52c41a', marginBottom: 4, fontWeight: 500 }}>
+        实时毛利率（当前平台销售价 − 成本 − 佣金）
+      </div>
+      <div>{content}</div>
+    </div>
+  )
+}
+
 // ========== 平台属性展示块（懒加载） ==========
 
 const PlatformAttributesBlock = ({ productId }) => {
@@ -1478,6 +1530,10 @@ const Products = () => {
                   </Form.Item>
                 </Col>
               </Row>
+
+              {/* 实时毛利率（按成本 + 销售价 + 佣金实时计算） */}
+              <RealtimeMarginBlock form={editForm} listing={editingProduct?.listings?.[0]} />
+
               <Row gutter={16}>
                 <Col span={8}>
                   <Form.Item name="length_mm" label="长" extra="WB 同步回填（mm）">
