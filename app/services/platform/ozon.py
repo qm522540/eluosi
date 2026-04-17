@@ -722,13 +722,15 @@ class OzonClient(BasePlatformClient):
 
     # ==================== 地区销售 ====================
 
-    async def fetch_region_sales(self, date_from: str, date_to: str) -> list:
+    async def fetch_region_sales(self, date_from: str, date_to: str,
+                                 delivered_only: bool = True) -> list:
         """按 city 聚合地区销售（Ozon analytics/data 不支持 region dimension，
         只能从 posting 的 analytics_data.city 聚合）。
 
         口径（与 WB region-sale 有差异，用户需知）：
         - region_name 实际是 city（城市级，WB 是联邦主体级）
-        - orders = 非 cancelled 的 posting 数（含在途）
+        - delivered_only=True（默认）：只算 status=delivered 的 posting（真实销售口径）
+        - delivered_only=False：算所有非 cancelled 的 posting（含在途，偏乐观）
         - revenue = products.price × quantity 汇总
         - returns 不在本接口（需另一个 /returns API，当前返回 0）
 
@@ -759,9 +761,13 @@ class OzonClient(BasePlatformClient):
                 offset += 1000
 
             agg: dict = {}
+            kept = 0
             for p in all_postings:
                 status = p.get("status") or ""
-                if status == "cancelled":
+                if delivered_only:
+                    if status != "delivered":
+                        continue
+                elif status == "cancelled":
                     continue
                 city = ((p.get("analytics_data") or {}).get("city") or "").strip()
                 if not city:
@@ -776,12 +782,14 @@ class OzonClient(BasePlatformClient):
                     agg[city] = {"region_name": city, "orders": 0, "revenue": 0.0}
                 agg[city]["orders"] += 1
                 agg[city]["revenue"] += rev
+                kept += 1
             items_out = [v for v in agg.values() if v["orders"] > 0 or v["revenue"] > 0]
             for v in items_out:
                 v["revenue"] = round(v["revenue"], 2)
             logger.info(
                 f"Ozon 地区销售 {date_from}~{date_to}: {len(items_out)} 城市 / "
-                f"原始 {len(all_postings)} postings"
+                f"保留 {kept}/{len(all_postings)} postings "
+                f"(delivered_only={delivered_only})"
             )
             return items_out
         except Exception as e:
@@ -789,10 +797,11 @@ class OzonClient(BasePlatformClient):
             return []
 
     async def fetch_region_sales_by_sku(self, date_from: str, date_to: str,
-                                        city_name: str = None) -> list:
+                                        city_name: str = None,
+                                        delivered_only: bool = True) -> list:
         """按 city × sku 双维度聚合 FBO posting 销售（Ozon 版 region TOP SKU）。
 
-        口径与 fetch_region_sales 一致：status != cancelled 的 posting 计入（含在途）。
+        口径与 fetch_region_sales 一致：默认 delivered_only=True（只算已妥投）。
         city_name 传入则仅返回该城市；不传返回全部。
 
         Returns: [{region_name (city), sku_id (Ozon), offer_id (商家编码),
@@ -824,7 +833,11 @@ class OzonClient(BasePlatformClient):
 
             agg: dict = {}
             for p in all_postings:
-                if (p.get("status") or "") == "cancelled":
+                status = p.get("status") or ""
+                if delivered_only:
+                    if status != "delivered":
+                        continue
+                elif status == "cancelled":
                     continue
                 city = ((p.get("analytics_data") or {}).get("city") or "").strip()
                 if not city:
