@@ -1050,10 +1050,11 @@ async def _fetch_platform_image_urls(shop, listing) -> list:
 
 
 async def optimize_title(db: Session, listing_id: int, tenant_id: int) -> dict:
-    """AI 标题优化：根据当前 listing 所在平台的风格优化俄文标题
+    “””AI 标题优化：富上下文版（热搜词 + 平台属性 + 商品属性 + 价格）
 
+    prompt 里尽量喂真实数据，让 AI 基于流量数据选词组标题。
     不修改 listing，仅返回建议文本让用户手动到平台后台改。
-    """
+    “””
     from app.config import get_settings
     from app.services.ai.kimi import KimiClient
     listing = db.query(PlatformListing).filter(
@@ -1061,63 +1062,156 @@ async def optimize_title(db: Session, listing_id: int, tenant_id: int) -> dict:
         PlatformListing.tenant_id == tenant_id,
     ).first()
     if not listing:
-        return {"code": ErrorCode.LISTING_NOT_FOUND, "msg": "Listing不存在"}
+        return {“code”: ErrorCode.LISTING_NOT_FOUND, “msg”: “Listing不存在”}
     if not listing.title_ru:
-        return {"code": ErrorCode.PARAM_ERROR, "msg": "商品暂无标题"}
+        return {“code”: ErrorCode.PARAM_ERROR, “msg”: “商品暂无标题”}
 
-    # 取商品关联的中文名 + 本地分类名作为上下文
     product = db.query(Product).filter(Product.id == listing.product_id).first()
-    zh_context = product.name_zh if product else ""
+    zh_context = product.name_zh if product else “”
 
+    # ── 1. 本地分类 + 平台属性 ──
+    category_name = “”
+    attributes_text = “”
+    if product and product.local_category_id:
+        from app.models.category import LocalCategory, AttributeMapping
+        cat = db.query(LocalCategory).filter(
+            LocalCategory.id == product.local_category_id,
+            LocalCategory.tenant_id == tenant_id,
+        ).first()
+        if cat:
+            category_name = f”{cat.name}” + (f”（{cat.name_ru}）” if cat.name_ru else “”)
+
+        attrs = db.query(AttributeMapping).filter(
+            AttributeMapping.tenant_id == tenant_id,
+            AttributeMapping.local_category_id == product.local_category_id,
+            AttributeMapping.platform == listing.platform,
+        ).order_by(AttributeMapping.is_required.desc()).limit(15).all()
+        if attrs:
+            required = [a for a in attrs if a.is_required]
+            optional = [a for a in attrs if not a.is_required]
+            parts = []
+            if required:
+                parts.append(“必填属性：” + “、”.join(
+                    f”{a.local_attr_name}({a.platform_attr_name})” for a in required
+                ))
+            if optional[:5]:
+                parts.append(“可选属性：” + “、”.join(
+                    f”{a.local_attr_name}” for a in optional[:5]
+                ))
+            attributes_text = “\n”.join(parts)
+
+    # ── 2. 商品自身属性 ──
+    product_attrs = []
+    if product:
+        if product.brand:
+            product_attrs.append(f”品牌：{product.brand}”)
+        if product.weight_g:
+            product_attrs.append(f”重量：{product.weight_g}g”)
+        if product.length_mm and product.width_mm:
+            product_attrs.append(f”尺寸：{product.length_mm}×{product.width_mm}mm”)
+    if listing.price:
+        product_attrs.append(f”售价：{listing.price}₽”)
+    if listing.discount_price:
+        product_attrs.append(f”折后价：{listing.discount_price}₽”)
+    product_attrs_text = “、”.join(product_attrs) if product_attrs else “暂无”
+
+    # ── 3. 热搜关键词（keyword_daily_stats 表可能还没建，graceful 降级）──
+    hot_keywords_text = “”
+    context_sources = []
+    try:
+        from sqlalchemy import text as sa_text
+        rows = db.execute(sa_text(“””
+            SELECT keyword, SUM(impressions) AS imp, SUM(clicks) AS clk
+            FROM keyword_daily_stats
+            WHERE tenant_id = :tid AND shop_id = :sid
+              AND stat_date >= DATE_SUB(CURDATE(), INTERVAL 30 DAY)
+            GROUP BY keyword
+            ORDER BY imp DESC
+            LIMIT 20
+        “””), {“tid”: tenant_id, “sid”: listing.shop_id}).fetchall()
+        if rows:
+            lines = []
+            for i, r in enumerate(rows, 1):
+                lines.append(f”  {i}. {r.keyword} — 曝光 {r.imp}, 点击 {r.clk}”)
+            hot_keywords_text = “\n”.join(lines)
+            context_sources.append(f”热搜词TOP{len(rows)}”)
+    except Exception:
+        pass
+
+    if category_name:
+        context_sources.append(“本地分类”)
+    if attributes_text:
+        context_sources.append(“平台属性”)
+    if product_attrs:
+        context_sources.append(“商品属性”)
+
+    # ── 4. 组装 prompt ──
     platform_style = {
-        "wb": (
-            "WB（Wildberries）标题风格：60-100 字符，关键词前置，"
-            "强调用途/材质/尺寸/适用场景，常见套路如"
-            "「商品类型 + 关键属性 + 用途场景 + 受众」"
+        “wb”: (
+            “WB（Wildberries）标题风格：60-100 字符，关键词前置，”
+            “强调用途/材质/尺寸/适用场景，常见套路如”
+            “「商品类型 + 关键属性 + 用途场景 + 受众」”
         ),
-        "ozon": (
-            "Ozon 标题风格：60-120 字符，SEO 导向，关键词自然融入，"
-            "突出产品名、品牌、型号、核心规格"
+        “ozon”: (
+            “Ozon 标题风格：60-120 字符，SEO 导向，关键词自然融入，”
+            “突出产品名、品牌、型号、核心规格”
         ),
-        "yandex": (
-            "Yandex Market 标题风格：品牌 + 型号 + 关键规格，"
-            "简洁精准，40-80 字符"
+        “yandex”: (
+            “Yandex Market 标题风格：品牌 + 型号 + 关键规格，”
+            “简洁精准，40-80 字符”
         ),
     }
-    style_desc = platform_style.get(listing.platform, platform_style["ozon"])
+    style_desc = platform_style.get(listing.platform, platform_style[“ozon”])
 
-    prompt = f"""你是俄罗斯电商标题优化专家。请针对 {listing.platform.upper()} 平台的搜索算法和展示特点优化下面的商品标题。
-
-目标平台风格：{style_desc}
-
-中文参考（商品实际是什么）：{zh_context}
-当前俄文标题：{listing.title_ru}
-
-要求：
-- 只返回优化后的俄文标题，一行，不要加任何解释、编号、引号
+    prompt_parts = [
+        f”你是俄罗斯电商标题优化专家。请针对 {listing.platform.upper()} 平台优化下面的商品标题。”,
+        f”\n【平台规则】\n{style_desc}”,
+        f”\n【当前标题】\n{listing.title_ru}”,
+        f”\n【中文参考】\n{zh_context}” if zh_context else “”,
+        f”\n【商品分类】\n{category_name}” if category_name else “”,
+        f”\n【商品属性】\n{product_attrs_text}”,
+        f”\n【平台属性清单（标题中应体现核心属性）】\n{attributes_text}” if attributes_text else “”,
+    ]
+    if hot_keywords_text:
+        prompt_parts.append(
+            f”\n【该店铺近30天热搜关键词（按曝光排序，标题应尽量包含高流量词）】\n{hot_keywords_text}”
+        )
+    prompt_parts.append(“””
+【要求】
+- 输出 3 个优化方案，每行一个，纯俄文标题，不加编号/引号/解释
+- 尽量把高曝光的热搜关键词自然融入标题
 - 保留核心商品信息，不要增加虚假属性
-- 长度符合平台风格要求
-- 关键词靠前
-"""
+- 关键词靠前，长度符合平台要求
+- 3 个方案分别侧重：①高流量词堆叠 ②自然语感 ③突出差异化卖点”””)
+
+    prompt = “\n”.join(p for p in prompt_parts if p)
+
     settings = get_settings()
     client = KimiClient(api_key=settings.KIMI_API_KEY)
     try:
         result = await client.chat(
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.5, max_tokens=400,
+            messages=[{“role”: “user”, “content”: prompt}],
+            temperature=0.6, max_tokens=600,
         )
-        content = (result.get("content") or "").strip()
-        # 清理可能的引号/前缀
-        if content.startswith(('"', '“', '«')):
-            content = content.lstrip('"“«').rstrip('"”»').strip()
-        return {"code": 0, "data": {
-            "optimized_title": content,
-            "original_title": listing.title_ru,
-            "platform": listing.platform,
+        content = (result.get(“content”) or “”).strip()
+        titles = [
+            line.strip().lstrip('0123456789.）)、').lstrip('””«').rstrip('””»').strip()
+            for line in content.split('\n')
+            if line.strip() and len(line.strip()) > 10
+        ][:3]
+        if not titles:
+            titles = [content]
+        return {“code”: 0, “data”: {
+            “suggestions”: titles,
+            “original_title”: listing.title_ru,
+            “platform”: listing.platform,
+            “context_sources”: context_sources,
+            “hot_keywords_used”: bool(hot_keywords_text),
+            “category”: category_name,
         }}
     except Exception as e:
-        logger.error(f"Kimi 标题优化失败: {e}")
-        return {"code": ErrorCode.UNKNOWN_ERROR, "msg": "AI 标题优化失败"}
+        logger.error(f”Kimi 标题优化失败: {e}”)
+        return {“code”: ErrorCode.UNKNOWN_ERROR, “msg”: “AI 标题优化失败”}
 
 
 async def generate_description(db: Session, listing_id: int,
