@@ -720,6 +720,74 @@ class OzonClient(BasePlatformClient):
 
         return orders
 
+    # ==================== 地区销售 ====================
+
+    async def fetch_region_sales(self, date_from: str, date_to: str) -> list:
+        """按 city 聚合地区销售（Ozon analytics/data 不支持 region dimension，
+        只能从 posting 的 analytics_data.city 聚合）。
+
+        口径（与 WB region-sale 有差异，用户需知）：
+        - region_name 实际是 city（城市级，WB 是联邦主体级）
+        - orders = 非 cancelled 的 posting 数（含在途）
+        - revenue = products.price × quantity 汇总
+        - returns 不在本接口（需另一个 /returns API，当前返回 0）
+
+        Returns: [{region_name, orders, revenue}]
+        """
+        try:
+            url = f"{OZON_SELLER_API}/v2/posting/fbo/list"
+            all_postings = []
+            offset = 0
+            for _ in range(20):
+                payload = {
+                    "dir": "ASC",
+                    "filter": {
+                        "since": f"{date_from}T00:00:00.000Z",
+                        "to": f"{date_to}T23:59:59.999Z",
+                        "status": "",
+                    },
+                    "limit": 1000, "offset": offset,
+                    "with": {"analytics_data": True, "financial_data": True},
+                }
+                r = await self._request("POST", url, json=payload)
+                items = (r or {}).get("result") or []
+                if not items:
+                    break
+                all_postings.extend(items)
+                if len(items) < 1000:
+                    break
+                offset += 1000
+
+            agg: dict = {}
+            for p in all_postings:
+                status = p.get("status") or ""
+                if status == "cancelled":
+                    continue
+                city = ((p.get("analytics_data") or {}).get("city") or "").strip()
+                if not city:
+                    continue
+                rev = 0.0
+                for prod in (p.get("products") or []):
+                    try:
+                        rev += float(prod.get("price") or 0) * int(prod.get("quantity") or 0)
+                    except (TypeError, ValueError):
+                        continue
+                if city not in agg:
+                    agg[city] = {"region_name": city, "orders": 0, "revenue": 0.0}
+                agg[city]["orders"] += 1
+                agg[city]["revenue"] += rev
+            items_out = [v for v in agg.values() if v["orders"] > 0 or v["revenue"] > 0]
+            for v in items_out:
+                v["revenue"] = round(v["revenue"], 2)
+            logger.info(
+                f"Ozon 地区销售 {date_from}~{date_to}: {len(items_out)} 城市 / "
+                f"原始 {len(all_postings)} postings"
+            )
+            return items_out
+        except Exception as e:
+            logger.error(f"Ozon 地区销售拉取失败 shop_id={self.shop_id}: {e}")
+            return []
+
     # ==================== 库存 ====================
 
     async def fetch_inventory(self) -> list:

@@ -54,10 +54,11 @@ def region_backfill(
     if not shop:
         return error(30001, "店铺不存在")
     task = backfill_region_stats.delay(shop_id, tenant_id, days)
-    chunks = math.ceil(days / 31) if shop.platform == "wb" else 1
+    # 两平台都按天循环，每天 2 次 API 调用（WB: region-sale + sales；Ozon: fbo posting 分页）
+    per_day_calls = 2 if shop.platform == "wb" else 1
     return success({
         "task_id": task.id,
-        "msg": f"地区数据回填已提交，{shop.platform.upper()} 需约 {chunks} 次请求",
+        "msg": f"地区数据回填已提交，{shop.platform.upper()} 约 {days * per_day_calls} 次请求",
     })
 
 

@@ -81,6 +81,27 @@ def _upsert_region_stats(db, tenant_id, shop_id, platform, stat_date, items,
     return n
 
 
+async def _sync_ozon_region(db, shop, date_from, date_to):
+    """Ozon 地区销售同步。粒度是 city（WB 是联邦主体级），口径差异见
+    OzonClient.fetch_region_sales docstring。returns 本期不做（API 不给 city）。
+    """
+    from app.services.platform.ozon import OzonClient
+    client = OzonClient(
+        shop_id=shop.id, api_key=shop.api_key, client_id=shop.client_id,
+        perf_client_id=shop.perf_client_id or "",
+        perf_client_secret=shop.perf_client_secret or "",
+    )
+    try:
+        items = await client.fetch_region_sales(date_from, date_to)
+        stat_date = date.fromisoformat(date_to)
+        n = _upsert_region_stats(
+            db, shop.tenant_id, shop.id, "ozon", stat_date, items,
+        )
+        return {"regions": len(items), "inserted": n, "returns_rows": 0}
+    finally:
+        await client.close()
+
+
 async def _sync_wb_region(db, shop, date_from, date_to):
     """同步一个时间段（date_from~date_to）的 WB 地区销售 + 按地区退货。
     - 销售：region-sale API（按 regionName 聚合 orders/revenue），日维度合并到 date_to 这一天
@@ -150,10 +171,18 @@ def sync_region_stats(self):
         shops = db.query(Shop).filter(Shop.status == "active", Shop.api_key.isnot(None)).all()
         results = {}
         for shop in shops:
-            if shop.platform == "wb":
-                r = _run_async(_sync_wb_region(db, shop, yesterday, yesterday))
-                results[shop.id] = r
-                logger.info(f"WB 地区销售同步 shop={shop.id}: {r}")
+            try:
+                if shop.platform == "wb":
+                    r = _run_async(_sync_wb_region(db, shop, yesterday, yesterday))
+                    results[shop.id] = r
+                    logger.info(f"WB 地区销售同步 shop={shop.id}: {r}")
+                elif shop.platform == "ozon":
+                    r = _run_async(_sync_ozon_region(db, shop, yesterday, yesterday))
+                    results[shop.id] = r
+                    logger.info(f"Ozon 地区销售同步 shop={shop.id}: {r}")
+            except Exception as e:
+                logger.error(f"地区同步 shop={shop.id} 失败: {e}")
+                results[shop.id] = {"error": str(e)}
         # 清理 90 天前
         cutoff = (date.today() - timedelta(days=90)).isoformat()
         deleted = db.query(RegionDailyStat).filter(RegionDailyStat.stat_date < cutoff).delete()
@@ -179,28 +208,29 @@ def backfill_region_stats(self, shop_id, tenant_id, days=90):
         shop = db.query(Shop).filter(Shop.id == shop_id).first()
         if not shop:
             return {"error": "店铺不存在"}
-        if shop.platform == "wb":
-            # WB region-sale API 返回的是【日期段汇总】（无 date 字段），所以按天逐日回填，
-            # 保证 orders/revenue/returns 都对齐到正确的 stat_date。
+        # 所有平台都按天循环（Ozon posting API 也按 since/to 过滤，单日更准）
+        if shop.platform in ("wb", "ozon"):
             total = 0
             total_returns = 0
             today = date.today()
+            sync_fn = _sync_wb_region if shop.platform == "wb" else _sync_ozon_region
+            platform_label = shop.platform.upper()
             for i in range(1, days + 1):
                 d = today - timedelta(days=i)
                 d_str = d.isoformat()
                 try:
-                    r = _run_async(_sync_wb_region(db, shop, d_str, d_str))
+                    r = _run_async(sync_fn(db, shop, d_str, d_str))
                 except Exception as e:
-                    logger.warning(f"WB 地区回填 {d_str} 失败: {e}")
+                    logger.warning(f"{platform_label} 地区回填 {d_str} 失败: {e}")
                     continue
                 total += r.get("inserted", 0)
                 total_returns += r.get("returns_rows", 0)
                 logger.info(
-                    f"WB 地区回填 {d_str}: 地区 {r.get('regions', 0)} / +{r.get('inserted', 0)} / "
-                    f"退货 {r.get('returns_rows', 0)}"
+                    f"{platform_label} 地区回填 {d_str}: 地区 {r.get('regions', 0)} / "
+                    f"+{r.get('inserted', 0)} / 退货 {r.get('returns_rows', 0)}"
                 )
             return {
-                "shop_id": shop_id, "platform": "wb",
+                "shop_id": shop_id, "platform": shop.platform,
                 "inserted": total, "returns_rows": total_returns,
             }
         return {"shop_id": shop_id, "platform": shop.platform, "msg": "暂不支持"}
