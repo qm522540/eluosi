@@ -644,9 +644,9 @@ const KeywordStats = () => {
                     </div>
                   }
                 >
-                  {/* 关键词数据卡片 */}
+                  {/* 关键词数据卡片（活动级，WB API 不支持 SKU 级拆分） */}
                   <div style={{
-                    display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)',
+                    display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)',
                     gap: 10, marginBottom: 14,
                   }}>
                     {[
@@ -655,6 +655,7 @@ const KeywordStats = () => {
                       { label: '花费', value: `${camp.spend?.toLocaleString()} ₽`, icon: '💰',
                         color: camp.spend > 50 && camp.clicks < 3 ? '#cf1322' : undefined },
                       { label: 'CTR', value: `${camp.impressions > 0 ? (camp.clicks / camp.impressions * 100).toFixed(2) : 0}%`, icon: '📊' },
+                      { label: '加入时间', value: camp.keyword_first_seen || '-', icon: '📅' },
                     ].map((item, i) => (
                       <div key={i} style={{
                         padding: '8px 10px', background: '#fafafa',
@@ -666,6 +667,10 @@ const KeywordStats = () => {
                         </div>
                       </div>
                     ))}
+                  </div>
+
+                  <div style={{ fontSize: 11, color: '#999', marginBottom: 10, fontStyle: 'italic' }}>
+                    ⚠ 以上为该关键词在整个活动中的数据。WB API 不支持按单个商品拆分关键词统计，屏蔽操作按商品执行。
                   </div>
 
                   {/* 商品列表 */}
