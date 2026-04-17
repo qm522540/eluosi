@@ -788,6 +788,75 @@ class OzonClient(BasePlatformClient):
             logger.error(f"Ozon 地区销售拉取失败 shop_id={self.shop_id}: {e}")
             return []
 
+    async def fetch_region_sales_by_sku(self, date_from: str, date_to: str,
+                                        city_name: str = None) -> list:
+        """按 city × sku 双维度聚合 FBO posting 销售（Ozon 版 region TOP SKU）。
+
+        口径与 fetch_region_sales 一致：status != cancelled 的 posting 计入（含在途）。
+        city_name 传入则仅返回该城市；不传返回全部。
+
+        Returns: [{region_name (city), sku_id (Ozon), offer_id (商家编码),
+                   orders (商品件数), revenue}]
+        """
+        try:
+            url = f"{OZON_SELLER_API}/v2/posting/fbo/list"
+            all_postings = []
+            offset = 0
+            for _ in range(20):
+                payload = {
+                    "dir": "ASC",
+                    "filter": {
+                        "since": f"{date_from}T00:00:00.000Z",
+                        "to": f"{date_to}T23:59:59.999Z",
+                        "status": "",
+                    },
+                    "limit": 1000, "offset": offset,
+                    "with": {"analytics_data": True, "financial_data": True},
+                }
+                r = await self._request("POST", url, json=payload)
+                items = (r or {}).get("result") or []
+                if not items:
+                    break
+                all_postings.extend(items)
+                if len(items) < 1000:
+                    break
+                offset += 1000
+
+            agg: dict = {}
+            for p in all_postings:
+                if (p.get("status") or "") == "cancelled":
+                    continue
+                city = ((p.get("analytics_data") or {}).get("city") or "").strip()
+                if not city:
+                    continue
+                if city_name and city != city_name:
+                    continue
+                for prod in (p.get("products") or []):
+                    sku_id = prod.get("sku")
+                    if sku_id is None:
+                        continue
+                    try:
+                        qty = int(prod.get("quantity") or 0)
+                        rev = float(prod.get("price") or 0) * qty
+                    except (TypeError, ValueError):
+                        continue
+                    offer_id = prod.get("offer_id") or ""
+                    key = (city, str(sku_id))
+                    if key not in agg:
+                        agg[key] = {
+                            "region_name": city, "sku_id": str(sku_id),
+                            "offer_id": offer_id, "orders": 0, "revenue": 0.0,
+                        }
+                    agg[key]["orders"] += qty
+                    agg[key]["revenue"] += rev
+            items_out = [v for v in agg.values() if v["orders"] > 0 or v["revenue"] > 0]
+            for v in items_out:
+                v["revenue"] = round(v["revenue"], 2)
+            return items_out
+        except Exception as e:
+            logger.error(f"Ozon 按 SKU 拉地区销售失败 shop_id={self.shop_id}: {e}")
+            return []
+
     # ==================== 库存 ====================
 
     async def fetch_inventory(self) -> list:

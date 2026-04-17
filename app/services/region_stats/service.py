@@ -179,7 +179,8 @@ def ranking(db: Session, tenant_id: int, shop_id: int,
 def region_detail(db: Session, tenant_id: int, shop_id: int, region_name: str,
                   date_from=None, date_to=None, limit: int = 10) -> dict:
     """返回某地区 TOP N SKU 的销售明细，用于"决策是否关闭该地区配送"。
-    WB：直接调 region-sale API 按 regionName 过滤 + nmID 聚合（不存表，避免膨胀）。
+    WB：region-sale API 按 regionName 过滤 + nmID 聚合（联邦主体级）。
+    Ozon：FBO posting 按 analytics_data.city 过滤 + sku 聚合（城市级）。
     """
     from app.models.shop import Shop
     date_from, date_to = _default_dates(date_from, date_to)
@@ -188,15 +189,23 @@ def region_detail(db: Session, tenant_id: int, shop_id: int, region_name: str,
     ).first()
     if not shop:
         return {"code": ErrorCode.SHOP_NOT_FOUND, "msg": "店铺不存在"}
-    if shop.platform != "wb":
-        return {"code": 0, "data": {
-            "region_name": region_name,
-            "region_name_zh": _RU_REGIONS_ZH.get(region_name, ""),
-            "date_from": date_from, "date_to": date_to,
-            "items": [], "platform": shop.platform,
-            "note": f"{shop.platform.upper()} 暂不支持 SKU 粒度的地区销售",
-        }}
+    if shop.platform == "wb":
+        return _region_detail_wb(db, tenant_id, shop, region_name,
+                                 date_from, date_to, limit)
+    if shop.platform == "ozon":
+        return _region_detail_ozon(db, tenant_id, shop, region_name,
+                                   date_from, date_to, limit)
+    return {"code": 0, "data": {
+        "region_name": region_name,
+        "region_name_zh": _RU_REGIONS_ZH.get(region_name, ""),
+        "date_from": date_from, "date_to": date_to,
+        "items": [], "platform": shop.platform,
+        "note": f"{shop.platform.upper()} 暂不支持 SKU 粒度的地区销售",
+    }}
 
+
+def _region_detail_wb(db, tenant_id, shop, region_name,
+                      date_from, date_to, limit):
     import asyncio
     from app.services.platform.wb import WBClient
     async def _fetch():
@@ -211,11 +220,9 @@ def region_detail(db: Session, tenant_id: int, shop_id: int, region_name: str,
     finally:
         loop.close()
 
-    # 按销售额降序
     rows.sort(key=lambda x: x["revenue"], reverse=True)
     rows = rows[:limit]
 
-    # 反查商品中文名
     nm_ids = [r["nm_id"] for r in rows]
     name_map = {}
     if nm_ids:
@@ -224,7 +231,7 @@ def region_detail(db: Session, tenant_id: int, shop_id: int, region_name: str,
             PlatformListing.platform_product_id, PlatformListing.product_id,
         ).filter(
             PlatformListing.tenant_id == tenant_id,
-            PlatformListing.shop_id == shop_id,
+            PlatformListing.shop_id == shop.id,
             PlatformListing.platform == "wb",
             PlatformListing.platform_product_id.in_([str(n) for n in nm_ids]),
         ).all()
@@ -233,7 +240,9 @@ def region_detail(db: Session, tenant_id: int, shop_id: int, region_name: str,
         if prod_ids:
             prods = db.query(
                 Product.id, Product.name_zh, Product.sku, Product.image_url,
-            ).filter(Product.id.in_(prod_ids)).all()
+            ).filter(
+                Product.id.in_(prod_ids), Product.tenant_id == tenant_id,
+            ).all()
             for p in prods:
                 nm = pid_to_nm.get(p.id)
                 if nm:
@@ -261,6 +270,84 @@ def region_detail(db: Session, tenant_id: int, shop_id: int, region_name: str,
         "region_name_zh": _RU_REGIONS_ZH.get(region_name, ""),
         "date_from": date_from, "date_to": date_to,
         "platform": "wb",
+        "items": items,
+    }}
+
+
+def _region_detail_ozon(db, tenant_id, shop, region_name,
+                        date_from, date_to, limit):
+    """Ozon 地区 TOP SKU：city × sku 聚合后反查 PlatformListing.platform_sku_id
+    拿中文名。offer_id 作为兜底展示（对齐前端 WB 的 sa 字段）。
+    """
+    import asyncio
+    from app.services.platform.ozon import OzonClient
+    async def _fetch():
+        c = OzonClient(
+            shop_id=shop.id, api_key=shop.api_key, client_id=shop.client_id,
+            perf_client_id=shop.perf_client_id or "",
+            perf_client_secret=shop.perf_client_secret or "",
+        )
+        try:
+            return await c.fetch_region_sales_by_sku(date_from, date_to, region_name)
+        finally:
+            await c.close()
+    loop = asyncio.new_event_loop()
+    try:
+        rows = loop.run_until_complete(_fetch())
+    finally:
+        loop.close()
+
+    rows.sort(key=lambda x: x["revenue"], reverse=True)
+    rows = rows[:limit]
+
+    sku_ids = [r["sku_id"] for r in rows]
+    name_map = {}
+    if sku_ids:
+        from app.models.product import Product, PlatformListing
+        pl_rows = db.query(
+            PlatformListing.platform_sku_id, PlatformListing.product_id,
+        ).filter(
+            PlatformListing.tenant_id == tenant_id,
+            PlatformListing.shop_id == shop.id,
+            PlatformListing.platform == "ozon",
+            PlatformListing.platform_sku_id.in_(sku_ids),
+        ).all()
+        prod_ids = [r.product_id for r in pl_rows]
+        pid_to_sku = {r.product_id: r.platform_sku_id for r in pl_rows}
+        if prod_ids:
+            prods = db.query(
+                Product.id, Product.name_zh, Product.sku, Product.image_url,
+            ).filter(
+                Product.id.in_(prod_ids), Product.tenant_id == tenant_id,
+            ).all()
+            for p in prods:
+                sk = pid_to_sku.get(p.id)
+                if sk:
+                    name_map[str(sk)] = {
+                        "name_zh": p.name_zh, "sku_local": p.sku,
+                        "image_url": p.image_url,
+                    }
+
+    total_rev = sum(r["revenue"] for r in rows) or 1
+    items = []
+    for r in rows:
+        info = name_map.get(str(r["sku_id"]), {}) or {}
+        items.append({
+            # 对齐前端 WB 字段：nm_id 位置放 Ozon sku_id；sa 位置放 offer_id
+            "nm_id": r["sku_id"],
+            "sa": r.get("offer_id") or info.get("sku_local") or "",
+            "name_zh": info.get("name_zh") or "",
+            "image_url": info.get("image_url"),
+            "orders": r["orders"],
+            "revenue": r["revenue"],
+            "revenue_pct_in_region": round(r["revenue"] / total_rev * 100, 1),
+        })
+
+    return {"code": 0, "data": {
+        "region_name": region_name,
+        "region_name_zh": _RU_REGIONS_ZH.get(region_name, ""),
+        "date_from": date_from, "date_to": date_to,
+        "platform": "ozon",
         "items": items,
     }}
 
