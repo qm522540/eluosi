@@ -11,6 +11,7 @@ from app.models.ai_pricing import AiPricingConfig, AiPricingSuggestion
 from app.models.promo_calendar import PromoCalendar
 from app.models.notification import Notification
 from app.models.task_log import TaskLog
+from app.models.translation import RuZhDict
 
 __all__ = [
     "BaseMixin", "Tenant", "User", "Shop",
@@ -22,4 +23,5 @@ __all__ = [
     "AiDecisionLog", "AiPricingConfig", "AiPricingSuggestion",
     "PromoCalendar",
     "Notification", "TaskLog",
+    "RuZhDict",
 ]
