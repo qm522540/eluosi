@@ -56,6 +56,7 @@ const KeywordStats = () => {
   // 关键词关联活动商品 Drawer
   const [kwDetailDrawer, setKwDetailDrawer] = useState(false)
   const [kwDetailKeyword, setKwDetailKeyword] = useState('')
+  const [kwDetailEfficiency, setKwDetailEfficiency] = useState('normal')
   const [kwDetailData, setKwDetailData] = useState(null)
   const [kwDetailLoading, setKwDetailLoading] = useState(false)
   const [excluding, setExcluding] = useState(null) // campaign_id:nm_id being excluded
@@ -134,8 +135,9 @@ const KeywordStats = () => {
     if (searched) fetchAll()
   }, [searched, fetchAll])
 
-  const handleViewKeywordCampaigns = async (keyword) => {
+  const handleViewKeywordCampaigns = async (keyword, efficiency) => {
     setKwDetailKeyword(keyword)
+    setKwDetailEfficiency(efficiency || 'normal')
     setKwDetailDrawer(true)
     setKwDetailLoading(true)
     setKwDetailData(null)
@@ -237,7 +239,7 @@ const KeywordStats = () => {
             <Tooltip title="查看引用此关键词的活动和商品">
               <Button size="small" type="text" icon={<EyeOutlined />}
                 style={{ fontSize: 11, padding: '0 4px', height: 20 }}
-                onClick={() => handleViewKeywordCampaigns(v)} />
+                onClick={() => handleViewKeywordCampaigns(v, record.efficiency)} />
             </Tooltip>
           </Space>
         )
@@ -565,13 +567,17 @@ const KeywordStats = () => {
       {/* ==================== 关键词关联活动商品 Drawer ==================== */}
       <Drawer
         title={
-          <Space>
+          <Space size={8} wrap>
             <KeyOutlined />
             <span>关键词详情</span>
             <Tag>{kwDetailKeyword}</Tag>
             {kwTranslations[kwDetailKeyword] && kwTranslations[kwDetailKeyword] !== kwDetailKeyword && (
               <Tag color="blue">{kwTranslations[kwDetailKeyword]}</Tag>
             )}
+            {(() => {
+              const cfg = EFFICIENCY_MAP[kwDetailEfficiency] || EFFICIENCY_MAP.normal
+              return <Tag color={cfg.color} icon={cfg.icon}>{cfg.label}</Tag>
+            })()}
           </Space>
         }
         open={kwDetailDrawer}
@@ -712,23 +718,34 @@ const KeywordStats = () => {
                                   <Text style={{ marginLeft: 8, fontSize: 12, color: '#666' }}>{name}</Text>
                                 )}
                               </div>
-                              {isExcluded ? (
-                                <Tag color="default" style={{ margin: 0, fontSize: 11 }}>✓ 已屏蔽</Tag>
-                              ) : (
-                                <Popconfirm
-                                  title={`对商品 ${nmId} 屏蔽此关键词？`}
-                                  description={`屏蔽「${kwDetailKeyword}」后该商品不再因此词展示广告`}
-                                  okText="确认屏蔽"
-                                  cancelText="取消"
-                                  onConfirm={() => handleExcludeKeyword(camp.campaign_id, nmId, kwDetailKeyword)}
-                                >
-                                  <Button size="small" danger icon={<StopOutlined />}
-                                    loading={excluding === excKey}
-                                    style={{ fontSize: 12 }}>
-                                    屏蔽
-                                  </Button>
-                                </Popconfirm>
-                              )}
+                              <Space size={6}>
+                                {!isExcluded && kwDetailEfficiency === 'waste' && (
+                                  <Tag color="red" style={{ margin: 0, fontSize: 10, lineHeight: '16px' }}>浪费词，建议屏蔽</Tag>
+                                )}
+                                {!isExcluded && kwDetailEfficiency === 'star' && (
+                                  <Tag color="green" style={{ margin: 0, fontSize: 10, lineHeight: '16px' }}>高效词</Tag>
+                                )}
+                                {!isExcluded && kwDetailEfficiency === 'potential' && (
+                                  <Tag color="blue" style={{ margin: 0, fontSize: 10, lineHeight: '16px' }}>潜力词</Tag>
+                                )}
+                                {isExcluded ? (
+                                  <Tag color="default" style={{ margin: 0, fontSize: 11 }}>✓ 已屏蔽</Tag>
+                                ) : (
+                                  <Popconfirm
+                                    title={`对商品 ${nmId} 屏蔽此关键词？`}
+                                    description={`屏蔽「${kwDetailKeyword}」后该商品不再因此词展示广告`}
+                                    okText="确认屏蔽"
+                                    cancelText="取消"
+                                    onConfirm={() => handleExcludeKeyword(camp.campaign_id, nmId, kwDetailKeyword)}
+                                  >
+                                    <Button size="small" danger icon={<StopOutlined />}
+                                      loading={excluding === excKey}
+                                      style={{ fontSize: 12 }}>
+                                      屏蔽
+                                    </Button>
+                                  </Popconfirm>
+                                )}
+                              </Space>
                             </div>
                           )
                         })}
