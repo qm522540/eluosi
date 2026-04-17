@@ -117,3 +117,20 @@ def keyword_sync_status(
 
 
 import math
+from pydantic import BaseModel, Field
+from typing import List
+
+
+class TranslateKeywordsRequest(BaseModel):
+    keywords: List[str] = Field(..., min_length=1, max_length=100)
+
+
+@router.post("/translate-keywords")
+async def translate_keywords(
+    req: TranslateKeywordsRequest,
+    tenant_id: int = Depends(get_tenant_id),
+):
+    """批量翻译俄文关键词为中文（Kimi AI，带内存缓存）"""
+    from app.services.keyword_stats.translator import translate_keywords_cached
+    result = await translate_keywords_cached(req.keywords)
+    return success(result)

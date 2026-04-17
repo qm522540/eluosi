@@ -13,6 +13,7 @@ import { getShops } from '@/api/shops'
 import {
   getKeywordSummary, getKeywordTrend, getKeywordSkuDetail,
   getNegativeSuggestions, getKeywordSyncStatus, backfillKeywords,
+  translateKeywords,
 } from '@/api/keyword_stats'
 
 const { Title, Text } = Typography
@@ -49,6 +50,7 @@ const KeywordStats = () => {
   const [trendData, setTrendData] = useState(null)
   const [trendMetric, setTrendMetric] = useState('impressions')
   const [negativeSugs, setNegativeSugs] = useState([])
+  const [kwTranslations, setKwTranslations] = useState({})
   const [syncStatus, setSyncStatus] = useState(null)
   const [page, setPage] = useState(1)
   const [sortBy, setSortBy] = useState('spend')
@@ -100,7 +102,16 @@ const KeywordStats = () => {
         getNegativeSuggestions({ shop_id: shopId, ...range }),
         getKeywordSyncStatus(shopId),
       ])
-      if (sumRes.status === 'fulfilled') setSummaryData(sumRes.value.data)
+      if (sumRes.status === 'fulfilled') {
+        setSummaryData(sumRes.value.data)
+        // 自动翻译当前页的关键词（异步，不阻塞展示）
+        const kws = (sumRes.value.data?.items || []).map(it => it.keyword).filter(Boolean)
+        if (kws.length > 0) {
+          translateKeywords(kws).then(res => {
+            setKwTranslations(prev => ({ ...prev, ...(res.data || {}) }))
+          }).catch(() => {})
+        }
+      }
       if (trendRes.status === 'fulfilled') setTrendData(trendRes.value.data)
       if (negRes.status === 'fulfilled') setNegativeSugs(negRes.value.data?.items || [])
       if (syncRes.status === 'fulfilled') setSyncStatus(syncRes.value.data)
@@ -175,7 +186,14 @@ const KeywordStats = () => {
     },
     {
       title: '关键词', dataIndex: 'keyword', key: 'keyword',
-      render: (v) => <Text strong style={{ fontSize: 13 }}>{v}</Text>,
+      render: (v) => {
+        const zh = kwTranslations[v]
+        return (
+          <Tooltip title={zh && zh !== v ? `中文：${zh}` : '翻译加载中...'}>
+            <Text strong style={{ fontSize: 13, cursor: 'help' }}>{v}</Text>
+          </Tooltip>
+        )
+      },
     },
     {
       title: '效能', dataIndex: 'efficiency', key: 'efficiency', width: 100,
@@ -202,7 +220,8 @@ const KeywordStats = () => {
       render: v => v?.toLocaleString(),
     },
     {
-      title: 'CTR', dataIndex: 'ctr', key: 'ctr', width: 80,
+      title: <Tooltip title="点击率 = 点击÷曝光×100%">CTR <span style={{ fontSize: 10, color: '#bbb' }}>ⓘ</span></Tooltip>,
+      dataIndex: 'ctr', key: 'ctr', width: 80,
       sorter: (a, b) => a.ctr - b.ctr,
       render: v => v != null ? `${v}%` : '-',
     },
@@ -213,7 +232,8 @@ const KeywordStats = () => {
       render: v => v != null ? <Text strong>{v.toLocaleString()} ₽</Text> : '-',
     },
     {
-      title: 'CPC', dataIndex: 'cpc', key: 'cpc', width: 80,
+      title: <Tooltip title="单次点击成本 = 花费÷点击数">CPC <span style={{ fontSize: 10, color: '#bbb' }}>ⓘ</span></Tooltip>,
+      dataIndex: 'cpc', key: 'cpc', width: 80,
       sorter: (a, b) => a.cpc - b.cpc,
       render: v => v != null ? `${v} ₽` : '-',
     },
@@ -330,14 +350,16 @@ const KeywordStats = () => {
             { title: '关键词数', value: totals.keywords, color: undefined },
             { title: '总曝光', value: totals.impressions, color: undefined },
             { title: '总点击', value: totals.clicks, color: undefined },
-            { title: '平均 CTR', value: totals.avg_ctr, suffix: '%', color: '#1677ff' },
+            { title: '平均 CTR', tip: '点击率 = 点击 ÷ 曝光 × 100%，反映广告吸引力', value: totals.avg_ctr, suffix: '%', color: '#1677ff' },
             { title: '总花费', value: totals.spend, suffix: '₽', color: '#722ed1' },
-            { title: '平均 CPC', value: totals.avg_cpc, suffix: '₽', color: '#fa8c16' },
+            { title: '平均 CPC', tip: '单次点击成本 = 花费 ÷ 点击数（₽），越低越好', value: totals.avg_cpc, suffix: '₽', color: '#fa8c16' },
           ].map((item, i) => (
             <Col xs={12} sm={8} md={4} key={i}>
               <Card size="small" bodyStyle={{ padding: 12 }}>
                 <Statistic
-                  title={item.title}
+                  title={item.tip ? (
+                    <Tooltip title={item.tip}><span style={{ cursor: 'help' }}>{item.title} <span style={{ fontSize: 11, color: '#bbb' }}>ⓘ</span></span></Tooltip>
+                  ) : item.title}
                   value={item.value ?? '-'}
                   suffix={item.suffix}
                   valueStyle={{ fontSize: 20, color: item.color }}

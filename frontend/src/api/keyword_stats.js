@@ -25,3 +25,7 @@ export function getNegativeSuggestions(params) {
 export function getKeywordSyncStatus(shopId) {
   return request.get(`${BASE}/sync-status`, { params: { shop_id: shopId } })
 }
+
+export function translateKeywords(keywords) {
+  return request.post(`${BASE}/translate-keywords`, { keywords }, { timeout: 60000 })
+}
