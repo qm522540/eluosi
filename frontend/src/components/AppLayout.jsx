@@ -16,6 +16,8 @@ import {
   PartitionOutlined,
   NotificationOutlined,
   DollarOutlined,
+  LineChartOutlined,
+  KeyOutlined,
 } from '@ant-design/icons'
 import { useAuthStore } from '@/stores/authStore'
 
@@ -52,9 +54,13 @@ const menuItems = [
     label: 'SEO优化',
   },
   {
-    key: '/reports',
+    key: 'reports-group',
     icon: <BarChartOutlined />,
     label: '数据报表',
+    children: [
+      { key: '/reports/keywords', icon: <KeyOutlined />, label: '关键词统计' },
+      { key: '/reports', icon: <LineChartOutlined />, label: '综合报表' },
+    ],
   },
   {
     key: '/settings',
@@ -124,6 +130,7 @@ const AppLayout = () => {
           defaultOpenKeys={[
             location.pathname.startsWith('/products') && 'products-group',
             location.pathname.startsWith('/ads') && 'ads-group',
+            location.pathname.startsWith('/reports') && 'reports-group',
           ].filter(Boolean)}
           items={menuItems}
           onClick={handleMenuClick}

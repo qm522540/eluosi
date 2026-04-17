@@ -6,6 +6,7 @@ import Products from '@/pages/Products'
 import MappingManagement from '@/pages/products/MappingManagement'
 import Seo from '@/pages/Seo'
 import Reports from '@/pages/Reports'
+import KeywordStats from '@/pages/reports/KeywordStats'
 import Settings from '@/pages/Settings'
 import AppLayout from '@/components/AppLayout'
 import AuthRoute from '@/components/AuthRoute'
@@ -29,6 +30,7 @@ const App = () => {
         <Route path="products/mapping" element={<MappingManagement />} />
         <Route path="seo" element={<Seo />} />
         <Route path="reports" element={<Reports />} />
+        <Route path="reports/keywords" element={<KeywordStats />} />
         <Route path="settings" element={<Settings />} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
