@@ -42,6 +42,17 @@ export function deleteCategoryMapping(mappingId) {
   return request.delete(`${BASE}/category-mappings/${mappingId}`)
 }
 
+// 跨平台建议（全局 hints 驱动，来自别的租户的确认共现）
+export function listCrossPlatformSuggestions(localCategoryId) {
+  return request.get(`${BASE}/cross-platform-suggestions`, {
+    params: { local_category_id: localCategoryId },
+  })
+}
+
+export function adoptCrossPlatformSuggestion(data) {
+  return request.post(`${BASE}/cross-platform-suggestions/adopt`, data)
+}
+
 // ========== §5 属性映射 ==========
 
 export function listAttributeMappings(params = {}) {

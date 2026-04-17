@@ -1,19 +1,23 @@
 import { useState, useEffect, useCallback } from 'react'
 import {
   Table, Button, Space, Modal, Form, Input, Select, Tag, Popconfirm,
-  message, Typography, Empty, Tooltip,
+  message, Typography, Empty, Tooltip, Alert,
 } from 'antd'
 import {
   PlusOutlined, CheckOutlined, EditOutlined, DeleteOutlined, ReloadOutlined,
-  StarFilled,
+  StarFilled, ThunderboltOutlined,
 } from '@ant-design/icons'
 import {
   listCategoryMappings,
   upsertCategoryMapping,
   confirmCategoryMapping,
   deleteCategoryMapping,
+  listCrossPlatformSuggestions,
+  adoptCrossPlatformSuggestion,
 } from '@/api/mapping'
 import ConfidenceBadge from './ConfidenceBadge'
+
+const PLATFORM_LABEL = { wb: 'Wildberries', ozon: 'Ozon', yandex: 'Yandex' }
 
 const { Text } = Typography
 
@@ -23,6 +27,10 @@ const CategoryMappingTab = ({ localCategoryId, localCategoryName, aiSlot = null 
   const [list, setList] = useState([])
   const [loading, setLoading] = useState(false)
   const [platformFilter, setPlatformFilter] = useState('all')
+
+  // 跨平台建议（不受 platformFilter 影响，始终基于全局事实）
+  const [suggestions, setSuggestions] = useState([])
+  const [adoptingKey, setAdoptingKey] = useState(null)
 
   // upsert modal
   const [editing, setEditing] = useState(null) // { mode: 'create' | 'edit', target }
@@ -44,9 +52,46 @@ const CategoryMappingTab = ({ localCategoryId, localCategoryName, aiSlot = null 
     }
   }, [localCategoryId, platformFilter])
 
+  const loadSuggestions = useCallback(async () => {
+    if (!localCategoryId) {
+      setSuggestions([])
+      return
+    }
+    try {
+      const res = await listCrossPlatformSuggestions(localCategoryId)
+      setSuggestions(res.data?.items || [])
+    } catch {
+      // 拉建议失败不影响主流程，静默
+      setSuggestions([])
+    }
+  }, [localCategoryId])
+
   useEffect(() => {
     load()
   }, [load])
+
+  useEffect(() => {
+    loadSuggestions()
+  }, [loadSuggestions])
+
+  const handleAdopt = async (s) => {
+    const key = `${s.target_platform}:${s.target_platform_category_id}`
+    setAdoptingKey(key)
+    try {
+      await adoptCrossPlatformSuggestion({
+        local_category_id: localCategoryId,
+        target_platform: s.target_platform,
+        target_platform_category_id: s.target_platform_category_id,
+      })
+      message.success(`已采纳 ${PLATFORM_LABEL[s.target_platform]} 建议，请在列表中确认`)
+      load()
+      loadSuggestions()
+    } catch (err) {
+      message.error(err.message || '采纳失败')
+    } finally {
+      setAdoptingKey(null)
+    }
+  }
 
   const openCreate = () => {
     setEditing({ mode: 'create' })
@@ -201,6 +246,65 @@ const CategoryMappingTab = ({ localCategoryId, localCategoryName, aiSlot = null 
 
   return (
     <div>
+      {suggestions.length > 0 && (
+        <Alert
+          type="info"
+          showIcon
+          icon={<ThunderboltOutlined />}
+          style={{ marginBottom: 12 }}
+          message={
+            <Text strong>
+              <StarFilled style={{ color: '#faad14', marginRight: 4 }} />
+              全局建议：其他租户常把此分类也绑到下列平台
+            </Text>
+          }
+          description={
+            <Space direction="vertical" size={6} style={{ width: '100%', marginTop: 4 }}>
+              {suggestions.map((s) => {
+                const key = `${s.target_platform}:${s.target_platform_category_id}`
+                const loadingThis = adoptingKey === key
+                return (
+                  <div
+                    key={key}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      gap: 12,
+                    }}
+                  >
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <Tag color={PLATFORM_COLORS[s.target_platform] || 'default'}>
+                        {s.target_platform.toUpperCase()}
+                      </Tag>
+                      <Text strong>
+                        {s.target_platform_category_name_ru || `ID ${s.target_platform_category_id}`}
+                      </Text>
+                      <Text type="secondary" style={{ fontSize: 12, marginLeft: 8 }}>
+                        ID: {s.target_platform_category_id}
+                      </Text>
+                      <Text type="secondary" style={{ fontSize: 12, marginLeft: 8 }}>
+                        · {s.co_confirmed_count} 个租户同时绑了此平台与 {PLATFORM_LABEL[s.source_platform]} 「
+                        {s.source_platform_category_name || s.source_platform_category_id}」
+                      </Text>
+                    </div>
+                    <Button
+                      size="small"
+                      type="primary"
+                      loading={loadingThis}
+                      disabled={adoptingKey && !loadingThis}
+                      onClick={() => handleAdopt(s)}
+                    >
+                      一键采纳
+                    </Button>
+                  </div>
+                )
+              })}
+            </Space>
+          }
+        />
+      )}
+
       <Space style={{ marginBottom: 12, justifyContent: 'space-between', width: '100%' }}>
         <Space>
           <Text type="secondary">
