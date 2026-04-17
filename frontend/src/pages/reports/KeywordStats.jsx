@@ -229,7 +229,7 @@ const KeywordStats = () => {
     },
     {
       title: '关键词', dataIndex: 'keyword', key: 'keyword',
-      render: (v) => {
+      render: (v, record) => {
         const zh = kwTranslations[v]
         return (
           <Space size={6}>

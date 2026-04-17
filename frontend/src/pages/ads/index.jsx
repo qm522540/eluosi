@@ -51,7 +51,9 @@ const Ads = () => {
   useEffect(() => {
     getShops({ page: 1, page_size: 100 }).then(res => {
       setShops(res.data.items || [])
-    }).catch(() => {})
+    }).catch(e => {
+      message.error('店铺列表加载失败: ' + (e?.message || '未知错误'))
+    })
   }, [])
 
   // "推广信息"页：有数据则检查 30 分钟自动同步
