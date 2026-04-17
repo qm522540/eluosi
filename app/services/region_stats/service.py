@@ -40,6 +40,55 @@ _RU_REGIONS_ZH = {
 }
 
 
+def _get_shop_avg_margin(db: Session, tenant_id: int, shop_id: int) -> tuple:
+    """取店铺级平均净毛利率。
+    优先顺序：该店铺所有 products.net_margin 平均 → ai_pricing_configs.default_config.gross_margin
+    → 兜底 0.30。返回 (avg_margin, source)。
+    """
+    row = db.execute(text("""
+        SELECT AVG(net_margin) avg_m, COUNT(net_margin) n
+        FROM products
+        WHERE tenant_id=:tid AND shop_id=:sid
+          AND status!='deleted' AND net_margin IS NOT NULL
+    """), {"tid": tenant_id, "sid": shop_id}).fetchone()
+    if row and row.avg_m is not None and (row.n or 0) > 0:
+        return float(row.avg_m), f"按店铺 {row.n} 款商品 net_margin 平均"
+
+    row = db.execute(text("""
+        SELECT default_config FROM ai_pricing_configs
+        WHERE tenant_id=:tid AND shop_id=:sid
+    """), {"tid": tenant_id, "sid": shop_id}).fetchone()
+    if row and row.default_config:
+        import json
+        try:
+            cfg = row.default_config if isinstance(row.default_config, dict) else json.loads(row.default_config)
+            gm = cfg.get("gross_margin")
+            if gm:
+                return float(gm), "按店铺 AI 调价默认配置 gross_margin"
+        except Exception:
+            pass
+
+    return 0.30, "默认兜底 30%（店铺未配置毛利率）"
+
+
+def _suggest_region_action(return_rate: float, net_profit_est: float,
+                           revenue_pct: float, orders: int) -> tuple:
+    """按退货率 + 净贡献 + 订单规模给出屏蔽建议。
+    返回 (suggestion, reason)，suggestion ∈ {'block','watch','keep'}。
+    """
+    if orders < 3:
+        return "keep", "订单过少，数据不足不做判断"
+    if return_rate >= 15:
+        return "block", f"退货率 {return_rate:.1f}% 过高，不建议投广告"
+    if net_profit_est < 0:
+        return "block", f"扣除退货损失后净利润为负（估算 ₽{net_profit_est:.0f}）"
+    if return_rate >= 8:
+        return "watch", f"退货率 {return_rate:.1f}% 偏高，建议观察"
+    if revenue_pct < 1 and orders < 10:
+        return "watch", f"销售占比 {revenue_pct:.1f}% 偏低，规模不值得重点投放"
+    return "keep", "表现正常"
+
+
 def ranking(db: Session, tenant_id: int, shop_id: int,
             date_from=None, date_to=None, sort_by="revenue", limit=50) -> dict:
     date_from, date_to = _default_dates(date_from, date_to)
@@ -52,12 +101,18 @@ def ranking(db: Session, tenant_id: int, shop_id: int,
     total_orders = int(totals_row.ord or 0)
     total_revenue = _f(totals_row.rev)
 
-    allowed = {"revenue", "orders", "avg_price", "returns"}
+    # 店铺平均毛利率（用于净贡献估算）
+    avg_margin, margin_source = _get_shop_avg_margin(db, tenant_id, shop_id)
+
+    allowed = {"revenue", "orders", "avg_price", "returns", "net_profit_est"}
     sort_col = sort_by if sort_by in allowed else "revenue"
-    if sort_col == "avg_price":
+    # net_profit_est 需 Python 侧排序（SQL 层无法直接表达退货损失+毛利）
+    if sort_col in {"revenue", "orders", "returns"}:
+        order_expr = f"SUM({sort_col}) DESC"
+    elif sort_col == "avg_price":
         order_expr = "ROUND(SUM(revenue)/NULLIF(SUM(orders),0),2) DESC"
     else:
-        order_expr = f"SUM({sort_col}) DESC"
+        order_expr = "SUM(revenue) DESC"
 
     rows = db.execute(text(f"""
         SELECT region_name, SUM(orders) ord, SUM(revenue) rev, SUM(returns) ret
@@ -71,6 +126,14 @@ def ranking(db: Session, tenant_id: int, shop_id: int,
         ord_val = int(r.ord or 0)
         rev_val = _f(r.rev)
         ret_val = int(r.ret or 0)
+        return_rate = round(ret_val / ord_val * 100, 1) if ord_val > 0 else 0
+        # 净贡献 = 销售额 × 毛利率 − 退货损失（退货按全损算，简化）
+        gross_profit = rev_val * avg_margin
+        return_loss = rev_val * return_rate / 100
+        net_profit_est = round(gross_profit - return_loss, 2)
+        revenue_pct = round(rev_val / total_revenue * 100, 1) if total_revenue > 0 else 0
+        suggestion, suggestion_reason = _suggest_region_action(
+            return_rate, net_profit_est, revenue_pct, ord_val)
         items.append({
             "region_name": r.region_name,
             "region_name_zh": _RU_REGIONS_ZH.get(r.region_name, ""),
@@ -78,10 +141,25 @@ def ranking(db: Session, tenant_id: int, shop_id: int,
             "revenue": rev_val,
             "avg_price": round(rev_val / ord_val, 2) if ord_val > 0 else 0,
             "returns": ret_val,
-            "return_rate": round(ret_val / ord_val * 100, 1) if ord_val > 0 else 0,
+            "return_rate": return_rate,
             "orders_pct": round(ord_val / total_orders * 100, 1) if total_orders > 0 else 0,
-            "revenue_pct": round(rev_val / total_revenue * 100, 1) if total_revenue > 0 else 0,
+            "revenue_pct": revenue_pct,
+            "net_profit_est": net_profit_est,
+            "suggestion": suggestion,
+            "suggestion_reason": suggestion_reason,
         })
+
+    if sort_col == "net_profit_est":
+        items.sort(key=lambda x: x["net_profit_est"], reverse=True)
+
+    # 全店净贡献估算
+    total_gross = total_revenue * avg_margin
+    total_returns = sum(_f(r.ret) for r in rows)  # 退货件数总和
+    total_return_loss = sum(
+        _f(r.rev) * (_f(r.ret) / _f(r.ord) if _f(r.ord) > 0 else 0)
+        for r in rows
+    )
+    total_net_profit = round(total_gross - total_return_loss, 2)
 
     return {"code": 0, "data": {
         "date_from": date_from, "date_to": date_to,
@@ -90,6 +168,9 @@ def ranking(db: Session, tenant_id: int, shop_id: int,
             "orders": total_orders,
             "revenue": total_revenue,
             "avg_price": round(total_revenue / total_orders, 2) if total_orders > 0 else 0,
+            "avg_margin_pct": round(avg_margin * 100, 1),
+            "margin_source": margin_source,
+            "net_profit_est": total_net_profit,
         },
         "items": items,
     }}
