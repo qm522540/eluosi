@@ -579,106 +579,161 @@ const KeywordStats = () => {
         destroyOnClose
       >
         {kwDetailLoading ? (
-          <div style={{ textAlign: 'center', padding: 40 }}><Spin /></div>
+          <div style={{ textAlign: 'center', padding: 40 }}><Spin size="large" tip="加载中..." /></div>
         ) : kwDetailData ? (
           <div>
-            <div style={{ fontSize: 13, color: '#666', marginBottom: 16 }}>
-              共在 {kwDetailData.campaigns?.length || 0} 个活动中出现
-            </div>
-            {(kwDetailData.campaigns || []).map(camp => (
-              <Card key={camp.campaign_id} size="small" style={{ marginBottom: 12 }}
-                title={
-                  <Space size={8} wrap>
-                    <span>{camp.campaign_name}</span>
-                    <Badge
-                      status={camp.status === 'active' ? 'success' : camp.status === 'paused' ? 'warning' : 'default'}
-                      text={camp.status === 'active' ? '投放中' : camp.status === 'paused' ? '暂停' : camp.status === 'archived' ? '已归档' : camp.status}
-                      style={{ fontSize: 12 }}
-                    />
-                    <Tag color="default" style={{ fontSize: 10 }}>
-                      {camp.platform?.toUpperCase()} ID: {camp.platform_campaign_id}
-                    </Tag>
-                    {camp.keyword_first_seen && (
-                      <Tooltip title="该关键词在此活动中首次出现数据的日期">
-                        <Tag color="blue" style={{ fontSize: 10, margin: 0 }}>
-                          首次出现: {camp.keyword_first_seen}
-                        </Tag>
-                      </Tooltip>
-                    )}
-                  </Space>
-                }
-              >
-                <Row gutter={16} style={{ marginBottom: 10 }}>
-                  <Col span={6}><Text type="secondary">关键词曝光</Text><br/><Text strong>{camp.impressions?.toLocaleString()}</Text></Col>
-                  <Col span={6}><Text type="secondary">关键词点击</Text><br/><Text strong>{camp.clicks?.toLocaleString()}</Text></Col>
-                  <Col span={6}><Text type="secondary">关键词花费</Text><br/><Text strong>{camp.spend?.toLocaleString()} ₽</Text></Col>
-                  <Col span={6}><Text type="secondary">CTR</Text><br/><Text strong>{camp.impressions > 0 ? (camp.clicks / camp.impressions * 100).toFixed(2) : 0}%</Text></Col>
-                </Row>
-                {/* 活动下的商品列表（屏蔽时选对哪个商品操作） */}
-                {(camp.products?.length > 0 || camp.skus?.length > 0) ? (
-                  <div>
-                    <div style={{
-                      padding: '8px 10px', marginBottom: 8,
-                      background: '#f6f8ff', border: '1px solid #e6edff',
-                      borderRadius: 6, fontSize: 12,
+            {/* ===== 顶部汇总条 ===== */}
+            {(() => {
+              const camps = kwDetailData.campaigns || []
+              const totalImp = camps.reduce((s, c) => s + (c.impressions || 0), 0)
+              const totalClk = camps.reduce((s, c) => s + (c.clicks || 0), 0)
+              const totalSp = camps.reduce((s, c) => s + (c.spend || 0), 0)
+              const earliest = camps.map(c => c.keyword_first_seen).filter(Boolean).sort()[0]
+              return (
+                <div style={{
+                  display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)',
+                  gap: 12, marginBottom: 20,
+                }}>
+                  {[
+                    { label: '涉及活动', value: camps.length, suffix: '个' },
+                    { label: '总曝光', value: totalImp.toLocaleString() },
+                    { label: '总点击', value: totalClk.toLocaleString() },
+                    { label: '总花费', value: `${totalSp.toLocaleString()} ₽`, color: totalSp > 100 ? '#cf1322' : undefined },
+                    { label: '首次出现', value: earliest || '-' },
+                  ].map((item, i) => (
+                    <div key={i} style={{
+                      padding: '12px 14px', background: '#fafafa',
+                      borderRadius: 8, borderLeft: `3px solid ${item.color || '#1677ff'}`,
                     }}>
-                      <div style={{ fontWeight: 500, color: '#333', marginBottom: 4 }}>
-                        该关键词在此活动中的数据
+                      <div style={{ fontSize: 12, color: '#888' }}>{item.label}</div>
+                      <div style={{ fontSize: 20, fontWeight: 600, color: item.color || '#1f1f1f', marginTop: 2 }}>
+                        {item.value}{item.suffix ? <span style={{ fontSize: 13, fontWeight: 400, marginLeft: 2 }}>{item.suffix}</span> : null}
                       </div>
-                      <Space size={16}>
-                        <span>曝光 <b>{camp.impressions?.toLocaleString()}</b></span>
-                        <span>点击 <b>{camp.clicks?.toLocaleString()}</b></span>
-                        <span>花费 <b>{camp.spend?.toLocaleString()}₽</b></span>
-                        <span>CTR <b>{camp.impressions > 0 ? (camp.clicks / camp.impressions * 100).toFixed(2) : 0}%</b></span>
+                    </div>
+                  ))}
+                </div>
+              )
+            })()}
+
+            {/* ===== 活动卡片列表 ===== */}
+            {(kwDetailData.campaigns || []).map(camp => {
+              const statusCfg = {
+                active: { badge: 'success', text: '投放中', bg: '#f6ffed', border: '#b7eb8f' },
+                paused: { badge: 'warning', text: '暂停', bg: '#fffbe6', border: '#ffe58f' },
+                archived: { badge: 'default', text: '已归档', bg: '#f5f5f5', border: '#d9d9d9' },
+              }[camp.status] || { badge: 'default', text: camp.status, bg: '#f5f5f5', border: '#d9d9d9' }
+              const prods = camp.products?.length > 0 ? camp.products : camp.skus || []
+              const excludedCount = prods.filter(p => p.is_excluded).length
+
+              return (
+                <Card key={camp.campaign_id} size="small"
+                  style={{ marginBottom: 16, borderColor: statusCfg.border }}
+                  styles={{ header: { background: statusCfg.bg, borderBottom: `1px solid ${statusCfg.border}` } }}
+                  title={
+                    <div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                        <Text strong style={{ fontSize: 14 }}>{camp.campaign_name}</Text>
+                        <Badge status={statusCfg.badge} text={statusCfg.text} style={{ fontSize: 12 }} />
+                      </div>
+                      <div style={{ fontSize: 11, color: '#888', marginTop: 4 }}>
+                        {camp.platform?.toUpperCase()} ID: {camp.platform_campaign_id}
                         {camp.keyword_first_seen && (
-                          <span>加入时间 <b>{camp.keyword_first_seen}</b></span>
+                          <span style={{ marginLeft: 12 }}>📅 首次出现: <b>{camp.keyword_first_seen}</b></span>
                         )}
-                      </Space>
+                      </div>
                     </div>
-                    <div style={{ fontSize: 12, color: '#888', marginBottom: 6 }}>
-                      选择要屏蔽此关键词的商品（{(camp.products || camp.skus || []).length} 个）
-                    </div>
-                    {/* 优先展示 products（有 nm_id + 名称），fallback 到 skus */}
-                    {(camp.products?.length > 0 ? camp.products : camp.skus || []).map(p => {
-                      const nmId = p.nm_id || parseInt(p.sku || '0')
-                      const name = p.name || p.subject_name || `商品 ${nmId}`
-                      const excKey = `${camp.campaign_id}:${nmId}`
-                      const isExcluded = p.is_excluded
-                      return (
-                        <div key={nmId} style={{
-                          display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-                          padding: '6px 0', borderBottom: '1px solid #f5f5f5',
-                          opacity: isExcluded ? 0.6 : 1,
-                        }}>
-                          <div style={{ flex: 1 }}>
-                            <Text style={{ fontSize: 12, fontWeight: 500 }}>nm_id: {nmId}</Text>
-                            {name && <Text style={{ marginLeft: 8, fontSize: 11, color: '#888' }}>{name}</Text>}
-                          </div>
-                          {isExcluded ? (
-                            <Tag color="default" style={{ margin: 0 }}>已屏蔽</Tag>
-                          ) : (
-                            <Popconfirm
-                              title={`对商品 ${nmId} 屏蔽「${kwDetailKeyword}」？`}
-                              description="屏蔽后该商品不再因此关键词展示广告"
-                              onConfirm={() => handleExcludeKeyword(camp.campaign_id, nmId, kwDetailKeyword)}
-                            >
-                              <Button size="small" danger icon={<StopOutlined />}
-                                loading={excluding === excKey}>
-                                屏蔽
-                              </Button>
-                            </Popconfirm>
-                          )}
+                  }
+                >
+                  {/* 关键词数据卡片 */}
+                  <div style={{
+                    display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)',
+                    gap: 10, marginBottom: 14,
+                  }}>
+                    {[
+                      { label: '曝光', value: camp.impressions?.toLocaleString(), icon: '👁' },
+                      { label: '点击', value: camp.clicks?.toLocaleString(), icon: '👆' },
+                      { label: '花费', value: `${camp.spend?.toLocaleString()} ₽`, icon: '💰',
+                        color: camp.spend > 50 && camp.clicks < 3 ? '#cf1322' : undefined },
+                      { label: 'CTR', value: `${camp.impressions > 0 ? (camp.clicks / camp.impressions * 100).toFixed(2) : 0}%`, icon: '📊' },
+                    ].map((item, i) => (
+                      <div key={i} style={{
+                        padding: '8px 10px', background: '#fafafa',
+                        borderRadius: 6, textAlign: 'center',
+                      }}>
+                        <div style={{ fontSize: 11, color: '#888' }}>{item.icon} {item.label}</div>
+                        <div style={{ fontSize: 16, fontWeight: 600, color: item.color || '#1f1f1f', marginTop: 2 }}>
+                          {item.value}
                         </div>
-                      )
-                    })}
+                      </div>
+                    ))}
                   </div>
-                ) : (
-                  <div style={{ fontSize: 12, color: '#888' }}>
-                    暂无商品数据
-                  </div>
-                )}
-              </Card>
-            ))}
+
+                  {/* 商品列表 */}
+                  {prods.length > 0 ? (
+                    <div>
+                      <div style={{
+                        fontSize: 12, color: '#666', marginBottom: 8,
+                        display: 'flex', justifyContent: 'space-between',
+                      }}>
+                        <span>
+                          <StopOutlined style={{ marginRight: 4 }} />
+                          选择要屏蔽此关键词的商品
+                        </span>
+                        <span style={{ color: '#888' }}>
+                          {prods.length} 个商品 · {excludedCount} 个已屏蔽
+                        </span>
+                      </div>
+                      <div style={{
+                        border: '1px solid #f0f0f0', borderRadius: 8,
+                        overflow: 'hidden',
+                      }}>
+                        {prods.map((p, idx) => {
+                          const nmId = p.nm_id || parseInt(p.sku || '0')
+                          const name = p.name || p.subject_name || ''
+                          const excKey = `${camp.campaign_id}:${nmId}`
+                          const isExcluded = p.is_excluded
+                          return (
+                            <div key={nmId} style={{
+                              display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                              padding: '8px 12px',
+                              background: isExcluded ? '#fafafa' : (idx % 2 === 0 ? '#fff' : '#fafcff'),
+                              borderBottom: idx < prods.length - 1 ? '1px solid #f5f5f5' : 'none',
+                              opacity: isExcluded ? 0.5 : 1,
+                            }}>
+                              <div style={{ flex: 1 }}>
+                                <Text style={{ fontSize: 13, fontWeight: 500 }}>{nmId}</Text>
+                                {name && (
+                                  <Text style={{ marginLeft: 8, fontSize: 12, color: '#666' }}>{name}</Text>
+                                )}
+                              </div>
+                              {isExcluded ? (
+                                <Tag color="default" style={{ margin: 0, fontSize: 11 }}>✓ 已屏蔽</Tag>
+                              ) : (
+                                <Popconfirm
+                                  title={`对商品 ${nmId} 屏蔽此关键词？`}
+                                  description={`屏蔽「${kwDetailKeyword}」后该商品不再因此词展示广告`}
+                                  okText="确认屏蔽"
+                                  cancelText="取消"
+                                  onConfirm={() => handleExcludeKeyword(camp.campaign_id, nmId, kwDetailKeyword)}
+                                >
+                                  <Button size="small" danger icon={<StopOutlined />}
+                                    loading={excluding === excKey}
+                                    style={{ fontSize: 12 }}>
+                                    屏蔽
+                                  </Button>
+                                </Popconfirm>
+                              )}
+                            </div>
+                          )
+                        })}
+                      </div>
+                    </div>
+                  ) : (
+                    <Empty description="暂无商品数据" image={Empty.PRESENTED_IMAGE_SIMPLE} />
+                  )}
+                </Card>
+              )
+            })}
           </div>
         ) : (
           <Empty description="无关联数据" />
