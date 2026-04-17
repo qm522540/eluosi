@@ -253,23 +253,37 @@ const PlatformAttributesBlock = ({ productId }) => {
           background: '#fafafa', border: '1px solid #f0f0f0',
           borderRadius: 8, padding: 12, maxHeight: 300, overflowY: 'auto',
         }}>
-          {attrs.attributes.map((a, i) => (
-            <div key={i} style={{
-              display: 'flex', gap: 8, padding: '5px 0',
-              borderBottom: i < attrs.attributes.length - 1 ? '1px solid #f5f5f5' : 'none',
-              fontSize: 12,
-            }}>
-              <div style={{
-                minWidth: 140, maxWidth: 180, color: '#666',
-                fontWeight: 500, flexShrink: 0,
+          {attrs.attributes.map((a, i) => {
+            const nameRu = a.name_ru && a.name_ru !== a.name ? a.name_ru : null
+            const valueRu = a.value_ru && a.value_ru !== a.value ? a.value_ru : null
+            return (
+              <div key={i} style={{
+                display: 'flex', gap: 8, padding: '5px 0',
+                borderBottom: i < attrs.attributes.length - 1 ? '1px solid #f5f5f5' : 'none',
+                fontSize: 12,
               }}>
-                {a.name}
+                <div style={{
+                  minWidth: 140, maxWidth: 180, color: '#666',
+                  fontWeight: 500, flexShrink: 0,
+                }}>
+                  <div>{a.name}</div>
+                  {nameRu && (
+                    <div style={{ fontSize: 11, color: '#bbb', fontWeight: 400, marginTop: 1 }}>
+                      {nameRu}
+                    </div>
+                  )}
+                </div>
+                <div style={{ color: '#1f1f1f', wordBreak: 'break-word', flex: 1 }}>
+                  <div>{a.value || '-'}</div>
+                  {valueRu && (
+                    <div style={{ fontSize: 11, color: '#bbb', marginTop: 1 }}>
+                      {valueRu}
+                    </div>
+                  )}
+                </div>
               </div>
-              <div style={{ color: '#1f1f1f', wordBreak: 'break-word' }}>
-                {a.value || '-'}
-              </div>
-            </div>
-          ))}
+            )
+          })}
         </div>
       ) : (
         <div style={{ fontSize: 12, color: '#999', padding: '8px 0' }}>

@@ -941,16 +941,19 @@ async def get_platform_attributes(
         return {"code": ErrorCode.SHOP_NOT_FOUND, "msg": "店铺不存在"}
 
     if listing.platform == "wb":
-        return await _wb_attributes(shop, listing)
+        return await _wb_attributes(db, tenant_id, shop, listing)
     elif listing.platform == "ozon":
         return await _ozon_attributes(db, tenant_id, shop, listing)
     else:
         return {"code": 0, "data": {"platform": listing.platform, "attributes": []}}
 
 
-async def _wb_attributes(shop, listing) -> dict:
+async def _wb_attributes(db, tenant_id, shop, listing) -> dict:
     """WB: 从 cards/list 找到这个 nm_id 的 characteristics"""
     from app.services.platform.wb import WBClient
+    from app.models.category import AttributeMapping, CategoryPlatformMapping
+    from app.services.translation.ru_zh import translate_batch
+
     client = WBClient(shop_id=shop.id, api_key=shop.api_key)
     try:
         res = await client.fetch_products(limit=100)
@@ -960,19 +963,69 @@ async def _wb_attributes(shop, listing) -> dict:
         if not target:
             return {"code": 0, "data": {"platform": "wb", "attributes": []}}
         chars = target.get("characteristics") or []
-        attrs = []
-        for c in chars:
-            value = c.get("value")
-            if isinstance(value, list):
-                value = ", ".join(str(v) for v in value)
-            attrs.append({
-                "id": c.get("id"),
-                "name": c.get("name", ""),
-                "value": str(value) if value is not None else "",
-            })
-        return {"code": 0, "data": {"platform": "wb", "attributes": attrs}}
     finally:
         await client.close()
+
+    # 属性名中文化：从 attribute_mappings 按 platform_attr_id 反查
+    name_map = {}
+    cat_mapping = db.query(CategoryPlatformMapping).filter(
+        CategoryPlatformMapping.tenant_id == tenant_id,
+        CategoryPlatformMapping.platform == "wb",
+        CategoryPlatformMapping.platform_category_id == listing.platform_category_id,
+    ).first()
+    if cat_mapping:
+        attr_rows = db.query(
+            AttributeMapping.platform_attr_id,
+            AttributeMapping.platform_attr_name,
+            AttributeMapping.local_attr_name,
+        ).filter(
+            AttributeMapping.tenant_id == tenant_id,
+            AttributeMapping.local_category_id == cat_mapping.local_category_id,
+            AttributeMapping.platform == "wb",
+        ).all()
+        for r in attr_rows:
+            name_map[str(r.platform_attr_id)] = {
+                "ru": r.platform_attr_name,
+                "zh": r.local_attr_name,
+            }
+
+    # 先组装原始结构 + 收集待翻译的属性名/值
+    raw = []
+    names_to_translate = []  # 映射表里没有的属性名
+    values_to_translate = []
+    for c in chars:
+        value = c.get("value")
+        if isinstance(value, list):
+            value = ", ".join(str(v) for v in value)
+        value_str = str(value) if value is not None else ""
+        name_ru = c.get("name", "")
+        attr_id = str(c.get("id", ""))
+        mapped = name_map.get(attr_id) or {}
+        name_zh = mapped.get("zh") or ""
+        if not name_zh and name_ru:
+            names_to_translate.append(name_ru)
+        if value_str:
+            values_to_translate.append(value_str)
+        raw.append({
+            "id": c.get("id"), "name_ru": name_ru, "name_zh": name_zh,
+            "value_ru": value_str,
+        })
+
+    name_trans = await translate_batch(db, names_to_translate, field_type="attr_name")
+    value_trans = await translate_batch(db, values_to_translate, field_type="attr_value")
+
+    attrs = []
+    for r in raw:
+        zh = r["name_zh"] or name_trans.get(r["name_ru"]) or r["name_ru"]
+        v_zh = value_trans.get(r["value_ru"], r["value_ru"])
+        attrs.append({
+            "id": r["id"],
+            "name": zh,
+            "name_ru": r["name_ru"],
+            "value": v_zh,
+            "value_ru": r["value_ru"],
+        })
+    return {"code": 0, "data": {"platform": "wb", "attributes": attrs}}
 
 
 async def _ozon_attributes(db, tenant_id, shop, listing) -> dict:
@@ -1029,23 +1082,44 @@ async def _ozon_attributes(db, tenant_id, shop, listing) -> dict:
                 "zh": r.local_attr_name,
             }
 
-    attrs = []
+    # 先组装原始结构 + 收集待翻译的值
+    from app.services.translation.ru_zh import translate_batch
+    raw = []
+    values_to_translate = []
+    names_to_translate = []
     for a in ozon_attrs:
         attr_id = str(a.get("id", ""))
         values = a.get("values") or []
-        # 组装值文本
         val_parts = []
         for v in values:
             if isinstance(v, dict):
                 val = v.get("value") or v.get("dictionary_value_id", "")
                 if val:
                     val_parts.append(str(val))
+        value_ru = " | ".join(val_parts)[:500]
         name_info = name_map.get(attr_id, {})
-        attrs.append({
+        name_ru = name_info.get("ru", "")
+        name_zh = name_info.get("zh") or ""
+        if not name_zh and name_ru:
+            names_to_translate.append(name_ru)
+        if value_ru:
+            values_to_translate.append(value_ru)
+        raw.append({
             "id": int(attr_id) if attr_id.isdigit() else attr_id,
-            "name": name_info.get("zh") or name_info.get("ru") or f"属性 #{attr_id}",
-            "name_ru": name_info.get("ru", ""),
-            "value": " | ".join(val_parts)[:500],
+            "name_ru": name_ru, "name_zh": name_zh,
+            "value_ru": value_ru, "attr_id_raw": attr_id,
+        })
+
+    name_trans = await translate_batch(db, names_to_translate, field_type="attr_name")
+    value_trans = await translate_batch(db, values_to_translate, field_type="attr_value")
+
+    attrs = []
+    for r in raw:
+        zh = r["name_zh"] or name_trans.get(r["name_ru"]) or r["name_ru"] or f"属性 #{r['attr_id_raw']}"
+        v_zh = value_trans.get(r["value_ru"], r["value_ru"])
+        attrs.append({
+            "id": r["id"], "name": zh, "name_ru": r["name_ru"],
+            "value": v_zh, "value_ru": r["value_ru"],
         })
     return {"code": 0, "data": {"platform": "ozon", "attributes": attrs}}
 
