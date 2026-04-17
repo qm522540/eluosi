@@ -83,7 +83,11 @@ def _upsert_region_stats(db, tenant_id, shop_id, platform, stat_date, items,
 
 async def _sync_ozon_region(db, shop, date_from, date_to):
     """Ozon 地区销售同步。粒度是 city（WB 是联邦主体级），口径差异见
-    OzonClient.fetch_region_sales docstring。returns 本期不做（API 不给 city）。
+    OzonClient.fetch_region_sales docstring。
+
+    退货按 city 聚合走 fetch_returns_by_city：拉 /v1/returns/list 全量 + 拉
+    posting 建 posting_number→city 反查表。无法反查 city 的退货会丢（log 中
+    有计数），通常是 posting 窗口外的老订单。
     """
     from app.services.platform.ozon import OzonClient
     client = OzonClient(
@@ -93,11 +97,17 @@ async def _sync_ozon_region(db, shop, date_from, date_to):
     )
     try:
         items = await client.fetch_region_sales(date_from, date_to)
+        returns_by_city = await client.fetch_returns_by_city(date_from, date_to)
         stat_date = date.fromisoformat(date_to)
         n = _upsert_region_stats(
             db, shop.tenant_id, shop.id, "ozon", stat_date, items,
+            returns_by_region=returns_by_city,
         )
-        return {"regions": len(items), "inserted": n, "returns_rows": 0}
+        return {
+            "regions": len(items), "inserted": n,
+            "returns_rows": sum(returns_by_city.values()),
+            "returns_cities": len(returns_by_city),
+        }
     finally:
         await client.close()
 

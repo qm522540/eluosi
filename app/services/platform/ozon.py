@@ -870,6 +870,127 @@ class OzonClient(BasePlatformClient):
             logger.error(f"Ozon 按 SKU 拉地区销售失败 shop_id={self.shop_id}: {e}")
             return []
 
+    async def fetch_returns_list(self, max_pages: int = 30) -> list:
+        """拉取 FBO 退货列表（/v1/returns/list）。
+
+        重要坑点：该接口的 filter 字段**全部无效**（传 logistic_return_date/since 等
+        都被忽略不报错）。排序按 id ASC（最早退货先返回），只能全量拉后在 Python
+        侧按 logistic.return_date 过滤。店铺级退货通常 <5000 条，可接受。
+
+        Returns: 原始退货列表
+        """
+        try:
+            url = f"{OZON_SELLER_API}/v1/returns/list"
+            all_returns = []
+            last_id = 0
+            for _ in range(max_pages):
+                payload = {"filter": {}, "limit": 500, "last_id": last_id}
+                r = await self._request("POST", url, json=payload)
+                rets = (r or {}).get("returns") or []
+                if not rets:
+                    break
+                all_returns.extend(rets)
+                last_id = rets[-1].get("id") or 0
+                if not (r or {}).get("has_next"):
+                    break
+            return all_returns
+        except Exception as e:
+            logger.error(f"Ozon 拉取退货列表失败 shop_id={self.shop_id}: {e}")
+            return []
+
+    async def build_posting_city_map(self, date_from: str, date_to: str) -> dict:
+        """拉 FBO posting 建 {posting_number: city} 反查表。
+
+        用于退货按 city 聚合——因 /v1/returns/list 不返回 city。
+        窗口应覆盖"退货日期前 30-45 天下单的 posting"，调用方自行设置。
+        """
+        try:
+            url = f"{OZON_SELLER_API}/v2/posting/fbo/list"
+            mp = {}
+            offset = 0
+            for _ in range(20):
+                payload = {
+                    "dir": "ASC",
+                    "filter": {
+                        "since": f"{date_from}T00:00:00.000Z",
+                        "to": f"{date_to}T23:59:59.999Z",
+                        "status": "",
+                    },
+                    "limit": 1000, "offset": offset,
+                    "with": {"analytics_data": True},
+                }
+                r = await self._request("POST", url, json=payload)
+                items = (r or {}).get("result") or []
+                if not items:
+                    break
+                for p in items:
+                    pn = p.get("posting_number") or ""
+                    city = ((p.get("analytics_data") or {}).get("city") or "").strip()
+                    if pn and city:
+                        mp[pn] = city
+                if len(items) < 1000:
+                    break
+                offset += 1000
+            return mp
+        except Exception as e:
+            logger.error(f"Ozon 建 posting-city map 失败 shop_id={self.shop_id}: {e}")
+            return {}
+
+    async def fetch_returns_by_city(self, date_from: str, date_to: str,
+                                    lookback_days: int = 60) -> dict:
+        """按 city 聚合窗口内退货数（Ozon 版，对齐 WB fetch_sales_returns_by_region）。
+
+        - date_from/date_to 是退货日期窗口（按 logistic.return_date 过滤）
+        - lookback_days：posting 反查窗口起点向前延多少天（退货通常订单后 7-30 天，
+          给 60 天冗余确保覆盖）
+        - 无法反查 city 的退货计入 "__unknown__" key（调用方可选择丢弃/告警）
+
+        Returns: {city: returns_count}
+        """
+        from datetime import date, timedelta
+        d_from = date.fromisoformat(date_from)
+        d_to = date.fromisoformat(date_to)
+
+        # 1) 拉全量 returns，Python 侧筛窗口
+        all_rets = await self.fetch_returns_list()
+        windowed = []
+        for item in all_rets:
+            rd = (item.get("logistic") or {}).get("return_date") or ""
+            if not rd:
+                continue
+            try:
+                rd_date = date.fromisoformat(rd[:10])
+            except ValueError:
+                continue
+            if d_from <= rd_date <= d_to:
+                windowed.append(item)
+
+        if not windowed:
+            logger.info(
+                f"Ozon 退货窗口 {date_from}~{date_to}: 0/{len(all_rets)} 条命中")
+            return {}
+
+        # 2) 拉对应 posting 反查 city
+        posting_from = (d_from - timedelta(days=lookback_days)).isoformat()
+        city_map = await self.build_posting_city_map(posting_from, date_to)
+
+        # 3) 按 city 聚合
+        out: dict = {}
+        unknown = 0
+        for item in windowed:
+            pn = item.get("posting_number") or ""
+            city = city_map.get(pn)
+            if not city:
+                unknown += 1
+                continue
+            out[city] = out.get(city, 0) + 1
+        logger.info(
+            f"Ozon 退货按 city 聚合 {date_from}~{date_to}: "
+            f"{len(windowed)} 条退货 / {len(out)} 城市 / {unknown} 条无法反查 city "
+            f"(posting map 覆盖 {len(city_map)} 条)"
+        )
+        return out
+
     # ==================== 库存 ====================
 
     async def fetch_inventory(self) -> list:
