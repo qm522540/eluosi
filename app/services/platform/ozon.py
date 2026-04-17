@@ -87,6 +87,40 @@ def _extract_ozon_min_bid(
     return min(candidates)
 
 
+def filter_returns_by_city(returns_list: list, city_map: dict,
+                           date_from: str, date_to: str):
+    """从预拉的 returns_list 按窗口过滤 + 按 city_map 反查聚合。纯函数不走网络。
+
+    用于 backfill 场景：先一次性拉齐 returns + posting map，按天循环时反复调用此函数。
+
+    Returns: (city_to_count_dict, windowed_total, unknown_count)
+    """
+    from datetime import date as _date
+    d_from = _date.fromisoformat(date_from)
+    d_to = _date.fromisoformat(date_to)
+    out: dict = {}
+    windowed = 0
+    unknown = 0
+    for item in returns_list:
+        rd = (item.get("logistic") or {}).get("return_date") or ""
+        if not rd:
+            continue
+        try:
+            rd_date = _date.fromisoformat(rd[:10])
+        except ValueError:
+            continue
+        if not (d_from <= rd_date <= d_to):
+            continue
+        windowed += 1
+        pn = item.get("posting_number") or ""
+        city = city_map.get(pn)
+        if not city:
+            unknown += 1
+            continue
+        out[city] = out.get(city, 0) + 1
+    return out, windowed, unknown
+
+
 class OzonClient(BasePlatformClient):
     """Ozon 平台客户端
 
@@ -943,50 +977,24 @@ class OzonClient(BasePlatformClient):
         - date_from/date_to 是退货日期窗口（按 logistic.return_date 过滤）
         - lookback_days：posting 反查窗口起点向前延多少天（退货通常订单后 7-30 天，
           给 60 天冗余确保覆盖）
-        - 无法反查 city 的退货计入 "__unknown__" key（调用方可选择丢弃/告警）
+        - 无法反查 city 的退货会丢（log 中 count 出来）
 
         Returns: {city: returns_count}
         """
         from datetime import date, timedelta
         d_from = date.fromisoformat(date_from)
-        d_to = date.fromisoformat(date_to)
 
-        # 1) 拉全量 returns，Python 侧筛窗口
+        # 1) 拉全量 returns + posting map
         all_rets = await self.fetch_returns_list()
-        windowed = []
-        for item in all_rets:
-            rd = (item.get("logistic") or {}).get("return_date") or ""
-            if not rd:
-                continue
-            try:
-                rd_date = date.fromisoformat(rd[:10])
-            except ValueError:
-                continue
-            if d_from <= rd_date <= d_to:
-                windowed.append(item)
-
-        if not windowed:
-            logger.info(
-                f"Ozon 退货窗口 {date_from}~{date_to}: 0/{len(all_rets)} 条命中")
-            return {}
-
-        # 2) 拉对应 posting 反查 city
         posting_from = (d_from - timedelta(days=lookback_days)).isoformat()
         city_map = await self.build_posting_city_map(posting_from, date_to)
 
-        # 3) 按 city 聚合
-        out: dict = {}
-        unknown = 0
-        for item in windowed:
-            pn = item.get("posting_number") or ""
-            city = city_map.get(pn)
-            if not city:
-                unknown += 1
-                continue
-            out[city] = out.get(city, 0) + 1
+        # 2) 按日期 + city 聚合
+        out, windowed_cnt, unknown = filter_returns_by_city(
+            all_rets, city_map, date_from, date_to)
         logger.info(
             f"Ozon 退货按 city 聚合 {date_from}~{date_to}: "
-            f"{len(windowed)} 条退货 / {len(out)} 城市 / {unknown} 条无法反查 city "
+            f"{windowed_cnt} 条退货 / {len(out)} 城市 / {unknown} 条无法反查 city "
             f"(posting map 覆盖 {len(city_map)} 条)"
         )
         return out

@@ -81,23 +81,35 @@ def _upsert_region_stats(db, tenant_id, shop_id, platform, stat_date, items,
     return n
 
 
-async def _sync_ozon_region(db, shop, date_from, date_to):
+async def _sync_ozon_region(db, shop, date_from, date_to, *,
+                            cached_returns=None, cached_city_map=None,
+                            client=None):
     """Ozon 地区销售同步。粒度是 city（WB 是联邦主体级），口径差异见
     OzonClient.fetch_region_sales docstring。
 
     退货按 city 聚合走 fetch_returns_by_city：拉 /v1/returns/list 全量 + 拉
-    posting 建 posting_number→city 反查表。无法反查 city 的退货会丢（log 中
-    有计数），通常是 posting 窗口外的老订单。
+    posting 建 posting_number→city 反查表。
+
+    backfill 场景可传入预拉的 cached_returns + cached_city_map 复用，
+    避免每天都重拉（1735 条退货 + 3300 条 posting）。也可传入共享 client
+    实例避免重复建连接。
     """
-    from app.services.platform.ozon import OzonClient
-    client = OzonClient(
-        shop_id=shop.id, api_key=shop.api_key, client_id=shop.client_id,
-        perf_client_id=shop.perf_client_id or "",
-        perf_client_secret=shop.perf_client_secret or "",
-    )
+    from app.services.platform.ozon import OzonClient, filter_returns_by_city
+    owned = False
+    if client is None:
+        client = OzonClient(
+            shop_id=shop.id, api_key=shop.api_key, client_id=shop.client_id,
+            perf_client_id=shop.perf_client_id or "",
+            perf_client_secret=shop.perf_client_secret or "",
+        )
+        owned = True
     try:
         items = await client.fetch_region_sales(date_from, date_to)
-        returns_by_city = await client.fetch_returns_by_city(date_from, date_to)
+        if cached_returns is not None and cached_city_map is not None:
+            returns_by_city, windowed, unknown = filter_returns_by_city(
+                cached_returns, cached_city_map, date_from, date_to)
+        else:
+            returns_by_city = await client.fetch_returns_by_city(date_from, date_to)
         stat_date = date.fromisoformat(date_to)
         n = _upsert_region_stats(
             db, shop.tenant_id, shop.id, "ozon", stat_date, items,
@@ -109,7 +121,64 @@ async def _sync_ozon_region(db, shop, date_from, date_to):
             "returns_cities": len(returns_by_city),
         }
     finally:
+        if owned:
+            await client.close()
+
+
+async def _ozon_backfill_bulk(db, shop, days: int) -> dict:
+    """Ozon backfill 专用：一次拉齐 returns_list + posting_city_map，
+    按天循环时只拉 sales（1 次/天），总耗时从 ~18min 降到 ~3min。
+
+    posting city_map 窗口：backfill 起点往前延 60 天（覆盖退货对应订单）。
+    """
+    from app.services.platform.ozon import OzonClient
+    total = 0
+    total_returns = 0
+    today = date.today()
+    oldest_stat = today - timedelta(days=days)
+    city_map_from = (oldest_stat - timedelta(days=60)).isoformat()
+    city_map_to = today.isoformat()
+
+    client = OzonClient(
+        shop_id=shop.id, api_key=shop.api_key, client_id=shop.client_id,
+        perf_client_id=shop.perf_client_id or "",
+        perf_client_secret=shop.perf_client_secret or "",
+    )
+    try:
+        import time as _time
+        t0 = _time.time()
+        cached_returns = await client.fetch_returns_list()
+        t1 = _time.time()
+        cached_city_map = await client.build_posting_city_map(city_map_from, city_map_to)
+        t2 = _time.time()
+        logger.info(
+            f"Ozon backfill 预拉: returns {len(cached_returns)} 条 ({t1-t0:.1f}s) + "
+            f"posting map {len(cached_city_map)} 条 ({t2-t1:.1f}s)"
+        )
+        for i in range(1, days + 1):
+            d_str = (today - timedelta(days=i)).isoformat()
+            try:
+                r = await _sync_ozon_region(
+                    db, shop, d_str, d_str,
+                    cached_returns=cached_returns,
+                    cached_city_map=cached_city_map,
+                    client=client,
+                )
+            except Exception as e:
+                logger.warning(f"Ozon 地区回填 {d_str} 失败: {e}")
+                continue
+            total += r.get("inserted", 0)
+            total_returns += r.get("returns_rows", 0)
+            logger.info(
+                f"Ozon 地区回填 {d_str}: 地区 {r.get('regions', 0)} / "
+                f"+{r.get('inserted', 0)} / 退货 {r.get('returns_rows', 0)}"
+            )
+    finally:
         await client.close()
+    return {
+        "shop_id": shop.id, "platform": "ozon",
+        "inserted": total, "returns_rows": total_returns,
+    }
 
 
 async def _sync_wb_region(db, shop, date_from, date_to):
@@ -218,29 +287,27 @@ def backfill_region_stats(self, shop_id, tenant_id, days=90):
         shop = db.query(Shop).filter(Shop.id == shop_id).first()
         if not shop:
             return {"error": "店铺不存在"}
-        # 所有平台都按天循环（Ozon posting API 也按 since/to 过滤，单日更准）
-        if shop.platform in ("wb", "ozon"):
+        if shop.platform == "ozon":
+            return _run_async(_ozon_backfill_bulk(db, shop, days))
+        if shop.platform == "wb":
             total = 0
             total_returns = 0
             today = date.today()
-            sync_fn = _sync_wb_region if shop.platform == "wb" else _sync_ozon_region
-            platform_label = shop.platform.upper()
             for i in range(1, days + 1):
-                d = today - timedelta(days=i)
-                d_str = d.isoformat()
+                d_str = (today - timedelta(days=i)).isoformat()
                 try:
-                    r = _run_async(sync_fn(db, shop, d_str, d_str))
+                    r = _run_async(_sync_wb_region(db, shop, d_str, d_str))
                 except Exception as e:
-                    logger.warning(f"{platform_label} 地区回填 {d_str} 失败: {e}")
+                    logger.warning(f"WB 地区回填 {d_str} 失败: {e}")
                     continue
                 total += r.get("inserted", 0)
                 total_returns += r.get("returns_rows", 0)
                 logger.info(
-                    f"{platform_label} 地区回填 {d_str}: 地区 {r.get('regions', 0)} / "
+                    f"WB 地区回填 {d_str}: 地区 {r.get('regions', 0)} / "
                     f"+{r.get('inserted', 0)} / 退货 {r.get('returns_rows', 0)}"
                 )
             return {
-                "shop_id": shop_id, "platform": shop.platform,
+                "shop_id": shop_id, "platform": "wb",
                 "inserted": total, "returns_rows": total_returns,
             }
         return {"shop_id": shop_id, "platform": shop.platform, "msg": "暂不支持"}
