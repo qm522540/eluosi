@@ -244,7 +244,8 @@ const KeywordStats = () => {
       },
     },
     {
-      title: '效能', dataIndex: 'efficiency', key: 'efficiency', width: 100,
+      title: <Tooltip title="根据点击率和花费自动评级：高效词（性价比高）、潜力词（值得加大曝光）、浪费词（建议屏蔽）、普通"><span style={{ cursor: 'help' }}>效能 <span style={{ fontSize: 10, color: '#bbb' }}>ⓘ</span></span></Tooltip>,
+      dataIndex: 'efficiency', key: 'efficiency', width: 100,
       filters: [
         { text: '高效词', value: 'star' },
         { text: '潜力词', value: 'potential' },
