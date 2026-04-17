@@ -1904,7 +1904,9 @@ const AdsAIPricing = ({ shopId, platform, searched }) => {
               setDataStatus(r.data)
               clearInterval(pollTimer.current)
             }
-          } catch {}
+          } catch {
+            /* 轮询失败静默，下次再试 */
+          }
         }, 30000)
       }
     } catch {
