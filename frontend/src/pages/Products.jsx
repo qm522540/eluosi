@@ -15,7 +15,10 @@ import {
   downloadProductImages, getProductPlatformAttributes,
 } from '@/api/products'
 import { getShops } from '@/api/shops'
-import { listLocalCategories, listCategoryMappings, listAttributeMappings } from '@/api/mapping'
+import {
+  listLocalCategories, listCategoryMappings, listAttributeMappings,
+  aiSuggestCategory, aiSuggestAttributes,
+} from '@/api/mapping'
 import { useAuthStore } from '@/stores/authStore'
 
 const { Text } = Typography
@@ -186,35 +189,121 @@ const SpreadMappingPreview = ({ localCategoryId, srcPlatform, dstShopIds, shops:
   const [catMappings, setCatMappings] = useState([])
   const [attrMappings, setAttrMappings] = useState([])
   const [loading, setLoading] = useState(false)
+  const [aiFixing, setAiFixing] = useState(false)
+  const [aiFixMsg, setAiFixMsg] = useState('')
 
-  // 目标平台列表（从 dstShopIds 解析）
-  const dstPlatforms = useMemo(() => {
-    if (!dstShopIds?.length || !allShops?.length) return []
-    const platSet = new Set()
+  // 目标平台列表 + 目标 shop_id 按平台分组
+  const { dstPlatforms, dstShopByPlatform } = useMemo(() => {
+    if (!dstShopIds?.length || !allShops?.length) return { dstPlatforms: [], dstShopByPlatform: {} }
+    const map = {}
     for (const sid of dstShopIds) {
       const shop = allShops.find(s => s.id === sid)
-      if (shop) platSet.add(shop.platform)
+      if (shop && !map[shop.platform]) map[shop.platform] = sid
     }
-    return [...platSet]
+    return { dstPlatforms: Object.keys(map), dstShopByPlatform: map }
   }, [dstShopIds, allShops])
 
-  useEffect(() => {
+  // 拉取映射 + 检测缺失时自动 AI 补全
+  const fetchAndAutoFix = useCallback(async () => {
     if (!localCategoryId || !dstPlatforms.length) {
       setCatMappings([])
       setAttrMappings([])
       return
     }
     setLoading(true)
-    Promise.all([
-      listCategoryMappings({ local_category_id: localCategoryId }),
-      listAttributeMappings({ local_category_id: localCategoryId }),
-    ]).then(([catRes, attrRes]) => {
-      setCatMappings(catRes.data?.items || [])
-      setAttrMappings(attrRes.data?.items || [])
-    }).catch(() => {}).finally(() => setLoading(false))
-  }, [localCategoryId, dstPlatforms.join(',')])
+    setAiFixMsg('')
+    try {
+      const [catRes, attrRes] = await Promise.all([
+        listCategoryMappings({ local_category_id: localCategoryId }),
+        listAttributeMappings({ local_category_id: localCategoryId }),
+      ])
+      let cats = catRes.data?.items || []
+      let attrs = attrRes.data?.items || []
+
+      // 检测目标平台是否缺品类/属性映射
+      const missingCatPlatforms = dstPlatforms.filter(p => !cats.some(c => c.platform === p))
+      const missingAttrPlatforms = dstPlatforms.filter(p => !attrs.some(a => a.platform === p))
+
+      if (missingCatPlatforms.length > 0 || missingAttrPlatforms.length > 0) {
+        setAiFixing(true)
+        setAiFixMsg(`AI 正在自动对接 ${[...new Set([...missingCatPlatforms, ...missingAttrPlatforms])].map(p => p.toUpperCase()).join('/')} 映射...`)
+
+        // 逐平台补品类映射
+        for (const p of missingCatPlatforms) {
+          const shopId = dstShopByPlatform[p]
+          if (!shopId) continue
+          try {
+            await aiSuggestCategory({
+              local_category_id: localCategoryId,
+              platforms: [p],
+              shop_id: shopId,
+            })
+          } catch (e) {
+            console.warn(`AI 品类映射 ${p} 失败:`, e)
+          }
+        }
+
+        // 逐平台补属性映射（需要品类映射先建好）
+        for (const p of [...new Set([...missingCatPlatforms, ...missingAttrPlatforms])]) {
+          const shopId = dstShopByPlatform[p]
+          if (!shopId) continue
+          try {
+            await aiSuggestAttributes({
+              local_category_id: localCategoryId,
+              platform: p,
+              shop_id: shopId,
+            })
+          } catch (e) {
+            console.warn(`AI 属性映射 ${p} 失败:`, e)
+          }
+        }
+
+        // 重新拉取映射数据
+        const [catRes2, attrRes2] = await Promise.all([
+          listCategoryMappings({ local_category_id: localCategoryId }),
+          listAttributeMappings({ local_category_id: localCategoryId }),
+        ])
+        cats = catRes2.data?.items || []
+        attrs = attrRes2.data?.items || []
+        setAiFixMsg('AI 对接完成（待确认）')
+        setAiFixing(false)
+      }
+
+      setCatMappings(cats)
+      setAttrMappings(attrs)
+    } catch {
+      setCatMappings([])
+      setAttrMappings([])
+    } finally {
+      setLoading(false)
+      setAiFixing(false)
+    }
+  }, [localCategoryId, dstPlatforms.join(','), JSON.stringify(dstShopByPlatform)])
+
+  useEffect(() => { fetchAndAutoFix() }, [fetchAndAutoFix])
 
   if (!localCategoryId || !dstPlatforms.length) return null
+
+  if (aiFixing) {
+    return (
+      <div style={{ marginTop: 16 }}>
+        <SectionTitle>品类 · 属性映射</SectionTitle>
+        <div style={{
+          padding: '24px 12px', textAlign: 'center',
+          background: '#f0f7ff', border: '1px solid #bae0ff',
+          borderRadius: 8,
+        }}>
+          <Spin />
+          <div style={{ marginTop: 10, fontSize: 13, color: '#0958d9' }}>
+            {aiFixMsg || 'AI 正在自动对接映射...'}
+          </div>
+          <div style={{ fontSize: 12, color: '#888', marginTop: 4 }}>
+            首次对接需要 10-30 秒，请勿关闭
+          </div>
+        </div>
+      </div>
+    )
+  }
 
   // 按平台分组
   const srcCat = catMappings.find(m => m.platform === srcPlatform)
@@ -310,9 +399,20 @@ const SpreadMappingPreview = ({ localCategoryId, srcPlatform, dstShopIds, shops:
         )
       })}
 
+      {aiFixMsg && (
+        <div style={{ fontSize: 12, color: '#0958d9', marginBottom: 8 }}>
+          🤖 {aiFixMsg}
+        </div>
+      )}
       {!dstCats.length && !Object.values(dstAttrsByPlatform).some(a => a.length) && (
         <Alert type="warning" style={{ fontSize: 12 }}
-          message="目标平台尚未配置品类/属性映射，请先到「映射管理」配置后再铺货" />
+          message="目标平台品类/属性映射仍为空（AI 对接可能失败）。可到「映射管理」手动配置，或点击下方重试"
+          action={
+            <Button size="small" onClick={fetchAndAutoFix} loading={loading}>
+              重试 AI 对接
+            </Button>
+          }
+        />
       )}
     </div>
   )
