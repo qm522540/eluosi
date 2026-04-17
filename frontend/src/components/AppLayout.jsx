@@ -18,6 +18,7 @@ import {
   DollarOutlined,
   LineChartOutlined,
   KeyOutlined,
+  EnvironmentOutlined,
 } from '@ant-design/icons'
 import { useAuthStore } from '@/stores/authStore'
 
@@ -59,6 +60,7 @@ const menuItems = [
     label: '数据报表',
     children: [
       { key: '/reports/keywords', icon: <KeyOutlined />, label: '关键词统计' },
+      { key: '/reports/regions', icon: <EnvironmentOutlined />, label: '地区销售' },
       { key: '/reports', icon: <LineChartOutlined />, label: '综合报表' },
     ],
   },
