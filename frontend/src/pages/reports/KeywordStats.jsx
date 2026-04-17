@@ -617,8 +617,26 @@ const KeywordStats = () => {
                 {/* 活动下的商品列表（屏蔽时选对哪个商品操作） */}
                 {(camp.products?.length > 0 || camp.skus?.length > 0) ? (
                   <div>
+                    <div style={{
+                      padding: '8px 10px', marginBottom: 8,
+                      background: '#f6f8ff', border: '1px solid #e6edff',
+                      borderRadius: 6, fontSize: 12,
+                    }}>
+                      <div style={{ fontWeight: 500, color: '#333', marginBottom: 4 }}>
+                        该关键词在此活动中的数据
+                      </div>
+                      <Space size={16}>
+                        <span>曝光 <b>{camp.impressions?.toLocaleString()}</b></span>
+                        <span>点击 <b>{camp.clicks?.toLocaleString()}</b></span>
+                        <span>花费 <b>{camp.spend?.toLocaleString()}₽</b></span>
+                        <span>CTR <b>{camp.impressions > 0 ? (camp.clicks / camp.impressions * 100).toFixed(2) : 0}%</b></span>
+                        {camp.keyword_first_seen && (
+                          <span>加入时间 <b>{camp.keyword_first_seen}</b></span>
+                        )}
+                      </Space>
+                    </div>
                     <div style={{ fontSize: 12, color: '#888', marginBottom: 6 }}>
-                      活动下的商品 — 选择要屏蔽此关键词的商品
+                      选择要屏蔽此关键词的商品（{(camp.products || camp.skus || []).length} 个）
                     </div>
                     {/* 优先展示 products（有 nm_id + 名称），fallback 到 skus */}
                     {(camp.products?.length > 0 ? camp.products : camp.skus || []).map(p => {
@@ -633,19 +651,8 @@ const KeywordStats = () => {
                           opacity: isExcluded ? 0.6 : 1,
                         }}>
                           <div style={{ flex: 1 }}>
-                            <div>
-                              <Text style={{ fontSize: 12, fontWeight: 500 }}>nm_id: {nmId}</Text>
-                              {name && <Text style={{ marginLeft: 8, fontSize: 11, color: '#888' }}>{name}</Text>}
-                            </div>
-                            {(p.impressions > 0 || p.spend > 0) && (
-                              <div style={{ fontSize: 11, color: '#888', marginTop: 2 }}>
-                                <Tooltip title="该商品在此活动的整体广告数据（非单关键词）">
-                                  <span style={{ cursor: 'help' }}>
-                                    整体: 曝光 {(p.impressions || 0).toLocaleString()} · 点击 {(p.clicks || 0).toLocaleString()} · 花费 {(p.spend || 0).toLocaleString()}₽
-                                  </span>
-                                </Tooltip>
-                              </div>
-                            )}
+                            <Text style={{ fontSize: 12, fontWeight: 500 }}>nm_id: {nmId}</Text>
+                            {name && <Text style={{ marginLeft: 8, fontSize: 11, color: '#888' }}>{name}</Text>}
                           </div>
                           {isExcluded ? (
                             <Tag color="default" style={{ margin: 0 }}>已屏蔽</Tag>
