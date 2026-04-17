@@ -711,6 +711,8 @@ async def init_mapping_from_wb(
     # 4. 建本地分类 + WB 映射
     stats = {"categories": 0, "attributes": 0, "values": 0, "skipped": []}
     local_cat_map = {}  # subjectID → local_category_id
+    _confirmed_cat_mps = []   # 本次自动确认的 category mapping ids，函数末尾贡献到 global hints
+    _confirmed_attr_mps = []  # 同上，attribute mapping ids
     for s, zh in zip(target_subjects, zh_names):
         subj_id = str(s["subjectID"])
         subj_name_ru = s.get("subjectName", "")
@@ -758,6 +760,7 @@ async def init_mapping_from_wb(
             mp.is_confirmed = 1
             from datetime import datetime, timezone
             mp.confirmed_at = datetime.now(timezone.utc)
+            _confirmed_cat_mps.append(mp.id)
     db.commit()
 
     # 5. 对每个分类拉 charcs，建属性映射
@@ -808,6 +811,7 @@ async def init_mapping_from_wb(
                     attr_mp.is_confirmed = 1
                     from datetime import datetime, timezone
                     attr_mp.confirmed_at = datetime.now(timezone.utc)
+                    _confirmed_attr_mps.append(attr_mp.id)
                 stats["attributes"] += 1
 
                 # 6. 枚举值写入
@@ -837,7 +841,42 @@ async def init_mapping_from_wb(
     finally:
         await client.close()
 
+    # 7. 把本次自动确认的映射贡献到 global hints
+    stats["hint_contributions"] = _contribute_hints(
+        db, tenant_id, _confirmed_cat_mps, _confirmed_attr_mps,
+    )
     return {"code": 0, "data": stats}
+
+
+def _contribute_hints(db, tenant_id, cat_mp_ids, attr_mp_ids):
+    """本轮 init 末尾把所有自动确认的映射写入 global hints"""
+    from app.services.global_hints.service import (
+        record_category_confirmation, record_attribute_confirmation,
+    )
+    from app.models.category import CategoryPlatformMapping, AttributeMapping
+    ok_cat = 0
+    ok_attr = 0
+    if cat_mp_ids:
+        mps = db.query(CategoryPlatformMapping).filter(
+            CategoryPlatformMapping.id.in_(cat_mp_ids),
+        ).all()
+        for mp in mps:
+            try:
+                record_category_confirmation(db, tenant_id, mp)
+                ok_cat += 1
+            except Exception as e:
+                logger.warning(f"init hint 贡献 cat_mp={mp.id} 失败: {e}")
+    if attr_mp_ids:
+        mps = db.query(AttributeMapping).filter(
+            AttributeMapping.id.in_(attr_mp_ids),
+        ).all()
+        for mp in mps:
+            try:
+                record_attribute_confirmation(db, tenant_id, mp)
+                ok_attr += 1
+            except Exception as e:
+                logger.warning(f"init hint 贡献 attr_mp={mp.id} 失败: {e}")
+    return {"category_hints": ok_cat, "attribute_hints": ok_attr}
 
 
 # ==================== 从 Ozon 初始化（智能合并到本地） ====================
@@ -950,6 +989,7 @@ async def init_mapping_from_ozon(
     stats = {"categories_new": 0, "categories_merged": 0,
              "attributes_new": 0, "attributes_reused": 0,
              "values": 0, "skipped": []}
+    _confirmed_cat_mps = []  # 本次自动确认的 OZON 分类映射
 
     # 5. 处理每个 OZON 分类
     from datetime import datetime, timezone
@@ -1002,6 +1042,7 @@ async def init_mapping_from_ozon(
             if mp:
                 mp.is_confirmed = 1
                 mp.confirmed_at = datetime.now(timezone.utc)
+                _confirmed_cat_mps.append(mp.id)
         cat_to_local_map[i] = local_id
     db.commit()
 
@@ -1102,6 +1143,11 @@ async def init_mapping_from_ozon(
     finally:
         await client.close()
 
+    # 7. 贡献到 global hints（OZON 属性映射是 is_confirmed=0 的，暂不贡献；
+    #    只贡献自动确认的新建分类映射）
+    stats["hint_contributions"] = _contribute_hints(
+        db, tenant_id, _confirmed_cat_mps, [],
+    )
     return {"code": 0, "data": stats}
 
 
