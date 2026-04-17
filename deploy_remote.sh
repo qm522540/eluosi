@@ -46,13 +46,35 @@ check() {
 # ==================== 部署动作 ====================
 pull()      { step "拉取代码";       run "cd ${DIR} && git pull origin main"; }
 pipi()      { step "Python依赖";     run "cd ${DIR} && source venv/bin/activate && pip install -r requirements.txt -q 2>&1 | tail -3"; }
+pycompile() {
+    step "Python 语法预检"
+    run "cd ${DIR} && source venv/bin/activate && python -m compileall -q app/ 2>&1" || {
+        echo "ERROR: Python 语法错误，中止部署。"
+        exit 1
+    }
+    echo "语法预检通过"
+}
 restart()   { step "重启后端";       run "sudo supervisorctl restart all"; sleep 2; run "sudo supervisorctl status"; }
 build()     { step "构建前端";       run "cd ${DIR}/frontend && npm run build"; }
 health()    {
-    step "健康检查"
-    local r; r=$(run "curl -s http://localhost:8000/api/v1/system/health")
-    echo "$r"
-    echo "$r" | grep -q '"code":0' && echo "API正常" || echo "WARNING: API异常！"
+    step "健康检查（最多等 30 秒）"
+    local attempt=0
+    local max=15  # 15 * 2s = 30s
+    local r=""
+    while [ $attempt -lt $max ]; do
+        r=$(run "curl -s -o /dev/null -w '%{http_code}|' http://localhost:8000/api/v1/system/health && curl -s http://localhost:8000/api/v1/system/health" 2>&1)
+        if echo "$r" | grep -q '"code":0'; then
+            echo "API 正常（第 $((attempt+1)) 次检测）: $r"
+            return 0
+        fi
+        attempt=$((attempt+1))
+        sleep 2
+    done
+    echo ""
+    echo "ERROR: 30 秒内 API 未就绪，最后返回: $r"
+    echo "==== 最近 60 行后端错误日志 ===="
+    run "tail -60 /data/logs/fastapi_err.log 2>&1" || true
+    exit 1
 }
 migrate()   {
     [ -z "$1" ] && echo "请指定SQL文件名: --migrate 016_ai_pricing.sql" && exit 1
@@ -67,8 +89,8 @@ dbexec()    { run "mysql -u ${DB_USER} -p'${DB_PASS}' ${DB_NAME} -e \"$1\""; }
 
 # ==================== 主入口 ====================
 case "${1:-full}" in
-    full|"")    check; pull; pipi; restart; build; health; step "部署完成" ;;
-    --backend)  check; pull; pipi; restart; health ;;
+    full|"")    check; pull; pipi; pycompile; restart; build; health; step "部署完成" ;;
+    --backend)  check; pull; pipi; pycompile; restart; health ;;
     --frontend) check; pull; build ;;
     --migrate)  check; migrate "$2" ;;
     --status)   check; status ;;
