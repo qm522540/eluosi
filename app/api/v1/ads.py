@@ -646,14 +646,14 @@ async def campaign_products(
 async def campaign_keywords(
     campaign_id: int,
     days: int = Query(7, ge=1, le=30),
+    nm_id: int = Query(None),
     db: Session = Depends(get_db),
     tenant_id: int = Depends(get_tenant_id),
 ):
-    """获取广告活动的关键词统计（仅 WB 活动级数据，不按 SKU 过滤）
+    """获取广告活动的关键词统计 + 屏蔽词列表
 
     返回最近 N 天（默认7天）该活动触发的搜索词聚合统计。
-    auction/unified 类型活动没有"手动关键词"概念，但可以看系统为活动
-    触发的实际搜索词。search 类型活动除此外还有独立配置的关键词。
+    传 nm_id 时同时返回该 SKU 的屏蔽关键词列表（WB auction/unified 支持）。
     """
     from app.models.ad import AdCampaign
     from app.models.shop import Shop
@@ -681,7 +681,7 @@ async def campaign_keywords(
     from app.services.platform.wb import WBClient
     client = WBClient(shop_id=shop.id, api_key=shop.api_key)
     try:
-        # 并行拉关键词统计 + 活动汇总
+        # 并行拉关键词统计 + 活动汇总 + 屏蔽词
         df = date_from.strftime("%Y-%m-%d")
         dt = date_to.strftime("%Y-%m-%d")
         import asyncio as _aio
@@ -690,8 +690,21 @@ async def campaign_keywords(
         summary_task = client.fetch_campaign_summary(
             advert_id=camp.platform_campaign_id, date_from=df, date_to=dt)
         keywords, summary = await _aio.gather(kw_task, summary_task)
+
+        # 有 nm_id 时拉屏蔽词
+        excluded_map = {}
+        if nm_id:
+            excluded_map = await client.fetch_excluded_keywords(
+                advert_id=camp.platform_campaign_id, nm_ids=[nm_id])
     finally:
         await client.close()
+
+    # 屏蔽词集合（用于交叉标注）
+    excluded_set = set()
+    excluded_list = []
+    if nm_id and excluded_map:
+        excluded_list = excluded_map.get(int(nm_id), [])
+        excluded_set = {w.lower().strip() for w in excluded_list}
 
     # 关键词级订单归因估算：按点击占比分摊活动总订单/营收
     total_clicks = summary.get("clicks", 0)
@@ -716,6 +729,10 @@ async def campaign_keywords(
             kw["est_atbs"] = 0
             kw["est_roas"] = 0
 
+        # 交叉标注：该关键词是否已被屏蔽
+        kw_text = (kw.get("keyword") or "").lower().strip()
+        kw["is_excluded"] = kw_text in excluded_set if excluded_set else False
+
     return success({
         "campaign_id": campaign_id,
         "date_from": str(date_from),
@@ -724,6 +741,8 @@ async def campaign_keywords(
         "total": len(keywords),
         "summary": summary,
         "keywords": keywords,
+        "excluded_keywords": excluded_list,
+        "excluded_count": len(excluded_list),
     })
 
 

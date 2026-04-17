@@ -385,13 +385,18 @@ const AdsOverview = ({ shopId, platform, shops, searched, syncing, lastSyncTime,
     // 已缓存或正在加载则跳过
     if (keywordsBySku[sku] !== undefined || keywordsLoadingSku[sku]) return
 
-    // WB: 调活动级关键词 API（所有 SKU 共享，整份缓存）
+    // WB: 调活动级关键词 API + 该 SKU 的屏蔽词
     if (platform === 'wb' && detailData?.id) {
       setKeywordsLoadingSku(m => ({ ...m, [sku]: true }))
       try {
-        const r = await getCampaignKeywords(detailData.id, 7)
+        const r = await getCampaignKeywords(detailData.id, 7, sku)
         const kws = r.data?.keywords || []
-        setKeywordsBySku(m => ({ ...m, [sku]: kws, __wb_activity_level: true }))
+        const excluded = r.data?.excluded_keywords || []
+        setKeywordsBySku(m => ({
+          ...m,
+          [sku]: kws,
+          [`${sku}_excluded`]: excluded,
+        }))
       } catch {
         setKeywordsBySku(m => ({ ...m, [sku]: [] }))
       } finally {
@@ -958,6 +963,7 @@ const AdsOverview = ({ shopId, platform, shops, searched, syncing, lastSyncTime,
 
     // WB：活动级关键词（所有 SKU 共享）
     if (platform === 'wb') {
+      const excluded = keywordsBySku[`${sku}_excluded`] || []
       if (!kws || kws.length === 0) {
         return (
           <div style={{ padding: 12, background: '#fafafa', borderRadius: 4 }}>
@@ -965,6 +971,14 @@ const AdsOverview = ({ shopId, platform, shops, searched, syncing, lastSyncTime,
               image={Empty.PRESENTED_IMAGE_SIMPLE}
               description={<span style={{ fontSize: 13 }}>近7天无关键词数据（活动可能还没曝光）</span>}
             />
+            {excluded.length > 0 && (
+              <div style={{ marginTop: 12, padding: 10, background: '#fff', borderRadius: 4 }}>
+                <Text type="secondary" style={{ fontSize: 12 }}>🚫 已屏蔽 {excluded.length} 个关键词：</Text>
+                <div style={{ marginTop: 6, display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+                  {excluded.map(w => <Tag key={w} color="red" style={{ fontSize: 11 }}>{w}</Tag>)}
+                </div>
+              </div>
+            )}
           </div>
         )
       }
@@ -975,6 +989,9 @@ const AdsOverview = ({ shopId, platform, shops, searched, syncing, lastSyncTime,
               <Text type="secondary" style={{ fontSize: 12 }}>活动级关键词（所有 SKU 共享）·</Text>
               <Text strong style={{ fontSize: 13 }}>{kws.length} 个</Text>
               <Text type="secondary" style={{ fontSize: 12 }}>· 近7天实际触发</Text>
+              {excluded.length > 0 && (
+                <Tag color="red" style={{ marginLeft: 8 }}>🚫 已屏蔽 {excluded.length} 个</Tag>
+              )}
             </Space>
           </div>
           <Table
@@ -994,9 +1011,10 @@ const AdsOverview = ({ shopId, platform, shops, searched, syncing, lastSyncTime,
                   const s = statusMap[r.status] || {}
                   return (
                     <Space size={4}>
-                      {s.label && <Tag color={s.color} style={{ margin: 0, fontSize: 11 }}>{s.label}</Tag>}
+                      {r.is_excluded && <Tag color="red" style={{ margin: 0, fontSize: 11 }}>已屏蔽</Tag>}
+                      {!r.is_excluded && s.label && <Tag color={s.color} style={{ margin: 0, fontSize: 11 }}>{s.label}</Tag>}
                       <Tooltip title={`${v}（${r.active_days || 0}/${r.total_days || 7}天出现）`} placement="topLeft">
-                        <span>{v}</span>
+                        <span style={r.is_excluded ? { textDecoration: 'line-through', color: '#999' } : {}}>{v}</span>
                       </Tooltip>
                     </Space>
                   )
@@ -1046,6 +1064,20 @@ const AdsOverview = ({ shopId, platform, shops, searched, syncing, lastSyncTime,
                 }},
             ]}
           />
+          {excluded.length > 0 && (
+            <div style={{ marginTop: 12, padding: 10, background: '#fff1f0', borderRadius: 4 }}>
+              <Text type="secondary" style={{ fontSize: 12, fontWeight: 500 }}>
+                🚫 已屏蔽关键词（{excluded.length} 个）— 以下词不会触发此商品广告展示
+              </Text>
+              <div style={{ marginTop: 6, display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+                {excluded.map(w => (
+                  <Tag key={w} style={{ fontSize: 11, color: '#cf1322', background: '#fff1f0', border: '1px solid #ffa39e' }}>
+                    {w}
+                  </Tag>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       )
     }

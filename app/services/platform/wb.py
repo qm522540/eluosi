@@ -677,6 +677,46 @@ class WBClient(BasePlatformClient):
 
         return None
 
+    async def fetch_excluded_keywords(
+        self, advert_id: str, nm_ids: list,
+    ) -> dict:
+        """获取 SKU 级屏蔽关键词列表
+
+        API: POST /adv/v0/normquery/get-minus
+        Body: {"items": [{"advert_id": int, "nm_id": int}, ...]}（最多100项）
+        返回: {nm_id: [屏蔽词1, 屏蔽词2, ...], ...}
+        """
+        if not nm_ids:
+            return {}
+        try:
+            url = f"{WB_ADVERT_API}/adv/v0/normquery/get-minus"
+            body = {
+                "items": [
+                    {"advert_id": int(advert_id), "nm_id": int(nm)}
+                    for nm in nm_ids[:100]
+                ]
+            }
+            resp = await self._request("POST", url, json=body)
+        except Exception as e:
+            logger.warning(f"WB 拉取屏蔽关键词失败 advert={advert_id}: {e}")
+            return {}
+
+        if not isinstance(resp, dict):
+            return {}
+
+        result = {}
+        for item in resp.get("items") or []:
+            nm = item.get("nm_id")
+            words = item.get("norm_queries") or []
+            if nm:
+                result[int(nm)] = words
+
+        logger.info(
+            f"WB advert={advert_id} 屏蔽关键词: "
+            + ", ".join(f"nm={k}:{len(v)}个" for k, v in result.items())
+        )
+        return result
+
     async def fetch_campaign_summary(
         self, advert_id: str,
         date_from: str, date_to: str,
