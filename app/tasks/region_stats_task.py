@@ -20,12 +20,20 @@ def _run_async(coro):
         loop.close()
 
 
-def _upsert_region_stats(db, tenant_id, shop_id, platform, stat_date, items):
+def _upsert_region_stats(db, tenant_id, shop_id, platform, stat_date, items,
+                         returns_by_region=None):
+    """写入/更新地区日销售。
+    - items: [{region_name, orders, revenue, returns?}] 来自 region-sale API
+    - returns_by_region: {region_name: returns_count} 来自 sales API 补退货数
+    """
+    returns_map = returns_by_region or {}
     n = 0
     for it in items:
         region = (it.get("region_name") or "")[:200]
         if not region:
             continue
+        # 退货：优先 sales API 聚合值，其次 items 自带
+        returns_val = returns_map.get(region, it.get("returns") or 0)
         existing = db.query(RegionDailyStat).filter(
             RegionDailyStat.tenant_id == tenant_id,
             RegionDailyStat.shop_id == shop_id,
@@ -35,14 +43,14 @@ def _upsert_region_stats(db, tenant_id, shop_id, platform, stat_date, items):
         if existing:
             existing.orders = it.get("orders", 0)
             existing.revenue = it.get("revenue", 0)
-            existing.returns = it.get("returns", 0)
+            existing.returns = returns_val
         else:
             db.add(RegionDailyStat(
                 tenant_id=tenant_id, shop_id=shop_id, platform=platform,
                 region_name=region, stat_date=stat_date,
                 orders=it.get("orders", 0),
                 revenue=it.get("revenue", 0),
-                returns=it.get("returns", 0),
+                returns=returns_val,
             ))
             n += 1
     db.commit()
@@ -50,13 +58,52 @@ def _upsert_region_stats(db, tenant_id, shop_id, platform, stat_date, items):
 
 
 async def _sync_wb_region(db, shop, date_from, date_to):
+    """同步一个时间段（date_from~date_to）的 WB 地区销售 + 按地区退货。
+    - 销售：region-sale API（按 regionName 聚合 orders/revenue），日维度合并到 date_to 这一天
+    - 退货：sales API（按 regionName + date 聚合），按 stat_date 分别回填
+    """
     from app.services.platform.wb import WBClient
     client = WBClient(shop_id=shop.id, api_key=shop.api_key)
     try:
         items = await client.fetch_region_sales(date_from, date_to)
+        returns_map = await client.fetch_sales_returns_by_region(date_from, date_to)
+
         stat_date = date.fromisoformat(date_to)
-        n = _upsert_region_stats(db, shop.tenant_id, shop.id, "wb", stat_date, items)
-        return {"regions": len(items), "inserted": n}
+        # 如果只同步单日，退货直接按该日 region 聚合；多日时退货按每日分别写入，主销售仍合并到 date_to
+        daily_returns = {}
+        for (region, d_str), cnt in returns_map.items():
+            daily_returns.setdefault(d_str, {})[region] = cnt
+
+        # 销售合并到 date_to，退货取 date_to 当天（和 date_to 对齐）
+        return_for_date_to = daily_returns.get(date_to, {})
+        n = _upsert_region_stats(
+            db, shop.tenant_id, shop.id, "wb", stat_date, items,
+            returns_by_region=return_for_date_to,
+        )
+
+        # 多日情形：其它日期的退货独立回写（orders/revenue 为 0，只改 returns）
+        extra_dates = [d for d in daily_returns.keys() if d != date_to]
+        extra_updated = 0
+        for d_str in extra_dates:
+            sd = date.fromisoformat(d_str)
+            for region, cnt in daily_returns[d_str].items():
+                row = db.query(RegionDailyStat).filter(
+                    RegionDailyStat.tenant_id == shop.tenant_id,
+                    RegionDailyStat.shop_id == shop.id,
+                    RegionDailyStat.region_name == region[:200],
+                    RegionDailyStat.stat_date == sd,
+                ).first()
+                if row:
+                    row.returns = cnt
+                    extra_updated += 1
+        if extra_updated:
+            db.commit()
+
+        return {
+            "regions": len(items), "inserted": n,
+            "returns_rows": len(returns_map),
+            "extra_returns_updated": extra_updated,
+        }
     finally:
         await client.close()
 
