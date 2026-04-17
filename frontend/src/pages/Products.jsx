@@ -12,7 +12,7 @@ import {
   getProducts, syncProducts, checkSyncNeeded,
   updateProductMargin, generateDescription, optimizeTitle,
   spreadProducts, getSpreadRecords, updateProduct, updateListing,
-  downloadProductImages,
+  downloadProductImages, getProductPlatformAttributes,
 } from '@/api/products'
 import { getShops } from '@/api/shops'
 import { listLocalCategories } from '@/api/mapping'

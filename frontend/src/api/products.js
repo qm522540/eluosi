@@ -62,6 +62,13 @@ export function downloadProductImages(productId) {
   })
 }
 
+/** 获取商品在平台上的全部属性（只读展示） */
+export function getProductPlatformAttributes(productId) {
+  return request.get(`/products/${productId}/platform-attributes`, {
+    timeout: 30000,
+  })
+}
+
 /** 提交铺货任务 */
 export function spreadProducts(data) {
   return request.post('/products/spread', data)
