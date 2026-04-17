@@ -1,10 +1,11 @@
 import { useState, useEffect, useCallback } from 'react'
 import {
   Typography, Card, Table, Button, Space, Select, Row, Col, Statistic, Tag,
-  Empty, Spin, message, Tooltip, DatePicker, Segmented, Progress, Badge,
+  Empty, Spin, message, Tooltip, DatePicker, Segmented, Progress, Badge, Alert,
 } from 'antd'
 import {
   EnvironmentOutlined, SyncOutlined, SearchOutlined,
+  StopOutlined, WarningOutlined, CheckCircleOutlined, InfoCircleOutlined,
 } from '@ant-design/icons'
 import ReactECharts from 'echarts-for-react'
 import dayjs from 'dayjs'
@@ -205,6 +206,41 @@ const RegionSales = () => {
       title: '销售占比', dataIndex: 'revenue_pct', key: 'revenue_pct', width: 90,
       render: v => v != null ? `${v}%` : '-',
     },
+    {
+      title: (
+        <Tooltip title="估算净毛利 = 销售额 × 店铺平均毛利率 − 退货损失。不含广告花费（平台 API 不给地区级广告数据）">
+          <Space size={4}>净贡献估算 <InfoCircleOutlined style={{ color: '#999' }} /></Space>
+        </Tooltip>
+      ),
+      dataIndex: 'net_profit_est', key: 'net_profit_est', width: 130,
+      sorter: (a, b) => (a.net_profit_est || 0) - (b.net_profit_est || 0),
+      render: v => {
+        if (v == null) return '-'
+        const color = v < 0 ? '#cf1322' : v < 100 ? '#d46b08' : '#389e0d'
+        return <Text style={{ color, fontWeight: 500 }}>{v.toLocaleString()} ₽</Text>
+      },
+    },
+    {
+      title: '投放建议', dataIndex: 'suggestion', key: 'suggestion', width: 130,
+      filters: [
+        { text: '建议屏蔽', value: 'block' },
+        { text: '观察', value: 'watch' },
+        { text: '保持', value: 'keep' },
+      ],
+      onFilter: (v, r) => r.suggestion === v,
+      render: (v, r) => {
+        const cfg = {
+          block: { color: 'red', icon: <StopOutlined />, label: '建议屏蔽' },
+          watch: { color: 'orange', icon: <WarningOutlined />, label: '观察' },
+          keep: { color: 'green', icon: <CheckCircleOutlined />, label: '保持' },
+        }[v] || { color: 'default', icon: null, label: v }
+        return (
+          <Tooltip title={r.suggestion_reason || '—'}>
+            <Tag color={cfg.color} icon={cfg.icon}>{cfg.label}</Tag>
+          </Tooltip>
+        )
+      },
+    },
   ]
 
   function renderFilterBar() {
@@ -293,8 +329,18 @@ const RegionSales = () => {
             { title: '总订单', value: totals.orders, color: undefined },
             { title: '总销售额', value: totals.revenue, suffix: '₽', color: '#722ed1' },
             { title: '平均客单价', value: totals.avg_price?.toFixed(0), suffix: '₽', color: '#fa8c16' },
+            {
+              title: (
+                <Tooltip title={totals.margin_source || '店铺平均毛利率'}>
+                  <Space size={4}>全店净贡献估算 <InfoCircleOutlined style={{ color: '#999' }} /></Space>
+                </Tooltip>
+              ),
+              value: totals.net_profit_est != null ? Math.round(totals.net_profit_est).toLocaleString() : '-',
+              suffix: '₽',
+              color: (totals.net_profit_est || 0) < 0 ? '#cf1322' : '#13c2c2',
+            },
           ].map((item, i) => (
-            <Col xs={12} sm={6} key={i}>
+            <Col xs={12} sm={i === 4 ? 8 : 4} key={i}>
               <Card size="small" bodyStyle={{ padding: 12 }}>
                 <Statistic title={item.title} value={item.value ?? '-'} suffix={item.suffix}
                   valueStyle={{ fontSize: 22, color: item.color }} />
@@ -302,6 +348,26 @@ const RegionSales = () => {
             </Col>
           ))}
         </Row>
+
+        {/* 毛利率来源 + 决策说明 */}
+        {totals.avg_margin_pct != null && (
+          <Alert
+            type="info" showIcon style={{ marginBottom: 16 }}
+            message={
+              <Space wrap>
+                <span>
+                  按店铺平均毛利率 <Text strong>{totals.avg_margin_pct}%</Text> 估算（{totals.margin_source}）
+                </span>
+                <Text type="secondary">|</Text>
+                <span>
+                  建议逻辑：<Tag color="red" icon={<StopOutlined />}>屏蔽</Tag>退货率≥15% 或 净贡献&lt;0 ·
+                  <Tag color="orange" icon={<WarningOutlined />} style={{ marginLeft: 4 }}>观察</Tag>退货率 8-15% 或低占比
+                </span>
+                <Text type="secondary">· 广告花费无地区拆分，此估算不含广告成本</Text>
+              </Space>
+            }
+          />
+        )}
 
         {/* 饼图 + 趋势图 并排 */}
         <Row gutter={16} style={{ marginBottom: 16 }}>
