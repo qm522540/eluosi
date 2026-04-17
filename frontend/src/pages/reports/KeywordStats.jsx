@@ -1,10 +1,490 @@
-import { Typography } from 'antd'
+import { useState, useEffect, useCallback } from 'react'
+import {
+  Typography, Card, Table, Button, Space, Select, Row, Col, Statistic, Tag,
+  Empty, Spin, Alert, message, Tooltip, DatePicker, Radio, Segmented, Badge,
+} from 'antd'
+import {
+  KeyOutlined, DownloadOutlined, ReloadOutlined, SyncOutlined,
+  StarFilled, BulbOutlined, WarningFilled, SearchOutlined,
+} from '@ant-design/icons'
+import ReactECharts from 'echarts-for-react'
+import dayjs from 'dayjs'
+import { getShops } from '@/api/shops'
+import {
+  getKeywordSummary, getKeywordTrend, getKeywordSkuDetail,
+  getNegativeSuggestions, getKeywordSyncStatus, backfillKeywords,
+} from '@/api/keyword_stats'
 
-const KeywordStats = () => (
-  <div>
-    <Typography.Title level={4}>关键词统计</Typography.Title>
-    <Typography.Text type="secondary">骨架中，待填充</Typography.Text>
-  </div>
-)
+const { Title, Text } = Typography
+const { Option } = Select
+
+const PLATFORM_LABEL = { wb: 'WB', ozon: 'Ozon', yandex: 'YM' }
+
+const EFFICIENCY_MAP = {
+  star: { color: 'green', icon: <StarFilled />, label: '高效词' },
+  potential: { color: 'blue', icon: <BulbOutlined />, label: '潜力词' },
+  waste: { color: 'red', icon: <WarningFilled />, label: '浪费词' },
+  normal: { color: 'default', icon: null, label: '普通' },
+}
+
+// 日期范围快捷项
+const DATE_PRESETS = [
+  { label: '近7天', value: '7d' },
+  { label: '近30天', value: '30d' },
+  { label: '按月', value: 'month' },
+]
+
+const KeywordStats = () => {
+  // 筛选
+  const [shops, setShops] = useState([])
+  const [shopId, setShopId] = useState(null)
+  const [shopPlatform, setShopPlatform] = useState(null)
+  const [datePreset, setDatePreset] = useState('7d')
+  const [monthValue, setMonthValue] = useState(null)
+  const [searched, setSearched] = useState(false)
+
+  // 数据
+  const [loading, setLoading] = useState(false)
+  const [summaryData, setSummaryData] = useState(null)
+  const [trendData, setTrendData] = useState(null)
+  const [trendMetric, setTrendMetric] = useState('impressions')
+  const [negativeSugs, setNegativeSugs] = useState([])
+  const [syncStatus, setSyncStatus] = useState(null)
+  const [page, setPage] = useState(1)
+  const [sortBy, setSortBy] = useState('spend')
+  const [keywordSearch, setKeywordSearch] = useState('')
+
+  // SKU 展开
+  const [expandedKeys, setExpandedKeys] = useState([])
+  const [skuDetailMap, setSkuDetailMap] = useState({})
+  const [skuLoadingMap, setSkuLoadingMap] = useState({})
+
+  // 初始化/回填
+  const [backfilling, setBackfilling] = useState(false)
+
+  useEffect(() => {
+    getShops({ page: 1, page_size: 100 })
+      .then(r => setShops(r.data?.items || []))
+      .catch(() => setShops([]))
+  }, [])
+
+  const getDateRange = useCallback(() => {
+    if (datePreset === 'month' && monthValue) {
+      const m = monthValue
+      return { date_from: m.startOf('month').format('YYYY-MM-DD'), date_to: m.endOf('month').format('YYYY-MM-DD') }
+    }
+    const days = datePreset === '30d' ? 30 : 7
+    return {
+      date_from: dayjs().subtract(days, 'day').format('YYYY-MM-DD'),
+      date_to: dayjs().subtract(1, 'day').format('YYYY-MM-DD'),
+    }
+  }, [datePreset, monthValue])
+
+  const handleSearch = async () => {
+    if (!shopId) { message.warning('请先选择店铺'); return }
+    setSearched(true)
+    setPage(1)
+    setExpandedKeys([])
+    setSkuDetailMap({})
+    fetchAll()
+  }
+
+  const fetchAll = useCallback(async () => {
+    if (!shopId) return
+    const range = getDateRange()
+    setLoading(true)
+    try {
+      const [sumRes, trendRes, negRes, syncRes] = await Promise.allSettled([
+        getKeywordSummary({ shop_id: shopId, ...range, sort_by: sortBy, page, size: 50, keyword: keywordSearch || undefined }),
+        getKeywordTrend({ shop_id: shopId, ...range, top: 10, metric: trendMetric }),
+        getNegativeSuggestions({ shop_id: shopId, ...range }),
+        getKeywordSyncStatus(shopId),
+      ])
+      if (sumRes.status === 'fulfilled') setSummaryData(sumRes.value.data)
+      if (trendRes.status === 'fulfilled') setTrendData(trendRes.value.data)
+      if (negRes.status === 'fulfilled') setNegativeSugs(negRes.value.data?.items || [])
+      if (syncRes.status === 'fulfilled') setSyncStatus(syncRes.value.data)
+    } catch {
+      // 后端未就绪时展示空态
+    } finally {
+      setLoading(false)
+    }
+  }, [shopId, getDateRange, sortBy, page, trendMetric, keywordSearch])
+
+  useEffect(() => {
+    if (searched) fetchAll()
+  }, [searched, fetchAll])
+
+  const handleBackfill = async () => {
+    if (!shopId) return
+    setBackfilling(true)
+    try {
+      const res = await backfillKeywords({ shop_id: shopId, days: 90 })
+      message.success(res.data?.msg || '回填任务已提交')
+    } catch (err) {
+      message.error(err.message || '回填失败')
+    } finally {
+      setBackfilling(false)
+    }
+  }
+
+  // SKU 展开（仅 Ozon）
+  const handleExpand = async (expanded, record) => {
+    const kw = record.keyword
+    if (!expanded) {
+      setExpandedKeys(keys => keys.filter(k => k !== kw))
+      return
+    }
+    setExpandedKeys(keys => [...keys, kw])
+    if (skuDetailMap[kw] !== undefined) return
+    setSkuLoadingMap(m => ({ ...m, [kw]: true }))
+    try {
+      const range = getDateRange()
+      const res = await getKeywordSkuDetail({ shop_id: shopId, keyword: kw, ...range })
+      setSkuDetailMap(m => ({ ...m, [kw]: res.data?.items || [] }))
+    } catch {
+      setSkuDetailMap(m => ({ ...m, [kw]: [] }))
+    } finally {
+      setSkuLoadingMap(m => ({ ...m, [kw]: false }))
+    }
+  }
+
+  // 趋势图配置
+  const trendOption = trendData ? {
+    tooltip: { trigger: 'axis' },
+    legend: { data: (trendData.series || []).map(s => s.keyword), type: 'scroll', bottom: 0 },
+    grid: { left: 50, right: 20, top: 10, bottom: 50 },
+    xAxis: { type: 'category', data: trendData.dates || [] },
+    yAxis: { type: 'value' },
+    series: (trendData.series || []).map(s => ({
+      name: s.keyword,
+      type: 'line',
+      smooth: true,
+      data: s.values,
+      emphasis: { focus: 'series' },
+    })),
+  } : null
+
+  const metricLabel = { impressions: '曝光', clicks: '点击', spend: '花费（₽）' }
+
+  // 表格列
+  const columns = [
+    {
+      title: '#', key: 'index', width: 50,
+      render: (_, __, i) => (page - 1) * 50 + i + 1,
+    },
+    {
+      title: '关键词', dataIndex: 'keyword', key: 'keyword',
+      render: (v) => <Text strong style={{ fontSize: 13 }}>{v}</Text>,
+    },
+    {
+      title: '效能', dataIndex: 'efficiency', key: 'efficiency', width: 100,
+      filters: [
+        { text: '高效词', value: 'star' },
+        { text: '潜力词', value: 'potential' },
+        { text: '浪费词', value: 'waste' },
+        { text: '普通', value: 'normal' },
+      ],
+      onFilter: (val, record) => record.efficiency === val,
+      render: (v) => {
+        const cfg = EFFICIENCY_MAP[v] || EFFICIENCY_MAP.normal
+        return <Tag color={cfg.color} icon={cfg.icon}>{cfg.label}</Tag>
+      },
+    },
+    {
+      title: '曝光', dataIndex: 'impressions', key: 'impressions', width: 100,
+      sorter: (a, b) => a.impressions - b.impressions,
+      render: v => v?.toLocaleString(),
+    },
+    {
+      title: '点击', dataIndex: 'clicks', key: 'clicks', width: 80,
+      sorter: (a, b) => a.clicks - b.clicks,
+      render: v => v?.toLocaleString(),
+    },
+    {
+      title: 'CTR', dataIndex: 'ctr', key: 'ctr', width: 80,
+      sorter: (a, b) => a.ctr - b.ctr,
+      render: v => v != null ? `${v}%` : '-',
+    },
+    {
+      title: '花费', dataIndex: 'spend', key: 'spend', width: 110,
+      sorter: (a, b) => a.spend - b.spend,
+      defaultSortOrder: 'descend',
+      render: v => v != null ? <Text strong>{v.toLocaleString()} ₽</Text> : '-',
+    },
+    {
+      title: 'CPC', dataIndex: 'cpc', key: 'cpc', width: 80,
+      sorter: (a, b) => a.cpc - b.cpc,
+      render: v => v != null ? `${v} ₽` : '-',
+    },
+    {
+      title: '占比', dataIndex: 'spend_pct', key: 'spend_pct', width: 80,
+      render: v => v != null ? `${v}%` : '-',
+    },
+  ]
+
+  const isOzon = shopPlatform === 'ozon'
+
+  // 未搜索态
+  if (!searched) {
+    return (
+      <div>
+        <Title level={4}><KeyOutlined /> 关键词统计</Title>
+        {renderFilterBar()}
+        <Card>
+          <Empty description="请选择店铺后点击查询" />
+        </Card>
+      </div>
+    )
+  }
+
+  function renderFilterBar() {
+    return (
+      <Card size="small" style={{ marginBottom: 16 }} bodyStyle={{ padding: '12px 16px' }}>
+        <Row gutter={8} align="middle" wrap>
+          <Col>
+            <Select
+              style={{ width: 260 }}
+              value={shopId}
+              onChange={(id, opt) => {
+                setShopId(id ?? null)
+                setShopPlatform(opt?.platform || null)
+                setSearched(false)
+              }}
+              placeholder="选择平台 · 店铺"
+              allowClear
+              showSearch
+              optionFilterProp="children"
+            >
+              {['wb', 'ozon', 'yandex'].map(plat => {
+                const list = shops.filter(s => s.platform === plat)
+                if (!list.length) return null
+                return (
+                  <Select.OptGroup key={plat} label={PLATFORM_LABEL[plat]}>
+                    {list.map(s => (
+                      <Option key={s.id} value={s.id} platform={plat}>
+                        {PLATFORM_LABEL[plat]} · {s.name}
+                      </Option>
+                    ))}
+                  </Select.OptGroup>
+                )
+              })}
+            </Select>
+          </Col>
+          <Col>
+            <Segmented
+              value={datePreset}
+              onChange={v => { setDatePreset(v); setSearched(false) }}
+              options={DATE_PRESETS}
+            />
+          </Col>
+          {datePreset === 'month' && (
+            <Col>
+              <DatePicker
+                picker="month"
+                value={monthValue}
+                onChange={v => { setMonthValue(v); setSearched(false) }}
+                placeholder="选择月份"
+                disabledDate={d => d.isAfter(dayjs())}
+              />
+            </Col>
+          )}
+          <Col>
+            <Button type="primary" icon={<SearchOutlined />} disabled={!shopId} onClick={handleSearch}>
+              查询
+            </Button>
+          </Col>
+          <Col flex={1} />
+          {syncStatus && (
+            <Col>
+              <Text type="secondary" style={{ fontSize: 12 }}>
+                数据截至 {syncStatus.latest_date} · 共 {syncStatus.total_days} 天
+              </Text>
+            </Col>
+          )}
+          <Col>
+            <Tooltip title="回填最近 90 天历史数据（首次使用需点一次）">
+              <Button size="small" icon={<SyncOutlined spin={backfilling} />} loading={backfilling} onClick={handleBackfill}>
+                回填历史
+              </Button>
+            </Tooltip>
+          </Col>
+        </Row>
+      </Card>
+    )
+  }
+
+  const totals = summaryData?.totals || {}
+  const items = summaryData?.items || []
+
+  return (
+    <div>
+      <Title level={4}><KeyOutlined /> 关键词统计</Title>
+
+      {renderFilterBar()}
+
+      <Spin spinning={loading}>
+        {/* ② 汇总卡片 */}
+        <Row gutter={16} style={{ marginBottom: 16 }}>
+          {[
+            { title: '关键词数', value: totals.keywords, color: undefined },
+            { title: '总曝光', value: totals.impressions, color: undefined },
+            { title: '总点击', value: totals.clicks, color: undefined },
+            { title: '平均 CTR', value: totals.avg_ctr, suffix: '%', color: '#1677ff' },
+            { title: '总花费', value: totals.spend, suffix: '₽', color: '#722ed1' },
+            { title: '平均 CPC', value: totals.avg_cpc, suffix: '₽', color: '#fa8c16' },
+          ].map((item, i) => (
+            <Col xs={12} sm={8} md={4} key={i}>
+              <Card size="small" bodyStyle={{ padding: 12 }}>
+                <Statistic
+                  title={item.title}
+                  value={item.value ?? '-'}
+                  suffix={item.suffix}
+                  valueStyle={{ fontSize: 20, color: item.color }}
+                />
+              </Card>
+            </Col>
+          ))}
+        </Row>
+
+        {/* ③ 趋势图 */}
+        <Card
+          size="small"
+          style={{ marginBottom: 16 }}
+          title={`TOP 10 关键词${metricLabel[trendMetric]}趋势`}
+          extra={
+            <Radio.Group size="small" value={trendMetric} onChange={e => setTrendMetric(e.target.value)}>
+              <Radio.Button value="impressions">曝光</Radio.Button>
+              <Radio.Button value="clicks">点击</Radio.Button>
+              <Radio.Button value="spend">花费</Radio.Button>
+            </Radio.Group>
+          }
+        >
+          {trendOption ? (
+            <ReactECharts option={trendOption} style={{ height: 300 }} />
+          ) : (
+            <Empty description="暂无趋势数据" style={{ padding: 40 }} />
+          )}
+        </Card>
+
+        {/* ④ 否定关键词建议 */}
+        {negativeSugs.length > 0 && (
+          <Alert
+            type="warning"
+            showIcon
+            style={{ marginBottom: 16 }}
+            message={`发现 ${negativeSugs.length} 个浪费词：花费高但几乎无点击`}
+            description={
+              <div style={{ marginTop: 8 }}>
+                {negativeSugs.slice(0, 5).map((s, i) => (
+                  <div key={i} style={{ fontSize: 12, marginBottom: 4 }}>
+                    <Tag color="red">{s.keyword}</Tag>
+                    <Text type="secondary">花费 {s.spend}₽，仅 {s.clicks} 次点击（CTR {s.ctr}%）</Text>
+                  </div>
+                ))}
+                {negativeSugs.length > 5 && (
+                  <Text type="secondary" style={{ fontSize: 12 }}>...及其他 {negativeSugs.length - 5} 个</Text>
+                )}
+              </div>
+            }
+          />
+        )}
+
+        {/* ⑤ 关键词明细表 */}
+        <Card
+          size="small"
+          title={
+            <Space>
+              <Text strong>关键词明细</Text>
+              <Text type="secondary" style={{ fontWeight: 400, fontSize: 13 }}>
+                {summaryData?.date_from} ~ {summaryData?.date_to}
+              </Text>
+            </Space>
+          }
+          extra={
+            <Space>
+              <Select
+                size="small"
+                style={{ width: 100 }}
+                placeholder="搜索"
+                allowClear
+                showSearch
+                value={keywordSearch || undefined}
+                onChange={v => { setKeywordSearch(v || ''); setPage(1) }}
+                onSearch={v => { setKeywordSearch(v || ''); setPage(1) }}
+                open={false}
+                placeholder="搜索关键词"
+              />
+              <Button size="small" icon={<DownloadOutlined />} disabled>导出 Excel</Button>
+            </Space>
+          }
+        >
+          <Table
+            rowKey="keyword"
+            size="middle"
+            dataSource={items}
+            columns={columns}
+            loading={loading}
+            pagination={{
+              current: page,
+              pageSize: 50,
+              total: summaryData?.total || 0,
+              showSizeChanger: false,
+              showTotal: t => `共 ${t} 个关键词`,
+              onChange: p => setPage(p),
+            }}
+            expandable={isOzon ? {
+              expandedRowKeys: expandedKeys,
+              onExpand: handleExpand,
+              expandedRowRender: record => {
+                const kw = record.keyword
+                if (skuLoadingMap[kw]) return <div style={{ padding: 12, textAlign: 'center' }}>加载 SKU 明细...</div>
+                const skus = skuDetailMap[kw]
+                if (!skus || skus.length === 0) return (
+                  <div style={{ padding: 12, background: '#fafafa', borderRadius: 4 }}>
+                    <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无 SKU 级明细" />
+                  </div>
+                )
+                return (
+                  <div style={{ padding: 8, background: '#fafafa', borderRadius: 4 }}>
+                    <Text type="secondary" style={{ fontSize: 12, marginBottom: 8, display: 'block' }}>
+                      该关键词在以下 {skus.length} 个商品上产生了流量：
+                    </Text>
+                    <Table
+                      size="small"
+                      rowKey="sku"
+                      dataSource={skus}
+                      pagination={false}
+                      columns={[
+                        { title: 'SKU', dataIndex: 'sku', width: 120 },
+                        { title: '商品', dataIndex: 'title', ellipsis: true },
+                        { title: '曝光', dataIndex: 'impressions', width: 80, render: v => v?.toLocaleString() },
+                        { title: '点击', dataIndex: 'clicks', width: 70, render: v => v?.toLocaleString() },
+                        { title: 'CTR', dataIndex: 'ctr', width: 70, render: v => `${v}%` },
+                        { title: '花费', dataIndex: 'spend', width: 100, render: v => `${v?.toLocaleString()} ₽` },
+                      ]}
+                    />
+                  </div>
+                )
+              },
+              rowExpandable: () => true,
+            } : undefined}
+            locale={{
+              emptyText: (
+                <Empty
+                  description={
+                    syncStatus?.total_days
+                      ? '该时间范围内无关键词数据'
+                      : <span>尚未同步关键词数据，点击右上角 <Text strong>回填历史</Text> 开始</span>
+                  }
+                />
+              ),
+            }}
+          />
+        </Card>
+      </Spin>
+    </div>
+  )
+}
 
 export default KeywordStats
