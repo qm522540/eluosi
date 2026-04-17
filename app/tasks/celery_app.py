@@ -42,16 +42,16 @@ celery_app.conf.beat_schedule = {
         "task": "app.tasks.report_tasks.generate_daily_report",
         "schedule": crontab(hour=8, minute=0),
     },
-    # ROI异常检测
-    "roi-alert-check": {
-        "task": "app.tasks.roi_alert.check_roi_anomaly",
-        "schedule": crontab(minute="*/30"),
-    },
-    # 自动化规则执行（每小时）
-    "ad-automation-rules": {
-        "task": "app.tasks.ad_tasks.run_automation_rules",
-        "schedule": crontab(minute=25),
-    },
+    # ROI异常检测 —— 前端页面已删（小明 a959039），暂停定时调度
+    # "roi-alert-check": {
+    #     "task": "app.tasks.roi_alert.check_roi_anomaly",
+    #     "schedule": crontab(minute="*/30"),
+    # },
+    # 自动化规则执行 —— 前端页面已删，暂停定时调度
+    # "ad-automation-rules": {
+    #     "task": "app.tasks.ad_tasks.run_automation_rules",
+    #     "schedule": crontab(minute=25),
+    # },
     # 出价管理统一入口（莫斯科时间每小时:05触发，分时调价 + AI调价二选一）
     "bid-management-hourly": {
         "task": "app.tasks.bid_management.run_bid_management",
