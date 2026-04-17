@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import {
   Typography, Card, Table, Button, Tag, Space, Row, Col,
   Input, Select, InputNumber, Modal, Form, Tooltip, Empty,
@@ -15,7 +15,7 @@ import {
   downloadProductImages, getProductPlatformAttributes,
 } from '@/api/products'
 import { getShops } from '@/api/shops'
-import { listLocalCategories } from '@/api/mapping'
+import { listLocalCategories, listCategoryMappings, listAttributeMappings } from '@/api/mapping'
 import { useAuthStore } from '@/stores/authStore'
 
 const { Text } = Typography
@@ -177,6 +177,144 @@ const PlatformAttributesBlock = ({ productId }) => {
         </div>
       )}
     </>
+  )
+}
+
+// ========== 铺货品类/属性映射预览（选了目标店铺后展示） ==========
+
+const SpreadMappingPreview = ({ localCategoryId, srcPlatform, dstShopIds, shops: allShops }) => {
+  const [catMappings, setCatMappings] = useState([])
+  const [attrMappings, setAttrMappings] = useState([])
+  const [loading, setLoading] = useState(false)
+
+  // 目标平台列表（从 dstShopIds 解析）
+  const dstPlatforms = useMemo(() => {
+    if (!dstShopIds?.length || !allShops?.length) return []
+    const platSet = new Set()
+    for (const sid of dstShopIds) {
+      const shop = allShops.find(s => s.id === sid)
+      if (shop) platSet.add(shop.platform)
+    }
+    return [...platSet]
+  }, [dstShopIds, allShops])
+
+  useEffect(() => {
+    if (!localCategoryId || !dstPlatforms.length) {
+      setCatMappings([])
+      setAttrMappings([])
+      return
+    }
+    setLoading(true)
+    Promise.all([
+      listCategoryMappings({ local_category_id: localCategoryId }),
+      listAttributeMappings({ local_category_id: localCategoryId }),
+    ]).then(([catRes, attrRes]) => {
+      setCatMappings(catRes.data?.items || [])
+      setAttrMappings(attrRes.data?.items || [])
+    }).catch(() => {}).finally(() => setLoading(false))
+  }, [localCategoryId, dstPlatforms.join(',')])
+
+  if (!localCategoryId || !dstPlatforms.length) return null
+
+  // 按平台分组
+  const srcCat = catMappings.find(m => m.platform === srcPlatform)
+  const dstCats = catMappings.filter(m => dstPlatforms.includes(m.platform))
+  const srcAttrs = attrMappings.filter(m => m.platform === srcPlatform)
+  const dstAttrsByPlatform = {}
+  for (const p of dstPlatforms) {
+    dstAttrsByPlatform[p] = attrMappings.filter(m => m.platform === p)
+  }
+
+  if (loading) {
+    return <div style={{ textAlign: 'center', padding: 16 }}><Spin size="small" /></div>
+  }
+
+  return (
+    <div style={{ marginTop: 16 }}>
+      <SectionTitle tip="映射管理中配置的对照关系">品类 · 属性映射</SectionTitle>
+
+      {/* 品类对照 */}
+      <div style={{
+        padding: 10, background: '#fafafa', border: '1px solid #f0f0f0',
+        borderRadius: 6, marginBottom: 12, fontSize: 12,
+      }}>
+        <div style={{ fontWeight: 500, marginBottom: 6, color: '#333' }}>品类映射</div>
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+          <Tag color={PLATFORM_COLOR[srcPlatform]?.color || 'default'}>
+            {PLATFORM_COLOR[srcPlatform]?.label}: {srcCat?.platform_category_name || '未映射'}
+          </Tag>
+          <span style={{ color: '#999' }}>→</span>
+          {dstCats.length > 0 ? dstCats.map(dc => (
+            <Tag key={dc.platform}
+              color={dc.is_confirmed ? PLATFORM_COLOR[dc.platform]?.color || 'default' : 'warning'}>
+              {PLATFORM_COLOR[dc.platform]?.label}: {dc.platform_category_name || '未映射'}
+              {!dc.is_confirmed && ' ⚠待确认'}
+            </Tag>
+          )) : (
+            <Tag color="error">目标平台未配置品类映射</Tag>
+          )}
+        </div>
+      </div>
+
+      {/* 属性对照 */}
+      {dstPlatforms.map(dp => {
+        const dstAttrs = dstAttrsByPlatform[dp] || []
+        if (!srcAttrs.length && !dstAttrs.length) return null
+        // 按 local_attr_name 匹配源→目标
+        const attrMap = {}
+        for (const sa of srcAttrs) {
+          attrMap[sa.local_attr_name] = { src: sa, dst: null }
+        }
+        for (const da of dstAttrs) {
+          if (attrMap[da.local_attr_name]) {
+            attrMap[da.local_attr_name].dst = da
+          } else {
+            attrMap[da.local_attr_name] = { src: null, dst: da }
+          }
+        }
+        const entries = Object.entries(attrMap)
+        if (!entries.length) return null
+        return (
+          <div key={dp} style={{
+            padding: 10, background: '#fafafa', border: '1px solid #f0f0f0',
+            borderRadius: 6, marginBottom: 8, fontSize: 12,
+          }}>
+            <div style={{ fontWeight: 500, marginBottom: 6, color: '#333' }}>
+              属性映射 → <span style={{ color: PLATFORM_COLOR[dp]?.color }}>{PLATFORM_COLOR[dp]?.label}</span>
+              <span style={{ fontWeight: 400, color: '#999', marginLeft: 6 }}>
+                {entries.length} 项（{entries.filter(([, v]) => v.src && v.dst).length} 已配对）
+              </span>
+            </div>
+            <div style={{ maxHeight: 200, overflowY: 'auto' }}>
+              {entries.slice(0, 20).map(([name, { src, dst }]) => (
+                <div key={name} style={{
+                  display: 'flex', gap: 6, padding: '3px 0',
+                  borderBottom: '1px solid #f5f5f5',
+                }}>
+                  <div style={{ width: 120, color: '#333', fontWeight: 500 }}>{name}</div>
+                  <div style={{ width: 140, color: PLATFORM_COLOR[srcPlatform]?.color || '#666' }}>
+                    {src?.platform_attr_name || '-'}
+                  </div>
+                  <span style={{ color: '#ccc' }}>→</span>
+                  <div style={{ flex: 1, color: dst ? (PLATFORM_COLOR[dp]?.color || '#333') : '#cf1322' }}>
+                    {dst ? dst.platform_attr_name : '未映射'}
+                    {dst && !dst.is_confirmed && <span style={{ color: '#faad14' }}> ⚠</span>}
+                  </div>
+                </div>
+              ))}
+              {entries.length > 20 && (
+                <div style={{ color: '#999', padding: '4px 0' }}>...还有 {entries.length - 20} 项</div>
+              )}
+            </div>
+          </div>
+        )
+      })}
+
+      {!dstCats.length && !Object.values(dstAttrsByPlatform).some(a => a.length) && (
+        <Alert type="warning" style={{ fontSize: 12 }}
+          message="目标平台尚未配置品类/属性映射，请先到「映射管理」配置后再铺货" />
+      )}
+    </div>
   )
 }
 
@@ -1531,6 +1669,32 @@ const Products = () => {
                 })
               )}
             </div>
+
+            {/* 品类/属性映射对照（选了目标店铺后展示） */}
+            <Form.Item noStyle shouldUpdate={(p, c) => {
+              const pIds = (p.dst_shop_ids || []).join(',')
+              const cIds = (c.dst_shop_ids || []).join(',')
+              return pIds !== cIds
+            }}>
+              {({ getFieldValue }) => {
+                const dstIds = getFieldValue('dst_shop_ids') || []
+                // 找源商品的 local_category_id：从 products state 里查
+                const srcListing = spreadItems[0]
+                const srcProduct = srcListing ? products.find(p =>
+                  (p.listings || []).some(l => l.id === srcListing.id)
+                ) : null
+                const srcPlatform = srcListing?.platform
+                const localCatId = srcProduct?.local_category_id
+                return (
+                  <SpreadMappingPreview
+                    localCategoryId={localCatId}
+                    srcPlatform={srcPlatform}
+                    dstShopIds={dstIds}
+                    shops={shops}
+                  />
+                )
+              }}
+            </Form.Item>
           </Col>
         </Row>
       </Drawer>
