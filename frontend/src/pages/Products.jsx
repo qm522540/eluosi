@@ -1427,21 +1427,21 @@ const Products = () => {
           </Space>
         }
       >
+        <Form
+          form={spreadForm} layout="vertical"
+          initialValues={{
+            price_mode: 'auto',
+            commission_wb: 29,
+            commission_ozon: 46,
+            commission_yandex: 46,
+            ai_rewrite_title: true,
+            ai_rewrite_desc: true,
+            use_oss_images: true,
+          }}
+        >
         <Row gutter={24}>
           {/* 左栏：铺货配置（14） */}
           <Col span={14}>
-            <Form
-              form={spreadForm} layout="vertical"
-              initialValues={{
-                price_mode: 'auto',
-                commission_wb: 15,
-                commission_ozon: 12,
-                commission_yandex: 10,
-                ai_rewrite_title: true,
-                ai_rewrite_desc: true,
-                use_oss_images: true,
-              }}
-            >
               <SectionTitle>目标店铺</SectionTitle>
               <Form.Item
                 name="dst_shop_ids" label="选择要铺货到的店铺"
@@ -1598,7 +1598,6 @@ const Products = () => {
                 style={{ fontSize: 12 }}
                 message="铺货任务异步执行，完成后推送企业微信通知。AI 改写单商品约 3-10 秒"
               />
-            </Form>
           </Col>
 
           {/* 右栏：来源商品预览 */}
@@ -1697,6 +1696,7 @@ const Products = () => {
             </Form.Item>
           </Col>
         </Row>
+        </Form>
       </Drawer>
 
       {/* AI改写描述抽屉 */}
