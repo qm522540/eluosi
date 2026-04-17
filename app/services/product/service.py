@@ -19,10 +19,7 @@ def list_products(db: Session, tenant_id: int, keyword: str = None,
                   page: int = 1, page_size: int = 20) -> dict:
     """获取商品列表"""
     try:
-        query = db.query(Product).filter(
-            Product.tenant_id == tenant_id,
-            Product.status != "deleted"
-        )
+        query = db.query(Product).filter(Product.tenant_id == tenant_id)
         # 店铺过滤：product 表直接带 shop_id（029 迁移后），不再需要 JOIN listing
         if shop_id:
             query = query.filter(Product.shop_id == shop_id)
@@ -40,7 +37,10 @@ def list_products(db: Session, tenant_id: int, keyword: str = None,
                 (Product.sku.contains(keyword))
             )
         if status:
+            # 用户显式传状态（含 archived）则精确过滤；否则默认不显示 deleted/archived
             query = query.filter(Product.status == status)
+        else:
+            query = query.filter(Product.status.notin_(["deleted", "archived"]))
 
         total = query.count()
         products = query.order_by(Product.created_at.desc()).offset(
@@ -680,9 +680,20 @@ def _sync_wb_products(db: Session, shop, tenant_id: int) -> dict:
             db.add(listing)
             created += 1
         synced += 1
+    # 归档保护：本次至少拉到一个商品才做归档扫描
+    archived_listing = archived_product = 0
+    if synced > 0:
+        seen_pids = {str(p.get("nmID")) for p in cards if p.get("nmID")}
+        if seen_pids:
+            archived_listing, archived_product = _archive_missing(
+                db, tenant_id, shop.id, "wb", seen_pids)
     db.commit()
     _update_sync_time(db, shop.id, tenant_id)
-    return {"code": 0, "data": {"synced": synced, "created": created, "updated": updated}}
+    return {"code": 0, "data": {
+        "synced": synced, "created": created, "updated": updated,
+        "archived_listing": archived_listing,
+        "archived_product": archived_product,
+    }}
 
 
 def _sync_ozon_products(db: Session, shop, tenant_id: int) -> dict:
@@ -760,7 +771,8 @@ def _sync_ozon_products(db: Session, shop, tenant_id: int) -> dict:
         ).first()
 
         if archived_map.get(pid) or p.get("is_archived"):
-            status = "deleted"
+            # 平台归档（用户未主动删除）——保留供 region-detail 等老订单反查
+            status = "archived"
         elif stock_map.get(pid) is False:
             status = "out_of_stock"
         else:
@@ -847,9 +859,55 @@ def _sync_ozon_products(db: Session, shop, tenant_id: int) -> dict:
             db.add(listing)
             created += 1
         synced += 1
+    # 归档保护：用 archived_map 的 keys（v3/product/list 全量，比 info 覆盖更全）
+    # 本次至少拉到一个商品才做归档扫描（避 API 空响应把全部误标）
+    archived_listing = archived_product = 0
+    if archived_map:
+        seen_pids = {str(pid) for pid in archived_map.keys()}
+        archived_listing, archived_product = _archive_missing(
+            db, tenant_id, shop.id, "ozon", seen_pids)
     db.commit()
     _update_sync_time(db, shop.id, tenant_id)
-    return {"code": 0, "data": {"synced": synced, "created": created, "updated": updated}}
+    return {"code": 0, "data": {
+        "synced": synced, "created": created, "updated": updated,
+        "archived_listing": archived_listing,
+        "archived_product": archived_product,
+    }}
+
+
+def _archive_missing(db: Session, tenant_id: int, shop_id: int,
+                     platform: str, seen_pids: set) -> tuple:
+    """把 shop 下本次同步未返回的 listing/product 标 archived。
+    product 按 shop 拆分（029 迁移）后与 listing 1:1，listing 归档连带 product 归档。
+    返回 (listing_archived_count, product_archived_count)。
+    """
+    stale = db.query(PlatformListing).filter(
+        PlatformListing.tenant_id == tenant_id,
+        PlatformListing.shop_id == shop_id,
+        PlatformListing.platform == platform,
+        PlatformListing.status.notin_(["deleted", "archived"]),
+        ~PlatformListing.platform_product_id.in_(seen_pids),
+    ).all()
+    if not stale:
+        return 0, 0
+    product_ids = set()
+    for l in stale:
+        l.status = "archived"
+        if l.product_id:
+            product_ids.add(l.product_id)
+    prod_count = 0
+    if product_ids:
+        prod_count = db.query(Product).filter(
+            Product.id.in_(product_ids),
+            Product.tenant_id == tenant_id,
+            Product.shop_id == shop_id,
+            Product.status == "active",
+        ).update({"status": "archived"}, synchronize_session=False)
+    logger.info(
+        f"{platform} 同步归档 shop={shop_id}: "
+        f"listing={len(stale)} product={prod_count}"
+    )
+    return len(stale), prod_count
 
 
 def _get_or_create_product(db: Session, tenant_id: int,

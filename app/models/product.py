@@ -28,7 +28,7 @@ class Product(BaseMixin, Base):
     height_mm: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, comment="高(毫米)")
     image_url: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
     status: Mapped[str] = mapped_column(
-        Enum("active", "inactive", "deleted", name="product_status"),
+        Enum("active", "inactive", "deleted", "archived", name="product_status"),
         nullable=False, default="active"
     )
 
@@ -69,6 +69,6 @@ class PlatformListing(BaseMixin, Base):
     rating: Mapped[Optional[float]] = mapped_column(DECIMAL(3, 2), nullable=True)
     review_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     status: Mapped[str] = mapped_column(
-        Enum("active", "inactive", "deleted", "out_of_stock", "blocked", name="listing_status"),
+        Enum("active", "inactive", "deleted", "out_of_stock", "blocked", "archived", name="listing_status"),
         nullable=False, default="active"
     )
