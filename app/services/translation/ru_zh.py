@@ -106,46 +106,43 @@ async def _call_kimi(texts: list, field_type: str) -> dict:
 
     client = KimiClient(api_key=settings.KIMI_API_KEY)
     out = {}
-    try:
-        for i in range(0, len(texts), CHUNK_SIZE):
-            chunk = texts[i:i + CHUNK_SIZE]
-            numbered = "\n".join(f"{j+1}. {t}" for j, t in enumerate(chunk))
-            hint = {
-                "attr_name": "这些是电商平台的商品属性名（如 Цвет/Материал），用最常用的中文电商术语",
-                "attr_value": "这些是商品属性值（如 Красный/Хлопок），用最常用的中文",
-            }.get(field_type, "这些是电商商品数据")
-            prompt = (
-                f"把下列俄文翻译为中文。{hint}。\n"
-                "规则：\n"
-                "- 保留品牌名/型号等专有名词不翻译\n"
-                "- 数字、单位原样保留（如 100 г → 100克）\n"
-                "- 不要加 \"翻译：\" 等前缀\n\n"
-                f"输入（俄文，共 {len(chunk)} 条）：\n{numbered}\n\n"
-                f"返回 JSON 数组（不含其他文字），长度必须等于 {len(chunk)}：\n"
-                "[\"中文1\", \"中文2\", ...]"
+    for i in range(0, len(texts), CHUNK_SIZE):
+        chunk = texts[i:i + CHUNK_SIZE]
+        numbered = "\n".join(f"{j+1}. {t}" for j, t in enumerate(chunk))
+        hint = {
+            "attr_name": "这些是电商平台的商品属性名（如 Цвет/Материал），用最常用的中文电商术语",
+            "attr_value": "这些是商品属性值（如 Красный/Хлопок），用最常用的中文",
+        }.get(field_type, "这些是电商商品数据")
+        prompt = (
+            f"把下列俄文翻译为中文。{hint}。\n"
+            "规则：\n"
+            "- 保留品牌名/型号等专有名词不翻译\n"
+            "- 数字、单位原样保留（如 100 г → 100克）\n"
+            "- 不要加 \"翻译：\" 等前缀\n\n"
+            f"输入（俄文，共 {len(chunk)} 条）：\n{numbered}\n\n"
+            f"返回 JSON 数组（不含其他文字），长度必须等于 {len(chunk)}：\n"
+            "[\"中文1\", \"中文2\", ...]"
+        )
+        try:
+            res = await client.chat(
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.1, max_tokens=4000,
             )
-            try:
-                res = await client.chat(
-                    messages=[{"role": "user", "content": prompt}],
-                    temperature=0.1, max_tokens=4000,
+            content = (res.get("content") or "").strip()
+            # 兼容围栏代码块
+            if content.startswith("```"):
+                content = re.sub(r"^```[a-zA-Z]*\n?|\n?```$", "", content).strip()
+            arr = json.loads(content)
+            if isinstance(arr, list) and len(arr) == len(chunk):
+                for src, tgt in zip(chunk, arr):
+                    if isinstance(tgt, str) and tgt.strip():
+                        out[src] = tgt.strip()
+            else:
+                logger.warning(
+                    f"Kimi 翻译返回长度不匹配: expected={len(chunk)} got={len(arr) if isinstance(arr, list) else 'N/A'}"
                 )
-                content = (res.get("content") or "").strip()
-                # 兼容围栏代码块
-                if content.startswith("```"):
-                    content = re.sub(r"^```[a-zA-Z]*\n?|\n?```$", "", content).strip()
-                arr = json.loads(content)
-                if isinstance(arr, list) and len(arr) == len(chunk):
-                    for src, tgt in zip(chunk, arr):
-                        if isinstance(tgt, str) and tgt.strip():
-                            out[src] = tgt.strip()
-                else:
-                    logger.warning(
-                        f"Kimi 翻译返回长度不匹配: expected={len(chunk)} got={len(arr) if isinstance(arr, list) else 'N/A'}"
-                    )
-            except Exception as e:
-                logger.warning(f"Kimi 翻译分片失败（{len(chunk)} 条）: {e}")
-    finally:
-        await client.close()
+        except Exception as e:
+            logger.warning(f"Kimi 翻译分片失败（{len(chunk)} 条）: {e}")
     return out
 
 
