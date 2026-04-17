@@ -37,3 +37,16 @@ export function getKeywordCampaigns(params) {
 export function excludeKeyword(data) {
   return request.post(`${BASE}/exclude-keyword`, data)
 }
+
+// 关键词效能评级规则（租户级自定义）
+export function getEfficiencyRules() {
+  return request.get(`${BASE}/efficiency-rules`)
+}
+
+export function setEfficiencyRules(rules) {
+  return request.put(`${BASE}/efficiency-rules`, rules)
+}
+
+export function resetEfficiencyRules() {
+  return request.post(`${BASE}/efficiency-rules/reset`)
+}

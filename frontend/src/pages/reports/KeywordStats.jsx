@@ -7,8 +7,9 @@ import {
 import {
   KeyOutlined, DownloadOutlined, ReloadOutlined, SyncOutlined,
   StarFilled, BulbOutlined, WarningFilled, SearchOutlined,
-  StopOutlined, EyeOutlined,
+  StopOutlined, EyeOutlined, SettingOutlined,
 } from '@ant-design/icons'
+import EfficiencyRulesDrawer from './EfficiencyRulesDrawer'
 import ReactECharts from 'echarts-for-react'
 import dayjs from 'dayjs'
 import { getShops } from '@/api/shops'
@@ -24,9 +25,9 @@ const { Option } = Select
 const PLATFORM_LABEL = { wb: 'WB', ozon: 'Ozon', yandex: 'YM' }
 
 const EFFICIENCY_MAP = {
-  star: { color: 'green', icon: <StarFilled />, label: '高效词', tip: '点击率 ≥ 5% 且单次点击成本低于平均值，性价比高的好词' },
-  potential: { color: 'blue', icon: <BulbOutlined />, label: '潜力词', tip: '点击率 ≥ 3% 但曝光偏少，有潜力但需要更多预算曝光' },
-  waste: { color: 'red', icon: <WarningFilled />, label: '浪费词', tip: '点击率 < 1% 但花费高于平均值，钱花了没效果，建议屏蔽' },
+  star: { color: 'green', icon: <StarFilled />, label: '高效词', tip: '点击率达标 且 CPC 不高于平均，性价比高（具体阈值见效能规则）' },
+  potential: { color: 'blue', icon: <BulbOutlined />, label: '潜力词', tip: '点击率达标 但 曝光偏少，建议加大投放（具体阈值见效能规则）' },
+  waste: { color: 'red', icon: <WarningFilled />, label: '浪费词', tip: '点击率过低 但 花费超过平均，建议屏蔽（具体阈值见效能规则）' },
   normal: { color: 'default', icon: null, label: '普通', tip: '表现一般，暂不需要特殊处理' },
 }
 
@@ -72,6 +73,9 @@ const KeywordStats = () => {
 
   // 初始化/回填
   const [backfilling, setBackfilling] = useState(false)
+
+  // 效能规则 Drawer
+  const [rulesDrawerOpen, setRulesDrawerOpen] = useState(false)
 
   useEffect(() => {
     getShops({ page: 1, page_size: 100 })
@@ -484,6 +488,13 @@ const KeywordStats = () => {
           }
           extra={
             <Space>
+              <Button
+                size="small"
+                icon={<SettingOutlined />}
+                onClick={() => setRulesDrawerOpen(true)}
+              >
+                效能规则
+              </Button>
               <Select
                 size="small"
                 style={{ width: 140 }}
@@ -768,6 +779,12 @@ const KeywordStats = () => {
           <Empty description="无关联数据" />
         )}
       </Drawer>
+
+      <EfficiencyRulesDrawer
+        open={rulesDrawerOpen}
+        onClose={() => setRulesDrawerOpen(false)}
+        onSaved={() => { if (searched) fetchAll() }}
+      />
     </div>
   )
 }
