@@ -3,7 +3,7 @@ import math
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 from app.dependencies import get_db, get_tenant_id
-from app.services.region_stats.service import ranking, trend, sync_status
+from app.services.region_stats.service import ranking, trend, sync_status, region_detail
 from app.utils.response import success, error
 
 router = APIRouter()
@@ -59,6 +59,22 @@ def region_backfill(
         "task_id": task.id,
         "msg": f"地区数据回填已提交，{shop.platform.upper()} 需约 {chunks} 次请求",
     })
+
+
+@router.get("/region-detail")
+def region_sku_detail(
+    shop_id: int = Query(...),
+    region_name: str = Query(..., description="俄文地区名原文（如 Москва）"),
+    date_from: str = Query(None),
+    date_to: str = Query(None),
+    limit: int = Query(10, ge=1, le=50),
+    db: Session = Depends(get_db),
+    tenant_id: int = Depends(get_tenant_id),
+):
+    r = region_detail(db, tenant_id, shop_id, region_name, date_from, date_to, limit)
+    if r["code"] != 0:
+        return error(r["code"], r["msg"])
+    return success(r["data"])
 
 
 @router.get("/sync-status")

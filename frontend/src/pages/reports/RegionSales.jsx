@@ -10,7 +10,7 @@ import {
 import ReactECharts from 'echarts-for-react'
 import dayjs from 'dayjs'
 import { getShops } from '@/api/shops'
-import { getRegionRanking, getRegionTrend, getRegionSyncStatus, backfillRegions } from '@/api/region_stats'
+import { getRegionRanking, getRegionTrend, getRegionSyncStatus, backfillRegions, getRegionDetail } from '@/api/region_stats'
 
 const { Title, Text } = Typography
 const { Option } = Select
@@ -37,6 +37,8 @@ const RegionSales = () => {
   const [trendMetric, setTrendMetric] = useState('orders')
   const [syncStatus, setSyncStatus] = useState(null)
   const [backfilling, setBackfilling] = useState(false)
+  // 地区 TOP SKU 展开缓存 {region_name: {loading, items, error}}
+  const [regionDetail, setRegionDetail] = useState({})
 
   useEffect(() => {
     getShops({ page: 1, page_size: 100 })
@@ -103,6 +105,78 @@ const RegionSales = () => {
 
   const items = rankingData?.items || []
   const totals = rankingData?.totals || {}
+
+  const loadRegionDetail = useCallback(async (regionName) => {
+    if (regionDetail[regionName] && !regionDetail[regionName].error) return
+    setRegionDetail(d => ({ ...d, [regionName]: { loading: true } }))
+    try {
+      const { date_from, date_to } = getDateRange()
+      const res = await getRegionDetail({
+        shop_id: shopId, region_name: regionName, date_from, date_to, limit: 10,
+      })
+      setRegionDetail(d => ({ ...d, [regionName]: { items: res.data?.items || [], note: res.data?.note } }))
+    } catch (e) {
+      setRegionDetail(d => ({ ...d, [regionName]: { error: e?.response?.data?.msg || '加载失败' } }))
+    }
+  }, [shopId, regionDetail, getDateRange])
+
+  const renderRegionDetail = useCallback((record) => {
+    const d = regionDetail[record.region_name]
+    if (!d) return <Text type="secondary">点击展开加载...</Text>
+    if (d.loading) return <Spin size="small" tip="拉取该地区 TOP SKU（可能需 3-5 秒）..." />
+    if (d.error) return <Alert type="warning" message={d.error} />
+    if (d.note) return <Alert type="info" message={d.note} />
+    if (!d.items?.length) return <Empty description="该地区暂无 SKU 销售明细" />
+    return (
+      <div style={{ padding: '8px 4px' }}>
+        <Text type="secondary" style={{ fontSize: 12, display: 'block', marginBottom: 8 }}>
+          该地区 TOP {d.items.length} SKU · 用于决策"关此 SKU 对该地区配送"
+        </Text>
+        <Table
+          size="small"
+          rowKey="nm_id"
+          dataSource={d.items}
+          pagination={false}
+          columns={[
+            { title: 'SKU', dataIndex: 'sa', width: 120,
+              render: (sa, r) => <Text code style={{ fontSize: 11 }}>{sa || r.nm_id}</Text> },
+            { title: '商品', dataIndex: 'name_zh', ellipsis: true,
+              render: (v, r) => v || <Text type="secondary">WB nm_id: {r.nm_id}</Text> },
+            { title: '订单', dataIndex: 'orders', width: 70, align: 'right' },
+            { title: '销售额', dataIndex: 'revenue', width: 100, align: 'right',
+              render: v => `${Number(v).toLocaleString()} ₽` },
+            { title: '该地区占比', dataIndex: 'revenue_pct_in_region', width: 100, align: 'right',
+              render: v => `${v}%` },
+          ]}
+        />
+      </div>
+    )
+  }, [regionDetail])
+
+  const handleExportBlockList = useCallback((rows) => {
+    const blocked = rows.filter(r => r.suggestion === 'block')
+    if (!blocked.length) {
+      message.info('当前没有建议屏蔽的地区')
+      return
+    }
+    const lines = [
+      ['地区俄文', '地区中文', '订单数', '销售额(RUB)', '退货率(%)', '净贡献估算(RUB)', '建议原因'].join(','),
+      ...blocked.map(r => [
+        `"${r.region_name}"`, `"${r.region_name_zh || ''}"`,
+        r.orders, r.revenue, r.return_rate, r.net_profit_est,
+        `"${(r.suggestion_reason || '').replace(/"/g, '""')}"`,
+      ].join(',')),
+    ]
+    const csv = '\ufeff' + lines.join('\n')  // BOM 让 Excel 识别 UTF-8
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `地区屏蔽清单_${dayjs().format('YYYYMMDD_HHmm')}.csv`
+    a.click()
+    URL.revokeObjectURL(url)
+    message.success(`已导出 ${blocked.length} 个建议屏蔽地区的清单`)
+  }, [])
 
   // 饼图配置：TOP 8 + 其他
   const pieOption = items.length > 0 ? (() => {
@@ -414,6 +488,18 @@ const RegionSales = () => {
               </Text>
             </Space>
           }
+          extra={
+            <Tooltip title="导出建议屏蔽地区的主销 SKU 清单（CSV）—— 用于运营到 WB/Ozon 后台关该地区配送">
+              <Button
+                size="small"
+                icon={<StopOutlined />}
+                disabled={!items.some(r => r.suggestion === 'block')}
+                onClick={() => handleExportBlockList(items)}
+              >
+                导出屏蔽列表
+              </Button>
+            </Tooltip>
+          }
         >
           <Table
             rowKey="region_name"
@@ -421,6 +507,11 @@ const RegionSales = () => {
             dataSource={items}
             columns={columns}
             loading={loading}
+            expandable={{
+              expandedRowRender: renderRegionDetail,
+              rowExpandable: r => shopPlatform === 'wb' && r.orders > 0,
+              onExpand: (expanded, r) => { if (expanded) loadRegionDetail(r.region_name) },
+            }}
             pagination={items.length > 20 ? { pageSize: 20, showTotal: t => `共 ${t} 个地区` } : false}
             locale={{
               emptyText: (

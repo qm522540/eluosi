@@ -17,3 +17,8 @@ export function backfillRegions(data) {
 export function getRegionSyncStatus(shopId) {
   return request.get(`${BASE}/sync-status`, { params: { shop_id: shopId } })
 }
+
+/** 某地区 TOP SKU 明细（决策关该地区配送时看是关哪几个 SKU） */
+export function getRegionDetail(params) {
+  return request.get(`${BASE}/region-detail`, { params, timeout: 30000 })
+}

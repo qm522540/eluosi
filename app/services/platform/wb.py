@@ -1115,6 +1115,39 @@ class WBClient(BasePlatformClient):
             logger.error(f"WB 退货聚合失败 shop_id={self.shop_id}: {e}")
             return {}
 
+    async def fetch_region_sales_by_sku(self, date_from: str, date_to: str,
+                                        region_name: str = None) -> list:
+        """按 region × nmID 双维度返回销售，用于"该地区 TOP SKU"决策。
+        Returns: [{region_name, nm_id, sa (商家编码), orders, revenue}]
+        """
+        try:
+            url = "https://seller-analytics-api.wildberries.ru/api/v1/analytics/region-sale"
+            params = {"dateFrom": date_from, "dateTo": date_to}
+            result = await self._request("GET", url, params=params)
+            report = (result or {}).get("report") or []
+            agg: dict = {}
+            for item in report:
+                region = item.get("regionName") or item.get("countryName") or "Unknown"
+                if region_name and region != region_name:
+                    continue
+                nm_id = item.get("nmID")
+                sa = item.get("sa") or ""
+                if nm_id is None:
+                    continue
+                key = (region, int(nm_id))
+                if key not in agg:
+                    agg[key] = {"region_name": region, "nm_id": int(nm_id), "sa": sa,
+                                "orders": 0, "revenue": 0}
+                agg[key]["orders"] += int(item.get("saleItemInvoiceQty") or 0)
+                agg[key]["revenue"] += float(item.get("saleInvoiceCostPrice") or 0)
+            items = [v for v in agg.values() if v["orders"] > 0 or v["revenue"] > 0]
+            for v in items:
+                v["revenue"] = round(v["revenue"], 2)
+            return items
+        except Exception as e:
+            logger.error(f"WB 按 SKU 拉地区销售失败: {e}")
+            return []
+
     async def fetch_region_sales(self, date_from: str, date_to: str) -> list:
         """拉取地区销售数据
 

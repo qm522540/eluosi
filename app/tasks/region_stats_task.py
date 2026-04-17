@@ -25,13 +25,17 @@ def _upsert_region_stats(db, tenant_id, shop_id, platform, stat_date, items,
     """写入/更新地区日销售。
     - items: [{region_name, orders, revenue, returns?}] 来自 region-sale API
     - returns_by_region: {region_name: returns_count} 来自 sales API 补退货数
+    如果 returns_by_region 中的 region 不在 items 里（当天零销售但有退货），
+    会新建 orders=0 的 row，避免退货丢失。
     """
     returns_map = returns_by_region or {}
     n = 0
+    processed_regions = set()
     for it in items:
         region = (it.get("region_name") or "")[:200]
         if not region:
             continue
+        processed_regions.add(region)
         # 退货：优先 sales API 聚合值，其次 items 自带
         returns_val = returns_map.get(region, it.get("returns") or 0)
         existing = db.query(RegionDailyStat).filter(
@@ -51,6 +55,26 @@ def _upsert_region_stats(db, tenant_id, shop_id, platform, stat_date, items,
                 orders=it.get("orders", 0),
                 revenue=it.get("revenue", 0),
                 returns=returns_val,
+            ))
+            n += 1
+    # 退货独有：returns_map 里存在但 items 没覆盖的地区，新建 orders=0 的 row
+    for region, cnt in returns_map.items():
+        r = region[:200]
+        if r in processed_regions or not r:
+            continue
+        existing = db.query(RegionDailyStat).filter(
+            RegionDailyStat.tenant_id == tenant_id,
+            RegionDailyStat.shop_id == shop_id,
+            RegionDailyStat.region_name == r,
+            RegionDailyStat.stat_date == stat_date,
+        ).first()
+        if existing:
+            existing.returns = cnt
+        else:
+            db.add(RegionDailyStat(
+                tenant_id=tenant_id, shop_id=shop_id, platform=platform,
+                region_name=r, stat_date=stat_date,
+                orders=0, revenue=0, returns=cnt,
             ))
             n += 1
     db.commit()
@@ -95,7 +119,14 @@ async def _sync_wb_region(db, shop, date_from, date_to):
                 ).first()
                 if row:
                     row.returns = cnt
-                    extra_updated += 1
+                else:
+                    # 当天该地区无销售但有退货 → 新建 orders=0 的 row，避免退货丢失
+                    db.add(RegionDailyStat(
+                        tenant_id=shop.tenant_id, shop_id=shop.id,
+                        platform="wb", region_name=region[:200],
+                        stat_date=sd, orders=0, revenue=0, returns=cnt,
+                    ))
+                extra_updated += 1
         if extra_updated:
             db.commit()
 
