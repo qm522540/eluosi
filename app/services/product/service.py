@@ -527,6 +527,20 @@ def _sync_wb_products(db: Session, shop, tenant_id: int) -> dict:
         subject_name = p.get("subjectName") or ""
         subject_id_str = str(subject_id) if subject_id else None
         local_cat_id = cat_map.get(subject_id_str) if subject_id_str else None
+        # WB 重量/尺寸：dimensions 字段（cm/kg → mm/g），两个分支都要用
+        dims = p.get("dimensions") or {}
+        if not isinstance(dims, dict):
+            dims = {}
+        weight_kg = dims.get("weightBrutto")
+        weight_g = int(round(float(weight_kg) * 1000)) if weight_kg else None
+        def _cm_to_mm(v):
+            try:
+                return int(round(float(v) * 10)) if v else None
+            except (TypeError, ValueError):
+                return None
+        length_mm = _cm_to_mm(dims.get("length"))
+        width_mm = _cm_to_mm(dims.get("width"))
+        height_mm = _cm_to_mm(dims.get("height"))
         from datetime import datetime, timezone
         data = {
             "title_ru": (p.get("title") or subject_name or "")[:500],
@@ -545,28 +559,23 @@ def _sync_wb_products(db: Session, shop, tenant_id: int) -> dict:
             for k, v in data.items():
                 if v is not None:
                     setattr(listing, k, v)
-            # 回填 product 的本地分类（若已有就不覆盖，避免跨店铺冲突）
-            if local_cat_id and listing.product_id:
+            # 回填 product 的本地分类 + 尺寸/重量（已有不覆盖）
+            if listing.product_id:
                 prod = db.query(Product).filter(Product.id == listing.product_id).first()
-                if prod and not prod.local_category_id:
-                    prod.local_category_id = local_cat_id
+                if prod:
+                    if local_cat_id and not prod.local_category_id:
+                        prod.local_category_id = local_cat_id
+                    if weight_g and not prod.weight_g:
+                        prod.weight_g = weight_g
+                    if length_mm and not prod.length_mm:
+                        prod.length_mm = length_mm
+                    if width_mm and not prod.width_mm:
+                        prod.width_mm = width_mm
+                    if height_mm and not prod.height_mm:
+                        prod.height_mm = height_mm
             updated += 1
         else:
             vendor_code = p.get("vendorCode") or f"WB-{nm_id}"
-            # WB 重量/尺寸：dimensions 字段，cm/kg → mm/g
-            dims = p.get("dimensions") or {}
-            if not isinstance(dims, dict):
-                dims = {}
-            weight_kg = dims.get("weightBrutto")
-            weight_g = int(round(float(weight_kg) * 1000)) if weight_kg else None
-            def _cm_to_mm(v):
-                try:
-                    return int(round(float(v) * 10)) if v else None
-                except (TypeError, ValueError):
-                    return None
-            length_mm = _cm_to_mm(dims.get("length"))
-            width_mm = _cm_to_mm(dims.get("width"))
-            height_mm = _cm_to_mm(dims.get("height"))
             product = _get_or_create_product(
                 db, tenant_id, name_ru=data["title_ru"], sku=vendor_code,
                 shop_id=shop.id,

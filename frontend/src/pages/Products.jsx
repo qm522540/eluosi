@@ -120,6 +120,66 @@ const AISuggestionCard = ({ color, platform, text, onRegenerate, regenerating, o
   )
 }
 
+// ========== 平台属性展示块（懒加载） ==========
+
+const PlatformAttributesBlock = ({ productId }) => {
+  const [attrs, setAttrs] = useState(null)
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState(null)
+
+  useEffect(() => {
+    if (!productId) return
+    setLoading(true)
+    setError(null)
+    getProductPlatformAttributes(productId)
+      .then(res => setAttrs(res.data))
+      .catch(e => setError(e?.response?.data?.msg || '拉取失败'))
+      .finally(() => setLoading(false))
+  }, [productId])
+
+  if (!productId) return null
+
+  return (
+    <>
+      <SectionTitle tip={attrs?.platform?.toUpperCase()}>平台商品属性</SectionTitle>
+      {loading ? (
+        <div style={{ textAlign: 'center', padding: 20 }}>
+          <Spin size="small" tip="正在拉取平台属性..." />
+        </div>
+      ) : error ? (
+        <Alert type="warning" message={error} style={{ fontSize: 12 }} />
+      ) : attrs?.attributes?.length > 0 ? (
+        <div style={{
+          background: '#fafafa', border: '1px solid #f0f0f0',
+          borderRadius: 8, padding: 12, maxHeight: 300, overflowY: 'auto',
+        }}>
+          {attrs.attributes.map((a, i) => (
+            <div key={i} style={{
+              display: 'flex', gap: 8, padding: '5px 0',
+              borderBottom: i < attrs.attributes.length - 1 ? '1px solid #f5f5f5' : 'none',
+              fontSize: 12,
+            }}>
+              <div style={{
+                minWidth: 140, maxWidth: 180, color: '#666',
+                fontWeight: 500, flexShrink: 0,
+              }}>
+                {a.name}
+              </div>
+              <div style={{ color: '#1f1f1f', wordBreak: 'break-word' }}>
+                {a.value || '-'}
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <div style={{ fontSize: 12, color: '#999', padding: '8px 0' }}>
+          该商品暂无平台属性数据
+        </div>
+      )}
+    </>
+  )
+}
+
 // 简易相对时间：UTC 字符串 → "x 分钟前 / x 小时前 / YYYY-MM-DD HH:mm"
 const dayjsLike = (iso) => {
   if (!iso) return ''
@@ -276,6 +336,9 @@ const Products = () => {
       cost_price: record.cost_price,
       net_margin: record.net_margin ? Math.round(record.net_margin * 100) : null,
       weight_g: record.weight_g,
+      length_mm: record.length_mm,
+      width_mm: record.width_mm,
+      height_mm: record.height_mm,
       image_url: record.image_url,
     })
     setEditModal(true)
@@ -318,6 +381,9 @@ const Products = () => {
         cost_price: values.cost_price,
         net_margin: values.net_margin ? values.net_margin / 100 : null,
         weight_g: values.weight_g,
+        length_mm: values.length_mm,
+        width_mm: values.width_mm,
+        height_mm: values.height_mm,
         image_url: values.image_url,
       }
       const tasks = [updateProduct(editingProduct.id, productPayload)]
@@ -1088,13 +1154,28 @@ const Products = () => {
                   </Form.Item>
                 </Col>
               </Row>
+              <Row gutter={16}>
+                <Col span={8}>
+                  <Form.Item name="length_mm" label="长" extra="WB 同步回填（mm）">
+                    <InputNumber min={0} step={1} style={{ width: '100%' }} addonAfter="mm" />
+                  </Form.Item>
+                </Col>
+                <Col span={8}>
+                  <Form.Item name="width_mm" label="宽">
+                    <InputNumber min={0} step={1} style={{ width: '100%' }} addonAfter="mm" />
+                  </Form.Item>
+                </Col>
+                <Col span={8}>
+                  <Form.Item name="height_mm" label="高">
+                    <InputNumber min={0} step={1} style={{ width: '100%' }} addonAfter="mm" />
+                  </Form.Item>
+                </Col>
+              </Row>
 
-              <Alert
-                type="info"
-                showIcon
-                style={{ fontSize: 12, marginTop: 8 }}
-                message="平台商品 ID、售价、库存、状态由同步自动更新，本页不可编辑"
-              />
+              <Divider style={{ margin: '8px 0 16px' }} />
+
+              {/* ========== 平台属性（懒加载只读展示）========== */}
+              <PlatformAttributesBlock productId={editingProduct?.id} />
             </Col>
 
             {/* 右栏：图片 */}
