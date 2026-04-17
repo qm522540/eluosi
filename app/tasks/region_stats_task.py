@@ -149,18 +149,29 @@ def backfill_region_stats(self, shop_id, tenant_id, days=90):
         if not shop:
             return {"error": "店铺不存在"}
         if shop.platform == "wb":
+            # WB region-sale API 返回的是【日期段汇总】（无 date 字段），所以按天逐日回填，
+            # 保证 orders/revenue/returns 都对齐到正确的 stat_date。
             total = 0
+            total_returns = 0
             today = date.today()
-            # WB 单次最多 31 天
-            for i in range(0, days, 31):
-                d_to = today - timedelta(days=i + 1)
-                d_from = today - timedelta(days=min(i + 31, days))
-                if d_from > d_to:
+            for i in range(1, days + 1):
+                d = today - timedelta(days=i)
+                d_str = d.isoformat()
+                try:
+                    r = _run_async(_sync_wb_region(db, shop, d_str, d_str))
+                except Exception as e:
+                    logger.warning(f"WB 地区回填 {d_str} 失败: {e}")
                     continue
-                r = _run_async(_sync_wb_region(db, shop, d_from.isoformat(), d_to.isoformat()))
                 total += r.get("inserted", 0)
-                logger.info(f"WB 地区回填 {d_from}~{d_to}: +{r.get('inserted', 0)}")
-            return {"shop_id": shop_id, "platform": "wb", "inserted": total}
+                total_returns += r.get("returns_rows", 0)
+                logger.info(
+                    f"WB 地区回填 {d_str}: 地区 {r.get('regions', 0)} / +{r.get('inserted', 0)} / "
+                    f"退货 {r.get('returns_rows', 0)}"
+                )
+            return {
+                "shop_id": shop_id, "platform": "wb",
+                "inserted": total, "returns_rows": total_returns,
+            }
         return {"shop_id": shop_id, "platform": shop.platform, "msg": "暂不支持"}
     except Exception as e:
         logger.error(f"地区回填异常: {e}")
