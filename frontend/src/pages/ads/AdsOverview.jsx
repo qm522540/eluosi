@@ -6,7 +6,7 @@ import {
 } from 'antd'
 import {
   SearchOutlined, EditOutlined, EyeOutlined, SyncOutlined, PlusOutlined,
-  DeleteOutlined, SettingOutlined,
+  DeleteOutlined, SettingOutlined, ExclamationCircleOutlined,
 } from '@ant-design/icons'
 import ReactECharts from 'echarts-for-react'
 import dayjs from 'dayjs'
@@ -215,6 +215,8 @@ const AdsOverview = ({ shopId, platform, shops, searched, syncing, lastSyncTime,
   })
   const [excludeConfigOpen, setExcludeConfigOpen] = useState(false)
   const [excludingKws, setExcludingKws] = useState(false)
+  const [qualityCheckedSku, setQualityCheckedSku] = useState(null)  // 当前质检的 SKU
+  const [suggestedExcludeWords, setSuggestedExcludeWords] = useState([])  // 质检标出的词
   const saveExcludeRules = (r) => { setExcludeRules(r); localStorage.setItem('wb_exclude_rules', JSON.stringify(r)) }
   // 按规则筛选"建议屏蔽"关键词
   const getSuggestedExcludes = (kws) => {
@@ -1012,7 +1014,7 @@ const AdsOverview = ({ shopId, platform, shops, searched, syncing, lastSyncTime,
       }
       return (
         <div style={{ padding: 8, background: '#fafafa', borderRadius: 4 }}>
-          {/* 顶部信息 + 屏蔽规则配置 */}
+          {/* 顶部信息 + 操作按钮栏 */}
           <div style={{ marginBottom: 8 }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <Space size={4}>
@@ -1023,11 +1025,68 @@ const AdsOverview = ({ shopId, platform, shops, searched, syncing, lastSyncTime,
                   <Tag color="red" style={{ marginLeft: 8 }}>🚫 已屏蔽 {excluded.length} 个</Tag>
                 )}
               </Space>
-              <Button size="small" type="link" icon={<SettingOutlined />}
-                onClick={() => setExcludeConfigOpen(!excludeConfigOpen)}>
-                屏蔽规则
-              </Button>
+              <Space size={8}>
+                <Button size="small" icon={<SettingOutlined />}
+                  onClick={() => setExcludeConfigOpen(!excludeConfigOpen)}>
+                  屏蔽规则
+                </Button>
+                <Button size="small" type="primary"
+                  icon={<SearchOutlined />}
+                  onClick={() => {
+                    const suggested = getSuggestedExcludes(kws)
+                    setQualityCheckedSku(sku)
+                    setSuggestedExcludeWords(suggested.map(s => s.keyword))
+                    if (suggested.length === 0) message.success('质检通过，无建议屏蔽词')
+                    else message.info(`发现 ${suggested.length} 个不合格关键词，已标红`)
+                  }}>
+                  关键词质检
+                </Button>
+                {qualityCheckedSku === sku && suggestedExcludeWords.length > 0 && (
+                  <Button size="small" type="primary" danger loading={excludingKws}
+                    icon={<DeleteOutlined />}
+                    onClick={() => {
+                      Modal.confirm({
+                        title: `确认屏蔽 ${suggestedExcludeWords.length} 个不合格关键词？`,
+                        icon: <ExclamationCircleOutlined style={{ color: '#ff4d4f' }} />,
+                        width: 500,
+                        content: (
+                          <div>
+                            <div style={{ maxHeight: 200, overflow: 'auto', marginTop: 8 }}>
+                              {suggestedExcludeWords.map(w => (
+                                <Tag key={w} color="volcano" style={{ margin: 2, fontSize: 11 }}>{w}</Tag>
+                              ))}
+                            </div>
+                            <div style={{ marginTop: 10, padding: 8, background: '#fff2f0', borderRadius: 4, fontSize: 12, color: '#cf1322' }}>
+                              屏蔽后这些词将不再触发此商品的广告展示。
+                            </div>
+                          </div>
+                        ),
+                        okText: '确认屏蔽',
+                        okType: 'danger',
+                        onOk: async () => {
+                          setExcludingKws(true)
+                          try {
+                            await excludeKeywords(detailData.id, parseInt(sku), suggestedExcludeWords)
+                            message.success(`已屏蔽 ${suggestedExcludeWords.length} 个关键词`)
+                            setSuggestedExcludeWords([])
+                            setQualityCheckedSku(null)
+                            setKeywordsBySku(m => ({ ...m, [sku]: undefined }))
+                            setExpandedSkuKeys(k => k.filter(x => x !== sku))
+                            setTimeout(() => handleProductRowExpand(true, record), 500)
+                          } catch (err) {
+                            message.error(err.message || '屏蔽失败')
+                          } finally {
+                            setExcludingKws(false)
+                          }
+                        },
+                      })
+                    }}>
+                    一键屏蔽 {suggestedExcludeWords.length} 个
+                  </Button>
+                )}
+              </Space>
             </div>
+            {/* 屏蔽规则配置面板 */}
             {excludeConfigOpen && (
               <div style={{ marginTop: 8, padding: 12, background: '#fff', border: '1px solid #f0f0f0', borderRadius: 6 }}>
                 <Space direction="vertical" size={6} style={{ width: '100%' }}>
@@ -1065,65 +1124,9 @@ const AdsOverview = ({ shopId, platform, shops, searched, syncing, lastSyncTime,
                     <InputNumber size="small" style={{ width: 60 }} min={1} max={7}
                       value={excludeRules.min_days}
                       onChange={v => saveExcludeRules({ ...excludeRules, min_days: v })} />
+                    <Text type="secondary" style={{ fontSize: 11 }}>（少于此天数的新词不参与质检）</Text>
                   </Space>
                 </Space>
-                {(() => {
-                  const suggested = getSuggestedExcludes(kws)
-                  if (!suggested.length) return (
-                    <div style={{ marginTop: 8, color: '#52c41a', fontSize: 12 }}>✓ 无建议屏蔽的关键词</div>
-                  )
-                  return (
-                    <div style={{ marginTop: 8 }}>
-                      <Space style={{ marginBottom: 6 }}>
-                        <Text type="warning" style={{ fontSize: 12 }}>
-                          建议屏蔽 {suggested.length} 个关键词：
-                        </Text>
-                        <Button size="small" type="primary" danger loading={excludingKws}
-                          onClick={async () => {
-                            Modal.confirm({
-                              title: `确认屏蔽 ${suggested.length} 个关键词？`,
-                              content: (
-                                <div style={{ maxHeight: 200, overflow: 'auto', fontSize: 12 }}>
-                                  {suggested.map(s => <Tag key={s.keyword} style={{ margin: 2 }}>{s.keyword}</Tag>)}
-                                </div>
-                              ),
-                              okText: '确认屏蔽',
-                              okType: 'danger',
-                              onOk: async () => {
-                                setExcludingKws(true)
-                                try {
-                                  await excludeKeywords(
-                                    detailData.id,
-                                    parseInt(sku),
-                                    suggested.map(s => s.keyword),
-                                  )
-                                  message.success(`已屏蔽 ${suggested.length} 个关键词`)
-                                  // 刷新
-                                  setKeywordsBySku(m => ({ ...m, [sku]: undefined }))
-                                  setExpandedSkuKeys(k => k.filter(x => x !== sku))
-                                  setTimeout(() => handleProductRowExpand(true, record), 500)
-                                } catch (err) {
-                                  message.error(err.message || '屏蔽失败')
-                                } finally {
-                                  setExcludingKws(false)
-                                }
-                              },
-                            })
-                          }}>
-                          一键屏蔽 {suggested.length} 个
-                        </Button>
-                      </Space>
-                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 3 }}>
-                        {suggested.slice(0, 20).map(s => (
-                          <Tag key={s.keyword} color="volcano" style={{ fontSize: 11 }}>
-                            {s.keyword}（{s.views}曝光/{s.clicks}点击）
-                          </Tag>
-                        ))}
-                        {suggested.length > 20 && <Tag>...等{suggested.length - 20}个</Tag>}
-                      </div>
-                    </div>
-                  )
-                })()}
               </div>
             )}
           </div>
@@ -1142,12 +1145,18 @@ const AdsOverview = ({ shopId, platform, shops, searched, syncing, lastSyncTime,
                     occasional: { label: '偶发', color: 'default' },
                   }
                   const s = statusMap[r.status] || {}
+                  const isSuggested = qualityCheckedSku === sku && suggestedExcludeWords.includes(v)
                   return (
                     <Space size={4}>
                       {r.is_excluded && <Tag color="red" style={{ margin: 0, fontSize: 11 }}>已屏蔽</Tag>}
-                      {!r.is_excluded && s.label && <Tag color={s.color} style={{ margin: 0, fontSize: 11 }}>{s.label}</Tag>}
+                      {isSuggested && !r.is_excluded && <Tag color="volcano" style={{ margin: 0, fontSize: 11 }}>建议屏蔽</Tag>}
+                      {!r.is_excluded && !isSuggested && s.label && <Tag color={s.color} style={{ margin: 0, fontSize: 11 }}>{s.label}</Tag>}
                       <Tooltip title={`${v}（${r.active_days || 0}/${r.total_days || 7}天出现）`} placement="topLeft">
-                        <span style={r.is_excluded ? { textDecoration: 'line-through', color: '#999' } : {}}>{v}</span>
+                        <span style={
+                          r.is_excluded ? { textDecoration: 'line-through', color: '#999' }
+                          : isSuggested ? { color: '#cf1322', fontWeight: 500 }
+                          : {}
+                        }>{v}</span>
                       </Tooltip>
                     </Space>
                   )
