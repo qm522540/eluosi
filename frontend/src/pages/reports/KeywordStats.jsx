@@ -24,10 +24,10 @@ const { Option } = Select
 const PLATFORM_LABEL = { wb: 'WB', ozon: 'Ozon', yandex: 'YM' }
 
 const EFFICIENCY_MAP = {
-  star: { color: 'green', icon: <StarFilled />, label: '高效词' },
-  potential: { color: 'blue', icon: <BulbOutlined />, label: '潜力词' },
-  waste: { color: 'red', icon: <WarningFilled />, label: '浪费词' },
-  normal: { color: 'default', icon: null, label: '普通' },
+  star: { color: 'green', icon: <StarFilled />, label: '高效词', tip: '点击率 ≥ 5% 且单次点击成本低于平均值，性价比高的好词' },
+  potential: { color: 'blue', icon: <BulbOutlined />, label: '潜力词', tip: '点击率 ≥ 3% 但曝光偏少，有潜力但需要更多预算曝光' },
+  waste: { color: 'red', icon: <WarningFilled />, label: '浪费词', tip: '点击率 < 1% 但花费高于平均值，钱花了没效果，建议屏蔽' },
+  normal: { color: 'default', icon: null, label: '普通', tip: '表现一般，暂不需要特殊处理' },
 }
 
 // 日期范围快捷项
@@ -254,7 +254,11 @@ const KeywordStats = () => {
       onFilter: (val, record) => record.efficiency === val,
       render: (v) => {
         const cfg = EFFICIENCY_MAP[v] || EFFICIENCY_MAP.normal
-        return <Tag color={cfg.color} icon={cfg.icon}>{cfg.label}</Tag>
+        return (
+          <Tooltip title={cfg.tip}>
+            <Tag color={cfg.color} icon={cfg.icon} style={{ cursor: 'help' }}>{cfg.label}</Tag>
+          </Tooltip>
+        )
       },
     },
     {
