@@ -1,11 +1,11 @@
 import { useState, useEffect, useCallback } from 'react'
 import {
   Table, Button, Space, Modal, Form, Input, Select, Tag, Popconfirm,
-  message, Typography, Empty, Switch,
+  message, Typography, Empty, Switch, Tooltip,
 } from 'antd'
 import {
   PlusOutlined, CheckOutlined, EditOutlined, DeleteOutlined, ReloadOutlined,
-  FolderOpenOutlined,
+  FolderOpenOutlined, StarFilled,
 } from '@ant-design/icons'
 import {
   listAttributeMappings,
@@ -159,17 +159,29 @@ const AttributeMappingTab = ({ localCategoryId, localCategoryName, onManageValue
     {
       title: '本地属性名',
       key: 'local_attr',
-      render: (_, row) => (
-        <div>
-          <Text>{row.local_attr_name}</Text>
-          {row.local_attr_name_ru && (
-            <>
-              <br />
-              <Text type="secondary" style={{ fontSize: 12 }}>{row.local_attr_name_ru}</Text>
-            </>
-          )}
-        </div>
-      ),
+      render: (_, row) => {
+        const hint = row.global_hint
+        return (
+          <div>
+            <Space size={4}>
+              <Text>{row.local_attr_name}</Text>
+              {hint?.confirmed_count > 0 && (
+                <Tooltip title={`全网 ${hint.confirmed_count} 个租户确认过此属性${hint.suggested_name_zh && hint.suggested_name_zh !== row.local_attr_name ? `，常用本地名："${hint.suggested_name_zh}"` : ''}`}>
+                  <Tag color="gold" icon={<StarFilled />} style={{ fontSize: 11, padding: '0 4px', margin: 0 }}>
+                    {hint.confirmed_count}
+                  </Tag>
+                </Tooltip>
+              )}
+            </Space>
+            {row.local_attr_name_ru && (
+              <>
+                <br />
+                <Text type="secondary" style={{ fontSize: 12 }}>{row.local_attr_name_ru}</Text>
+              </>
+            )}
+          </div>
+        )
+      },
     },
     {
       title: '必填',

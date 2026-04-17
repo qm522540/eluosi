@@ -142,6 +142,7 @@ def list_category_mappings(
     platform: Optional[str] = None,
     is_confirmed: Optional[int] = None,
 ) -> dict:
+    from app.services.global_hints.service import get_category_hints_bulk
     try:
         query = db.query(CategoryPlatformMapping).filter(
             CategoryPlatformMapping.tenant_id == tenant_id
@@ -153,7 +154,24 @@ def list_category_mappings(
         if is_confirmed is not None:
             query = query.filter(CategoryPlatformMapping.is_confirmed == is_confirmed)
         items = query.all()
-        return {"code": 0, "data": {"items": [_cat_mapping_to_dict(m) for m in items]}}
+
+        # 按 platform 分组查 hints（批量）
+        hints_by_platform = {}
+        for plat in set(m.platform for m in items):
+            ids = [str(m.platform_category_id) for m in items if m.platform == plat]
+            hints_by_platform[plat] = get_category_hints_bulk(db, plat, ids)
+
+        out = []
+        for m in items:
+            d = _cat_mapping_to_dict(m)
+            hint = (hints_by_platform.get(m.platform) or {}).get(str(m.platform_category_id))
+            if hint:
+                d["global_hint"] = {
+                    "confirmed_count": hint.get("total_confirmed_count", 0),
+                    "suggested_name_zh": hint.get("suggested_local_name_zh"),
+                }
+            out.append(d)
+        return {"code": 0, "data": {"items": out}}
     except Exception as e:
         logger.error(f"获取品类映射失败: {e}")
         return {"code": ErrorCode.UNKNOWN_ERROR, "msg": "获取品类映射失败"}
@@ -235,6 +253,7 @@ def list_attribute_mappings(
     db: Session, tenant_id: int,
     local_category_id: int, platform: Optional[str] = None,
 ) -> dict:
+    from app.services.global_hints.service import get_attribute_hints_bulk
     try:
         query = db.query(AttributeMapping).filter(
             AttributeMapping.tenant_id == tenant_id,
@@ -243,7 +262,23 @@ def list_attribute_mappings(
         if platform:
             query = query.filter(AttributeMapping.platform == platform)
         items = query.all()
-        return {"code": 0, "data": {"items": [_attr_mapping_to_dict(m) for m in items]}}
+
+        hints_by_platform = {}
+        for plat in set(m.platform for m in items):
+            ids = [str(m.platform_attr_id) for m in items if m.platform == plat]
+            hints_by_platform[plat] = get_attribute_hints_bulk(db, plat, ids)
+
+        out = []
+        for m in items:
+            d = _attr_mapping_to_dict(m)
+            hint = (hints_by_platform.get(m.platform) or {}).get(str(m.platform_attr_id))
+            if hint:
+                d["global_hint"] = {
+                    "confirmed_count": hint.get("total_confirmed_count", 0),
+                    "suggested_name_zh": hint.get("suggested_local_name_zh"),
+                }
+            out.append(d)
+        return {"code": 0, "data": {"items": out}}
     except Exception as e:
         logger.error(f"获取属性映射失败: {e}")
         return {"code": ErrorCode.UNKNOWN_ERROR, "msg": "获取属性映射失败"}

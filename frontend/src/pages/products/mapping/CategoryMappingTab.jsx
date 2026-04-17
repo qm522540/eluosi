@@ -1,10 +1,11 @@
 import { useState, useEffect, useCallback } from 'react'
 import {
   Table, Button, Space, Modal, Form, Input, Select, Tag, Popconfirm,
-  message, Typography, Empty,
+  message, Typography, Empty, Tooltip,
 } from 'antd'
 import {
   PlusOutlined, CheckOutlined, EditOutlined, DeleteOutlined, ReloadOutlined,
+  StarFilled,
 } from '@ant-design/icons'
 import {
   listCategoryMappings,
@@ -130,15 +131,27 @@ const CategoryMappingTab = ({ localCategoryId, localCategoryName, aiSlot = null 
     {
       title: '平台分类',
       key: 'platform_category',
-      render: (_, row) => (
-        <div>
-          <Text strong>{row.platform_category_name}</Text>
-          <br />
-          <Text type="secondary" style={{ fontSize: 12 }}>
-            ID: {row.platform_category_id}
-          </Text>
-        </div>
-      ),
+      render: (_, row) => {
+        const hint = row.global_hint
+        return (
+          <div>
+            <Space size={4}>
+              <Text strong>{row.platform_category_name}</Text>
+              {hint?.confirmed_count > 0 && (
+                <Tooltip title={`全网 ${hint.confirmed_count} 个租户确认过此映射${hint.suggested_name_zh ? `，常用本地名：${hint.suggested_name_zh}` : ''}`}>
+                  <Tag color="gold" icon={<StarFilled />} style={{ fontSize: 11, padding: '0 4px', margin: 0 }}>
+                    {hint.confirmed_count}
+                  </Tag>
+                </Tooltip>
+              )}
+            </Space>
+            <br />
+            <Text type="secondary" style={{ fontSize: 12 }}>
+              ID: {row.platform_category_id}
+            </Text>
+          </div>
+        )
+      },
     },
     {
       title: '面包屑',
