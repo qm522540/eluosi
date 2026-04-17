@@ -1039,6 +1039,48 @@ class WBClient(BasePlatformClient):
             logger.error(f"WB 拉取库存失败，shop_id={self.shop_id}: {e}")
             raise
 
+    # ==================== 关键词统计 ====================
+
+    async def fetch_keyword_stats(self, advert_id: str, date_from: str, date_to: str) -> list:
+        """拉取关键词统计数据
+
+        API: GET /adv/v0/stats/keywords?advert_id=X&from=YYYY-MM-DD&to=YYYY-MM-DD
+        单次最多 7 天，调用方需自行拆分。
+
+        Returns: [{date, keyword, impressions, clicks, spend, ctr, cpc}]
+        """
+        try:
+            url = f"{WB_ADVERT_API}/adv/v0/stats/keywords"
+            params = {"advert_id": str(advert_id), "from": date_from, "to": date_to}
+            result = await self._request("GET", url, params=params)
+            items = []
+            kw_data = (result or {}).get("keywords") or []
+            for day_entry in kw_data:
+                stat_date = day_entry.get("date", date_from)
+                for s in day_entry.get("stats") or []:
+                    kw = s.get("keyword", "")
+                    if not kw:
+                        continue
+                    views = int(s.get("views") or 0)
+                    clicks = int(s.get("clicks") or 0)
+                    spend = float(s.get("sum") or 0)
+                    ctr = float(s.get("ctr") or 0)
+                    cpc = round(spend / clicks, 2) if clicks > 0 else 0
+                    items.append({
+                        "date": stat_date,
+                        "keyword": kw,
+                        "impressions": views,
+                        "clicks": clicks,
+                        "spend": spend,
+                        "ctr": ctr,
+                        "cpc": cpc,
+                    })
+            logger.info(f"WB 关键词统计 advert={advert_id} {date_from}~{date_to}: {len(items)} 条")
+            return items
+        except Exception as e:
+            logger.error(f"WB 关键词统计拉取失败 advert={advert_id}: {e}")
+            return []
+
     # ==================== 分类/属性（用于铺货映射） ====================
 
     async def fetch_all_subjects(self, locale: str = "ru") -> list:

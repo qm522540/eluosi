@@ -27,6 +27,7 @@ celery_app.conf.update(
         "app.tasks.roi_alert",
         "app.tasks.daily_sync_task",
         "app.tasks.bid_management",
+        "app.tasks.keyword_stats_task",
     ],
 )
 
@@ -56,5 +57,10 @@ celery_app.conf.beat_schedule = {
     "bid-management-hourly": {
         "task": "app.tasks.bid_management.run_bid_management",
         "schedule": crontab(minute=5),
+    },
+    # 关键词统计每日增量拉取（莫斯科凌晨3点 = UTC 0:00）
+    "keyword-stats-daily": {
+        "task": "app.tasks.keyword_stats_task.sync_keyword_stats",
+        "schedule": crontab(hour=0, minute=0),
     },
 }

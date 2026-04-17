@@ -1,6 +1,6 @@
 from fastapi import APIRouter
 
-from app.api.v1 import system, auth, shops, products, ads, finance, notifications, bid_management, category_mapping
+from app.api.v1 import system, auth, shops, products, ads, finance, notifications, bid_management, category_mapping, keyword_stats
 
 api_router = APIRouter()
 
@@ -30,6 +30,9 @@ api_router.include_router(bid_management.router, prefix="/bid-management", tags=
 
 # 映射管理（本地分类 + 品类/属性/属性值映射）
 api_router.include_router(category_mapping.router, prefix="/mapping", tags=["映射管理"])
+
+# 关键词统计
+api_router.include_router(keyword_stats.router, prefix="/keyword-stats", tags=["关键词统计"])
 
 # 后续模块:
 # from app.api.v1 import seo, inventory
