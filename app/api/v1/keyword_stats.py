@@ -205,21 +205,38 @@ def keyword_campaigns(
             if camp.platform == "wb":
                 from app.services.platform.wb import WBClient
                 import asyncio
-                async def _get_products():
+                async def _get_products_and_excluded(kw_text):
                     client = WBClient(shop_id=shop.id, api_key=shop.api_key)
                     try:
-                        return await client.fetch_campaign_products(camp.platform_campaign_id)
+                        prods = await client.fetch_campaign_products(camp.platform_campaign_id)
+                        nm_ids = [int(p.get("sku", 0)) for p in prods if p.get("sku")]
+                        excluded = await client.fetch_excluded_keywords(
+                            camp.platform_campaign_id, nm_ids,
+                        ) if nm_ids else {}
+                        result = []
+                        for p in prods:
+                            nm = int(p.get("sku", 0))
+                            if not nm:
+                                continue
+                            ex_words = excluded.get(nm, [])
+                            is_exc = kw_text.lower().strip() in [w.lower().strip() for w in ex_words]
+                            result.append({
+                                "nm_id": nm,
+                                "name": p.get("subject_name", ""),
+                                "is_excluded": is_exc,
+                            })
+                        # 未屏蔽排前面
+                        result.sort(key=lambda x: (x["is_excluded"], x["nm_id"]))
+                        return result
                     finally:
                         await client.close()
                 loop = asyncio.new_event_loop()
                 try:
-                    prods = loop.run_until_complete(_get_products())
+                    entry["products"] = loop.run_until_complete(
+                        _get_products_and_excluded(keyword)
+                    )
                 finally:
                     loop.close()
-                entry["products"] = [{
-                    "nm_id": int(p.get("sku", 0)),
-                    "name": p.get("subject_name", ""),
-                } for p in prods if p.get("sku")]
         except Exception as e:
             logger.warning(f"查活动 {cid} 商品失败: {e}")
 

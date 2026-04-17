@@ -609,25 +609,31 @@ const KeywordStats = () => {
                       const nmId = p.nm_id || parseInt(p.sku || '0')
                       const name = p.name || p.subject_name || `商品 ${nmId}`
                       const excKey = `${camp.campaign_id}:${nmId}`
+                      const isExcluded = p.is_excluded
                       return (
                         <div key={nmId} style={{
                           display: 'flex', justifyContent: 'space-between', alignItems: 'center',
                           padding: '6px 0', borderBottom: '1px solid #f5f5f5',
+                          opacity: isExcluded ? 0.6 : 1,
                         }}>
                           <div>
                             <Text style={{ fontSize: 12, fontWeight: 500 }}>nm_id: {nmId}</Text>
                             {name && <Text style={{ marginLeft: 8, fontSize: 11, color: '#888' }}>{name}</Text>}
                           </div>
-                          <Popconfirm
-                            title={`对商品 ${nmId} 屏蔽「${kwDetailKeyword}」？`}
-                            description="屏蔽后该商品不再因此关键词展示广告"
-                            onConfirm={() => handleExcludeKeyword(camp.campaign_id, nmId, kwDetailKeyword)}
-                          >
-                            <Button size="small" danger icon={<StopOutlined />}
-                              loading={excluding === excKey}>
-                              屏蔽
-                            </Button>
-                          </Popconfirm>
+                          {isExcluded ? (
+                            <Tag color="default" style={{ margin: 0 }}>已屏蔽</Tag>
+                          ) : (
+                            <Popconfirm
+                              title={`对商品 ${nmId} 屏蔽「${kwDetailKeyword}」？`}
+                              description="屏蔽后该商品不再因此关键词展示广告"
+                              onConfirm={() => handleExcludeKeyword(camp.campaign_id, nmId, kwDetailKeyword)}
+                            >
+                              <Button size="small" danger icon={<StopOutlined />}
+                                loading={excluding === excKey}>
+                                屏蔽
+                              </Button>
+                            </Popconfirm>
+                          )}
                         </div>
                       )
                     })}
