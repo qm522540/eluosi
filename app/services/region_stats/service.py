@@ -276,8 +276,10 @@ def _region_detail_wb(db, tenant_id, shop, region_name,
 
 def _region_detail_ozon(db, tenant_id, shop, region_name,
                         date_from, date_to, limit):
-    """Ozon 地区 TOP SKU：city × sku 聚合后反查 PlatformListing.platform_sku_id
-    拿中文名。offer_id 作为兜底展示（对齐前端 WB 的 sa 字段）。
+    """Ozon 地区 TOP SKU：city × sku 聚合。name_zh 反查顺序：
+    1) PlatformListing.platform_sku_id 精准匹配（当前在架商品）
+    2) 降级：按 offer_id → Product.sku（本租户任意 shop 同编码商品，覆盖已下架
+       但历史有销售的 SKU）
     """
     import asyncio
     from app.services.platform.ozon import OzonClient
@@ -300,10 +302,11 @@ def _region_detail_ozon(db, tenant_id, shop, region_name,
     rows.sort(key=lambda x: x["revenue"], reverse=True)
     rows = rows[:limit]
 
+    from app.models.product import Product, PlatformListing
+    # 1) 精准匹配：platform_sku_id → product
     sku_ids = [r["sku_id"] for r in rows]
-    name_map = {}
+    name_by_sku_id = {}
     if sku_ids:
-        from app.models.product import Product, PlatformListing
         pl_rows = db.query(
             PlatformListing.platform_sku_id, PlatformListing.product_id,
         ).filter(
@@ -323,15 +326,36 @@ def _region_detail_ozon(db, tenant_id, shop, region_name,
             for p in prods:
                 sk = pid_to_sku.get(p.id)
                 if sk:
-                    name_map[str(sk)] = {
+                    name_by_sku_id[str(sk)] = {
                         "name_zh": p.name_zh, "sku_local": p.sku,
                         "image_url": p.image_url,
                     }
 
+    # 2) 降级：按 offer_id 反查本租户任意 Product（覆盖已下架 SKU）
+    offer_ids = [r.get("offer_id") for r in rows if r.get("offer_id")]
+    name_by_offer = {}
+    if offer_ids:
+        # 同 sku 可能多行（WB/Ozon 各一份），取任一的 name_zh/image_url
+        prods = db.query(
+            Product.sku, Product.name_zh, Product.image_url,
+        ).filter(
+            Product.tenant_id == tenant_id,
+            Product.sku.in_(offer_ids),
+        ).all()
+        for p in prods:
+            if p.sku not in name_by_offer:
+                name_by_offer[p.sku] = {
+                    "name_zh": p.name_zh, "sku_local": p.sku,
+                    "image_url": p.image_url,
+                }
+
     total_rev = sum(r["revenue"] for r in rows) or 1
     items = []
     for r in rows:
-        info = name_map.get(str(r["sku_id"]), {}) or {}
+        info = name_by_sku_id.get(str(r["sku_id"]))
+        if not info:
+            info = name_by_offer.get(r.get("offer_id") or "")
+        info = info or {}
         items.append({
             # 对齐前端 WB 字段：nm_id 位置放 Ozon sku_id；sa 位置放 offer_id
             "nm_id": r["sku_id"],
