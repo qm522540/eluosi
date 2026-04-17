@@ -760,7 +760,8 @@ class WBClient(BasePlatformClient):
             return []
 
         # 响应: {"keywords": [{"date": "YYYY-MM-DD", "stats": [{...关键词数据}]}]}
-        # 按关键词聚合，每个关键词合并所有日期的 views/clicks/sum
+        # 按关键词聚合，每个关键词合并所有日期的 views/clicks/sum + 出现天数
+        total_days = len(resp.get("keywords") or [])
         agg: dict = {}
         for day_group in resp.get("keywords") or []:
             for stat in day_group.get("stats") or []:
@@ -772,20 +773,32 @@ class WBClient(BasePlatformClient):
                         "keyword": kw,
                         "views": 0, "clicks": 0,
                         "sum": 0.0, "currency": stat.get("currency", "RUB"),
+                        "active_days": 0,
                     }
                 agg[kw]["views"] += int(stat.get("views") or 0)
                 agg[kw]["clicks"] += int(stat.get("clicks") or 0)
                 agg[kw]["sum"] += float(stat.get("sum") or 0)
+                agg[kw]["active_days"] += 1
 
         # 按 views 降序
         result = sorted(agg.values(), key=lambda x: x["views"], reverse=True)
 
-        # 算 CTR（聚合后重算）
+        # 算 CTR + 推断活跃标签
         for r in result:
             r["ctr"] = (
                 round(r["clicks"] / r["views"] * 100, 2) if r["views"] > 0 else 0
             )
             r["sum"] = round(r["sum"], 2)
+            r["total_days"] = total_days
+            # 活跃标签推断
+            if r["clicks"] > 0:
+                r["status"] = "active"       # 有点击=真正在工作
+            elif r["active_days"] >= max(total_days - 1, 3):
+                r["status"] = "stable"       # 多数天都出现，曝光稳定但没点击
+            elif r["active_days"] <= 2:
+                r["status"] = "occasional"   # 只出现 1-2 天
+            else:
+                r["status"] = "low_effect"   # 有曝光无点击
 
         logger.info(
             f"WB shop_id={self.shop_id} advert={advert_id} "

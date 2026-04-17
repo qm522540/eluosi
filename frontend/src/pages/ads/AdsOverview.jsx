@@ -984,7 +984,23 @@ const AdsOverview = ({ shopId, platform, shops, searched, syncing, lastSyncTime,
             pagination={{ pageSize: 20, size: 'small', showSizeChanger: false }}
             columns={[
               { title: '关键词', dataIndex: 'keyword', key: 'keyword', ellipsis: true,
-                render: v => <Tooltip title={v} placement="topLeft"><span>{v}</span></Tooltip> },
+                render: (v, r) => {
+                  const statusMap = {
+                    active:     { label: '活跃', color: 'green' },
+                    stable:     { label: '稳定', color: 'blue' },
+                    low_effect: { label: '低效', color: 'orange' },
+                    occasional: { label: '偶发', color: 'default' },
+                  }
+                  const s = statusMap[r.status] || {}
+                  return (
+                    <Space size={4}>
+                      {s.label && <Tag color={s.color} style={{ margin: 0, fontSize: 11 }}>{s.label}</Tag>}
+                      <Tooltip title={`${v}（${r.active_days || 0}/${r.total_days || 7}天出现）`} placement="topLeft">
+                        <span>{v}</span>
+                      </Tooltip>
+                    </Space>
+                  )
+                }},
               { title: '曝光', dataIndex: 'views', key: 'views', width: 80, align: 'right',
                 sorter: (a, b) => (a.views||0) - (b.views||0),
                 render: v => (v || 0).toLocaleString() },
