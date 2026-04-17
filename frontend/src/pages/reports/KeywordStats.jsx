@@ -598,48 +598,43 @@ const KeywordStats = () => {
                   <Col span={8}><Text type="secondary">点击</Text><br/><Text strong>{camp.clicks?.toLocaleString()}</Text></Col>
                   <Col span={8}><Text type="secondary">花费</Text><br/><Text strong>{camp.spend?.toLocaleString()} ₽</Text></Col>
                 </Row>
-                {camp.skus?.length > 0 ? (
+                {/* 活动下的商品列表（屏蔽时选对哪个商品操作） */}
+                {(camp.products?.length > 0 || camp.skus?.length > 0) ? (
                   <div>
-                    <div style={{ fontSize: 12, color: '#888', marginBottom: 6 }}>关联商品 ({camp.skus.length})</div>
-                    {camp.skus.map(s => (
-                      <div key={s.sku} style={{
-                        display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-                        padding: '6px 0', borderBottom: '1px solid #f5f5f5',
-                      }}>
-                        <div>
-                          <Text style={{ fontSize: 12 }}>SKU: {s.sku}</Text>
-                          <span style={{ marginLeft: 8, fontSize: 11, color: '#888' }}>
-                            曝光 {s.impressions} · 点击 {s.clicks} · 花费 {s.spend}₽
-                          </span>
+                    <div style={{ fontSize: 12, color: '#888', marginBottom: 6 }}>
+                      活动下的商品 — 选择要屏蔽此关键词的商品
+                    </div>
+                    {/* 优先展示 products（有 nm_id + 名称），fallback 到 skus */}
+                    {(camp.products?.length > 0 ? camp.products : camp.skus || []).map(p => {
+                      const nmId = p.nm_id || parseInt(p.sku || '0')
+                      const name = p.name || p.subject_name || `商品 ${nmId}`
+                      const excKey = `${camp.campaign_id}:${nmId}`
+                      return (
+                        <div key={nmId} style={{
+                          display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                          padding: '6px 0', borderBottom: '1px solid #f5f5f5',
+                        }}>
+                          <div>
+                            <Text style={{ fontSize: 12, fontWeight: 500 }}>nm_id: {nmId}</Text>
+                            {name && <Text style={{ marginLeft: 8, fontSize: 11, color: '#888' }}>{name}</Text>}
+                          </div>
+                          <Popconfirm
+                            title={`对商品 ${nmId} 屏蔽「${kwDetailKeyword}」？`}
+                            description="屏蔽后该商品不再因此关键词展示广告"
+                            onConfirm={() => handleExcludeKeyword(camp.campaign_id, nmId, kwDetailKeyword)}
+                          >
+                            <Button size="small" danger icon={<StopOutlined />}
+                              loading={excluding === excKey}>
+                              屏蔽
+                            </Button>
+                          </Popconfirm>
                         </div>
-                        <Popconfirm
-                          title={`确认在此活动中屏蔽「${kwDetailKeyword}」？`}
-                          description="屏蔽后该词将不再触发广告展示"
-                          onConfirm={() => handleExcludeKeyword(camp.campaign_id, parseInt(s.sku), kwDetailKeyword)}
-                        >
-                          <Button size="small" danger icon={<StopOutlined />}
-                            loading={excluding === `${camp.campaign_id}:${s.sku}`}>
-                            屏蔽
-                          </Button>
-                        </Popconfirm>
-                      </div>
-                    ))}
+                      )
+                    })}
                   </div>
                 ) : (
                   <div style={{ fontSize: 12, color: '#888' }}>
-                    WB 平台关键词为活动级，不按商品拆分
-                    <Popconfirm
-                      title={`确认在此活动中屏蔽「${kwDetailKeyword}」？`}
-                      onConfirm={() => {
-                        // WB 没有 SKU 级，用活动下第一个 nm_id
-                        handleExcludeKeyword(camp.campaign_id, 0, kwDetailKeyword)
-                      }}
-                    >
-                      <Button size="small" danger icon={<StopOutlined />} style={{ marginLeft: 8 }}
-                        loading={excluding === `${camp.campaign_id}:0`}>
-                        屏蔽此词
-                      </Button>
-                    </Popconfirm>
+                    暂无商品数据
                   </div>
                 )}
               </Card>

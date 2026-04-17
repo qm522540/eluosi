@@ -177,6 +177,7 @@ def keyword_campaigns(
                 "platform": camp.platform if camp else "wb",
                 "impressions": 0, "clicks": 0, "spend": 0,
                 "skus": [],
+                "products": [],  # 活动下的商品列表（用于选择屏蔽哪个商品）
             }
         entry = camp_map[cid]
         entry["impressions"] += int(r.imp or 0)
@@ -190,6 +191,37 @@ def keyword_campaigns(
                 "spend": float(r.sp or 0),
                 "ctr": float(r.ctr or 0),
             })
+
+    # 为每个活动查关联商品（WB 屏蔽需要 nm_id，从 campaign_products 拿）
+    from app.models.shop import Shop
+    for cid, entry in camp_map.items():
+        camp = db.query(AdCampaign).filter(AdCampaign.id == cid).first()
+        if not camp:
+            continue
+        shop = db.query(Shop).filter(Shop.id == camp.shop_id).first()
+        if not shop:
+            continue
+        try:
+            if camp.platform == "wb":
+                from app.services.platform.wb import WBClient
+                import asyncio
+                async def _get_products():
+                    client = WBClient(shop_id=shop.id, api_key=shop.api_key)
+                    try:
+                        return await client.fetch_campaign_products(camp.platform_campaign_id)
+                    finally:
+                        await client.close()
+                loop = asyncio.new_event_loop()
+                try:
+                    prods = loop.run_until_complete(_get_products())
+                finally:
+                    loop.close()
+                entry["products"] = [{
+                    "nm_id": int(p.get("sku", 0)),
+                    "name": p.get("subject_name", ""),
+                } for p in prods if p.get("sku")]
+        except Exception as e:
+            logger.warning(f"查活动 {cid} 商品失败: {e}")
 
     return success({
         "keyword": keyword,
