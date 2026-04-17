@@ -346,7 +346,7 @@ const KeywordStats = () => {
           <Col>
             <Segmented
               value={datePreset}
-              onChange={v => { setDatePreset(v); setSearched(false) }}
+              onChange={v => { setDatePreset(v) }}
               options={DATE_PRESETS}
             />
           </Col>
@@ -355,7 +355,7 @@ const KeywordStats = () => {
               <DatePicker
                 picker="month"
                 value={monthValue}
-                onChange={v => { setMonthValue(v); setSearched(false) }}
+                onChange={v => { setMonthValue(v) }}
                 placeholder="选择月份"
                 disabledDate={d => d.isAfter(dayjs())}
               />
