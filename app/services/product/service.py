@@ -505,11 +505,13 @@ def _load_platform_category_map(db: Session, tenant_id: int, platform: str) -> d
 
 def _flatten_ozon_category_tree(tree: list) -> dict:
     """把 Ozon 分类树压平为 {(description_category_id, type_id): "面包屑名称"}。
-    叶子节点才含 type_id；用 (desc_cat_id, type_id) 双键唯一标识。
+    OZON 分类树是深层嵌套：外层 description_category_id 一直向下传递，直到
+    叶子节点才出现 type_id。递归时保留"最近一次"看到的 desc_cat_id，遇到 type_id
+    叶子时把 (current_desc_cat, type_id) 作为 key。
     """
     result: dict = {}
 
-    def _walk(nodes, trail):
+    def _walk(nodes, trail, current_desc_cat):
         for n in nodes or []:
             if not isinstance(n, dict):
                 continue
@@ -517,13 +519,14 @@ def _flatten_ozon_category_tree(tree: list) -> dict:
             type_id = n.get("type_id")
             name = n.get("category_name") or n.get("type_name") or ""
             new_trail = trail + [name] if name else trail
-            if desc_cat_id is not None and type_id is not None:
-                result[(int(desc_cat_id), int(type_id))] = " / ".join(new_trail)
+            next_desc_cat = desc_cat_id if desc_cat_id is not None else current_desc_cat
+            if type_id is not None and next_desc_cat is not None:
+                result[(int(next_desc_cat), int(type_id))] = " / ".join(new_trail)
             children = n.get("children") or []
             if children:
-                _walk(children, new_trail)
+                _walk(children, new_trail, next_desc_cat)
 
-    _walk(tree, [])
+    _walk(tree, [], None)
     return result
 
 
