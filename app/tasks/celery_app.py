@@ -28,6 +28,7 @@ celery_app.conf.update(
         "app.tasks.daily_sync_task",
         "app.tasks.bid_management",
         "app.tasks.keyword_stats_task",
+        "app.tasks.region_stats_task",
     ],
 )
 
@@ -62,5 +63,10 @@ celery_app.conf.beat_schedule = {
     "keyword-stats-daily": {
         "task": "app.tasks.keyword_stats_task.sync_keyword_stats",
         "schedule": crontab(hour=0, minute=0),
+    },
+    # 地区销售每日增量拉取（莫斯科凌晨4点 = UTC 1:00）
+    "region-stats-daily": {
+        "task": "app.tasks.region_stats_task.sync_region_stats",
+        "schedule": crontab(hour=1, minute=0),
     },
 }
