@@ -101,10 +101,14 @@ async def suggest_category_mappings(
 
     流程：
     1. 读取本地分类（name, name_ru）
-    2. 通过 shop 凭证拉取平台全量分类列表
-    3. 让 AI 按名称语义推荐 top-1 + 置信度
+    2. **先查全局跨平台 hint**：如果本地分类已有其他平台映射，用 hint 直接推另一侧
+    3. 未命中走 AI：拉平台全量分类 + Kimi 匹配 top-1
     4. 写入 category_platform_mappings，ai_suggested=1
     """
+    from app.services.global_hints.service import (
+        get_cross_platform_hint, get_category_hint,
+    )
+
     platforms = platforms or ["wb", "ozon"]
     local_cat = db.query(LocalCategory).filter(
         LocalCategory.id == local_category_id,
@@ -119,9 +123,60 @@ async def suggest_category_mappings(
     if not shop:
         return {"code": ErrorCode.SHOP_NOT_FOUND, "msg": "店铺不存在"}
 
+    # 查本地分类已有的（已确认）平台映射，用来驱动跨平台 hint
+    existing_confirmed = db.query(CategoryPlatformMapping).filter(
+        CategoryPlatformMapping.tenant_id == tenant_id,
+        CategoryPlatformMapping.local_category_id == local_category_id,
+        CategoryPlatformMapping.is_confirmed == 1,
+    ).all()
+
     results = []
     for platform in platforms:
         try:
+            # Step 1: 尝试从全局跨平台 hint 推出目标平台分类
+            hint_hit = None
+            for src in existing_confirmed:
+                if src.platform == platform:
+                    continue  # 已有这个平台的映射，跳过
+                h = get_cross_platform_hint(
+                    db, src.platform, str(src.platform_category_id), platform,
+                )
+                if h and h.get("target_category_id"):
+                    hint_hit = {
+                        "source_platform": src.platform,
+                        "source_category_id": str(src.platform_category_id),
+                        **h,
+                    }
+                    break
+
+            if hint_hit:
+                # 置信度按共现次数换算：1次→0.7, 2次→0.8, 5+→0.95
+                count = hint_hit["co_confirmed_count"]
+                confidence = min(0.95, 0.65 + 0.05 * count)
+                cat_hint = get_category_hint(
+                    db, platform, hint_hit["target_category_id"],
+                )
+                name = (cat_hint or {}).get("suggested_local_name_zh") or ""
+                name_ru = (cat_hint or {}).get("platform_category_name_ru", "") or ""
+                upsert_category_mapping(db, tenant_id, {
+                    "local_category_id": local_category_id,
+                    "platform": platform,
+                    "platform_category_id": hint_hit["target_category_id"],
+                    "platform_category_name": name or name_ru,
+                    "ai_suggested": 1,
+                    "ai_confidence": confidence,
+                })
+                results.append({
+                    "platform": platform,
+                    "id": hint_hit["target_category_id"],
+                    "name": name or name_ru,
+                    "confidence": confidence,
+                    "source": "global_hint",
+                    "co_confirmed_count": count,
+                })
+                continue
+
+            # Step 2: 没有 hint，走原有 AI 流程
             platform_cats = await _fetch_platform_categories(shop, platform)
             if not platform_cats:
                 results.append({"platform": platform, "error": "拉取平台分类失败"})
@@ -138,7 +193,7 @@ async def suggest_category_mappings(
                     "ai_suggested": 1,
                     "ai_confidence": suggestion["confidence"],
                 })
-                results.append({"platform": platform, **suggestion})
+                results.append({"platform": platform, "source": "ai", **suggestion})
             else:
                 results.append({"platform": platform, "error": "AI 未给出推荐"})
         except Exception as e:
@@ -286,28 +341,57 @@ async def suggest_attribute_mappings(
     if not platform_attrs:
         return {"code": ErrorCode.UNKNOWN_ERROR, "msg": "拉取平台属性失败"}
 
-    suggestions = await _ai_suggest_attr_names(platform, platform_attrs)
-    if not suggestions:
-        return {"code": ErrorCode.UNKNOWN_ERROR, "msg": "AI 未能推荐属性"}
+    # 先查全局属性 hints 命中哪些，未命中的才扔给 AI
+    from app.services.global_hints.service import get_attribute_hints_bulk
+    attr_ids = [str(a.get("id", "")) for a in platform_attrs if a.get("id")]
+    hints = get_attribute_hints_bulk(db, platform, attr_ids)
+
+    miss_attrs = [a for a in platform_attrs
+                  if str(a.get("id", "")) not in hints
+                  or not hints.get(str(a.get("id", ""))).get("suggested_local_name_zh")]
+
+    ai_suggestions_by_name = {}
+    if miss_attrs:
+        ai_res = await _ai_suggest_attr_names(platform, miss_attrs) or []
+        for attr, sugg in zip(miss_attrs, ai_res):
+            ai_suggestions_by_name[attr["name"]] = sugg
 
     # 批量写入
     created = 0
-    for attr, suggestion in zip(platform_attrs, suggestions):
+    for attr in platform_attrs:
+        attr_id = str(attr.get("id", ""))
+        hint = hints.get(attr_id) or {}
+        local_name = hint.get("suggested_local_name_zh")
+        confidence = 70
+        source = "ai"
+        if local_name:
+            # 从 hint 命中，置信度按总确认数换算
+            total = hint.get("total_confirmed_count", 0)
+            confidence = min(95, 70 + total * 3)  # 1 次=73, 5 次=85, 10 次=95
+            source = "global_hint"
+        else:
+            sugg = ai_suggestions_by_name.get(attr["name"], {})
+            local_name = sugg.get("local_name", attr["name"])
+            confidence = sugg.get("confidence", 70)
         upsert_attribute_mapping(db, tenant_id, {
             "local_category_id": local_category_id,
-            "local_attr_name": suggestion.get("local_name", attr["name"]),
+            "local_attr_name": local_name,
             "local_attr_name_ru": attr["name"],
             "platform": platform,
-            "platform_attr_id": str(attr.get("id", "")),
+            "platform_attr_id": attr_id,
             "platform_attr_name": attr["name"],
             "is_required": 1 if attr.get("is_required") else 0,
             "value_type": attr.get("value_type", "string"),
             "platform_dict_id": str(attr.get("dict_id")) if attr.get("dict_id") else None,
             "ai_suggested": 1,
-            "ai_confidence": suggestion.get("confidence", 70),
+            "ai_confidence": confidence,
         })
         created += 1
-    return {"code": 0, "data": {"count": created}}
+    return {"code": 0, "data": {
+        "count": created,
+        "hint_hits": len(attr_ids) - len(miss_attrs),
+        "ai_calls": len(miss_attrs),
+    }}
 
 
 async def _fetch_platform_attributes(

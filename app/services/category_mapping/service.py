@@ -187,6 +187,7 @@ def upsert_category_mapping(db: Session, tenant_id: int, data: dict) -> dict:
 
 def confirm_category_mapping(db: Session, tenant_id: int, mapping_id: int, data: dict = None) -> dict:
     """人工确认品类映射（可同时修改映射值）"""
+    from app.services.global_hints.service import record_category_confirmation
     try:
         mapping = db.query(CategoryPlatformMapping).filter(
             CategoryPlatformMapping.id == mapping_id,
@@ -202,6 +203,8 @@ def confirm_category_mapping(db: Session, tenant_id: int, mapping_id: int, data:
         mapping.confirmed_at = datetime.now(timezone.utc)
         db.commit()
         db.refresh(mapping)
+        # 贡献到全局 hints（失败不影响主流程）
+        record_category_confirmation(db, tenant_id, mapping)
         return {"code": 0, "data": _cat_mapping_to_dict(mapping)}
     except Exception as e:
         db.rollback()
@@ -273,6 +276,7 @@ def upsert_attribute_mapping(db: Session, tenant_id: int, data: dict) -> dict:
 
 
 def confirm_attribute_mapping(db: Session, tenant_id: int, mapping_id: int, data: dict = None) -> dict:
+    from app.services.global_hints.service import record_attribute_confirmation
     try:
         mapping = db.query(AttributeMapping).filter(
             AttributeMapping.id == mapping_id,
@@ -288,6 +292,7 @@ def confirm_attribute_mapping(db: Session, tenant_id: int, mapping_id: int, data
         mapping.confirmed_at = datetime.now(timezone.utc)
         db.commit()
         db.refresh(mapping)
+        record_attribute_confirmation(db, tenant_id, mapping)
         return {"code": 0, "data": _attr_mapping_to_dict(mapping)}
     except Exception as e:
         db.rollback()
