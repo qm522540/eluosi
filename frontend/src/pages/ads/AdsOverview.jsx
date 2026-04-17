@@ -1161,6 +1161,12 @@ const AdsOverview = ({ shopId, platform, shops, searched, syncing, lastSyncTime,
                     </Space>
                   )
                 }},
+              { title: '首次出现', dataIndex: 'first_seen', key: 'first_seen', width: 100,
+                sorter: (a, b) => (a.first_seen || '').localeCompare(b.first_seen || ''),
+                render: v => v ? v.slice(5) : '-' },
+              { title: '天数', dataIndex: 'active_days', key: 'active_days', width: 60, align: 'center',
+                sorter: (a, b) => (a.active_days||0) - (b.active_days||0),
+                render: (v, r) => `${v||0}/${r.total_days||7}` },
               { title: '曝光', dataIndex: 'views', key: 'views', width: 80, align: 'right',
                 sorter: (a, b) => (a.views||0) - (b.views||0),
                 render: v => (v || 0).toLocaleString() },
