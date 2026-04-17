@@ -27,7 +27,6 @@ router = APIRouter()
 @router.get("")
 def product_list(
     keyword: str = Query(None, description="搜索关键词(SKU/名称)"),
-    category: str = Query(None, description="分类筛选"),
     status: str = Query("active"),
     platform: str = Query(None),
     shop_id: int = Query(None),
@@ -37,7 +36,7 @@ def product_list(
     tenant_id: int = Depends(get_tenant_id),
 ):
     """获取商品列表"""
-    result = list_products(db, tenant_id, keyword=keyword, category=category,
+    result = list_products(db, tenant_id, keyword=keyword,
                            status=status, platform=platform, shop_id=shop_id,
                            page=page, page_size=page_size)
     if result["code"] != 0:

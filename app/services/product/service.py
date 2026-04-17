@@ -14,7 +14,7 @@ from app.utils.logger import logger
 # ==================== 商品 CRUD ====================
 
 def list_products(db: Session, tenant_id: int, keyword: str = None,
-                  category: str = None, status: str = None,
+                  status: str = None,
                   platform: str = None, shop_id: int = None,
                   page: int = 1, page_size: int = 20) -> dict:
     """获取商品列表"""
@@ -39,8 +39,6 @@ def list_products(db: Session, tenant_id: int, keyword: str = None,
                 (Product.name_ru.contains(keyword)) |
                 (Product.sku.contains(keyword))
             )
-        if category:
-            query = query.filter(Product.category == category)
         if status:
             query = query.filter(Product.status == status)
 
@@ -341,7 +339,6 @@ def _product_to_dict(p: Product, cat_name_map: dict = None) -> dict:
         "name_zh": p.name_zh,
         "name_ru": p.name_ru,
         "brand": p.brand,
-        "category": p.category,
         "local_category_id": p.local_category_id,
         "local_category_name": cat_name_map.get(p.local_category_id) if p.local_category_id else None,
         "cost_price": float(p.cost_price) if p.cost_price else None,
