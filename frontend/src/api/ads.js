@@ -192,6 +192,14 @@ export function getCampaignKeywords(campaignId, days = 7, nmId = null) {
   return request.get(`/ads/campaign-keywords/${campaignId}`, { params })
 }
 
+/** 屏蔽关键词：把指定词加入 WB minus-phrases */
+export function excludeKeywords(campaignId, nmId, keywords) {
+  return request.post(`/ads/campaign-keywords/${campaignId}/exclude`, {
+    nm_id: nmId,
+    keywords,
+  })
+}
+
 export function getCampaignProducts(campaignId) {
   return request.get(`/ads/campaign-products/${campaignId}`)
 }

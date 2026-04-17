@@ -746,6 +746,73 @@ async def campaign_keywords(
     })
 
 
+class ExcludeKeywordsRequest(BaseModel):
+    nm_id: int = Field(..., description="WB 商品 nm_id")
+    keywords: list = Field(..., description="要屏蔽的关键词列表")
+
+
+@router.post("/campaign-keywords/{campaign_id}/exclude")
+async def exclude_keywords(
+    campaign_id: int,
+    req: ExcludeKeywordsRequest,
+    db: Session = Depends(get_db),
+    tenant_id: int = Depends(get_tenant_id),
+):
+    """屏蔽关键词：把指定词加入 WB 活动的 minus-phrases
+
+    WB API: POST /adv/v0/normquery/set-minus
+    注意：set-minus 是全量覆盖（不是追加），所以需要先 get 现有列表再合并。
+    """
+    from app.models.ad import AdCampaign
+    from app.models.shop import Shop
+
+    camp = db.query(AdCampaign).filter(
+        AdCampaign.id == campaign_id, AdCampaign.tenant_id == tenant_id
+    ).first()
+    if not camp:
+        return error(50001, "广告活动不存在")
+    if camp.platform != "wb":
+        return error(10002, "仅支持 WB 平台")
+
+    shop = db.query(Shop).filter(Shop.id == camp.shop_id).first()
+    if not shop:
+        return error(30001, "店铺不存在")
+
+    from app.services.platform.wb import WBClient
+    client = WBClient(shop_id=shop.id, api_key=shop.api_key)
+    try:
+        # 1. 先拉现有屏蔽词
+        existing_map = await client.fetch_excluded_keywords(
+            advert_id=camp.platform_campaign_id, nm_ids=[req.nm_id])
+        existing = set(existing_map.get(int(req.nm_id), []))
+
+        # 2. 合并新词
+        new_words = set(w.strip() for w in req.keywords if w.strip())
+        merged = list(existing | new_words)
+
+        # 3. 全量写入 WB
+        url = f"https://advert-api.wildberries.ru/adv/v0/normquery/set-minus"
+        resp = await client._request("POST", url, json={
+            "advert_id": int(camp.platform_campaign_id),
+            "nm_id": int(req.nm_id),
+            "norm_queries": merged,
+        })
+
+        logger.info(
+            f"WB 屏蔽关键词成功 advert={camp.platform_campaign_id} "
+            f"nm={req.nm_id}: 新增{len(new_words)}个 总计{len(merged)}个"
+        )
+    finally:
+        await client.close()
+
+    return success({
+        "campaign_id": campaign_id,
+        "nm_id": req.nm_id,
+        "added": list(new_words),
+        "total_excluded": len(merged),
+    })
+
+
 class BidUpdateRequest(BaseModel):
     sku: str = Field(..., description="商品SKU")
     bid: str = Field(..., description="新出价")

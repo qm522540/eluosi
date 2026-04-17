@@ -18,7 +18,7 @@ import {
   getKeywords, createKeyword, batchCreateKeywords, updateKeyword, deleteKeyword,
   getAdStats, getAdSummary,
   exportAdStats, getAlerts, getAlertConfig, updateAlertConfig,
-  getCampaignProducts, getCampaignKeywords, updateCampaignBid, getCampaignBudget,
+  getCampaignProducts, getCampaignKeywords, excludeKeywords, updateCampaignBid, getCampaignBudget,
   getShopSummary,
 } from '@/api/ads'
 import { getListings } from '@/api/products'
@@ -201,6 +201,34 @@ const AdsOverview = ({ shopId, platform, shops, searched, syncing, lastSyncTime,
   const [expandedSkuKeys, setExpandedSkuKeys] = useState([])
   const [keywordsBySku, setKeywordsBySku] = useState({})
   const [keywordsLoadingSku, setKeywordsLoadingSku] = useState({})
+  // 屏蔽规则配置（持久化到 localStorage）
+  const [excludeRules, setExcludeRules] = useState(() => {
+    try {
+      const saved = localStorage.getItem('wb_exclude_rules')
+      return saved ? JSON.parse(saved) : {
+        rule1: true,  rule1_views: 100,
+        rule2: true,  rule2_clicks: 5,
+        rule3: false, rule3_spend: 50, rule3_roas: 3.0,
+        min_days: 3,
+      }
+    } catch { return { rule1: true, rule1_views: 100, rule2: true, rule2_clicks: 5, rule3: false, rule3_spend: 50, rule3_roas: 3.0, min_days: 3 } }
+  })
+  const [excludeConfigOpen, setExcludeConfigOpen] = useState(false)
+  const [excludingKws, setExcludingKws] = useState(false)
+  const saveExcludeRules = (r) => { setExcludeRules(r); localStorage.setItem('wb_exclude_rules', JSON.stringify(r)) }
+  // 按规则筛选"建议屏蔽"关键词
+  const getSuggestedExcludes = (kws) => {
+    if (!kws || !kws.length) return []
+    const r = excludeRules
+    return kws.filter(kw => {
+      if (kw.is_excluded) return false
+      if (kw.active_days < (r.min_days || 3)) return false
+      if (r.rule1 && kw.views >= (r.rule1_views || 100) && kw.clicks === 0) return true
+      if (r.rule2 && kw.clicks >= (r.rule2_clicks || 5) && (kw.est_orders || 0) === 0) return true
+      if (r.rule3 && kw.sum >= (r.rule3_spend || 50) && (kw.est_roas || 0) < (r.rule3_roas || 3)) return true
+      return false
+    })
+  }
 
   // ==================== 数据加载 ====================
 
@@ -984,15 +1012,120 @@ const AdsOverview = ({ shopId, platform, shops, searched, syncing, lastSyncTime,
       }
       return (
         <div style={{ padding: 8, background: '#fafafa', borderRadius: 4 }}>
-          <div style={{ marginBottom: 8, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <Space size={4}>
-              <Text type="secondary" style={{ fontSize: 12 }}>活动级关键词（所有 SKU 共享）·</Text>
-              <Text strong style={{ fontSize: 13 }}>{kws.length} 个</Text>
-              <Text type="secondary" style={{ fontSize: 12 }}>· 近7天实际触发</Text>
-              {excluded.length > 0 && (
-                <Tag color="red" style={{ marginLeft: 8 }}>🚫 已屏蔽 {excluded.length} 个</Tag>
-              )}
-            </Space>
+          {/* 顶部信息 + 屏蔽规则配置 */}
+          <div style={{ marginBottom: 8 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <Space size={4}>
+                <Text type="secondary" style={{ fontSize: 12 }}>活动级关键词（所有 SKU 共享）·</Text>
+                <Text strong style={{ fontSize: 13 }}>{kws.length} 个</Text>
+                <Text type="secondary" style={{ fontSize: 12 }}>· 近7天实际触发</Text>
+                {excluded.length > 0 && (
+                  <Tag color="red" style={{ marginLeft: 8 }}>🚫 已屏蔽 {excluded.length} 个</Tag>
+                )}
+              </Space>
+              <Button size="small" type="link" icon={<SettingOutlined />}
+                onClick={() => setExcludeConfigOpen(!excludeConfigOpen)}>
+                屏蔽规则
+              </Button>
+            </div>
+            {excludeConfigOpen && (
+              <div style={{ marginTop: 8, padding: 12, background: '#fff', border: '1px solid #f0f0f0', borderRadius: 6 }}>
+                <Space direction="vertical" size={6} style={{ width: '100%' }}>
+                  <Space>
+                    <input type="checkbox" checked={excludeRules.rule1}
+                      onChange={e => saveExcludeRules({ ...excludeRules, rule1: e.target.checked })} />
+                    <Text style={{ fontSize: 12 }}>
+                      曝光 ≥ <InputNumber size="small" style={{ width: 70 }} min={1}
+                        value={excludeRules.rule1_views}
+                        onChange={v => saveExcludeRules({ ...excludeRules, rule1_views: v })} /> 且点击=0（烧钱无效词）
+                    </Text>
+                  </Space>
+                  <Space>
+                    <input type="checkbox" checked={excludeRules.rule2}
+                      onChange={e => saveExcludeRules({ ...excludeRules, rule2: e.target.checked })} />
+                    <Text style={{ fontSize: 12 }}>
+                      点击 ≥ <InputNumber size="small" style={{ width: 70 }} min={1}
+                        value={excludeRules.rule2_clicks}
+                        onChange={v => saveExcludeRules({ ...excludeRules, rule2_clicks: v })} /> 且估算订单=0（点击不转化）
+                    </Text>
+                  </Space>
+                  <Space>
+                    <input type="checkbox" checked={excludeRules.rule3}
+                      onChange={e => saveExcludeRules({ ...excludeRules, rule3: e.target.checked })} />
+                    <Text style={{ fontSize: 12 }}>
+                      花费 ≥ <InputNumber size="small" style={{ width: 70 }} min={1}
+                        value={excludeRules.rule3_spend}
+                        onChange={v => saveExcludeRules({ ...excludeRules, rule3_spend: v })} /> 且ROAS {'<'} <InputNumber size="small" style={{ width: 60 }} min={0} step={0.5}
+                        value={excludeRules.rule3_roas}
+                        onChange={v => saveExcludeRules({ ...excludeRules, rule3_roas: v })} />（低ROAS）
+                    </Text>
+                  </Space>
+                  <Space>
+                    <Text style={{ fontSize: 12 }}>最低观察天数：</Text>
+                    <InputNumber size="small" style={{ width: 60 }} min={1} max={7}
+                      value={excludeRules.min_days}
+                      onChange={v => saveExcludeRules({ ...excludeRules, min_days: v })} />
+                  </Space>
+                </Space>
+                {(() => {
+                  const suggested = getSuggestedExcludes(kws)
+                  if (!suggested.length) return (
+                    <div style={{ marginTop: 8, color: '#52c41a', fontSize: 12 }}>✓ 无建议屏蔽的关键词</div>
+                  )
+                  return (
+                    <div style={{ marginTop: 8 }}>
+                      <Space style={{ marginBottom: 6 }}>
+                        <Text type="warning" style={{ fontSize: 12 }}>
+                          建议屏蔽 {suggested.length} 个关键词：
+                        </Text>
+                        <Button size="small" type="primary" danger loading={excludingKws}
+                          onClick={async () => {
+                            Modal.confirm({
+                              title: `确认屏蔽 ${suggested.length} 个关键词？`,
+                              content: (
+                                <div style={{ maxHeight: 200, overflow: 'auto', fontSize: 12 }}>
+                                  {suggested.map(s => <Tag key={s.keyword} style={{ margin: 2 }}>{s.keyword}</Tag>)}
+                                </div>
+                              ),
+                              okText: '确认屏蔽',
+                              okType: 'danger',
+                              onOk: async () => {
+                                setExcludingKws(true)
+                                try {
+                                  await excludeKeywords(
+                                    detailData.id,
+                                    parseInt(sku),
+                                    suggested.map(s => s.keyword),
+                                  )
+                                  message.success(`已屏蔽 ${suggested.length} 个关键词`)
+                                  // 刷新
+                                  setKeywordsBySku(m => ({ ...m, [sku]: undefined }))
+                                  setExpandedSkuKeys(k => k.filter(x => x !== sku))
+                                  setTimeout(() => handleProductRowExpand(true, record), 500)
+                                } catch (err) {
+                                  message.error(err.message || '屏蔽失败')
+                                } finally {
+                                  setExcludingKws(false)
+                                }
+                              },
+                            })
+                          }}>
+                          一键屏蔽 {suggested.length} 个
+                        </Button>
+                      </Space>
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 3 }}>
+                        {suggested.slice(0, 20).map(s => (
+                          <Tag key={s.keyword} color="volcano" style={{ fontSize: 11 }}>
+                            {s.keyword}（{s.views}曝光/{s.clicks}点击）
+                          </Tag>
+                        ))}
+                        {suggested.length > 20 && <Tag>...等{suggested.length - 20}个</Tag>}
+                      </div>
+                    </div>
+                  )
+                })()}
+              </div>
+            )}
           </div>
           <Table
             size="small"
