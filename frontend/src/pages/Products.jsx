@@ -503,9 +503,9 @@ const Products = () => {
   const [editForm] = Form.useForm()
   const [editSubmitting, setEditSubmitting] = useState(false)
   const [localCategories, setLocalCategories] = useState([])
-  // AI 标题优化
+  // AI 标题优化（新版：3 条建议 + 上下文来源）
   const [titleOptimizing, setTitleOptimizing] = useState(false)
-  const [optimizedTitle, setOptimizedTitle] = useState(null)
+  const [titleSuggestions, setTitleSuggestions] = useState(null) // { suggestions[], context_sources[], hot_keywords_used, category }
   // AI 描述优化
   const [descOptimizing, setDescOptimizing] = useState(false)
   const [optimizedDesc, setOptimizedDesc] = useState(null)
@@ -621,15 +621,20 @@ const Products = () => {
       return
     }
     setTitleOptimizing(true)
-    setOptimizedTitle(null)
+    setTitleSuggestions(null)
     try {
       const res = await optimizeTitle(firstListing.id)
-      const newTitle = res.data?.optimized_title || ''
-      if (newTitle) {
-        // 直接填入文本框 + 保留建议展示框（对比原值）
-        editForm.setFieldsValue({ name_ru: newTitle })
-        setOptimizedTitle(newTitle)
-        message.success('AI 已生成并填入，可直接保存或继续编辑')
+      const data = res.data || {}
+      const suggestions = data.suggestions || (data.optimized_title ? [data.optimized_title] : [])
+      if (suggestions.length) {
+        editForm.setFieldsValue({ name_ru: suggestions[0] })
+        setTitleSuggestions({
+          suggestions,
+          context_sources: data.context_sources || [],
+          hot_keywords_used: !!data.hot_keywords_used,
+          category: data.category || '',
+        })
+        message.success(`AI 生成了 ${suggestions.length} 个方案，已填入方案①`)
       } else {
         message.warning('AI 未返回内容')
       }
@@ -1304,15 +1309,61 @@ const Products = () => {
                 <Form.Item name="name_ru" noStyle>
                   <Input.TextArea autoSize={{ minRows: 2, maxRows: 4 }} placeholder="商品俄文标题" />
                 </Form.Item>
-                {optimizedTitle && (
-                  <AISuggestionCard
-                    color="blue"
-                    platform={editingProduct?.listings?.[0]?.platform}
-                    text={optimizedTitle}
-                    onRegenerate={handleOptimizeTitle}
-                    regenerating={titleOptimizing}
-                    onClose={() => setOptimizedTitle(null)}
-                  />
+                {titleSuggestions && (
+                  <div style={{
+                    marginTop: 8, padding: '10px 12px',
+                    background: '#f0f7ff', border: '1px solid #bae0ff', borderRadius: 6,
+                  }}>
+                    <div style={{
+                      display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                      fontSize: 12, color: '#0958d9', marginBottom: 6, fontWeight: 500,
+                    }}>
+                      <Space size={4} wrap>
+                        <span>AI 标题优化</span>
+                        {titleSuggestions.context_sources.map(s => (
+                          <Tag key={s} color="blue" style={{ fontSize: 11, margin: 0, lineHeight: '18px' }}>{s}</Tag>
+                        ))}
+                        {titleSuggestions.hot_keywords_used && (
+                          <Tag color="gold" style={{ fontSize: 11, margin: 0, lineHeight: '18px' }}>含热搜词</Tag>
+                        )}
+                      </Space>
+                      <Space size={4}>
+                        <Button size="small" type="text" onClick={handleOptimizeTitle} loading={titleOptimizing}
+                          style={{ fontSize: 11, height: 22, padding: '0 6px' }}>重新生成</Button>
+                        <Button size="small" type="text" onClick={() => setTitleSuggestions(null)}
+                          style={{ fontSize: 11, height: 22, padding: '0 6px', color: '#888' }}>关闭</Button>
+                      </Space>
+                    </div>
+                    {titleSuggestions.suggestions.map((title, idx) => {
+                      const labels = ['① 高流量词', '② 自然语感', '③ 差异化']
+                      const isActive = editForm.getFieldValue('name_ru') === title
+                      return (
+                        <div
+                          key={idx}
+                          onClick={() => {
+                            editForm.setFieldsValue({ name_ru: title })
+                            message.success(`已切换为方案${labels[idx]?.charAt(0) || idx + 1}`)
+                          }}
+                          style={{
+                            padding: '6px 8px', marginBottom: 4, borderRadius: 4, cursor: 'pointer',
+                            background: isActive ? '#e6f4ff' : '#fff',
+                            border: isActive ? '1px solid #91caff' : '1px solid #f0f0f0',
+                            fontSize: 12, lineHeight: 1.6, transition: 'all 0.2s',
+                          }}
+                        >
+                          <Text type="secondary" style={{ fontSize: 11, marginRight: 6 }}>
+                            {labels[idx] || `方案${idx + 1}`}
+                          </Text>
+                          <Text style={{ color: isActive ? '#1677ff' : '#1f1f1f' }}>{title}</Text>
+                        </div>
+                      )
+                    })}
+                    {titleSuggestions.category && (
+                      <Text type="secondary" style={{ fontSize: 11, marginTop: 4, display: 'block' }}>
+                        分类：{titleSuggestions.category}
+                      </Text>
+                    )}
+                  </div>
                 )}
               </Form.Item>
               <Form.Item
