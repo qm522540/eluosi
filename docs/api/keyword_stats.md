@@ -141,12 +141,16 @@
 
 **`efficiency` 字段**（后端计算，前端展示标签）：
 
-| 值 | 条件 | 含义 | 前端颜色 |
+| 值 | 默认条件 | 含义 | 前端颜色 |
 |---|---|---|---|
-| `star` | CTR ≥ 5% 且 CPC < 均值 | 高效词（高点击率低成本） | 绿 |
-| `potential` | CTR ≥ 3% 且 曝光 < 中位数 | 潜力词（效果好但曝光少） | 蓝 |
-| `waste` | CTR < 1% 且 花费 > 均值 | 浪费词（低点击高花费） | 红 |
-| `normal` | 其他 | 普通 | 灰 |
+| `star` | CTR ≥ `star_ctr_min`（默认5%）且 CPC ≤ 平均×`star_cpc_max_ratio`（默认1.0）| 高效词 | 绿 |
+| `potential` | CTR ≥ `potential_ctr_min`（默认3%）且 曝光 ≤ 平均×`potential_impressions_max_ratio`（默认1.0）| 潜力词 | 蓝 |
+| `waste` | CTR ≤ `waste_ctr_max`（默认1%）且 花费 ≥ 平均×`waste_spend_min_ratio`（默认1.0）| 浪费词 | 红 |
+| `normal` | 以上都不符合 | 普通 | 灰 |
+
+**优先级**：star → potential → waste → normal（命中即返，不会重复判定）
+
+**可配置**：租户可通过 §3.6 / 3.7 / 3.8 接口自定义 6 项阈值；无自定义时走系统默认
 
 ### 3.2 关键词 SKU 明细（Ozon 展开用）
 
@@ -266,6 +270,61 @@
 }
 ```
 
+### 3.7 查询效能评级规则（租户级）
+
+**GET** `/api/v1/keyword-stats/efficiency-rules`
+
+**响应**：
+```json
+{
+  "rules": {
+    "star_ctr_min": 5.0,
+    "star_cpc_max_ratio": 1.0,
+    "potential_ctr_min": 3.0,
+    "potential_impressions_max_ratio": 1.0,
+    "waste_ctr_max": 1.0,
+    "waste_spend_min_ratio": 1.0
+  },
+  "defaults": { "... 同上系统默认值 ..." },
+  "is_default": true
+}
+```
+
+- `rules`：当前租户生效的规则（无自定义则等于 defaults）
+- `defaults`：系统默认值，前端用作输入框的"默认"提示和"恢复默认"基准
+- `is_default`：是否还在用默认值（用于灰掉"恢复默认"按钮）
+
+### 3.8 保存效能评级规则
+
+**PUT** `/api/v1/keyword-stats/efficiency-rules`
+
+**请求体**（6 项全部必填，小数可选）：
+```json
+{
+  "star_ctr_min": 7.0,
+  "star_cpc_max_ratio": 0.9,
+  "potential_ctr_min": 2.5,
+  "potential_impressions_max_ratio": 1.2,
+  "waste_ctr_max": 0.8,
+  "waste_spend_min_ratio": 1.5
+}
+```
+
+**字段范围校验**：
+- 所有 `*_ctr_*` 字段：[0.0, 100.0]（百分比）
+- 所有 `*_ratio*` 字段：[0.0, 10.0]（倍数）
+- 越界返回 `code=10002` 错误
+
+**响应**：同 §3.7 的结构，`is_default` 为 `false`
+
+### 3.9 恢复默认规则
+
+**POST** `/api/v1/keyword-stats/efficiency-rules/reset`
+
+**行为**：从 `keyword_efficiency_rules` 表删除当前租户的行。下次查询自动走 `DEFAULT_RULES`。
+
+**响应**：同 §3.7 结构，`rules=defaults`，`is_default=true`
+
 ---
 
 ## 4. 前端页面设计
@@ -335,3 +394,4 @@
 | 日期 | 版本 | 作者 | 变更 |
 |---|---|---|---|
 | 2026-04-17 | v1 | 小明 | 初稿 |
+| 2026-04-17 | v1.1 | 老林 | 效能评级规则租户级自定义：迁移 041 + 3 个 endpoint（§3.7/3.8/3.9）+ 前端 EfficiencyRulesDrawer。§3.1 `efficiency` 字段说明改为参数化 |
