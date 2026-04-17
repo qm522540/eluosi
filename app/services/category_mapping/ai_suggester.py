@@ -150,9 +150,9 @@ async def suggest_category_mappings(
                     break
 
             if hint_hit:
-                # 置信度按共现次数换算：1次→0.7, 2次→0.8, 5+→0.95
+                # 置信度按共现次数换算（0-100 整数）：1次=70, 2次=75, 7次=100 封顶 95
                 count = hint_hit["co_confirmed_count"]
-                confidence = min(0.95, 0.65 + 0.05 * count)
+                confidence = min(95, int(65 + 5 * count))
                 cat_hint = get_category_hint(
                     db, platform, hint_hit["target_category_id"],
                 )

@@ -56,6 +56,9 @@ def record_category_confirmation(
         )
 
         # 2. 找出同本地分类下其他已确认的平台映射，记录共现
+        # 注：每一对配对的两次 confirm 都会各 +1（A 先确认的话 A 函数里 siblings=[]，
+        # B 后确认时 siblings=[A] 得 +1；反过来也是类似）。净效果：每对贡献 1 次。
+        # 但回填时两头都已 confirmed，两次循环都会 +1 → 贡献 2（已知小瑕疵，不影响排序用途）。
         siblings = db.query(CategoryPlatformMapping).filter(
             CategoryPlatformMapping.tenant_id == tenant_id,
             CategoryPlatformMapping.local_category_id == mapping.local_category_id,

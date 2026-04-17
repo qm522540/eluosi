@@ -53,7 +53,8 @@ const AISuggestCategoryButton = ({ localCategoryId, localCategoryName, onSuccess
           const tag = s.source === 'global_hint'
             ? `⭐全局(${s.co_confirmed_count}次确认)`
             : 'AI'
-          return `${s.platform.toUpperCase()} ${Math.round((s.confidence || 0) * 100)}% [${tag}]`
+          // confidence 后端返回 0-100 整数
+          return `${s.platform.toUpperCase()} ${Math.round(s.confidence || 0)}% [${tag}]`
         })
         message.success(`推荐成功：${parts.join(' · ')}`, 6)
         if (fromHint.length) {
