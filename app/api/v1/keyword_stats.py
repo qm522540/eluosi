@@ -1,15 +1,30 @@
 """关键词统计路由"""
 
 from fastapi import APIRouter, Depends, Query
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.dependencies import get_db, get_tenant_id
 from app.services.keyword_stats.service import (
     summary, sku_detail, trend, negative_suggestions, sync_status,
 )
+from app.services.keyword_stats.rules import (
+    DEFAULT_RULES, FIELD_BOUNDS, get_rules, set_rules, reset_rules,
+)
+from app.utils.errors import ErrorCode
 from app.utils.response import success, error
 
 router = APIRouter()
+
+
+class EfficiencyRulesBody(BaseModel):
+    """6 项阈值都可选，后端会用 DEFAULT 填补缺失项"""
+    star_ctr_min: float = Field(DEFAULT_RULES["star_ctr_min"])
+    star_cpc_max_ratio: float = Field(DEFAULT_RULES["star_cpc_max_ratio"])
+    potential_ctr_min: float = Field(DEFAULT_RULES["potential_ctr_min"])
+    potential_impressions_max_ratio: float = Field(DEFAULT_RULES["potential_impressions_max_ratio"])
+    waste_ctr_max: float = Field(DEFAULT_RULES["waste_ctr_max"])
+    waste_spend_min_ratio: float = Field(DEFAULT_RULES["waste_spend_min_ratio"])
 
 
 @router.get("/summary")
@@ -308,6 +323,53 @@ async def exclude_keyword(
             await client.close()
     else:
         return error(10002, f"{camp.platform} 平台暂不支持关键词屏蔽")
+
+
+# ==================== 效能评级规则（租户级） ====================
+
+@router.get("/efficiency-rules")
+def efficiency_rules_get(
+    db: Session = Depends(get_db),
+    tenant_id: int = Depends(get_tenant_id),
+):
+    """读当前租户规则（无记录返回系统默认）"""
+    rules = get_rules(db, tenant_id)
+    # 标识是否使用默认 —— 前端用于显示"恢复默认"按钮灰色
+    is_default = rules == DEFAULT_RULES
+    return success({
+        "rules": rules,
+        "defaults": DEFAULT_RULES,
+        "is_default": is_default,
+    })
+
+
+@router.put("/efficiency-rules")
+def efficiency_rules_put(
+    body: EfficiencyRulesBody,
+    db: Session = Depends(get_db),
+    tenant_id: int = Depends(get_tenant_id),
+):
+    """写入/更新租户规则（全量覆盖）"""
+    rules = body.model_dump()
+    # 字段范围校验
+    for k, v in rules.items():
+        lo, hi = FIELD_BOUNDS.get(k, (None, None))
+        if lo is not None and not (lo <= v <= hi):
+            return error(ErrorCode.PARAM_ERROR, f"{k} 超出合理范围 [{lo}, {hi}]")
+    saved = set_rules(db, tenant_id, rules)
+    return success({"rules": saved, "defaults": DEFAULT_RULES, "is_default": saved == DEFAULT_RULES},
+                   msg="规则已保存")
+
+
+@router.post("/efficiency-rules/reset")
+def efficiency_rules_reset(
+    db: Session = Depends(get_db),
+    tenant_id: int = Depends(get_tenant_id),
+):
+    """删除租户自定义规则 → 恢复系统默认"""
+    rules = reset_rules(db, tenant_id)
+    return success({"rules": rules, "defaults": DEFAULT_RULES, "is_default": True},
+                   msg="已恢复默认")
 
 
 def _default_dates(date_from, date_to):

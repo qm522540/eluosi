@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import text, func
 
 from app.models.keyword_stat import KeywordDailyStat
+from app.services.keyword_stats.rules import get_rules, classify
 from app.utils.errors import ErrorCode
 from app.utils.logger import logger
 
@@ -94,7 +95,11 @@ def summary(
     total = db.execute(text(count_sql), params).scalar() or 0
     rows = db.execute(text(items_sql), params).fetchall()
 
-    # 效能标签计算
+    # 效能标签计算：租户规则 > 系统默认
+    rules = get_rules(db, tenant_id)
+    avg_imp = total_imp / max(total, 1)
+    avg_sp = total_sp / max(total, 1)
+
     items = []
     for r in rows:
         imp = int(r.impressions or 0)
@@ -103,14 +108,11 @@ def summary(
         ctr_val = _float(r.ctr)
         cpc_val = _float(r.cpc)
 
-        if ctr_val >= 5 and cpc_val < avg_cpc:
-            eff = "star"
-        elif ctr_val >= 3 and imp < (total_imp / max(total, 1)):
-            eff = "potential"
-        elif ctr_val < 1 and sp > (total_sp / max(total, 1)):
-            eff = "waste"
-        else:
-            eff = "normal"
+        eff = classify(
+            ctr=ctr_val, cpc=cpc_val, impressions=imp, spend=sp,
+            avg_cpc=avg_cpc, avg_impressions=avg_imp, avg_spend=avg_sp,
+            rules=rules,
+        )
 
         items.append({
             "keyword": r.keyword,
