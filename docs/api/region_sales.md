@@ -206,12 +206,90 @@ else:                        keep
 地区销售排行 (本模块)
    ↓ 识别
 [建议屏蔽] 标签的地区
+   ↓ 展开地区行看 TOP SKU（§7）
+   ↓ 点"导出屏蔽列表"拿 CSV
    ↓ 人工操作
-WB: 关闭该地区仓储 coverage
-Ozon: 商品卡关闭 доставка в регион
+WB: 关闭该地区仓储 coverage，或商品卡关该 SKU 的地区配送
+Ozon: 商品卡关闭 доставка в регион（按 SKU 粒度）
    ↓ 结果
 该地区下单率降至零，等效广告预算节省
 ```
+
+---
+
+## 6. 退货率数据源（2026-04-17 修复）
+
+### 6.1 WB region-sale API 不返回退货字段
+
+实测 `GET /api/v1/analytics/region-sale` 返回字段只有：
+`cityName / countryName / foName / regionName / nmID / sa / saleInvoiceCostPrice / saleInvoiceCostPricePerc / saleItemInvoiceQty` —— **没有 returns**。
+
+### 6.2 退货走 sales API 聚合
+
+`GET /api/v1/supplier/sales` 每条含：
+- `regionName` / `oblastOkrugName`（联邦区）
+- `saleID`：**以 "R" 开头 = 退货**
+- `date`：精确到秒，用于按日归档
+
+**实现**：`WBClient.fetch_sales_returns_by_region(date_from, date_to)` 返回 `{(region, date): count}`。
+
+### 6.3 回填策略：按天循环
+
+region-sale API 返回的是**日期段汇总**（无 date 字段），早期回填 31 天段导致
+销售全部记到 date_to 那一天 + 退货只有 date_to 当天命中。
+
+修复：回填改为逐日 `_sync_wb_region(d, d)`，orders/returns 都按真实 stat_date 对齐。
+
+### 6.4 当天零销售但有退货的处理
+
+若某地区某天只有退货（往期单的退款）、没有新销售，region-sale 不返回该地区
+→ 补逻辑：`_upsert_region_stats` 里 returns_map 剩余地区新建 `orders=0, returns=N` 的 row。
+
+---
+
+## 7. 地区 TOP SKU 明细接口（2026-04-17 新增）
+
+### 7.1 用途
+
+当用户在排行表看到某地区建议屏蔽，展开该地区行查看：
+"在这个地区主要卖什么 SKU" → 决策 "关这几个 SKU 的该地区配送"。
+
+### 7.2 GET /region-stats/region-detail
+
+| 参数 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| shop_id | int | 是 | |
+| region_name | string | 是 | 俄文地区名原文（如 Москва）|
+| date_from | string | 否 | 默认 7 天前 |
+| date_to | string | 否 | 默认昨天 |
+| limit | int | 否 | 默认 10，最大 50 |
+
+**响应 data**：
+```json
+{
+  "region_name": "Москва",
+  "region_name_zh": "莫斯科",
+  "date_from": "2026-04-10",
+  "date_to": "2026-04-16",
+  "platform": "wb",
+  "items": [
+    { "nm_id": 895130646, "sa": "SK-E0001",
+      "name_zh": "耳饰饰品...", "image_url": "https://...",
+      "orders": 4, "revenue": 1859.42, "revenue_pct_in_region": 22.1 }
+  ]
+}
+```
+
+**注意**：Ozon 暂不支持（OZON 的 `/v1/analytics/data` 不能按 region × SKU 双维度拆）。
+
+### 7.3 导出屏蔽清单（前端）
+
+点击排行表 Card 右上角"导出屏蔽列表"按钮：
+- 筛 `suggestion=block` 的地区
+- 下载 CSV（UTF-8 BOM + Excel 兼容）
+- 字段：地区俄文 / 地区中文 / 订单 / 销售额 / 退货率 / 净贡献 / 建议原因
+
+运营拿此 CSV 到 WB/Ozon 后台手工操作物流关地区。
 
 **参考链接**：
 - [Wildberries 广告 OpenAPI](https://openapi.wildberries.ru/promotion/api/ru/)
@@ -226,3 +304,4 @@ Ozon: 商品卡关闭 доставка в регион
 |---|---|---|---|
 | 2026-04-17 | v1 | 小明 | 初稿 |
 | 2026-04-17 | v2 | 老张 | 加净贡献估算 + 屏蔽建议 + 广告地区排除能力调研结论 |
+| 2026-04-17 | v3 | 老张 | 退货率从 sales API 聚合 + 按天回填 + region-detail 接口 + 导出屏蔽清单 |
