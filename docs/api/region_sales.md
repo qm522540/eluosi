@@ -282,6 +282,32 @@ region-sale API 返回的是**日期段汇总**（无 date 字段），早期回
 
 **注意**：Ozon 暂不支持（OZON 的 `/v1/analytics/data` 不能按 region × SKU 双维度拆）。
 
+---
+
+## 8. Ozon 地区销售（2026-04-17 补）
+
+### 8.1 粒度差异（重要）
+
+| 平台 | API | 粒度 | 说明 |
+|---|---|---|---|
+| WB | `/api/v1/analytics/region-sale` | **联邦主体级**（регион/область/край）| 如 "Московская область" = 莫斯科州 |
+| Ozon | `/v2/posting/fbo/list` + `analytics_data.city` | **城市级** | 如 "Москва" = 莫斯科市 |
+
+两平台同时在 `region_daily_stats.region_name` 里并存：
+- WB：莫斯科州、列宁格勒州 等
+- Ozon：莫斯科、圣彼得堡、克拉斯诺亚尔斯克 等
+
+### 8.2 Ozon 口径
+
+- **orders**：`status != 'cancelled'` 的 posting（含在途 `delivering`）
+- **revenue**：`products.price × quantity` 汇总
+- **returns**：本期 0（`/v1/returns/list` 不返回 city，要 N+1 反查 posting，代价大）
+- **analytics/data 不支持 region dimension**（实测 400 `invalid Dimensions`）
+
+### 8.3 Ozon 回填逻辑
+
+和 WB 一样按天循环（`backfill_region_stats` 已合并两平台逻辑）。每天一次 FBO posting API 调用，支持分页到 20k 条。
+
 ### 7.3 导出屏蔽清单（前端）
 
 点击排行表 Card 右上角"导出屏蔽列表"按钮：
@@ -305,3 +331,4 @@ region-sale API 返回的是**日期段汇总**（无 date 字段），早期回
 | 2026-04-17 | v1 | 小明 | 初稿 |
 | 2026-04-17 | v2 | 老张 | 加净贡献估算 + 屏蔽建议 + 广告地区排除能力调研结论 |
 | 2026-04-17 | v3 | 老张 | 退货率从 sales API 聚合 + 按天回填 + region-detail 接口 + 导出屏蔽清单 |
+| 2026-04-17 | v4 | 老张 | Ozon 地区销售同步（city 粒度，orders + revenue，returns 待补） |
