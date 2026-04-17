@@ -193,9 +193,15 @@
   "ai_confidence": 95,
   "is_confirmed": 0,
   "confirmed_at": null,
-  "created_at": "2026-04-16T08:10:00Z"
+  "created_at": "2026-04-16T08:10:00Z",
+  "global_hint": {
+    "confirmed_count": 12,
+    "suggested_name_zh": "项链"
+  }
 }
 ```
+
+`global_hint` 字段（可能为 null）：来自跨租户共享的 `global_category_hints` 表，表示此 `(platform, platform_category_id)` 被**全网 N 个租户**确认过、其他租户常用的本地中文名。前端用于绘制「⭐ N」徽章，用户可据此判断是否为可信高频映射。
 
 **字段说明**：
 - `platform_category_id`：WB=subjectID / Ozon=description_category_id
@@ -246,6 +252,94 @@ Ozon 示例：
 ### 4.4 删除
 
 **DELETE** `/api/v1/mapping/category-mappings/{mapping_id}`
+
+### 4.5 跨平台建议列表（全局 hints 驱动）
+
+**GET** `/api/v1/mapping/cross-platform-suggestions?local_category_id={id}`
+
+**用途**：对某本地分类，查"当前租户还没绑、但其他租户常一起绑"的平台建议。在 CategoryMappingTab 顶部弹 Banner 让用户一键采纳。
+
+**实现原理**：
+- 查该 local_cat 已有的平台映射集合 `{wb, ozon, ...}`
+- 对每个未覆盖平台 T，对每个已覆盖平台 S，查 `global_cross_platform_category_hints` 里 `(S, S_category_id, T) → top1 by co_confirmed_count`
+- hint 命中 → 去 `global_category_hints` 取 target 的俄文名和常用本地名
+
+**响应 data.items[]**：
+```json
+[
+  {
+    "target_platform": "ozon",
+    "target_platform_category_id": "17028733",
+    "target_platform_category_name_ru": "Товары для праздников",
+    "target_suggested_local_name_zh": "节日套装",
+    "co_confirmed_count": 12,
+    "source_platform": "wb",
+    "source_platform_category_id": "716",
+    "source_platform_category_name": "Наборы для праздника"
+  }
+]
+```
+
+**字段**：
+- `target_*`：建议的目标平台分类信息
+- `source_*`：已有的源平台映射（用于告诉用户"因为你已绑了 S，所以推 T"）
+- `co_confirmed_count`：N 个租户同时绑了 `(S, T)` 这对配对
+
+**空场景**：`items=[]` 表示所有支持的平台都已覆盖、或无共现 hint
+
+### 4.6 采纳跨平台建议
+
+**POST** `/api/v1/mapping/cross-platform-suggestions/adopt`
+
+```json
+{
+  "local_category_id": 3,
+  "target_platform": "ozon",
+  "target_platform_category_id": "17028733"
+}
+```
+
+**行为**：
+- 创建 `CategoryPlatformMapping`，`is_confirmed=0`（待用户确认，不自动确认）
+- `platform_category_name` 从 `global_category_hints` 补全俄文名
+- `ai_suggested=0`、`ai_confidence=0`（来源是「全局建议」不是 AI）
+
+**幂等性**：目标平台已有映射 → 返回 `code=10002 "该平台已有映射，请直接编辑或删除后重试"`，前端提示用户走"修改"路径
+
+**Ozon 限制**：`platform_category_extra_id`（type_id）**不在** cross hint 里，adopt 时留空。用户需要在列表里点"修改"补上 type_id 后再确认，否则后续拉 Ozon 属性会失败
+
+**响应 data**：新建的 mapping 完整对象（同 §4.1 格式）
+
+### 4.7 手动添加 Modal 的 hint 预览
+
+**GET** `/api/v1/mapping/category-hint?platform=wb&platform_category_id=716`
+
+**用途**：用户在"手动添加映射"Modal 里输入 platform + category_id 时，前端 500ms debounce 查询此接口，即时显示「此分类被 N 个租户确认过」+「常用本地名」+「常与 X 平台同绑」，降低用户盲填错误率
+
+**响应 data**：
+```json
+{
+  "hint": {
+    "suggested_local_name_zh": "节日套装",
+    "top_name_count": 11,
+    "total_confirmed_count": 12,
+    "platform_category_name_ru": "Наборы для праздника"
+  },
+  "cross_hints": [
+    {
+      "target_platform": "ozon",
+      "target_platform_category_id": "17028733",
+      "target_platform_category_name_ru": "Товары для праздников",
+      "co_confirmed_count": 12
+    }
+  ]
+}
+```
+
+**字段说明**：
+- `hint=null`：此分类 ID 还没任何租户确认过 → 前端不显示 Alert
+- `cross_hints=[]`：与其他平台无共现历史
+- `top_name_count` / `total_confirmed_count`：两者差值大说明中文名存在分歧（lossy vote 保留 top1）
 
 ---
 
@@ -677,7 +771,7 @@ function ConfidenceBadge({ conf, confirmed }) {
 | code | 说明 |
 |---|---|
 | 0 | 成功 |
-| 10002 | 参数错误（含：分类超过3级 / 有子分类不能删 / 枚举值映射仅支持enum类型 / 未完成品类映射） |
+| 10002 | 参数错误（含：分类超过3级 / 有子分类不能删 / 枚举值映射仅支持enum类型 / 未完成品类映射 / 跨平台建议 adopt 时目标平台已有映射） |
 | 30001 | 店铺不存在（AI 推荐时传了无效 shop_id） |
 | 99999 | 未知错误（AI调用失败 / 平台API失败等） |
 
@@ -688,3 +782,4 @@ function ConfidenceBadge({ conf, confirmed }) {
 | 日期 | 版本 | 作者 | 变更 |
 |---|---|---|---|
 | 2026-04-16 | v1 | 老张 | 初稿：本地分类 + 三层映射 + AI 推荐 |
+| 2026-04-17 | v1.1 | 老林 | §4.1 列表响应补 `global_hint` 徽章字段；新增 §4.5 跨平台建议列表、§4.6 采纳建议、§4.7 手动添加 Modal 的 hint 预览 |
