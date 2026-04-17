@@ -2,10 +2,12 @@ import { useState, useEffect, useCallback } from 'react'
 import {
   Typography, Card, Table, Button, Space, Select, Row, Col, Statistic, Tag,
   Empty, Spin, Alert, message, Tooltip, DatePicker, Radio, Segmented, Badge,
+  Drawer, Popconfirm,
 } from 'antd'
 import {
   KeyOutlined, DownloadOutlined, ReloadOutlined, SyncOutlined,
   StarFilled, BulbOutlined, WarningFilled, SearchOutlined,
+  StopOutlined, EyeOutlined,
 } from '@ant-design/icons'
 import ReactECharts from 'echarts-for-react'
 import dayjs from 'dayjs'
@@ -13,7 +15,7 @@ import { getShops } from '@/api/shops'
 import {
   getKeywordSummary, getKeywordTrend, getKeywordSkuDetail,
   getNegativeSuggestions, getKeywordSyncStatus, backfillKeywords,
-  translateKeywords,
+  translateKeywords, getKeywordCampaigns, excludeKeyword,
 } from '@/api/keyword_stats'
 
 const { Title, Text } = Typography
@@ -51,6 +53,12 @@ const KeywordStats = () => {
   const [trendMetric, setTrendMetric] = useState('impressions')
   const [negativeSugs, setNegativeSugs] = useState([])
   const [kwTranslations, setKwTranslations] = useState({})
+  // 关键词关联活动商品 Drawer
+  const [kwDetailDrawer, setKwDetailDrawer] = useState(false)
+  const [kwDetailKeyword, setKwDetailKeyword] = useState('')
+  const [kwDetailData, setKwDetailData] = useState(null)
+  const [kwDetailLoading, setKwDetailLoading] = useState(false)
+  const [excluding, setExcluding] = useState(null) // campaign_id:nm_id being excluded
   const [syncStatus, setSyncStatus] = useState(null)
   const [page, setPage] = useState(1)
   const [sortBy, setSortBy] = useState('spend')
@@ -126,6 +134,39 @@ const KeywordStats = () => {
     if (searched) fetchAll()
   }, [searched, fetchAll])
 
+  const handleViewKeywordCampaigns = async (keyword) => {
+    setKwDetailKeyword(keyword)
+    setKwDetailDrawer(true)
+    setKwDetailLoading(true)
+    setKwDetailData(null)
+    try {
+      const range = getDateRange()
+      const res = await getKeywordCampaigns({ shop_id: shopId, keyword, ...range })
+      setKwDetailData(res.data)
+    } catch {
+      message.error('查询关联活动失败')
+    } finally {
+      setKwDetailLoading(false)
+    }
+  }
+
+  const handleExcludeKeyword = async (campaignId, nmId, keyword) => {
+    const key = `${campaignId}:${nmId}`
+    setExcluding(key)
+    try {
+      const res = await excludeKeyword({ shop_id: shopId, campaign_id: campaignId, nm_id: nmId, keyword })
+      if (res.data?.already_excluded) {
+        message.info('该关键词已在屏蔽列表中')
+      } else {
+        message.success(res.data?.msg || '已屏蔽')
+      }
+    } catch (e) {
+      message.error(e?.response?.data?.msg || '屏蔽失败')
+    } finally {
+      setExcluding(null)
+    }
+  }
+
   const handleBackfill = async () => {
     if (!shopId) return
     setBackfilling(true)
@@ -189,9 +230,16 @@ const KeywordStats = () => {
       render: (v) => {
         const zh = kwTranslations[v]
         return (
-          <Tooltip title={zh && zh !== v ? `中文：${zh}` : '翻译加载中...'}>
-            <Text strong style={{ fontSize: 13, cursor: 'help' }}>{v}</Text>
-          </Tooltip>
+          <Space size={6}>
+            <Tooltip title={zh && zh !== v ? `中文：${zh}` : '翻译加载中...'}>
+              <Text strong style={{ fontSize: 13, cursor: 'help' }}>{v}</Text>
+            </Tooltip>
+            <Tooltip title="查看引用此关键词的活动和商品">
+              <Button size="small" type="text" icon={<EyeOutlined />}
+                style={{ fontSize: 11, padding: '0 4px', height: 20 }}
+                onClick={() => handleViewKeywordCampaigns(v)} />
+            </Tooltip>
+          </Space>
         )
       },
     },
@@ -210,35 +258,39 @@ const KeywordStats = () => {
       },
     },
     {
-      title: '曝光', dataIndex: 'impressions', key: 'impressions', width: 100,
+      title: <Tooltip title="广告被展示给用户的次数"><span style={{ cursor: 'help' }}>曝光 <span style={{ fontSize: 10, color: '#bbb' }}>ⓘ</span></span></Tooltip>,
+      dataIndex: 'impressions', key: 'impressions', width: 100,
       sorter: (a, b) => a.impressions - b.impressions,
       render: v => v?.toLocaleString(),
     },
     {
-      title: '点击', dataIndex: 'clicks', key: 'clicks', width: 80,
+      title: <Tooltip title="用户看到广告后点击进入商品页的次数"><span style={{ cursor: 'help' }}>点击 <span style={{ fontSize: 10, color: '#bbb' }}>ⓘ</span></span></Tooltip>,
+      dataIndex: 'clicks', key: 'clicks', width: 80,
       sorter: (a, b) => a.clicks - b.clicks,
       render: v => v?.toLocaleString(),
     },
     {
-      title: <Tooltip title="点击率 = 点击÷曝光×100%">CTR <span style={{ fontSize: 10, color: '#bbb' }}>ⓘ</span></Tooltip>,
+      title: <Tooltip title="点击率 = 点击 ÷ 曝光 × 100%，反映广告吸引力"><span style={{ cursor: 'help' }}>CTR <span style={{ fontSize: 10, color: '#bbb' }}>ⓘ</span></span></Tooltip>,
       dataIndex: 'ctr', key: 'ctr', width: 80,
       sorter: (a, b) => a.ctr - b.ctr,
       render: v => v != null ? `${v}%` : '-',
     },
     {
-      title: '花费', dataIndex: 'spend', key: 'spend', width: 110,
+      title: <Tooltip title="该关键词在选定日期范围内的广告总花费"><span style={{ cursor: 'help' }}>花费 <span style={{ fontSize: 10, color: '#bbb' }}>ⓘ</span></span></Tooltip>,
+      dataIndex: 'spend', key: 'spend', width: 110,
       sorter: (a, b) => a.spend - b.spend,
       defaultSortOrder: 'descend',
       render: v => v != null ? <Text strong>{v.toLocaleString()} ₽</Text> : '-',
     },
     {
-      title: <Tooltip title="单次点击成本 = 花费÷点击数">CPC <span style={{ fontSize: 10, color: '#bbb' }}>ⓘ</span></Tooltip>,
+      title: <Tooltip title="单次点击成本 = 花费 ÷ 点击数，越低越好"><span style={{ cursor: 'help' }}>CPC <span style={{ fontSize: 10, color: '#bbb' }}>ⓘ</span></span></Tooltip>,
       dataIndex: 'cpc', key: 'cpc', width: 80,
       sorter: (a, b) => a.cpc - b.cpc,
       render: v => v != null ? `${v} ₽` : '-',
     },
     {
-      title: '占比', dataIndex: 'spend_pct', key: 'spend_pct', width: 80,
+      title: <Tooltip title="该关键词花费占总花费的百分比"><span style={{ cursor: 'help' }}>占比 <span style={{ fontSize: 10, color: '#bbb' }}>ⓘ</span></span></Tooltip>,
+      dataIndex: 'spend_pct', key: 'spend_pct', width: 80,
       render: v => v != null ? `${v}%` : '-',
     },
   ]
@@ -505,6 +557,98 @@ const KeywordStats = () => {
           />
         </Card>
       </Spin>
+
+      {/* ==================== 关键词关联活动商品 Drawer ==================== */}
+      <Drawer
+        title={
+          <Space>
+            <KeyOutlined />
+            <span>关键词详情</span>
+            <Tag>{kwDetailKeyword}</Tag>
+            {kwTranslations[kwDetailKeyword] && kwTranslations[kwDetailKeyword] !== kwDetailKeyword && (
+              <Tag color="blue">{kwTranslations[kwDetailKeyword]}</Tag>
+            )}
+          </Space>
+        }
+        open={kwDetailDrawer}
+        onClose={() => setKwDetailDrawer(false)}
+        width={640}
+        destroyOnClose
+      >
+        {kwDetailLoading ? (
+          <div style={{ textAlign: 'center', padding: 40 }}><Spin /></div>
+        ) : kwDetailData ? (
+          <div>
+            <div style={{ fontSize: 13, color: '#666', marginBottom: 16 }}>
+              共在 {kwDetailData.campaigns?.length || 0} 个活动中出现
+            </div>
+            {(kwDetailData.campaigns || []).map(camp => (
+              <Card key={camp.campaign_id} size="small" style={{ marginBottom: 12 }}
+                title={
+                  <Space>
+                    <span>{camp.campaign_name}</span>
+                    <Tag color="default" style={{ fontSize: 10 }}>
+                      {camp.platform?.toUpperCase()} ID: {camp.platform_campaign_id}
+                    </Tag>
+                  </Space>
+                }
+              >
+                <Row gutter={16} style={{ marginBottom: 10 }}>
+                  <Col span={8}><Text type="secondary">曝光</Text><br/><Text strong>{camp.impressions?.toLocaleString()}</Text></Col>
+                  <Col span={8}><Text type="secondary">点击</Text><br/><Text strong>{camp.clicks?.toLocaleString()}</Text></Col>
+                  <Col span={8}><Text type="secondary">花费</Text><br/><Text strong>{camp.spend?.toLocaleString()} ₽</Text></Col>
+                </Row>
+                {camp.skus?.length > 0 ? (
+                  <div>
+                    <div style={{ fontSize: 12, color: '#888', marginBottom: 6 }}>关联商品 ({camp.skus.length})</div>
+                    {camp.skus.map(s => (
+                      <div key={s.sku} style={{
+                        display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                        padding: '6px 0', borderBottom: '1px solid #f5f5f5',
+                      }}>
+                        <div>
+                          <Text style={{ fontSize: 12 }}>SKU: {s.sku}</Text>
+                          <span style={{ marginLeft: 8, fontSize: 11, color: '#888' }}>
+                            曝光 {s.impressions} · 点击 {s.clicks} · 花费 {s.spend}₽
+                          </span>
+                        </div>
+                        <Popconfirm
+                          title={`确认在此活动中屏蔽「${kwDetailKeyword}」？`}
+                          description="屏蔽后该词将不再触发广告展示"
+                          onConfirm={() => handleExcludeKeyword(camp.campaign_id, parseInt(s.sku), kwDetailKeyword)}
+                        >
+                          <Button size="small" danger icon={<StopOutlined />}
+                            loading={excluding === `${camp.campaign_id}:${s.sku}`}>
+                            屏蔽
+                          </Button>
+                        </Popconfirm>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div style={{ fontSize: 12, color: '#888' }}>
+                    WB 平台关键词为活动级，不按商品拆分
+                    <Popconfirm
+                      title={`确认在此活动中屏蔽「${kwDetailKeyword}」？`}
+                      onConfirm={() => {
+                        // WB 没有 SKU 级，用活动下第一个 nm_id
+                        handleExcludeKeyword(camp.campaign_id, 0, kwDetailKeyword)
+                      }}
+                    >
+                      <Button size="small" danger icon={<StopOutlined />} style={{ marginLeft: 8 }}
+                        loading={excluding === `${camp.campaign_id}:0`}>
+                        屏蔽此词
+                      </Button>
+                    </Popconfirm>
+                  </div>
+                )}
+              </Card>
+            ))}
+          </div>
+        ) : (
+          <Empty description="无关联数据" />
+        )}
+      </Drawer>
     </div>
   )
 }

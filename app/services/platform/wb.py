@@ -717,6 +717,28 @@ class WBClient(BasePlatformClient):
         )
         return result
 
+    async def set_excluded_keywords(
+        self, advert_id: str, nm_id: int, words: list,
+    ) -> dict:
+        """设置 SKU 级屏蔽关键词（替换模式：传入的 words 会覆盖已有列表）
+
+        API: POST /adv/v0/normquery/set-minus
+        Body: {"advert_id": int, "nm_id": int, "words": ["词1", "词2"]}
+        """
+        try:
+            url = f"{WB_ADVERT_API}/adv/v0/normquery/set-minus"
+            body = {
+                "advert_id": int(advert_id),
+                "nm_id": int(nm_id),
+                "words": words,
+            }
+            await self._request("POST", url, json=body)
+            logger.info(f"WB 设置屏蔽关键词成功 advert={advert_id} nm={nm_id} words={len(words)}")
+            return {"ok": True}
+        except Exception as e:
+            logger.error(f"WB 设置屏蔽关键词失败: {e}")
+            return {"ok": False, "error": str(e)}
+
     async def fetch_campaign_summary(
         self, advert_id: str,
         date_from: str, date_to: str,

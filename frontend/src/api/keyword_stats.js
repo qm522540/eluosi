@@ -29,3 +29,11 @@ export function getKeywordSyncStatus(shopId) {
 export function translateKeywords(keywords) {
   return request.post(`${BASE}/translate-keywords`, { keywords }, { timeout: 60000 })
 }
+
+export function getKeywordCampaigns(params) {
+  return request.get(`${BASE}/keyword-campaigns`, { params })
+}
+
+export function excludeKeyword(data) {
+  return request.post(`${BASE}/exclude-keyword`, data)
+}
