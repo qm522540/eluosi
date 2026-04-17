@@ -133,7 +133,7 @@ class ExcludeKeywordRequest(BaseModel):
 
 
 @router.get("/keyword-campaigns")
-def keyword_campaigns(
+async def keyword_campaigns(
     shop_id: int = Query(...),
     keyword: str = Query(...),
     date_from: str = Query(None),
@@ -141,109 +141,100 @@ def keyword_campaigns(
     db: Session = Depends(get_db),
     tenant_id: int = Depends(get_tenant_id),
 ):
-    """查看关键词关联了哪些活动和商品
-
-    返回按活动分组的数据：活动名+商品列表+该活动下这个词的曝光/点击/花费
-    """
-    from app.models.ad import AdCampaign
-    from app.models.keyword_stat import KeywordDailyStat
-    from sqlalchemy import text
+    """查看关键词关联了哪些活动和商品"""
+    from app.models.ad import AdCampaign, AdStat
+    from app.models.shop import Shop
+    from sqlalchemy import text, func as sqlfunc
 
     date_from, date_to = _default_dates(date_from, date_to)
+    params = {"tid": tenant_id, "sid": shop_id, "kw": keyword, "df": date_from, "dt": date_to}
 
-    sql = text("""
-        SELECT kds.campaign_id, kds.platform_campaign_id, kds.sku,
-               SUM(kds.impressions) imp, SUM(kds.clicks) clk, SUM(kds.spend) sp,
-               ROUND(SUM(kds.clicks)/NULLIF(SUM(kds.impressions),0)*100, 2) ctr
-        FROM keyword_daily_stats kds
-        WHERE kds.tenant_id = :tid AND kds.shop_id = :sid
-          AND kds.keyword = :kw AND kds.stat_date BETWEEN :df AND :dt
-        GROUP BY kds.campaign_id, kds.platform_campaign_id, kds.sku
-        ORDER BY sp DESC
-    """)
-    rows = db.execute(sql, {"tid": tenant_id, "sid": shop_id,
-                            "kw": keyword, "df": date_from, "dt": date_to}).fetchall()
+    # 按活动汇总关键词统计
+    rows = db.execute(text("""
+        SELECT campaign_id, platform_campaign_id,
+               SUM(impressions) imp, SUM(clicks) clk, SUM(spend) sp,
+               MIN(stat_date) first_seen
+        FROM keyword_daily_stats
+        WHERE tenant_id=:tid AND shop_id=:sid AND keyword=:kw AND stat_date BETWEEN :df AND :dt
+        GROUP BY campaign_id, platform_campaign_id ORDER BY sp DESC
+    """), params).fetchall()
 
-    # 按活动分组
-    camp_map = {}
+    campaigns = []
+    shop = db.query(Shop).filter(Shop.id == shop_id).first()
+
     for r in rows:
-        cid = r.campaign_id
-        if cid not in camp_map:
-            camp = db.query(AdCampaign).filter(AdCampaign.id == cid).first()
-            camp_map[cid] = {
-                "campaign_id": cid,
-                "platform_campaign_id": r.platform_campaign_id,
-                "campaign_name": camp.name if camp else f"活动#{cid}",
-                "platform": camp.platform if camp else "wb",
-                "impressions": 0, "clicks": 0, "spend": 0,
-                "skus": [],
-                "products": [],  # 活动下的商品列表（用于选择屏蔽哪个商品）
-            }
-        entry = camp_map[cid]
-        entry["impressions"] += int(r.imp or 0)
-        entry["clicks"] += int(r.clk or 0)
-        entry["spend"] += float(r.sp or 0)
-        if r.sku:
-            entry["skus"].append({
-                "sku": r.sku,
-                "impressions": int(r.imp or 0),
-                "clicks": int(r.clk or 0),
-                "spend": float(r.sp or 0),
-                "ctr": float(r.ctr or 0),
-            })
+        camp = db.query(AdCampaign).filter(AdCampaign.id == r.campaign_id).first()
+        entry = {
+            "campaign_id": r.campaign_id,
+            "platform_campaign_id": r.platform_campaign_id,
+            "campaign_name": camp.name if camp else f"活动#{r.campaign_id}",
+            "platform": camp.platform if camp else "wb",
+            "status": camp.status if camp else "unknown",
+            "impressions": int(r.imp or 0),
+            "clicks": int(r.clk or 0),
+            "spend": float(r.sp or 0),
+            "keyword_first_seen": r.first_seen.isoformat() if r.first_seen else None,
+            "products": [],
+        }
 
-    # 为每个活动查关联商品（WB 屏蔽需要 nm_id，从 campaign_products 拿）
-    from app.models.shop import Shop
-    for cid, entry in camp_map.items():
-        camp = db.query(AdCampaign).filter(AdCampaign.id == cid).first()
-        if not camp:
-            continue
-        shop = db.query(Shop).filter(Shop.id == camp.shop_id).first()
-        if not shop:
-            continue
-        try:
-            if camp.platform == "wb":
+        # WB: 查活动商品 + 屏蔽状态 + 每个商品的广告统计
+        if camp and camp.platform == "wb" and shop:
+            try:
                 from app.services.platform.wb import WBClient
-                import asyncio
-                async def _get_products_and_excluded(kw_text):
-                    client = WBClient(shop_id=shop.id, api_key=shop.api_key)
-                    try:
-                        prods = await client.fetch_campaign_products(camp.platform_campaign_id)
-                        nm_ids = [int(p.get("sku", 0)) for p in prods if p.get("sku")]
-                        excluded = await client.fetch_excluded_keywords(
-                            camp.platform_campaign_id, nm_ids,
-                        ) if nm_ids else {}
-                        result = []
-                        for p in prods:
-                            nm = int(p.get("sku", 0))
-                            if not nm:
-                                continue
-                            ex_words = excluded.get(nm, [])
-                            is_exc = kw_text.lower().strip() in [w.lower().strip() for w in ex_words]
-                            result.append({
-                                "nm_id": nm,
-                                "name": p.get("subject_name", ""),
-                                "is_excluded": is_exc,
-                            })
-                        # 未屏蔽排前面
-                        result.sort(key=lambda x: (x["is_excluded"], x["nm_id"]))
-                        return result
-                    finally:
-                        await client.close()
-                loop = asyncio.new_event_loop()
+                client = WBClient(shop_id=shop.id, api_key=shop.api_key)
                 try:
-                    entry["products"] = loop.run_until_complete(
-                        _get_products_and_excluded(keyword)
-                    )
+                    prods = await client.fetch_campaign_products(camp.platform_campaign_id)
+                    nm_ids = [int(p.get("sku", 0)) for p in prods if p.get("sku")]
+                    # 批量查屏蔽状态
+                    excluded = await client.fetch_excluded_keywords(
+                        camp.platform_campaign_id, nm_ids,
+                    ) if nm_ids else {}
                 finally:
-                    loop.close()
-        except Exception as e:
-            logger.warning(f"查活动 {cid} 商品失败: {e}")
+                    await client.close()
 
-    return success({
-        "keyword": keyword,
-        "campaigns": list(camp_map.values()),
-    })
+                # 批量查每个 nm_id 的广告统计（整体，非关键词级）
+                nm_stats = {}
+                if nm_ids:
+                    for sr in db.query(
+                        AdStat.ad_group_id,
+                        sqlfunc.sum(AdStat.impressions).label("imp"),
+                        sqlfunc.sum(AdStat.clicks).label("clk"),
+                        sqlfunc.sum(AdStat.spend).label("sp"),
+                    ).filter(
+                        AdStat.campaign_id == camp.id,
+                        AdStat.ad_group_id.in_(nm_ids),
+                    ).group_by(AdStat.ad_group_id).all():
+                        nm_stats[sr.ad_group_id] = {
+                            "impressions": int(sr.imp or 0),
+                            "clicks": int(sr.clk or 0),
+                            "spend": float(sr.sp or 0),
+                        }
+
+                products = []
+                kw_lower = keyword.lower().strip()
+                for p in prods:
+                    nm = int(p.get("sku", 0))
+                    if not nm:
+                        continue
+                    ex_words = excluded.get(nm, [])
+                    is_exc = kw_lower in [w.lower().strip() for w in ex_words]
+                    s = nm_stats.get(nm, {})
+                    products.append({
+                        "nm_id": nm,
+                        "name": p.get("subject_name", ""),
+                        "is_excluded": is_exc,
+                        "impressions": s.get("impressions", 0),
+                        "clicks": s.get("clicks", 0),
+                        "spend": s.get("spend", 0),
+                    })
+                products.sort(key=lambda x: (x["is_excluded"], -x["spend"]))
+                entry["products"] = products
+            except Exception as e:
+                logger.warning(f"查活动 {camp.id} 商品失败: {e}")
+
+        campaigns.append(entry)
+
+    return success({"keyword": keyword, "campaigns": campaigns})
 
 
 @router.post("/exclude-keyword")

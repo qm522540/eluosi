@@ -572,7 +572,7 @@ const KeywordStats = () => {
         }
         open={kwDetailDrawer}
         onClose={() => setKwDetailDrawer(false)}
-        width={640}
+        width="85%"
         destroyOnClose
       >
         {kwDetailLoading ? (
@@ -585,18 +585,31 @@ const KeywordStats = () => {
             {(kwDetailData.campaigns || []).map(camp => (
               <Card key={camp.campaign_id} size="small" style={{ marginBottom: 12 }}
                 title={
-                  <Space>
+                  <Space size={8} wrap>
                     <span>{camp.campaign_name}</span>
+                    <Badge
+                      status={camp.status === 'active' ? 'success' : camp.status === 'paused' ? 'warning' : 'default'}
+                      text={camp.status === 'active' ? '投放中' : camp.status === 'paused' ? '暂停' : camp.status === 'archived' ? '已归档' : camp.status}
+                      style={{ fontSize: 12 }}
+                    />
                     <Tag color="default" style={{ fontSize: 10 }}>
                       {camp.platform?.toUpperCase()} ID: {camp.platform_campaign_id}
                     </Tag>
+                    {camp.keyword_first_seen && (
+                      <Tooltip title="该关键词在此活动中首次出现数据的日期">
+                        <Tag color="blue" style={{ fontSize: 10, margin: 0 }}>
+                          首次出现: {camp.keyword_first_seen}
+                        </Tag>
+                      </Tooltip>
+                    )}
                   </Space>
                 }
               >
                 <Row gutter={16} style={{ marginBottom: 10 }}>
-                  <Col span={8}><Text type="secondary">曝光</Text><br/><Text strong>{camp.impressions?.toLocaleString()}</Text></Col>
-                  <Col span={8}><Text type="secondary">点击</Text><br/><Text strong>{camp.clicks?.toLocaleString()}</Text></Col>
-                  <Col span={8}><Text type="secondary">花费</Text><br/><Text strong>{camp.spend?.toLocaleString()} ₽</Text></Col>
+                  <Col span={6}><Text type="secondary">关键词曝光</Text><br/><Text strong>{camp.impressions?.toLocaleString()}</Text></Col>
+                  <Col span={6}><Text type="secondary">关键词点击</Text><br/><Text strong>{camp.clicks?.toLocaleString()}</Text></Col>
+                  <Col span={6}><Text type="secondary">关键词花费</Text><br/><Text strong>{camp.spend?.toLocaleString()} ₽</Text></Col>
+                  <Col span={6}><Text type="secondary">CTR</Text><br/><Text strong>{camp.impressions > 0 ? (camp.clicks / camp.impressions * 100).toFixed(2) : 0}%</Text></Col>
                 </Row>
                 {/* 活动下的商品列表（屏蔽时选对哪个商品操作） */}
                 {(camp.products?.length > 0 || camp.skus?.length > 0) ? (
@@ -616,9 +629,20 @@ const KeywordStats = () => {
                           padding: '6px 0', borderBottom: '1px solid #f5f5f5',
                           opacity: isExcluded ? 0.6 : 1,
                         }}>
-                          <div>
-                            <Text style={{ fontSize: 12, fontWeight: 500 }}>nm_id: {nmId}</Text>
-                            {name && <Text style={{ marginLeft: 8, fontSize: 11, color: '#888' }}>{name}</Text>}
+                          <div style={{ flex: 1 }}>
+                            <div>
+                              <Text style={{ fontSize: 12, fontWeight: 500 }}>nm_id: {nmId}</Text>
+                              {name && <Text style={{ marginLeft: 8, fontSize: 11, color: '#888' }}>{name}</Text>}
+                            </div>
+                            {(p.impressions > 0 || p.spend > 0) && (
+                              <div style={{ fontSize: 11, color: '#888', marginTop: 2 }}>
+                                <Tooltip title="该商品在此活动的整体广告数据（非单关键词）">
+                                  <span style={{ cursor: 'help' }}>
+                                    整体: 曝光 {(p.impressions || 0).toLocaleString()} · 点击 {(p.clicks || 0).toLocaleString()} · 花费 {(p.spend || 0).toLocaleString()}₽
+                                  </span>
+                                </Tooltip>
+                              </div>
+                            )}
                           </div>
                           {isExcluded ? (
                             <Tag color="default" style={{ margin: 0 }}>已屏蔽</Tag>
