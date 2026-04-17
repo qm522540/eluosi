@@ -12,6 +12,11 @@ from app.models.promo_calendar import PromoCalendar
 from app.models.notification import Notification
 from app.models.task_log import TaskLog
 from app.models.translation import RuZhDict
+from app.models.global_hints import (
+    GlobalCategoryHint,
+    GlobalCrossPlatformCategoryHint,
+    GlobalAttributeHint,
+)
 
 __all__ = [
     "BaseMixin", "Tenant", "User", "Shop",
@@ -24,4 +29,5 @@ __all__ = [
     "PromoCalendar",
     "Notification", "TaskLog",
     "RuZhDict",
+    "GlobalCategoryHint", "GlobalCrossPlatformCategoryHint", "GlobalAttributeHint",
 ]
