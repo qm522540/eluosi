@@ -1151,7 +1151,7 @@ const AdsOverview = ({ shopId, platform, shops, searched, syncing, lastSyncTime,
                       {r.is_excluded && <Tag color="red" style={{ margin: 0, fontSize: 11 }}>已屏蔽</Tag>}
                       {isSuggested && !r.is_excluded && <Tag color="volcano" style={{ margin: 0, fontSize: 11 }}>建议屏蔽</Tag>}
                       {!r.is_excluded && !isSuggested && s.label && <Tag color={s.color} style={{ margin: 0, fontSize: 11 }}>{s.label}</Tag>}
-                      <Tooltip title={`${v}（${r.active_days || 0}/${r.total_days || 7}天出现）`} placement="topLeft">
+                      <Tooltip title={`${v}（${r.active_days || 0}/${r.total_days || 7}天出现${r.first_seen ? `，首次 ${r.first_seen}` : ''}${r.last_seen && r.last_seen !== r.first_seen ? `，末次 ${r.last_seen}` : ''}）`} placement="topLeft">
                         <span style={
                           r.is_excluded ? { textDecoration: 'line-through', color: '#999' }
                           : isSuggested ? { color: '#cf1322', fontWeight: 500 }

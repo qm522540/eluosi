@@ -826,6 +826,7 @@ class WBClient(BasePlatformClient):
         total_days = len(resp.get("keywords") or [])
         agg: dict = {}
         for day_group in resp.get("keywords") or []:
+            day_date = day_group.get("date") or ""
             for stat in day_group.get("stats") or []:
                 kw = stat.get("keyword") or ""
                 if not kw:
@@ -836,11 +837,17 @@ class WBClient(BasePlatformClient):
                         "views": 0, "clicks": 0,
                         "sum": 0.0, "currency": stat.get("currency", "RUB"),
                         "active_days": 0,
+                        "first_seen": day_date,
+                        "last_seen": day_date,
                     }
                 agg[kw]["views"] += int(stat.get("views") or 0)
                 agg[kw]["clicks"] += int(stat.get("clicks") or 0)
                 agg[kw]["sum"] += float(stat.get("sum") or 0)
                 agg[kw]["active_days"] += 1
+                if day_date and day_date < agg[kw]["first_seen"]:
+                    agg[kw]["first_seen"] = day_date
+                if day_date and day_date > agg[kw]["last_seen"]:
+                    agg[kw]["last_seen"] = day_date
 
         # 按 views 降序
         result = sorted(agg.values(), key=lambda x: x["views"], reverse=True)
@@ -1060,6 +1067,43 @@ class WBClient(BasePlatformClient):
         except Exception as e:
             logger.error(f"WB 拉取库存失败，shop_id={self.shop_id}: {e}")
             raise
+
+    # ==================== 地区销售 ====================
+
+    async def fetch_region_sales(self, date_from: str, date_to: str) -> list:
+        """拉取地区销售数据
+
+        API: GET https://seller-analytics-api.wildberries.ru/api/v1/analytics/region-sale
+        单次最多 31 天。返回按 regionName + cityName + nmID 粒度。
+        本方法按 regionName 聚合（去掉城市和商品粒度），返回每天每地区的汇总。
+
+        Returns: [{region_name, date, orders, revenue}]
+        """
+        try:
+            url = "https://seller-analytics-api.wildberries.ru/api/v1/analytics/region-sale"
+            params = {"dateFrom": date_from, "dateTo": date_to}
+            result = await self._request("GET", url, params=params)
+            report = (result or {}).get("report") or []
+            # 按 regionName 聚合（API 返回按 city+nmID 拆分，合并到 region 级）
+            region_map = {}
+            for item in report:
+                region = item.get("regionName") or item.get("countryName") or "Unknown"
+                orders = int(item.get("saleItemInvoiceQty") or 0)
+                revenue = float(item.get("saleInvoiceCostPrice") or 0)
+                key = region
+                if key not in region_map:
+                    region_map[key] = {"orders": 0, "revenue": 0}
+                region_map[key]["orders"] += orders
+                region_map[key]["revenue"] += revenue
+            items = [
+                {"region_name": k, "orders": v["orders"], "revenue": round(v["revenue"], 2)}
+                for k, v in region_map.items() if v["orders"] > 0 or v["revenue"] > 0
+            ]
+            logger.info(f"WB 地区销售 {date_from}~{date_to}: {len(items)} 个地区，原始 {len(report)} 条")
+            return items
+        except Exception as e:
+            logger.error(f"WB 地区销售拉取失败: {e}")
+            return []
 
     # ==================== 关键词统计 ====================
 
