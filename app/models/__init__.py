@@ -17,6 +17,7 @@ from app.models.global_hints import (
     GlobalCrossPlatformCategoryHint,
     GlobalAttributeHint,
 )
+from app.models.search_insight import ProductSearchQuery
 
 __all__ = [
     "BaseMixin", "Tenant", "User", "Shop",
@@ -30,4 +31,5 @@ __all__ = [
     "Notification", "TaskLog",
     "RuZhDict",
     "GlobalCategoryHint", "GlobalCrossPlatformCategoryHint", "GlobalAttributeHint",
+    "ProductSearchQuery",
 ]
