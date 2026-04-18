@@ -1204,16 +1204,27 @@ const AdsOverview = ({ shopId, platform, shops, searched, syncing, lastSyncTime,
                         okText: '确认屏蔽',
                         okType: 'danger',
                         onOk: async () => {
+                          // 兜底：发请求前再过滤一次含空格短语，防止 stale state
+                          const sendable = suggestedExcludeWords.filter(w => !w.includes(' '))
+                          const phraseDropped = suggestedExcludeWords.filter(w => w.includes(' '))
+                          if (sendable.length === 0) {
+                            message.info(`${phraseDropped.length} 个候选词都是含空格短语，WB 不支持屏蔽，请到 WB 后台手动添加`, 5)
+                            return
+                          }
                           setExcludingKws(true)
                           try {
-                            const res = await excludeKeywords(detailData.id, parseInt(sku), suggestedExcludeWords)
+                            const res = await excludeKeywords(detailData.id, parseInt(sku), sendable)
                             const added = res.data?.added || []
                             const skipped = res.data?.skipped_protected || []
                             const dropped = res.data?.dropped_invalid || []
                             const parts = []
                             if (added.length > 0) parts.push(`屏蔽 ${added.length} 个`)
                             if (skipped.length > 0) parts.push(`白名单跳过 ${skipped.length} 个`)
-                            if (dropped.length > 0) parts.push(`${dropped.length} 个含空格短语 WB 不支持，请到 WB 后台手动屏蔽`)
+                            const allPhraseDropped = [...phraseDropped, ...dropped.filter(d => d.includes(' '))]
+                            if (allPhraseDropped.length > 0) parts.push(`${allPhraseDropped.length} 个含空格短语 WB 不支持`)
+                            if (dropped.filter(d => !d.includes(' ')).length > 0) {
+                              parts.push(`WB 拒绝 ${dropped.filter(d => !d.includes(' ')).length} 个`)
+                            }
                             if (added.length > 0) {
                               message.success(parts.join('；'), 5)
                             } else {
