@@ -215,6 +215,16 @@ export function removeProtectedKeyword(campaignId, nmId, keyword) {
   })
 }
 
+// ==================== Ozon SKU × 搜索词 ====================
+
+export function getOzonSkuQueries(shopId, sku, days = 7) {
+  return request.get('/ads/ozon-sku-queries', { params: { shop_id: shopId, sku, days } })
+}
+
+export function syncOzonSkuQueries(shopId, days = 7) {
+  return request.post('/ads/ozon-sku-queries/sync', null, { params: { shop_id: shopId, days } })
+}
+
 // ==================== 活动汇总指标 ====================
 
 export function getCampaignSummary(campaignId, days = 7) {

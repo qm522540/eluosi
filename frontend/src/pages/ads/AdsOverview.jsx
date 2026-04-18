@@ -22,7 +22,7 @@ import {
   getCampaignProducts, getCampaignKeywords, excludeKeywords, updateCampaignBid, getCampaignBudget,
   getShopSummary, addProtectedKeyword, removeProtectedKeyword,
   getAutoExcludeConfig, toggleAutoExclude, runAutoExcludeNow, getAutoExcludeLogs,
-  getCampaignSummary,
+  getCampaignSummary, getOzonSkuQueries, syncOzonSkuQueries,
 } from '@/api/ads'
 import { getListings } from '@/api/products'
 import { getEfficiencyRules } from '@/api/keyword_stats'
@@ -575,7 +575,21 @@ const AdsOverview = ({ shopId, platform, shops, searched, syncing, lastSyncTime,
       return
     }
 
-    // Ozon: 保留原来按 ad_group_id 查本地 ad_keywords 的逻辑
+    // Ozon: 调本地 ozon_product_queries（SKU × 搜索词，含完整漏斗 + 决策派生）
+    if (platform === 'ozon' && detailData?.shop_id) {
+      setKeywordsLoadingSku(m => ({ ...m, [sku]: true }))
+      try {
+        const r = await getOzonSkuQueries(detailData.shop_id, sku, 7)
+        // 把整个 data 对象塞 keywordsBySku（含 items + 顶部 summary 字段）
+        setKeywordsBySku(m => ({ ...m, [sku]: r.data || { items: [] } }))
+      } catch {
+        setKeywordsBySku(m => ({ ...m, [sku]: { items: [] } }))
+      } finally {
+        setKeywordsLoadingSku(m => ({ ...m, [sku]: false }))
+      }
+      return
+    }
+    // 其他平台（保留 ad_group_id 路径作为兜底）
     const adGroupId = getAdGroupIdBySku(sku)
     if (!adGroupId) {
       setKeywordsBySku(m => ({ ...m, [sku]: [] }))
@@ -1375,7 +1389,109 @@ const AdsOverview = ({ shopId, platform, shops, searched, syncing, lastSyncTime,
       )
     }
 
-    // Ozon：保留原"本地广告组+关键词"逻辑
+    // Ozon: 走 ozon_product_queries（SKU × 搜索词，含完整漏斗）
+    if (platform === 'ozon') {
+      const data = kws || {}
+      const items = data.items || []
+      if (items.length === 0) {
+        return (
+          <div style={{ padding: 12, background: '#fafafa', borderRadius: 4 }}>
+            <Empty
+              image={Empty.PRESENTED_IMAGE_SIMPLE}
+              description={<span style={{ fontSize: 13 }}>暂无该 SKU 的搜索词数据。可点击右上「立即同步」从 Ozon 拉取最新（需 Premium 订阅）</span>}
+            >
+              <Button size="small" type="primary" onClick={async () => {
+                try {
+                  await syncOzonSkuQueries(detailData.shop_id, 7)
+                  message.success('同步任务已提交，1-3 分钟后请重新展开此 SKU')
+                } catch (err) {
+                  message.error(err.message || '同步失败')
+                }
+              }}>立即同步</Button>
+            </Empty>
+          </div>
+        )
+      }
+      // 决策标签算法（前端先实现简版，将来挪后端可配阈值）
+      const labelOf = (r) => {
+        if (r.orders >= 3 && r.cvr >= 2) return { tag: '🔥 明星', color: 'red' }
+        if (r.impressions >= 100 && r.orders === 0) return { tag: '🗑️ 低效', color: 'default' }
+        if (r.cvr >= 1.5 && r.orders < 3) return { tag: '📈 成长', color: 'green' }
+        if (r.impressions >= 200 && r.cvr < 0.5) return { tag: '💡 机会', color: 'blue' }
+        return { tag: '普通', color: 'default' }
+      }
+      return (
+        <div style={{ padding: 8, background: '#fafafa', borderRadius: 4 }}>
+          <div style={{ marginBottom: 8, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <Space size={6}>
+              <Text type="secondary" style={{ fontSize: 12 }}>
+                Ozon SKU × 搜索词
+                {data.date_from && data.date_to && ` · ${data.date_from} ~ ${data.date_to}`}
+              </Text>
+              <Text strong style={{ fontSize: 13 }}>{items.length} 个词</Text>
+              <Text type="secondary" style={{ fontSize: 12 }}>
+                · 共 {data.total_clicks} 点击 · {data.total_orders} 单 · ¥{data.total_revenue?.toLocaleString()}
+              </Text>
+            </Space>
+            <Button size="small" onClick={async () => {
+              try {
+                await syncOzonSkuQueries(detailData.shop_id, 7)
+                message.success('同步任务已提交，1-3 分钟后请重新展开')
+              } catch (err) {
+                message.error(err.message || '同步失败')
+              }
+            }}>立即同步</Button>
+          </div>
+          <Table
+            size="small"
+            rowKey="query"
+            dataSource={items}
+            pagination={{ pageSize: 10, size: 'small', showSizeChanger: false }}
+            columns={[
+              { title: '搜索词', dataIndex: 'query', ellipsis: true,
+                render: v => <Text strong style={{ fontSize: 12 }}>{v}</Text> },
+              { title: '决策', width: 80,
+                render: (_, r) => {
+                  const l = labelOf(r)
+                  return <Tag color={l.color} style={{ margin: 0, fontSize: 11 }}>{l.tag}</Tag>
+                } },
+              { title: '曝光', dataIndex: 'impressions', width: 80, align: 'right',
+                sorter: (a, b) => a.impressions - b.impressions,
+                render: v => v?.toLocaleString() },
+              { title: '点击', dataIndex: 'clicks', width: 70, align: 'right',
+                sorter: (a, b) => a.clicks - b.clicks,
+                render: v => v?.toLocaleString() },
+              { title: 'CTR', dataIndex: 'ctr', width: 70, align: 'right',
+                sorter: (a, b) => a.ctr - b.ctr,
+                render: v => v ? `${v}%` : '-' },
+              { title: '加购', dataIndex: 'add_to_cart', width: 70, align: 'right',
+                sorter: (a, b) => a.add_to_cart - b.add_to_cart,
+                render: v => v || '-' },
+              { title: '加购率', dataIndex: 'atc_rate', width: 80, align: 'right',
+                render: v => v ? `${v}%` : '-' },
+              { title: '订单', dataIndex: 'orders', width: 70, align: 'right',
+                sorter: (a, b) => a.orders - b.orders,
+                render: v => v ? <Text strong style={{ color: '#722ed1' }}>{v}</Text> : '-' },
+              { title: '转化率', dataIndex: 'cvr', width: 80, align: 'right',
+                sorter: (a, b) => a.cvr - b.cvr,
+                render: v => {
+                  if (!v) return '-'
+                  const color = v >= 3 ? '#52c41a' : v >= 1 ? '#faad14' : '#999'
+                  return <span style={{ color, fontWeight: 500 }}>{v}%</span>
+                } },
+              { title: '营收', dataIndex: 'revenue', width: 100, align: 'right',
+                sorter: (a, b) => a.revenue - b.revenue,
+                defaultSortOrder: 'descend',
+                render: v => v > 0 ? <Text strong style={{ color: '#52c41a' }}>¥{v.toLocaleString()}</Text> : '-' },
+              { title: '客单价', dataIndex: 'aov', width: 90, align: 'right',
+                render: v => v > 0 ? `¥${v}` : '-' },
+            ]}
+          />
+        </div>
+      )
+    }
+
+    // 兜底：本地广告组+关键词逻辑（其他平台或老路径）
     const adGroupId = getAdGroupIdBySku(sku)
     const adGroup = adGroups.find(g => g.id === adGroupId)
     if (!adGroupId) {
