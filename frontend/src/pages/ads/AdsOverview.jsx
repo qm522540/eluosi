@@ -3,7 +3,7 @@ import {
   Typography, Card, Table, Button, Tag, Space, Select, Row, Col,
   Statistic, Modal, Form, Input, InputNumber, message, DatePicker, Tooltip, Badge, Empty,
   Popconfirm, Tabs, Alert, Drawer, Descriptions, List, Divider, Progress, Checkbox, Popover,
-  Switch,
+  Switch, Segmented, Spin,
 } from 'antd'
 import {
   SearchOutlined, EditOutlined, EyeOutlined, SyncOutlined, PlusOutlined,
@@ -22,6 +22,7 @@ import {
   getCampaignProducts, getCampaignKeywords, excludeKeywords, updateCampaignBid, getCampaignBudget,
   getShopSummary, addProtectedKeyword, removeProtectedKeyword,
   getAutoExcludeConfig, toggleAutoExclude, runAutoExcludeNow, getAutoExcludeLogs,
+  getCampaignSummary,
 } from '@/api/ads'
 import { getListings } from '@/api/products'
 import { getEfficiencyRules } from '@/api/keyword_stats'
@@ -148,6 +149,10 @@ const AdsOverview = ({ shopId, platform, shops, searched, syncing, lastSyncTime,
   const [detailVisible, setDetailVisible] = useState(false)
   const [detailData, setDetailData] = useState(null)
   const [detailLoading, setDetailLoading] = useState(false)
+  // 活动汇总指标（基本信息页用）
+  const [campaignSummaryData, setCampaignSummaryData] = useState(null)
+  const [campaignSummaryLoading, setCampaignSummaryLoading] = useState(false)
+  const [summaryDays, setSummaryDays] = useState(7)
   // 活动级自动屏蔽托管
   const [autoExcludeCfg, setAutoExcludeCfg] = useState(null)
   const [autoExcludeBusy, setAutoExcludeBusy] = useState(false)
@@ -286,6 +291,20 @@ const AdsOverview = ({ shopId, platform, shops, searched, syncing, lastSyncTime,
       message.error(err.message || err?.response?.data?.msg || '运行失败')
     } finally {
       setAutoExcludeBusy(false)
+    }
+  }
+
+  const reloadCampaignSummary = async (days) => {
+    if (!detailData?.id || detailData.platform !== 'wb') return
+    setSummaryDays(days)
+    setCampaignSummaryLoading(true)
+    try {
+      const r = await getCampaignSummary(detailData.id, days)
+      setCampaignSummaryData(r.data)
+    } catch {
+      setCampaignSummaryData(null)
+    } finally {
+      setCampaignSummaryLoading(false)
     }
   }
 
@@ -483,10 +502,16 @@ const AdsOverview = ({ shopId, platform, shops, searched, syncing, lastSyncTime,
       fetchAdGroups(id)
       getCampaignBudget(id).then(r => setCampaignBudget(r.data)).catch(err => console.warn('预算加载失败', err))
       fetchCampaignProducts(id)
-      // WB 平台拉自动屏蔽配置
+      // WB 平台拉自动屏蔽配置 + 活动汇总指标
       setAutoExcludeCfg(null)
+      setCampaignSummaryData(null)
       if (res.data?.platform === 'wb') {
         getAutoExcludeConfig(id).then(r => setAutoExcludeCfg(r.data)).catch(() => setAutoExcludeCfg(null))
+        setCampaignSummaryLoading(true)
+        getCampaignSummary(id, summaryDays)
+          .then(r => setCampaignSummaryData(r.data))
+          .catch(() => setCampaignSummaryData(null))
+          .finally(() => setCampaignSummaryLoading(false))
       }
       // 拉店铺全量 listings 以便把 sku 映射到 listing_id → ad_group_id
       if (res.data?.shop_id) {
@@ -1636,6 +1661,109 @@ const AdsOverview = ({ shopId, platform, shops, searched, syncing, lastSyncTime,
                         message="AI 调价暂不支持此付费类型"
                         description={`当前付费类型 ${pt.toUpperCase()}，AI 调价公式只支持 WB=CPM 和 Ozon=CPC。此活动仅展示数据，不会被 AI 自动调价。`}
                       />
+                    )}
+
+                    {/* 流量与转化（仅 WB） */}
+                    {plat === 'wb' && (
+                      <Card
+                        size="small"
+                        style={{ marginBottom: 16 }}
+                        title={
+                          <Space>
+                            <span>📊 流量与转化</span>
+                            {campaignSummaryData?.date_from && (
+                              <Text type="secondary" style={{ fontSize: 12, fontWeight: 400 }}>
+                                {campaignSummaryData.date_from} ~ {campaignSummaryData.date_to}
+                              </Text>
+                            )}
+                          </Space>
+                        }
+                        extra={
+                          <Segmented
+                            size="small"
+                            value={summaryDays}
+                            onChange={reloadCampaignSummary}
+                            options={[
+                              { label: '近 7 天', value: 7 },
+                              { label: '近 14 天', value: 14 },
+                              { label: '近 30 天', value: 30 },
+                            ]}
+                          />
+                        }
+                      >
+                        <Spin spinning={campaignSummaryLoading}>
+                          {(() => {
+                            const s = campaignSummaryData || {}
+                            const cells = [
+                              { title: '曝光', value: s.views, suffix: '', color: undefined,
+                                tip: '广告被展示给用户的次数' },
+                              { title: '点击', value: s.clicks, color: undefined,
+                                tip: '用户点击进入商品页的次数' },
+                              { title: '加购', value: s.atbs, color: '#1677ff',
+                                tip: '点击后加入购物车的次数' },
+                              { title: '订单', value: s.orders, color: '#722ed1',
+                                tip: '最终成单数' },
+                              { title: 'CTR', value: s.ctr, suffix: '%', color: '#1677ff',
+                                tip: '点击率 = 点击 ÷ 曝光' },
+                              { title: '转化率', value: s.cr, suffix: '%', color: '#13c2c2',
+                                tip: '订单 ÷ 点击' },
+                              { title: 'CPC', value: s.cpc, suffix: '₽', color: '#fa8c16',
+                                tip: '单次点击成本 = 花费 ÷ 点击' },
+                              { title: 'ROAS',
+                                value: s.roas,
+                                suffix: 'x',
+                                color: s.roas >= 5 ? '#52c41a' : s.roas >= 2 ? '#faad14' : '#ff4d4f',
+                                tip: '广告投资回报率 = 营收 ÷ 花费' },
+                            ]
+                            return (
+                              <>
+                                <Row gutter={8}>
+                                  {cells.map((c, i) => (
+                                    <Col xs={12} sm={6} key={i} style={{ marginBottom: 8 }}>
+                                      <Tooltip title={c.tip}>
+                                        <div style={{ background: '#fafbfe', padding: '10px 12px',
+                                                      borderRadius: 6, cursor: 'help' }}>
+                                          <div style={{ fontSize: 11, color: '#999' }}>{c.title}</div>
+                                          <div style={{
+                                            fontSize: 20, fontWeight: 600, color: c.color,
+                                            marginTop: 2,
+                                          }}>
+                                            {c.value != null
+                                              ? (typeof c.value === 'number' ? c.value.toLocaleString() : c.value)
+                                              : '-'}
+                                            <span style={{ fontSize: 12, fontWeight: 400, marginLeft: 2 }}>
+                                              {c.suffix}
+                                            </span>
+                                          </div>
+                                        </div>
+                                      </Tooltip>
+                                    </Col>
+                                  ))}
+                                </Row>
+                                <Divider style={{ margin: '8px 0' }} />
+                                <Row gutter={16}>
+                                  <Col span={12}>
+                                    <Space>
+                                      <Text type="secondary">花费：</Text>
+                                      <Text strong style={{ fontSize: 16, color: '#cf1322' }}>
+                                        ₽{(s.spend || 0).toLocaleString()}
+                                      </Text>
+                                    </Space>
+                                  </Col>
+                                  <Col span={12}>
+                                    <Space>
+                                      <Text type="secondary">营收：</Text>
+                                      <Text strong style={{ fontSize: 16, color: '#52c41a' }}>
+                                        ₽{(s.revenue || 0).toLocaleString()}
+                                      </Text>
+                                    </Space>
+                                  </Col>
+                                </Row>
+                              </>
+                            )
+                          })()}
+                        </Spin>
+                      </Card>
                     )}
 
                     {/* 详细信息 */}

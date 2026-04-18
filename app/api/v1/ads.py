@@ -1372,6 +1372,67 @@ async def manual_sync_shop(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# ==================== 活动汇总指标（基本信息页用）====================
+
+@router.get("/campaign-summary/{campaign_id}")
+async def campaign_summary(
+    campaign_id: int,
+    days: int = Query(7, ge=1, le=30),
+    db: Session = Depends(get_db),
+    tenant_id: int = Depends(get_tenant_id),
+):
+    """活动汇总指标：曝光/点击/订单/加购/CTR/CPC/ROAS（fullstats v3）"""
+    from app.models.ad import AdCampaign
+    from app.models.shop import Shop
+    from datetime import date as _date, timedelta as _td
+
+    camp = db.query(AdCampaign).filter(
+        AdCampaign.id == campaign_id, AdCampaign.tenant_id == tenant_id,
+    ).first()
+    if not camp:
+        return error(50001, "广告活动不存在")
+    if camp.platform != "wb":
+        return success({"days": days, "available": False, "msg": "暂仅支持 WB"})
+
+    shop = db.query(Shop).filter(Shop.id == camp.shop_id).first()
+    if not shop:
+        return error(30001, "店铺不存在")
+
+    today = _date.today()
+    date_to = today.strftime("%Y-%m-%d")
+    date_from = (today - _td(days=days - 1)).strftime("%Y-%m-%d")
+
+    from app.services.platform.wb import WBClient
+    client = WBClient(shop_id=shop.id, api_key=shop.api_key)
+    try:
+        s = await client.fetch_campaign_summary(
+            advert_id=camp.platform_campaign_id,
+            date_from=date_from, date_to=date_to,
+        )
+    finally:
+        await client.close()
+
+    spend = float(s.get("sum") or 0)
+    revenue = float(s.get("sum_price") or 0)
+    clicks = int(s.get("clicks") or 0)
+    views = int(s.get("views") or 0)
+    return success({
+        "days": days,
+        "date_from": date_from, "date_to": date_to,
+        "available": True,
+        "views": views,
+        "clicks": clicks,
+        "ctr": round(clicks / views * 100, 2) if views > 0 else 0,
+        "cpc": round(spend / clicks, 2) if clicks > 0 else 0,
+        "orders": int(s.get("orders") or 0),
+        "atbs": int(s.get("atbs") or 0),
+        "cr": round(int(s.get("orders") or 0) / clicks * 100, 2) if clicks > 0 else 0,
+        "spend": round(spend, 2),
+        "revenue": round(revenue, 2),
+        "roas": round(revenue / spend, 2) if spend > 0 else 0,
+    })
+
+
 # ==================== 活动级自动屏蔽托管 ====================
 
 class AutoExcludeToggleRequest(BaseModel):

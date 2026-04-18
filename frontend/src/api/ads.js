@@ -214,6 +214,12 @@ export function removeProtectedKeyword(campaignId, nmId, keyword) {
   })
 }
 
+// ==================== 活动汇总指标 ====================
+
+export function getCampaignSummary(campaignId, days = 7) {
+  return request.get(`/ads/campaign-summary/${campaignId}`, { params: { days } })
+}
+
 // ==================== 活动级自动屏蔽托管 ====================
 
 export function getAutoExcludeConfig(campaignId) {
