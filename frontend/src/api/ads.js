@@ -200,6 +200,20 @@ export function excludeKeywords(campaignId, nmId, keywords) {
   })
 }
 
+/** 加入智能屏蔽白名单（被勾入后即使是浪费词也不会被一键屏蔽） */
+export function addProtectedKeyword(campaignId, nmId, keyword) {
+  return request.post(`/ads/campaign-keywords/${campaignId}/protected`, {
+    nm_id: nmId, keyword,
+  })
+}
+
+/** 从智能屏蔽白名单移除 */
+export function removeProtectedKeyword(campaignId, nmId, keyword) {
+  return request.delete(`/ads/campaign-keywords/${campaignId}/protected`, {
+    data: { nm_id: nmId, keyword },
+  })
+}
+
 export function getCampaignProducts(campaignId) {
   return request.get(`/ads/campaign-products/${campaignId}`)
 }

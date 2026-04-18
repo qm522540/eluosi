@@ -131,3 +131,18 @@ class AdStat(BaseMixin, Base):
     spend: Mapped[float] = mapped_column(DECIMAL(10, 2), nullable=False, default=0)
     orders: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     revenue: Mapped[float] = mapped_column(DECIMAL(10, 2), nullable=False, default=0)
+
+
+class AdKeywordProtected(BaseMixin, Base):
+    """关键词智能屏蔽白名单（粒度 A：tenant + shop + campaign + nm_id + keyword）
+
+    勾入此表的 (campaign_id, nm_id, keyword) 即使被效能规则判为 waste，
+    也不会出现在"建议屏蔽"列表 + "一键屏蔽"会自动剔除。
+    """
+    __tablename__ = "ad_keyword_protected"
+
+    tenant_id: Mapped[int] = mapped_column(BigInteger, nullable=False, index=True)
+    shop_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    campaign_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    nm_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    keyword: Mapped[str] = mapped_column(String(500), nullable=False)

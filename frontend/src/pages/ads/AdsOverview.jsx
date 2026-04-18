@@ -19,7 +19,7 @@ import {
   getAdStats, getAdSummary,
   exportAdStats, getAlerts, getAlertConfig, updateAlertConfig,
   getCampaignProducts, getCampaignKeywords, excludeKeywords, updateCampaignBid, getCampaignBudget,
-  getShopSummary,
+  getShopSummary, addProtectedKeyword, removeProtectedKeyword,
 } from '@/api/ads'
 import { getListings } from '@/api/products'
 import { getEfficiencyRules } from '@/api/keyword_stats'
@@ -222,7 +222,7 @@ const AdsOverview = ({ shopId, platform, shops, searched, syncing, lastSyncTime,
   }, [])
   useEffect(() => { loadExcludeRules() }, [loadExcludeRules])
 
-  // 按规则筛选"建议屏蔽"关键词（waste 判定 + 观察天数门槛）
+  // 按规则筛选"建议屏蔽"关键词（waste 判定 + 观察天数门槛 + 跳过白名单）
   const getSuggestedExcludes = (kws) => {
     if (!kws || !kws.length) return []
     const r = excludeRules || {}
@@ -231,7 +231,7 @@ const AdsOverview = ({ shopId, platform, shops, searched, syncing, lastSyncTime,
     const ctrMax = r.waste_ctr_max ?? 1.0
     const spendRatio = r.waste_spend_min_ratio ?? 1.0
     // 当前 SKU 关键词集合的平均花费（参与判定的基准）
-    const candidates = kws.filter(kw => !kw.is_excluded)
+    const candidates = kws.filter(kw => !kw.is_excluded && !kw.is_protected)
     const avgSpend = candidates.length
       ? candidates.reduce((s, k) => s + (k.sum || 0), 0) / candidates.length
       : 0
@@ -243,6 +243,31 @@ const AdsOverview = ({ shopId, platform, shops, searched, syncing, lastSyncTime,
       if (avgSpend <= 0 || (kw.sum || 0) < avgSpend * spendRatio) return false
       return true
     })
+  }
+
+  // 切换关键词的"智能屏蔽白名单"标记（A 粒度: campaign + nm_id + keyword）
+  const toggleProtected = async (sku, keyword, currentProtected) => {
+    if (!detailData?.id) return
+    const nmId = parseInt(sku)
+    try {
+      if (currentProtected) {
+        await removeProtectedKeyword(detailData.id, nmId, keyword)
+      } else {
+        await addProtectedKeyword(detailData.id, nmId, keyword)
+      }
+      // 乐观更新本地缓存：把对应 keyword 的 is_protected 翻转
+      setKeywordsBySku(m => {
+        const list = m[sku] || []
+        return {
+          ...m,
+          [sku]: list.map(kw =>
+            kw.keyword === keyword ? { ...kw, is_protected: !currentProtected } : kw
+          ),
+        }
+      })
+    } catch (err) {
+      message.error(err.message || err?.response?.data?.msg || '操作失败')
+    }
   }
 
   // ==================== 数据加载 ====================
@@ -1191,6 +1216,15 @@ const AdsOverview = ({ shopId, platform, shops, searched, syncing, lastSyncTime,
                   const color = v >= 5 ? '#52c41a' : v >= 3 ? '#faad14' : '#ff4d4f'
                   return <span style={{ color, fontWeight: 500 }}>{v.toFixed(1)}x</span>
                 }},
+              { title: <Tooltip title="勾选后此词不会进入"建议屏蔽"，"一键屏蔽"也会跳过。可随时取消。">🛡 不屏蔽</Tooltip>,
+                key: 'is_protected', width: 90, align: 'center',
+                render: (_, r) => (
+                  <Checkbox
+                    checked={!!r.is_protected}
+                    disabled={r.is_excluded}
+                    onChange={() => toggleProtected(sku, r.keyword, !!r.is_protected)}
+                  />
+                ) },
             ]}
           />
           {excluded.length > 0 && (

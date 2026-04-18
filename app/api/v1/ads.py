@@ -706,6 +706,18 @@ async def campaign_keywords(
         excluded_list = excluded_map.get(int(nm_id), [])
         excluded_set = {w.lower().strip() for w in excluded_list}
 
+    # 智能屏蔽白名单：(tenant, shop, campaign, nm_id, keyword) 五元组
+    protected_set = set()
+    if nm_id:
+        from app.models.ad import AdKeywordProtected
+        protected_rows = db.query(AdKeywordProtected.keyword).filter(
+            AdKeywordProtected.tenant_id == tenant_id,
+            AdKeywordProtected.shop_id == shop.id,
+            AdKeywordProtected.campaign_id == campaign_id,
+            AdKeywordProtected.nm_id == int(nm_id),
+        ).all()
+        protected_set = {r.keyword.lower().strip() for r in protected_rows}
+
     # 关键词级订单归因估算：按点击占比分摊活动总订单/营收
     total_clicks = summary.get("clicks", 0)
     total_orders = summary.get("orders", 0)
@@ -729,9 +741,10 @@ async def campaign_keywords(
             kw["est_atbs"] = 0
             kw["est_roas"] = 0
 
-        # 交叉标注：该关键词是否已被屏蔽
+        # 交叉标注：该关键词是否已被屏蔽 / 是否在智能屏蔽白名单
         kw_text = (kw.get("keyword") or "").lower().strip()
         kw["is_excluded"] = kw_text in excluded_set if excluded_set else False
+        kw["is_protected"] = kw_text in protected_set if protected_set else False
 
     return success({
         "campaign_id": campaign_id,
@@ -778,6 +791,29 @@ async def exclude_keywords(
     if not shop:
         return error(30001, "店铺不存在")
 
+    # 先剔除白名单的词（即使前端没过滤，后端兜底）
+    from app.models.ad import AdKeywordProtected
+    protected_rows = db.query(AdKeywordProtected.keyword).filter(
+        AdKeywordProtected.tenant_id == tenant_id,
+        AdKeywordProtected.shop_id == shop.id,
+        AdKeywordProtected.campaign_id == campaign_id,
+        AdKeywordProtected.nm_id == int(req.nm_id),
+    ).all()
+    protected_lower = {r.keyword.lower().strip() for r in protected_rows}
+    requested = [w.strip() for w in req.keywords if w.strip()]
+    skipped_protected = [w for w in requested if w.lower() in protected_lower]
+    effective = [w for w in requested if w.lower() not in protected_lower]
+
+    if not effective:
+        return success({
+            "campaign_id": campaign_id,
+            "nm_id": req.nm_id,
+            "added": [],
+            "total_excluded": 0,
+            "skipped_protected": skipped_protected,
+            "msg": "传入关键词全部在白名单内，未屏蔽任何词",
+        })
+
     from app.services.platform.wb import WBClient
     client = WBClient(shop_id=shop.id, api_key=shop.api_key)
     try:
@@ -786,11 +822,11 @@ async def exclude_keywords(
             advert_id=camp.platform_campaign_id, nm_ids=[req.nm_id])
         existing = set(existing_map.get(int(req.nm_id), []))
 
-        # 2. 合并新词
-        new_words = set(w.strip() for w in req.keywords if w.strip())
+        # 2. 合并新词（已剔除白名单）
+        new_words = set(effective)
         merged = list(existing | new_words)
 
-        # 3. 全量写入 WB（复用客户端方法，body 字段是 "words" 不是 "norm_queries"）
+        # 3. 全量写入 WB（body 字段名是 norm_queries —— wb.py 客户端已对齐）
         result = await client.set_excluded_keywords(
             advert_id=camp.platform_campaign_id,
             nm_id=int(req.nm_id),
@@ -801,7 +837,8 @@ async def exclude_keywords(
 
         logger.info(
             f"WB 屏蔽关键词成功 advert={camp.platform_campaign_id} "
-            f"nm={req.nm_id}: 新增{len(new_words)}个 总计{len(merged)}个"
+            f"nm={req.nm_id}: 新增{len(new_words)}个 总计{len(merged)}个 "
+            f"白名单跳过{len(skipped_protected)}个"
         )
     finally:
         await client.close()
@@ -811,7 +848,77 @@ async def exclude_keywords(
         "nm_id": req.nm_id,
         "added": list(new_words),
         "total_excluded": len(merged),
+        "skipped_protected": skipped_protected,
     })
+
+
+# ==================== 关键词智能屏蔽白名单（A 粒度） ====================
+
+class KeywordProtectedRequest(BaseModel):
+    nm_id: int = Field(..., description="WB 商品 nm_id")
+    keyword: str = Field(..., min_length=1, max_length=500)
+
+
+@router.post("/campaign-keywords/{campaign_id}/protected")
+def add_protected_keyword(
+    campaign_id: int,
+    req: KeywordProtectedRequest,
+    db: Session = Depends(get_db),
+    tenant_id: int = Depends(get_tenant_id),
+):
+    """加入智能屏蔽白名单（幂等：已存在不报错）"""
+    from app.models.ad import AdCampaign, AdKeywordProtected
+    camp = db.query(AdCampaign).filter(
+        AdCampaign.id == campaign_id, AdCampaign.tenant_id == tenant_id,
+    ).first()
+    if not camp:
+        return error(50001, "广告活动不存在")
+
+    kw = req.keyword.strip()
+    existing = db.query(AdKeywordProtected).filter(
+        AdKeywordProtected.tenant_id == tenant_id,
+        AdKeywordProtected.shop_id == camp.shop_id,
+        AdKeywordProtected.campaign_id == campaign_id,
+        AdKeywordProtected.nm_id == req.nm_id,
+        AdKeywordProtected.keyword == kw,
+    ).first()
+    if existing:
+        return success({"id": existing.id, "msg": "已在白名单"})
+
+    row = AdKeywordProtected(
+        tenant_id=tenant_id, shop_id=camp.shop_id,
+        campaign_id=campaign_id, nm_id=req.nm_id, keyword=kw,
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return success({"id": row.id, "msg": "已加入白名单"})
+
+
+@router.delete("/campaign-keywords/{campaign_id}/protected")
+def remove_protected_keyword(
+    campaign_id: int,
+    req: KeywordProtectedRequest,
+    db: Session = Depends(get_db),
+    tenant_id: int = Depends(get_tenant_id),
+):
+    """从白名单移除（幂等：不存在也返回 success）"""
+    from app.models.ad import AdCampaign, AdKeywordProtected
+    camp = db.query(AdCampaign).filter(
+        AdCampaign.id == campaign_id, AdCampaign.tenant_id == tenant_id,
+    ).first()
+    if not camp:
+        return error(50001, "广告活动不存在")
+
+    deleted = db.query(AdKeywordProtected).filter(
+        AdKeywordProtected.tenant_id == tenant_id,
+        AdKeywordProtected.shop_id == camp.shop_id,
+        AdKeywordProtected.campaign_id == campaign_id,
+        AdKeywordProtected.nm_id == req.nm_id,
+        AdKeywordProtected.keyword == req.keyword.strip(),
+    ).delete()
+    db.commit()
+    return success({"deleted": deleted})
 
 
 class BidUpdateRequest(BaseModel):
