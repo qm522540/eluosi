@@ -323,6 +323,10 @@ const AdsOverview = ({ shopId, platform, shops, searched, syncing, lastSyncTime,
           ),
         }
       })
+      // 加白名单时同步从"已质检建议屏蔽"列表里剔除（避免一键屏蔽误带）
+      if (!currentProtected && qualityCheckedSku === sku) {
+        setSuggestedExcludeWords(prev => prev.filter(w => w !== keyword))
+      }
     } catch (err) {
       message.error(err.message || err?.response?.data?.msg || '操作失败')
     }
@@ -1167,8 +1171,18 @@ const AdsOverview = ({ shopId, platform, shops, searched, syncing, lastSyncTime,
                         onOk: async () => {
                           setExcludingKws(true)
                           try {
-                            await excludeKeywords(detailData.id, parseInt(sku), suggestedExcludeWords)
-                            message.success(`已屏蔽 ${suggestedExcludeWords.length} 个关键词`)
+                            const res = await excludeKeywords(detailData.id, parseInt(sku), suggestedExcludeWords)
+                            const added = res.data?.added || []
+                            const skipped = res.data?.skipped_protected || []
+                            if (added.length > 0 && skipped.length > 0) {
+                              message.success(`实际屏蔽 ${added.length} 个；${skipped.length} 个在白名单内未屏蔽`)
+                            } else if (added.length > 0) {
+                              message.success(`已屏蔽 ${added.length} 个关键词`)
+                            } else if (skipped.length > 0) {
+                              message.info(`${skipped.length} 个词全部在白名单内，未屏蔽任何词`)
+                            } else {
+                              message.info('未屏蔽任何词')
+                            }
                             setSuggestedExcludeWords([])
                             setQualityCheckedSku(null)
                             // 直接 refetch 替代"折叠 + 0.5s 后展开"——后者依赖
