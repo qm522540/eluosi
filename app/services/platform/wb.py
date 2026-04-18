@@ -16,7 +16,11 @@ from typing import Optional
 import httpx
 
 from app.config import get_settings
-from app.services.platform.base import BasePlatformClient, PlatformClientFactory
+from app.services.platform.base import (
+    BasePlatformClient,
+    PlatformClientFactory,
+    SubscriptionRequiredError,
+)
 from app.utils.logger import setup_logger
 
 logger = setup_logger("platform.wb")
@@ -1301,6 +1305,109 @@ class WBClient(BasePlatformClient):
         except Exception as e:
             logger.error(f"WB 拉取分类属性失败 subject_id={subject_id}: {e}")
             raise
+
+    # ==================== 搜索词洞察（SEO流量）====================
+
+    async def fetch_product_search_texts(
+        self,
+        nm_id: int,
+        date_from: str,
+        date_to: str,
+        top_order_by: str = "orders",
+        order_field: str = "orders",
+        order_mode: str = "desc",
+        limit: int = 30,
+    ) -> list:
+        """拉取"用户搜哪些词点进了该商品"
+
+        API: POST /api/v2/search-report/product/search-texts
+        需要 WB Jam 订阅；无订阅返回 403 "Available only in a Jam subscription"。
+
+        每次调用仅拉 1 个 nm_id —— 因为平台返回的每条记录不含 nmId 字段，
+        只有一次只传一个才能把返回的 texts 对应回商品。上层按商品循环即可。
+
+        Args:
+            nm_id: 商品 nmId（必须是数字）
+            date_from / date_to: YYYY-MM-DD，跨度 ≤ 31 天
+            top_order_by: orders / openCard / addToCart / cartToOrder / openToCart
+            order_field / order_mode: 明细排序
+            limit: 单品 TOP N 词，≤30（Advanced 订阅 ≤100）
+
+        Returns:
+            [{nm_id, text, frequency, median_position, open_card, add_to_cart,
+              orders, cart_to_order, extra}, ...]
+
+        Raises:
+            SubscriptionRequiredError: 店铺未开通 Jam
+        """
+        url = "https://seller-analytics-api.wildberries.ru/api/v2/search-report/product/search-texts"
+        payload = {
+            "currentPeriod": {"start": date_from, "end": date_to},
+            "nmIds": [int(nm_id)],
+            "topOrderBy": top_order_by,
+            "orderBy": {"field": order_field, "mode": order_mode},
+            "limit": min(int(limit), 30),
+        }
+        try:
+            result = await self._request("POST", url, json=payload)
+        except httpx.HTTPStatusError as e:
+            status = e.response.status_code
+            body = ""
+            try:
+                body = e.response.text or ""
+            except Exception:
+                pass
+            if status in (402, 403) and ("Jam" in body or "subscription" in body.lower()):
+                raise SubscriptionRequiredError("wb", body[:200])
+            logger.warning(
+                f"WB search-texts 失败 shop_id={self.shop_id} nm_id={nm_id}: "
+                f"status={status} body={body[:200]}"
+            )
+            return []
+        except Exception as e:
+            logger.warning(f"WB search-texts 异常 shop_id={self.shop_id} nm_id={nm_id}: {e}")
+            return []
+
+        # 返回结构：{data: {items: [...]}} 或 {items: [...]} 或 直接数组，未实测
+        # 按照 WB analytics 系列惯例，先解 data.items / result / 根数组
+        items = []
+        if isinstance(result, dict):
+            items = (
+                (result.get("data") or {}).get("items")
+                or result.get("items")
+                or result.get("texts")
+                or []
+            )
+        elif isinstance(result, list):
+            items = result
+
+        out = []
+        for it in items or []:
+            if not isinstance(it, dict):
+                continue
+
+            def _cur(field):
+                v = it.get(field)
+                if isinstance(v, dict):
+                    return v.get("current") or 0
+                return v or 0
+
+            out.append({
+                "nm_id": int(nm_id),
+                "text": it.get("text") or it.get("searchText") or "",
+                "frequency": int(_cur("frequency") or 0),
+                "open_card": int(_cur("openCard") or 0),
+                "add_to_cart": int(_cur("addToCart") or 0),
+                "orders": int(_cur("orders") or 0),
+                "median_position": float(_cur("medianPosition") or 0) or None,
+                "cart_to_order": float(_cur("cartToOrder") or 0) or None,
+                "extra": {
+                    k: it.get(k) for k in it.keys()
+                    if k not in {"text", "searchText", "frequency", "openCard",
+                                 "addToCart", "orders", "medianPosition", "cartToOrder"}
+                } or None,
+            })
+        return out
 
     async def close(self):
         """关闭HTTP客户端"""

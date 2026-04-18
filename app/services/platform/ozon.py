@@ -17,7 +17,11 @@ from typing import Optional
 import httpx
 
 from app.config import get_settings
-from app.services.platform.base import BasePlatformClient, PlatformClientFactory
+from app.services.platform.base import (
+    BasePlatformClient,
+    PlatformClientFactory,
+    SubscriptionRequiredError,
+)
 from app.utils.logger import setup_logger
 
 logger = setup_logger("platform.ozon")
@@ -1150,6 +1154,107 @@ class OzonClient(BasePlatformClient):
                 f"Ozon 拉取属性值失败 attr_id={attribute_id}: {e}"
             )
             raise
+
+    # ==================== 搜索词洞察（SEO流量）====================
+
+    async def fetch_product_queries_details(
+        self,
+        skus: list,
+        date_from: str,
+        date_to: str,
+        limit_by_sku: int = 15,
+        sort_by: str = "gmv",
+        sort_dir: str = "DESC",
+    ) -> list:
+        """拉取"用户搜哪些词点进了指定 SKU"（词粒度）
+
+        API: POST /v1/analytics/product-queries/details
+        需要 Ozon Premium 订阅；无订阅返回 403 "available starting from the premium subscription"。
+
+        Args:
+            skus: Ozon SKU 字符串列表（≤ 50）
+            date_from / date_to: YYYY-MM-DD —— 内部自动转 RFC3339
+            limit_by_sku: 每个 SKU 返回的 TOP N 词，范围 (0, 15]
+            sort_by / sort_dir: 排序字段与方向
+
+        Returns:
+            [{sku, query, frequency, impressions, clicks, add_to_cart,
+              orders, revenue, view_conversion, extra}, ...]
+
+        Raises:
+            SubscriptionRequiredError: 店铺未开通 Premium
+        """
+        if not skus:
+            return []
+        url = f"{OZON_SELLER_API}/v1/analytics/product-queries/details"
+        # Ozon 要求 RFC3339 timestamp，不是纯日期
+        df = f"{date_from}T00:00:00Z" if "T" not in date_from else date_from
+        dt_ = f"{date_to}T00:00:00Z" if "T" not in date_to else date_to
+        payload = {
+            "date_from": df,
+            "date_to": dt_,
+            "skus": [str(s) for s in skus[:50]],
+            "limit_by_sku": max(1, min(int(limit_by_sku), 15)),
+            "page": 1,
+            "page_size": 200,
+            "sort_by": sort_by,
+            "sort_dir": sort_dir,
+        }
+        try:
+            result = await self._request("POST", url, json=payload)
+        except httpx.HTTPStatusError as e:
+            status = e.response.status_code
+            body = ""
+            try:
+                body = e.response.text or ""
+            except Exception:
+                pass
+            if status == 403 and ("premium" in body.lower() or "PermissionDenied" in body):
+                raise SubscriptionRequiredError("ozon", body[:200])
+            logger.warning(
+                f"Ozon product-queries/details 失败 shop_id={self.shop_id}: "
+                f"status={status} body={body[:200]}"
+            )
+            return []
+        except Exception as e:
+            logger.warning(f"Ozon product-queries/details 异常 shop_id={self.shop_id}: {e}")
+            return []
+
+        # 字段结构未实测，按命名惯例 + 社区 Go client 推测
+        items = []
+        if isinstance(result, dict):
+            items = result.get("items") or result.get("details") or []
+
+        out = []
+        for it in items or []:
+            if not isinstance(it, dict):
+                continue
+            sku = it.get("sku") or it.get("sku_id") or it.get("offer_id")
+            # queries 可能是嵌套：{sku, queries: [{query, frequency, ...}]}
+            queries = it.get("queries") or it.get("details") or [it]
+            for q in queries:
+                if not isinstance(q, dict):
+                    continue
+                out.append({
+                    "sku": str(sku) if sku is not None else "",
+                    "query": q.get("query") or q.get("text") or q.get("search_query") or "",
+                    "frequency": int(q.get("unique_search_users") or q.get("frequency") or 0),
+                    "impressions": int(q.get("view_count") or q.get("impressions") or 0),
+                    "clicks": int(q.get("click_count") or q.get("clicks") or 0),
+                    "add_to_cart": int(q.get("add_to_cart_count") or q.get("add_to_cart") or 0),
+                    "orders": int(q.get("orders_count") or q.get("orders") or 0),
+                    "revenue": float(q.get("gmv") or q.get("revenue") or 0),
+                    "position": float(q.get("position") or 0) or None,
+                    "view_conversion": float(q.get("view_conversion") or 0) or None,
+                    "extra": {
+                        k: q.get(k) for k in q.keys()
+                        if k not in {"query", "text", "search_query", "unique_search_users",
+                                     "frequency", "view_count", "impressions", "click_count",
+                                     "clicks", "add_to_cart_count", "add_to_cart", "orders_count",
+                                     "orders", "gmv", "revenue", "position", "view_conversion"}
+                    } or None,
+                })
+        return out
 
     async def close(self):
         """关闭HTTP客户端"""

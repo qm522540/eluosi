@@ -8,6 +8,18 @@ from abc import ABC, abstractmethod
 from typing import Optional
 
 
+class SubscriptionRequiredError(Exception):
+    """平台返回 403 因未开通付费订阅（WB Jam / Ozon Premium 等）。
+
+    service 层捕获后转 93001 错误码返回给前端友好提示。
+    """
+
+    def __init__(self, platform: str, detail: str = ""):
+        self.platform = platform
+        self.detail = detail
+        super().__init__(f"[{platform}] subscription required: {detail}")
+
+
 class BasePlatformClient(ABC):
     """平台API客户端抽象基类"""
 

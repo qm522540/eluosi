@@ -78,6 +78,10 @@ class ErrorCode:
     BID_EXECUTION_FAILED = 92011
     BID_SKU_LOCKED = 92012              # user_managed 锁定
 
+    # 搜索词洞察 93xxx
+    SEARCH_INSIGHTS_SUBSCRIPTION_REQUIRED = 93001  # WB Jam / Ozon Premium 未开通
+    SEARCH_INSIGHTS_FETCH_FAILED = 93002           # 平台 API 拉取失败（非订阅原因）
+
 
 ERROR_MESSAGES = {
     ErrorCode.SUCCESS: "成功",
@@ -122,4 +126,6 @@ ERROR_MESSAGES = {
     ErrorCode.BID_DATA_SYNC_RUNNING: "数据同步进行中",
     ErrorCode.BID_EXECUTION_FAILED: "出价执行失败",
     ErrorCode.BID_SKU_LOCKED: "该SKU已被用户手动管理，不允许自动调价",
+    ErrorCode.SEARCH_INSIGHTS_SUBSCRIPTION_REQUIRED: "该功能需开通 WB Jam 或 Ozon Premium 订阅",
+    ErrorCode.SEARCH_INSIGHTS_FETCH_FAILED: "搜索词数据拉取失败",
 }
