@@ -1,7 +1,8 @@
 """关键词效能评级规则：默认值 + 读/写 + 分类器
 
-业务上 4 档优先级：star → potential → waste → normal（命中即返，不会重复）。
+业务上 5 档优先级：new → star → potential → waste → normal（命中即返，不会重复）。
 
+- new 新词/观察中：曝光 < min_impressions（数据不足，所有指标都不可信，先观察）
 - star 高效：CTR ≥ star_ctr_min 且 CPC ≤ 平均CPC × star_cpc_max_ratio
 - potential 潜力：CTR ≥ potential_ctr_min 且 曝光 ≤ 平均曝光 × potential_impressions_max_ratio
 - waste 浪费：CTR ≤ waste_ctr_max 且 花费 ≥ 平均花费 × waste_spend_min_ratio
@@ -16,16 +17,18 @@ from app.models.keyword_stat import KeywordEfficiencyRule
 
 
 DEFAULT_RULES = {
+    "min_impressions": 20,
     "star_ctr_min": 5.0,
     "star_cpc_max_ratio": 1.0,
     "potential_ctr_min": 3.0,
-    "potential_impressions_max_ratio": 1.0,
+    "potential_impressions_max_ratio": 2.0,
     "waste_ctr_max": 1.0,
     "waste_spend_min_ratio": 1.0,
 }
 
 # Pydantic 校验用的字段范围（防用户输入离谱值）
 FIELD_BOUNDS = {
+    "min_impressions": (0, 1000000),
     "star_ctr_min": (0.0, 100.0),
     "star_cpc_max_ratio": (0.0, 10.0),
     "potential_ctr_min": (0.0, 100.0),
@@ -83,11 +86,14 @@ def classify(
     avg_cpc: float, avg_impressions: float, avg_spend: float,
     rules: Optional[dict] = None,
 ) -> str:
-    """返回 "star" | "potential" | "waste" | "normal"
+    """返回 "new" | "star" | "potential" | "waste" | "normal"
 
     avg_* 传 0 表示数据集为空，阈值比较降级（不触发依赖平均的分支）
     """
     r = rules or DEFAULT_RULES
+    # new: 曝光不足，数据不可信，先观察
+    if impressions < r.get("min_impressions", DEFAULT_RULES["min_impressions"]):
+        return "new"
     # star: 高效
     if ctr >= r["star_ctr_min"] and (
         avg_cpc <= 0 or cpc <= avg_cpc * r["star_cpc_max_ratio"]

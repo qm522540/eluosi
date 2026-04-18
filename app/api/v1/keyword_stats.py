@@ -18,7 +18,8 @@ router = APIRouter()
 
 
 class EfficiencyRulesBody(BaseModel):
-    """6 项阈值都可选，后端会用 DEFAULT 填补缺失项"""
+    """7 项阈值都可选，后端会用 DEFAULT 填补缺失项"""
+    min_impressions: int = Field(DEFAULT_RULES["min_impressions"])
     star_ctr_min: float = Field(DEFAULT_RULES["star_ctr_min"])
     star_cpc_max_ratio: float = Field(DEFAULT_RULES["star_cpc_max_ratio"])
     potential_ctr_min: float = Field(DEFAULT_RULES["potential_ctr_min"])
@@ -38,12 +39,16 @@ def keyword_summary(
     sort_order: str = Query("desc"),
     page: int = Query(1, ge=1),
     size: int = Query(50, ge=1, le=200),
+    efficiency: str = Query(None),
     db: Session = Depends(get_db),
     tenant_id: int = Depends(get_tenant_id),
 ):
-    """关键词汇总列表（主表格）"""
+    """关键词汇总列表（主表格）
+
+    efficiency: 可选，按效能档位过滤，取值 new/star/potential/waste/normal
+    """
     result = summary(db, tenant_id, shop_id, date_from, date_to,
-                     campaign_id, keyword, sort_by, sort_order, page, size)
+                     campaign_id, keyword, sort_by, sort_order, page, size, efficiency)
     if result["code"] != 0:
         return error(result["code"], result["msg"])
     return success(result["data"])

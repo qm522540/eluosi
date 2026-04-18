@@ -30,14 +30,24 @@ def _float(v):
     return float(v) if v is not None else 0
 
 
+_VALID_EFF = {"new", "star", "potential", "waste", "normal"}
+
+
 def summary(
     db: Session, tenant_id: int, shop_id: int,
     date_from: str = None, date_to: str = None,
     campaign_id: int = None, keyword: str = None,
     sort_by: str = "spend", sort_order: str = "desc",
     page: int = 1, size: int = 50,
+    efficiency: str = None,
 ) -> dict:
-    """§3.1 关键词汇总列表"""
+    """§3.1 关键词汇总列表
+
+    实现说明：
+    - efficiency 是 SQL 后派生字段（先聚合 → classify），无法下推到 SQL WHERE
+    - 因此 server-side filter 走"先全量聚合 → Python 算 efficiency → filter → 切片分页"
+    - 单店铺 distinct keyword 量级在 2-5k，全量聚合性能可接受（< 100ms）
+    """
     date_from, date_to = _default_dates(date_from, date_to)
 
     # 构建 WHERE
@@ -64,7 +74,7 @@ def summary(
     avg_ctr = round(total_clk / total_imp * 100, 2) if total_imp > 0 else 0
     avg_cpc = round(total_sp / total_clk, 2) if total_clk > 0 else 0
 
-    # 分组汇总 + 排序 + 分页
+    # 分组排序（全量，不分页）
     allowed_sorts = {"spend", "impressions", "clicks", "ctr", "cpc"}
     sort_col = sort_by if sort_by in allowed_sorts else "spend"
     order = "DESC" if sort_order == "desc" else "ASC"
@@ -81,26 +91,16 @@ def summary(
         GROUP BY keyword
         {kw_where}
         ORDER BY {sort_col} {order}
-        LIMIT :limit OFFSET :offset
     """
-    params["limit"] = min(size, 200)
-    params["offset"] = (page - 1) * size
-
-    count_sql = f"""
-        SELECT COUNT(*) FROM (
-            SELECT keyword FROM keyword_daily_stats {where}
-            GROUP BY keyword {kw_where}
-        ) t
-    """
-    total = db.execute(text(count_sql), params).scalar() or 0
     rows = db.execute(text(items_sql), params).fetchall()
 
     # 效能标签计算：租户规则 > 系统默认
     rules = get_rules(db, tenant_id)
-    avg_imp = total_imp / max(total, 1)
-    avg_sp = total_sp / max(total, 1)
+    distinct_count = len(rows)
+    avg_imp = total_imp / max(distinct_count, 1)
+    avg_sp = total_sp / max(distinct_count, 1)
 
-    items = []
+    items_all = []
     for r in rows:
         imp = int(r.impressions or 0)
         clk = int(r.clicks or 0)
@@ -114,7 +114,7 @@ def summary(
             rules=rules,
         )
 
-        items.append({
+        items_all.append({
             "keyword": r.keyword,
             "impressions": imp,
             "clicks": clk,
@@ -127,8 +127,18 @@ def summary(
             "efficiency": eff,
         })
 
+    # 效能 server-side filter（在 classify 之后）
+    if efficiency in _VALID_EFF:
+        items_all = [i for i in items_all if i["efficiency"] == efficiency]
+
+    # 分页（filter 后）
+    total = len(items_all)
+    page_size = min(size, 200)
+    offset = (page - 1) * page_size
+    items = items_all[offset: offset + page_size]
+
     return {"code": 0, "data": {
-        "total": total, "page": page, "size": size,
+        "total": total, "page": page, "size": page_size,
         "date_from": date_from, "date_to": date_to,
         "totals": {
             "keywords": int(row.kw_count or 0),

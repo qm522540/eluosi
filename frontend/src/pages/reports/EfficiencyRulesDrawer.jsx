@@ -3,7 +3,7 @@ import {
   Drawer, Button, Space, Card, Row, Col, InputNumber, Typography,
   Alert, message, Popconfirm, Skeleton,
 } from 'antd'
-import { ReloadOutlined, StarFilled, BulbOutlined, WarningFilled } from '@ant-design/icons'
+import { ReloadOutlined, StarFilled, BulbOutlined, WarningFilled, EyeOutlined } from '@ant-design/icons'
 import {
   getEfficiencyRules, setEfficiencyRules, resetEfficiencyRules,
 } from '@/api/keyword_stats'
@@ -11,6 +11,16 @@ import {
 const { Text, Paragraph } = Typography
 
 const FIELDS = [
+  {
+    group: 'base',
+    color: '#13c2c2',
+    icon: <EyeOutlined />,
+    label: '数据置信度',
+    desc: '曝光低于门槛的关键词归"新词/观察中"，不参与 4 档评级',
+    rows: [
+      { key: 'min_impressions', label: '曝光门槛 ≥', suffix: '次', min: 0, max: 1000000, step: 5 },
+    ],
+  },
   {
     group: 'star',
     color: '#52c41a',
@@ -137,7 +147,7 @@ export default function EfficiencyRulesDrawer({ open, onClose, onSaved }) {
             type="info"
             showIcon
             style={{ marginBottom: 12 }}
-            message="评级优先级：高效 → 潜力 → 浪费 → 普通（命中即返）"
+            message="评级优先级：新词 → 高效 → 潜力 → 浪费 → 普通（命中即返）"
             description={
               <Paragraph style={{ marginBottom: 0, fontSize: 12 }}>
                 "平均"指当前查询范围内按关键词数均摊的 CPC/曝光/花费。

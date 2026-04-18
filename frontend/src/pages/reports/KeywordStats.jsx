@@ -29,7 +29,26 @@ const EFFICIENCY_MAP = {
   potential: { color: 'blue', icon: <BulbOutlined />, label: '潜力词', tip: '点击率达标 但 曝光偏少，建议加大投放（具体阈值见效能规则）' },
   waste: { color: 'red', icon: <WarningFilled />, label: '浪费词', tip: '点击率过低 但 花费超过平均，建议屏蔽（具体阈值见效能规则）' },
   normal: { color: 'default', icon: null, label: '普通', tip: '表现一般，暂不需要特殊处理' },
+  new: { color: 'cyan', icon: <EyeOutlined />, label: '新词', tip: '曝光不足门槛，数据不可信，建议先观察（曝光门槛见效能规则）' },
 }
+
+const EFFICIENCY_FILTER_OPTS = [
+  { label: '全部', value: '' },
+  { label: '⭐ 高效', value: 'star' },
+  { label: '💡 潜力', value: 'potential' },
+  { label: '🗑️ 浪费', value: 'waste' },
+  { label: '普通', value: 'normal' },
+  { label: '👁 新词', value: 'new' },
+]
+
+const SORT_OPTS = [
+  { label: '花费 ↓', value: 'spend|desc' },
+  { label: '花费 ↑', value: 'spend|asc' },
+  { label: '曝光 ↓', value: 'impressions|desc' },
+  { label: '点击 ↓', value: 'clicks|desc' },
+  { label: 'CTR ↓', value: 'ctr|desc' },
+  { label: 'CPC ↑', value: 'cpc|asc' },
+]
 
 // 日期范围快捷项
 const DATE_PRESETS = [
@@ -64,6 +83,8 @@ const KeywordStats = () => {
   const [syncStatus, setSyncStatus] = useState(null)
   const [page, setPage] = useState(1)
   const [sortBy, setSortBy] = useState('spend')
+  const [sortOrder, setSortOrder] = useState('desc')
+  const [efficiencyFilter, setEfficiencyFilter] = useState('')
   const [keywordSearch, setKeywordSearch] = useState('')
 
   // SKU 展开
@@ -110,7 +131,13 @@ const KeywordStats = () => {
     setLoading(true)
     try {
       const [sumRes, trendRes, negRes, syncRes] = await Promise.allSettled([
-        getKeywordSummary({ shop_id: shopId, ...range, sort_by: sortBy, page, size: 50, keyword: keywordSearch || undefined }),
+        getKeywordSummary({
+          shop_id: shopId, ...range,
+          sort_by: sortBy, sort_order: sortOrder,
+          page, size: 50,
+          keyword: keywordSearch || undefined,
+          efficiency: efficiencyFilter || undefined,
+        }),
         getKeywordTrend({ shop_id: shopId, ...range, top: 10, metric: trendMetric }),
         getNegativeSuggestions({ shop_id: shopId, ...range }),
         getKeywordSyncStatus(shopId),
@@ -133,7 +160,7 @@ const KeywordStats = () => {
     } finally {
       setLoading(false)
     }
-  }, [shopId, getDateRange, sortBy, page, trendMetric, keywordSearch])
+  }, [shopId, getDateRange, sortBy, sortOrder, page, trendMetric, keywordSearch, efficiencyFilter])
 
   useEffect(() => {
     if (searched) fetchAll()
@@ -250,15 +277,8 @@ const KeywordStats = () => {
       },
     },
     {
-      title: <Tooltip title="根据点击率和花费自动评级：高效词（性价比高）、潜力词（值得加大曝光）、浪费词（建议屏蔽）、普通"><span style={{ cursor: 'help' }}>效能 <span style={{ fontSize: 10, color: '#bbb' }}>ⓘ</span></span></Tooltip>,
+      title: <Tooltip title="根据曝光门槛 + 点击率 + 花费自动评级。详细阈值见效能规则"><span style={{ cursor: 'help' }}>效能 <span style={{ fontSize: 10, color: '#bbb' }}>ⓘ</span></span></Tooltip>,
       dataIndex: 'efficiency', key: 'efficiency', width: 100,
-      filters: [
-        { text: '高效词', value: 'star' },
-        { text: '潜力词', value: 'potential' },
-        { text: '浪费词', value: 'waste' },
-        { text: '普通', value: 'normal' },
-      ],
-      onFilter: (val, record) => record.efficiency === val,
       render: (v) => {
         const cfg = EFFICIENCY_MAP[v] || EFFICIENCY_MAP.normal
         return (
@@ -269,34 +289,28 @@ const KeywordStats = () => {
       },
     },
     {
-      title: <Tooltip title="广告被展示给用户的次数"><span style={{ cursor: 'help' }}>曝光 <span style={{ fontSize: 10, color: '#bbb' }}>ⓘ</span></span></Tooltip>,
+      title: <Tooltip title="广告被展示给用户的次数（用列头上方的排序选择器切换）"><span style={{ cursor: 'help' }}>曝光 <span style={{ fontSize: 10, color: '#bbb' }}>ⓘ</span></span></Tooltip>,
       dataIndex: 'impressions', key: 'impressions', width: 100,
-      sorter: (a, b) => a.impressions - b.impressions,
       render: v => v?.toLocaleString(),
     },
     {
       title: <Tooltip title="用户看到广告后点击进入商品页的次数"><span style={{ cursor: 'help' }}>点击 <span style={{ fontSize: 10, color: '#bbb' }}>ⓘ</span></span></Tooltip>,
       dataIndex: 'clicks', key: 'clicks', width: 80,
-      sorter: (a, b) => a.clicks - b.clicks,
       render: v => v?.toLocaleString(),
     },
     {
       title: <Tooltip title="点击率 = 点击 ÷ 曝光 × 100%，反映广告吸引力"><span style={{ cursor: 'help' }}>CTR <span style={{ fontSize: 10, color: '#bbb' }}>ⓘ</span></span></Tooltip>,
       dataIndex: 'ctr', key: 'ctr', width: 80,
-      sorter: (a, b) => a.ctr - b.ctr,
       render: v => v != null ? `${v}%` : '-',
     },
     {
       title: <Tooltip title="该关键词在选定日期范围内的广告总花费"><span style={{ cursor: 'help' }}>花费 <span style={{ fontSize: 10, color: '#bbb' }}>ⓘ</span></span></Tooltip>,
       dataIndex: 'spend', key: 'spend', width: 110,
-      sorter: (a, b) => a.spend - b.spend,
-      defaultSortOrder: 'descend',
       render: v => v != null ? <Text strong>{v.toLocaleString()} ₽</Text> : '-',
     },
     {
       title: <Tooltip title="单次点击成本 = 花费 ÷ 点击数，越低越好"><span style={{ cursor: 'help' }}>CPC <span style={{ fontSize: 10, color: '#bbb' }}>ⓘ</span></span></Tooltip>,
       dataIndex: 'cpc', key: 'cpc', width: 80,
-      sorter: (a, b) => a.cpc - b.cpc,
       render: v => v != null ? `${v} ₽` : '-',
     },
     {
@@ -487,7 +501,24 @@ const KeywordStats = () => {
             </Space>
           }
           extra={
-            <Space>
+            <Space wrap>
+              <Select
+                size="small"
+                style={{ width: 110 }}
+                value={efficiencyFilter}
+                onChange={v => { setEfficiencyFilter(v); setPage(1) }}
+                options={EFFICIENCY_FILTER_OPTS}
+              />
+              <Select
+                size="small"
+                style={{ width: 110 }}
+                value={`${sortBy}|${sortOrder}`}
+                onChange={v => {
+                  const [by, ord] = v.split('|')
+                  setSortBy(by); setSortOrder(ord); setPage(1)
+                }}
+                options={SORT_OPTS}
+              />
               <Button
                 size="small"
                 icon={<SettingOutlined />}
