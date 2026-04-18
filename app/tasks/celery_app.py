@@ -29,6 +29,7 @@ celery_app.conf.update(
         "app.tasks.bid_management",
         "app.tasks.keyword_stats_task",
         "app.tasks.region_stats_task",
+        "app.tasks.ad_auto_exclude_task",
     ],
 )
 
@@ -68,5 +69,10 @@ celery_app.conf.beat_schedule = {
     "region-stats-daily": {
         "task": "app.tasks.region_stats_task.sync_region_stats",
         "schedule": crontab(hour=1, minute=0),
+    },
+    # 活动级自动屏蔽托管（莫斯科凌晨4:30 = UTC 1:30，错开 region-stats）
+    "ad-auto-exclude-daily": {
+        "task": "app.tasks.ad_auto_exclude_task.auto_exclude_keywords",
+        "schedule": crontab(hour=1, minute=30),
     },
 }

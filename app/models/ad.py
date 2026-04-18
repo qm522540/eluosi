@@ -1,6 +1,6 @@
 from datetime import date, datetime
 from typing import Optional
-from sqlalchemy import BigInteger, String, Enum, Integer, DECIMAL, Date, DateTime, SmallInteger, JSON
+from sqlalchemy import BigInteger, String, Enum, Integer, DECIMAL, Date, DateTime, SmallInteger, JSON, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database import Base
@@ -146,3 +146,36 @@ class AdKeywordProtected(BaseMixin, Base):
     campaign_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
     nm_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
     keyword: Mapped[str] = mapped_column(String(500), nullable=False)
+
+
+class AdCampaignAutoExclude(BaseMixin, Base):
+    """活动级自动屏蔽托管开关 + 最近一次运行快照
+
+    规则参数复用租户级 efficiency_rules（不为活动单独配置规则）。
+    """
+    __tablename__ = "ad_campaign_auto_exclude"
+
+    tenant_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    shop_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    campaign_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    enabled: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=0)
+    last_run_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    last_run_excluded: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    last_run_saved: Mapped[float] = mapped_column(DECIMAL(12, 2), nullable=False, default=0)
+
+
+class AdAutoExcludeLog(BaseMixin, Base):
+    """自动屏蔽日志：每个被屏蔽词一条，含节省金额估算"""
+    __tablename__ = "ad_auto_exclude_log"
+
+    tenant_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    shop_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    campaign_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    nm_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    keyword: Mapped[str] = mapped_column(String(500), nullable=False)
+    run_id: Mapped[str] = mapped_column(String(50), nullable=False)
+    excluded_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, server_default=func.now()
+    )
+    saved_per_day: Mapped[float] = mapped_column(DECIMAL(12, 4), nullable=False, default=0)
+    reason: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)

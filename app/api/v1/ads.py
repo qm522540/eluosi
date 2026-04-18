@@ -1343,3 +1343,199 @@ async def manual_sync_shop(
     except Exception as e:
         logger.error(f"同步失败 shop_id={shop_id}: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ==================== 活动级自动屏蔽托管 ====================
+
+class AutoExcludeToggleRequest(BaseModel):
+    enabled: bool
+
+
+@router.get("/campaign-auto-exclude/{campaign_id}")
+def get_auto_exclude_config(
+    campaign_id: int,
+    db: Session = Depends(get_db),
+    tenant_id: int = Depends(get_tenant_id),
+):
+    """活动级自动屏蔽配置 + 累计成果（顶部卡片用）"""
+    from app.models.ad import AdCampaign, AdCampaignAutoExclude, AdAutoExcludeLog
+    from sqlalchemy import func as sqlfunc
+
+    camp = db.query(AdCampaign).filter(
+        AdCampaign.id == campaign_id, AdCampaign.tenant_id == tenant_id,
+    ).first()
+    if not camp:
+        return error(50001, "广告活动不存在")
+
+    cfg = db.query(AdCampaignAutoExclude).filter(
+        AdCampaignAutoExclude.tenant_id == tenant_id,
+        AdCampaignAutoExclude.campaign_id == campaign_id,
+    ).first()
+
+    # 累计：本月已屏蔽词数 + 累计估算节省
+    from datetime import date as _date
+    month_start = _date.today().replace(day=1).isoformat()
+    agg = db.execute(text("""
+        SELECT COUNT(*) cnt, COALESCE(SUM(saved_per_day), 0) total_saved_per_day
+        FROM ad_auto_exclude_log
+        WHERE tenant_id=:tid AND campaign_id=:cid AND excluded_at >= :ms
+    """), {"tid": tenant_id, "cid": campaign_id, "ms": month_start}).fetchone()
+
+    return success({
+        "campaign_id": campaign_id,
+        "enabled": bool(cfg.enabled) if cfg else False,
+        "last_run_at": cfg.last_run_at.isoformat() if cfg and cfg.last_run_at else None,
+        "last_run_excluded": cfg.last_run_excluded if cfg else 0,
+        "last_run_saved_monthly": float(cfg.last_run_saved) if cfg else 0,
+        "month_excluded_total": int(agg.cnt or 0),
+        "month_saved_estimated": round(float(agg.total_saved_per_day or 0) * 30, 2),
+    })
+
+
+@router.put("/campaign-auto-exclude/{campaign_id}")
+def toggle_auto_exclude(
+    campaign_id: int,
+    req: AutoExcludeToggleRequest,
+    db: Session = Depends(get_db),
+    tenant_id: int = Depends(get_tenant_id),
+):
+    """切换活动级自动屏蔽开关（首次开启会自动创建配置行）"""
+    from app.models.ad import AdCampaign, AdCampaignAutoExclude
+    camp = db.query(AdCampaign).filter(
+        AdCampaign.id == campaign_id, AdCampaign.tenant_id == tenant_id,
+    ).first()
+    if not camp:
+        return error(50001, "广告活动不存在")
+    if camp.platform != "wb":
+        return error(10002, "自动屏蔽当前仅支持 WB")
+
+    cfg = db.query(AdCampaignAutoExclude).filter(
+        AdCampaignAutoExclude.tenant_id == tenant_id,
+        AdCampaignAutoExclude.campaign_id == campaign_id,
+    ).first()
+    if not cfg:
+        cfg = AdCampaignAutoExclude(
+            tenant_id=tenant_id, shop_id=camp.shop_id,
+            campaign_id=campaign_id, enabled=1 if req.enabled else 0,
+        )
+        db.add(cfg)
+    else:
+        cfg.enabled = 1 if req.enabled else 0
+    db.commit()
+    return success({"enabled": bool(cfg.enabled)})
+
+
+@router.post("/campaign-auto-exclude/{campaign_id}/run")
+def run_auto_exclude_now(
+    campaign_id: int,
+    db: Session = Depends(get_db),
+    tenant_id: int = Depends(get_tenant_id),
+):
+    """立即触发一次自动屏蔽（同步等待结果，方便前端 toast 展示）"""
+    from app.models.ad import AdCampaign, AdCampaignAutoExclude
+    camp = db.query(AdCampaign).filter(
+        AdCampaign.id == campaign_id, AdCampaign.tenant_id == tenant_id,
+    ).first()
+    if not camp:
+        return error(50001, "广告活动不存在")
+    if camp.platform != "wb":
+        return error(10002, "自动屏蔽当前仅支持 WB")
+
+    # 没开关也允许手动跑一次（先建配置 enabled=0 不影响定时任务）
+    cfg = db.query(AdCampaignAutoExclude).filter(
+        AdCampaignAutoExclude.tenant_id == tenant_id,
+        AdCampaignAutoExclude.campaign_id == campaign_id,
+    ).first()
+    if not cfg:
+        cfg = AdCampaignAutoExclude(
+            tenant_id=tenant_id, shop_id=camp.shop_id,
+            campaign_id=campaign_id, enabled=0,
+        )
+        db.add(cfg)
+        db.commit()
+
+    from app.tasks.ad_auto_exclude_task import auto_exclude_for_campaign
+    # 同步执行（task 内部自管 db session），方便前端立刻拿到结果
+    result = auto_exclude_for_campaign.apply(
+        args=[campaign_id, tenant_id]
+    ).get(disable_sync_subtasks=False)
+    if result.get("error"):
+        return error(92011, result["error"])
+    return success(result)
+
+
+@router.get("/campaign-auto-exclude/{campaign_id}/logs")
+def list_auto_exclude_logs(
+    campaign_id: int,
+    days: int = Query(30, ge=1, le=180),
+    db: Session = Depends(get_db),
+    tenant_id: int = Depends(get_tenant_id),
+):
+    """活动自动屏蔽日志（详情 Drawer 用）"""
+    from app.models.ad import AdCampaign
+    camp = db.query(AdCampaign).filter(
+        AdCampaign.id == campaign_id, AdCampaign.tenant_id == tenant_id,
+    ).first()
+    if not camp:
+        return error(50001, "广告活动不存在")
+
+    from datetime import date as _date, timedelta as _td
+    since = (_date.today() - _td(days=days)).isoformat()
+    rows = db.execute(text("""
+        SELECT keyword, nm_id, excluded_at, saved_per_day, reason
+        FROM ad_auto_exclude_log
+        WHERE tenant_id=:tid AND campaign_id=:cid AND excluded_at >= :since
+        ORDER BY excluded_at DESC
+        LIMIT 500
+    """), {"tid": tenant_id, "cid": campaign_id, "since": since}).fetchall()
+    return success({
+        "items": [{
+            "keyword": r.keyword, "nm_id": int(r.nm_id),
+            "excluded_at": r.excluded_at.isoformat(),
+            "saved_per_day": float(r.saved_per_day),
+            "saved_per_month": round(float(r.saved_per_day) * 30, 2),
+            "reason": r.reason,
+        } for r in rows],
+        "total": len(rows),
+    })
+
+
+@router.get("/auto-exclude/summary")
+def auto_exclude_summary(
+    days: int = Query(30, ge=1, le=180),
+    db: Session = Depends(get_db),
+    tenant_id: int = Depends(get_tenant_id),
+):
+    """全租户自动屏蔽成果汇总（关键词统计页顶部条用）"""
+    from datetime import date as _date, timedelta as _td
+    since = (_date.today() - _td(days=days)).isoformat()
+
+    # 总数
+    total = db.execute(text("""
+        SELECT COUNT(*) cnt, COALESCE(SUM(saved_per_day), 0) total_saved
+        FROM ad_auto_exclude_log
+        WHERE tenant_id=:tid AND excluded_at >= :since
+    """), {"tid": tenant_id, "since": since}).fetchone()
+
+    # 按活动展开
+    by_camp = db.execute(text("""
+        SELECT l.campaign_id, c.name campaign_name,
+               COUNT(*) excluded_cnt, COALESCE(SUM(l.saved_per_day), 0) saved_per_day
+        FROM ad_auto_exclude_log l
+        JOIN ad_campaigns c ON c.id = l.campaign_id
+        WHERE l.tenant_id=:tid AND l.excluded_at >= :since
+        GROUP BY l.campaign_id, c.name
+        ORDER BY saved_per_day DESC
+    """), {"tid": tenant_id, "since": since}).fetchall()
+
+    return success({
+        "days": days,
+        "total_excluded": int(total.cnt or 0),
+        "total_saved_estimated": round(float(total.total_saved or 0) * 30, 2),
+        "by_campaign": [{
+            "campaign_id": int(r.campaign_id),
+            "campaign_name": r.campaign_name,
+            "excluded_count": int(r.excluded_cnt),
+            "saved_estimated": round(float(r.saved_per_day) * 30, 2),
+        } for r in by_camp],
+    })
