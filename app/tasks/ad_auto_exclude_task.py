@@ -147,6 +147,15 @@ async def _exclude_one_campaign(db, shop, camp, run_id):
                 )
                 continue
 
+            # 剔除 WB 拒绝的无效词，不计入"已屏蔽"账本，避免污染节省统计
+            dropped_lower = {w.lower().strip() for w in (result.get("dropped_invalid") or [])}
+            new_kws_meta = [
+                wk for wk in new_kws_meta
+                if wk["keyword"].lower().strip() not in dropped_lower
+            ]
+            if not new_kws_meta:
+                continue
+
             since = (today - timedelta(days=6)).isoformat()
             for wk in new_kws_meta:
                 kw_text = wk["keyword"]
