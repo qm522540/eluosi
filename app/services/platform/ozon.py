@@ -1196,7 +1196,7 @@ class OzonClient(BasePlatformClient):
             "skus": [str(s) for s in skus[:50]],
             "limit_by_sku": max(1, min(int(limit_by_sku), 15)),
             "page": 1,
-            "page_size": 200,
+            "page_size": 100,
             "sort_by": sort_by,
             "sort_dir": sort_dir,
         }
