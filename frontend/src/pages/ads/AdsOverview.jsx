@@ -1535,123 +1535,184 @@ const AdsOverview = ({ shopId, platform, shops, searched, syncing, lastSyncTime,
         width="85%"
         loading={detailLoading}
       >
-        {detailData && detailData.platform === 'wb' && (
-          <Card
-            size="small"
-            style={{ marginBottom: 12, background: autoExcludeCfg?.enabled ? '#f6ffed' : '#fafafa',
-                     borderColor: autoExcludeCfg?.enabled ? '#b7eb8f' : '#d9d9d9' }}
-            bodyStyle={{ padding: '10px 14px' }}
-          >
-            <Row align="middle" gutter={12} wrap={false}>
-              <Col flex="none">
-                <Space size={8}>
-                  <span style={{ fontSize: 18 }}>🤖</span>
-                  <Text strong>自动屏蔽托管</Text>
-                  <Switch
-                    size="default"
-                    checked={!!autoExcludeCfg?.enabled}
-                    loading={autoExcludeBusy}
-                    onChange={handleToggleAutoExclude}
-                  />
-                </Space>
-              </Col>
-              <Col flex="auto" style={{ paddingLeft: 16 }}>
-                <Text type="secondary" style={{ fontSize: 12 }}>
-                  规则复用「关键词效能规则」waste 档（
-                  <a onClick={() => setRulesDrawerOpen(true)}>查看/调整</a>
-                  ），跳过白名单 + 已屏蔽词
-                </Text>
-                <div style={{ marginTop: 4, fontSize: 13 }}>
-                  本月已屏蔽 <Text strong style={{ color: '#cf1322' }}>{autoExcludeCfg?.month_excluded_total ?? 0}</Text> 个词
-                  · 估算节省 <Text strong style={{ color: '#52c41a' }}>¥{(autoExcludeCfg?.month_saved_estimated ?? 0).toLocaleString()}</Text>
-                  {autoExcludeCfg?.last_run_at && (
-                    <Text type="secondary" style={{ marginLeft: 12, fontSize: 12 }}>
-                      · 最近运行 {formatMoscowTime(autoExcludeCfg.last_run_at)}
-                    </Text>
-                  )}
-                </div>
-              </Col>
-              <Col flex="none">
-                <Space size={6}>
-                  <Button size="small" onClick={handleViewAutoExcludeLogs}>查看详情</Button>
-                  <Button size="small" type="primary" icon={<SyncOutlined spin={autoExcludeBusy} />}
-                    loading={autoExcludeBusy} onClick={handleRunAutoExcludeNow}>
-                    立即跑一次
-                  </Button>
-                </Space>
-              </Col>
-            </Row>
-          </Card>
-        )}
         {detailData && (
           <Tabs activeKey={detailTab} onChange={setDetailTab} items={[
             {
               key: 'info',
               label: '基本信息',
-              children: (
-                <div>
-                  <Card size="small" style={{ marginBottom: 16, background: '#f6ffed', borderColor: '#b7eb8f' }}>
-                    <Row align="middle">
-                      <Col span={8}>
-                        <Text type="secondary">预算余额</Text>
-                        <div style={{ fontSize: 24, fontWeight: 600, color: '#52c41a' }}>
-                          {campaignBudget ? `${campaignBudget.total?.toLocaleString()} ₽` : detailData.daily_budget != null ? `${detailData.daily_budget?.toLocaleString()} ₽` : '-'}
-                        </div>
+              children: (() => {
+                const pt = detailData.payment_type
+                const plat = detailData.platform
+                const ptMap = { cpm: { label: 'CPM · 按曝光', color: 'blue' },
+                                cpc: { label: 'CPC · 按点击', color: 'green' },
+                                cpo: { label: 'CPO · 按订单', color: 'orange' } }
+                const ptCfg = ptMap[pt] || { label: pt || '-', color: 'default' }
+                const aiSupported = (plat === 'wb' && pt === 'cpm') || (plat === 'ozon' && pt === 'cpc')
+                const runDays = detailData.start_date
+                  ? dayjs().diff(dayjs(detailData.start_date), 'day') : null
+                const budgetVal = campaignBudget
+                  ? campaignBudget.total
+                  : (detailData.daily_budget != null ? detailData.daily_budget : null)
+                return (
+                  <div>
+                    {/* 顶部 4 卡片：预算 + 平台 + 状态 + 付费类型 */}
+                    <Row gutter={12} style={{ marginBottom: 16 }}>
+                      <Col span={9}>
+                        <Card size="small" style={{
+                          background: 'linear-gradient(135deg, #f6ffed 0%, #d9f7be 100%)',
+                          borderColor: '#b7eb8f', height: '100%',
+                        }}>
+                          <div style={{ fontSize: 12, color: '#666' }}>💰 预算余额</div>
+                          <div style={{ fontSize: 30, fontWeight: 700, color: '#389e0d', lineHeight: 1.3 }}>
+                            {budgetVal != null ? `${budgetVal.toLocaleString()} ₽` : '-'}
+                          </div>
+                          {campaignBudget && (
+                            <div style={{ fontSize: 11, color: '#999' }}>实时余额</div>
+                          )}
+                        </Card>
                       </Col>
-                      <Col span={16}>
-                        <Descriptions column={2} size="small" style={{ marginBottom: 0 }}>
-                          <Descriptions.Item label="平台">
-                            <Tag color={PLATFORMS[detailData.platform]?.color}>{PLATFORMS[detailData.platform]?.label}</Tag>
-                          </Descriptions.Item>
-                          <Descriptions.Item label="状态">
-                            <Badge color={AD_STATUS[detailData.status]?.color} text={AD_STATUS[detailData.status]?.label || detailData.status} />
-                          </Descriptions.Item>
-                          <Descriptions.Item label="广告类型">{AD_TYPES[detailData.ad_type]?.label || detailData.ad_type}</Descriptions.Item>
-                          <Descriptions.Item label="付费类型">
-                            {(() => {
-                              const pt = detailData.payment_type
-                              const map = { cpm: { label: 'CPM (按曝光)', color: 'blue' },
-                                            cpc: { label: 'CPC (按点击)', color: 'green' },
-                                            cpo: { label: 'CPO (按订单)', color: 'orange' } }
-                              const cfg = map[pt] || { label: pt || '-', color: 'default' }
-                              return <Tag color={cfg.color} style={{ margin: 0 }}>{cfg.label}</Tag>
-                            })()}
-                          </Descriptions.Item>
-                          <Descriptions.Item label="活动ID">{detailData.platform_campaign_id || '-'}</Descriptions.Item>
-                        </Descriptions>
+                      <Col span={5}>
+                        <Card size="small" style={{ height: '100%' }}>
+                          <div style={{ fontSize: 12, color: '#999' }}>平台</div>
+                          <div style={{ marginTop: 8 }}>
+                            <Tag color={PLATFORMS[detailData.platform]?.color} style={{ fontSize: 14, padding: '2px 10px' }}>
+                              {PLATFORMS[detailData.platform]?.label}
+                            </Tag>
+                          </div>
+                          <div style={{ fontSize: 11, color: '#bbb', marginTop: 8 }}>
+                            {AD_TYPES[detailData.ad_type]?.label || detailData.ad_type}
+                          </div>
+                        </Card>
+                      </Col>
+                      <Col span={5}>
+                        <Card size="small" style={{ height: '100%' }}>
+                          <div style={{ fontSize: 12, color: '#999' }}>状态</div>
+                          <div style={{ marginTop: 8 }}>
+                            <Badge color={AD_STATUS[detailData.status]?.color}
+                              text={<Text strong>{AD_STATUS[detailData.status]?.label || detailData.status}</Text>} />
+                          </div>
+                          {runDays !== null && (
+                            <div style={{ fontSize: 11, color: '#bbb', marginTop: 8 }}>
+                              已运行 {runDays} 天
+                            </div>
+                          )}
+                        </Card>
+                      </Col>
+                      <Col span={5}>
+                        <Card size="small" style={{ height: '100%' }}>
+                          <div style={{ fontSize: 12, color: '#999' }}>付费方式</div>
+                          <div style={{ marginTop: 8 }}>
+                            <Tag color={ptCfg.color} style={{ fontSize: 13, padding: '2px 8px' }}>{ptCfg.label}</Tag>
+                          </div>
+                          <div style={{ fontSize: 11, marginTop: 8 }}>
+                            {aiSupported
+                              ? <Text type="success">✓ AI 调价支持</Text>
+                              : <Text type="secondary" style={{ color: '#bbb' }}>AI 调价不支持</Text>}
+                          </div>
+                        </Card>
                       </Col>
                     </Row>
-                    {/* 不支持 AI 调价的活动加提示 */}
-                    {(() => {
-                      const pt = detailData.payment_type
-                      const plat = detailData.platform
-                      const supported = (plat === 'wb' && pt === 'cpm') || (plat === 'ozon' && pt === 'cpc')
-                      if (supported || !pt) return null
-                      return (
-                        <Alert
-                          style={{ marginTop: 12 }}
-                          type="warning"
-                          showIcon
-                          message="AI 调价暂不支持此付费类型"
-                          description={`当前活动付费类型为 ${pt.toUpperCase()}，AI 调价公式只支持 WB=CPM 和 Ozon=CPC。此活动仅展示数据，不会被 AI 自动调价。`}
-                        />
-                      )
-                    })()}
-                  </Card>
-                  <Descriptions column={2} bordered size="small">
-                    <Descriptions.Item label="名称">{detailData.name}</Descriptions.Item>
-                    <Descriptions.Item label="总预算">{detailData.total_budget != null ? `₽${detailData.total_budget}` : '不限'}</Descriptions.Item>
-                    <Descriptions.Item label="开始日期">{detailData.start_date || '-'}</Descriptions.Item>
-                    <Descriptions.Item label="结束日期">{detailData.end_date || '-'}</Descriptions.Item>
-                  </Descriptions>
-                </div>
-              ),
+
+                    {/* AI 调价不支持的活动加提示 */}
+                    {!aiSupported && pt && (
+                      <Alert
+                        style={{ marginBottom: 16 }}
+                        type="warning"
+                        showIcon
+                        message="AI 调价暂不支持此付费类型"
+                        description={`当前付费类型 ${pt.toUpperCase()}，AI 调价公式只支持 WB=CPM 和 Ozon=CPC。此活动仅展示数据，不会被 AI 自动调价。`}
+                      />
+                    )}
+
+                    {/* 详细信息 */}
+                    <Card size="small" title="活动详情" bodyStyle={{ padding: 0 }}>
+                      <Descriptions
+                        column={2} bordered size="small"
+                        labelStyle={{ width: 120, background: '#fafafa', color: '#666' }}
+                      >
+                        <Descriptions.Item label="📛 活动名称" span={2}>
+                          <Text strong>{detailData.name}</Text>
+                        </Descriptions.Item>
+                        <Descriptions.Item label="🆔 活动 ID">
+                          <Text code style={{ fontSize: 13 }}>{detailData.platform_campaign_id || '-'}</Text>
+                        </Descriptions.Item>
+                        <Descriptions.Item label="💸 总预算">
+                          {detailData.total_budget != null
+                            ? <Text strong>₽{detailData.total_budget?.toLocaleString()}</Text>
+                            : <Text type="secondary">不限</Text>}
+                        </Descriptions.Item>
+                        <Descriptions.Item label="📅 投放周期" span={2}>
+                          {detailData.start_date
+                            ? <>
+                                <Text>{detailData.start_date} ~ {detailData.end_date || '至今'}</Text>
+                                {runDays !== null && (
+                                  <Text type="secondary" style={{ marginLeft: 12, fontSize: 12 }}>
+                                    （已运行 {runDays} 天）
+                                  </Text>
+                                )}
+                              </>
+                            : <Text type="secondary">未设置</Text>}
+                        </Descriptions.Item>
+                      </Descriptions>
+                    </Card>
+                  </div>
+                )
+              })(),
             },
             {
               key: 'products',
               label: `商品出价 (${campaignProducts.length})`,
               children: (
                 <div>
+                  {/* 自动屏蔽托管（仅 WB） */}
+                  {detailData.platform === 'wb' && (
+                    <Card
+                      size="small"
+                      style={{ marginBottom: 12, background: autoExcludeCfg?.enabled ? '#f6ffed' : '#fafafa',
+                               borderColor: autoExcludeCfg?.enabled ? '#b7eb8f' : '#d9d9d9' }}
+                      bodyStyle={{ padding: '10px 14px' }}
+                    >
+                      <Row align="middle" gutter={12} wrap={false}>
+                        <Col flex="none">
+                          <Space size={8}>
+                            <span style={{ fontSize: 18 }}>🤖</span>
+                            <Text strong>自动屏蔽托管</Text>
+                            <Switch
+                              size="default"
+                              checked={!!autoExcludeCfg?.enabled}
+                              loading={autoExcludeBusy}
+                              onChange={handleToggleAutoExclude}
+                            />
+                          </Space>
+                        </Col>
+                        <Col flex="auto" style={{ paddingLeft: 16 }}>
+                          <Text type="secondary" style={{ fontSize: 12 }}>
+                            规则复用「关键词效能规则」waste 档（
+                            <a onClick={() => setRulesDrawerOpen(true)}>查看/调整</a>
+                            ），跳过白名单 + 已屏蔽词
+                          </Text>
+                          <div style={{ marginTop: 4, fontSize: 13 }}>
+                            本月已屏蔽 <Text strong style={{ color: '#cf1322' }}>{autoExcludeCfg?.month_excluded_total ?? 0}</Text> 个词
+                            · 估算节省 <Text strong style={{ color: '#52c41a' }}>¥{(autoExcludeCfg?.month_saved_estimated ?? 0).toLocaleString()}</Text>
+                            {autoExcludeCfg?.last_run_at && (
+                              <Text type="secondary" style={{ marginLeft: 12, fontSize: 12 }}>
+                                · 最近运行 {formatMoscowTime(autoExcludeCfg.last_run_at)}
+                              </Text>
+                            )}
+                          </div>
+                        </Col>
+                        <Col flex="none">
+                          <Space size={6}>
+                            <Button size="small" onClick={handleViewAutoExcludeLogs}>查看详情</Button>
+                            <Button size="small" type="primary" icon={<SyncOutlined spin={autoExcludeBusy} />}
+                              loading={autoExcludeBusy} onClick={handleRunAutoExcludeNow}>
+                              立即跑一次
+                            </Button>
+                          </Space>
+                        </Col>
+                      </Row>
+                    </Card>
+                  )}
                   {/* 顶部汇总条 */}
                   {campaignProducts.length > 0 && (
                     <Card size="small" style={{ marginBottom: 12, background: '#fafbfe', borderColor: '#e6ecf5' }}>
