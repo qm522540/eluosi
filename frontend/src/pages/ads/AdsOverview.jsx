@@ -1199,14 +1199,15 @@ const AdsOverview = ({ shopId, platform, shops, searched, syncing, lastSyncTime,
                             const res = await excludeKeywords(detailData.id, parseInt(sku), suggestedExcludeWords)
                             const added = res.data?.added || []
                             const skipped = res.data?.skipped_protected || []
-                            if (added.length > 0 && skipped.length > 0) {
-                              message.success(`实际屏蔽 ${added.length} 个；${skipped.length} 个在白名单内未屏蔽`)
-                            } else if (added.length > 0) {
-                              message.success(`已屏蔽 ${added.length} 个关键词`)
-                            } else if (skipped.length > 0) {
-                              message.info(`${skipped.length} 个词全部在白名单内，未屏蔽任何词`)
+                            const dropped = res.data?.dropped_invalid || []
+                            const parts = []
+                            if (added.length > 0) parts.push(`实际屏蔽 ${added.length} 个`)
+                            if (skipped.length > 0) parts.push(`白名单跳过 ${skipped.length} 个`)
+                            if (dropped.length > 0) parts.push(`WB 拒绝 ${dropped.length} 个 (${dropped.slice(0, 3).join('、')}${dropped.length > 3 ? '…' : ''})`)
+                            if (added.length > 0) {
+                              message.success(parts.join('；'), 5)
                             } else {
-                              message.info('未屏蔽任何词')
+                              message.info(parts.length ? parts.join('；') : '未屏蔽任何词', 5)
                             }
                             setSuggestedExcludeWords([])
                             setQualityCheckedSku(null)

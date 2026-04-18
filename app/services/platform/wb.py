@@ -739,22 +739,76 @@ class WBClient(BasePlatformClient):
         API: POST /adv/v0/normquery/set-minus
         Body: {"advert_id": int, "nm_id": int, "norm_queries": ["词1", "词2"]}
 
-        注意：WB API 实际接受的字段名是 norm_queries（不是 words）；用 words
-        WB 会静默忽略（200 OK 但实际不写入）—— 实测证据见 2026-04-18 日志。
+        - WB 字段名是 norm_queries（不是 words）；用 words 会静默忽略
+        - WB 对每个词内容有校验（含空格/标点的复合词常被拒），返回:
+          `norm_query 'xxx' is not valid for nm Y`
+        - **整批失败语义**：列表里有 1 个无效词，整批 400，无任何词写入
+        - 本方法自动剔除无效词重试（最多 10 次），返回 dropped_invalid
+
+        Returns:
+            {ok: bool, dropped_invalid: [...], error: str|None, warn: str|None}
         """
-        try:
-            url = f"{WB_ADVERT_API}/adv/v0/normquery/set-minus"
-            body = {
-                "advert_id": int(advert_id),
-                "nm_id": int(nm_id),
-                "norm_queries": words,
-            }
-            await self._request("POST", url, json=body)
-            logger.info(f"WB 设置屏蔽关键词成功 advert={advert_id} nm={nm_id} words={len(words)}")
-            return {"ok": True}
-        except Exception as e:
-            logger.error(f"WB 设置屏蔽关键词失败: {e}")
-            return {"ok": False, "error": str(e)}
+        import re
+        INVALID_RE = re.compile(r"norm_query '([^']+)' is not valid")
+        current = list(words)
+        dropped = []
+        max_retries = 10
+
+        for attempt in range(max_retries + 1):
+            try:
+                url = f"{WB_ADVERT_API}/adv/v0/normquery/set-minus"
+                body = {
+                    "advert_id": int(advert_id),
+                    "nm_id": int(nm_id),
+                    "norm_queries": current,
+                }
+                await self._request("POST", url, json=body)
+                logger.info(
+                    f"WB 设置屏蔽关键词成功 advert={advert_id} nm={nm_id} "
+                    f"words={len(current)} dropped_invalid={len(dropped)}"
+                )
+                return {"ok": True, "dropped_invalid": dropped}
+            except Exception as e:
+                err_msg = str(e)
+                m = INVALID_RE.search(err_msg)
+                if not m:
+                    logger.error(f"WB 设置屏蔽关键词失败（非校验错误）: {e}")
+                    return {"ok": False, "error": err_msg, "dropped_invalid": dropped}
+
+                invalid_word = m.group(1)
+                target = next(
+                    (w for w in current if w.strip().lower() == invalid_word.strip().lower()),
+                    None,
+                )
+                if target is None:
+                    logger.warning(
+                        f"WB 报无效词 '{invalid_word}' 但不在请求集，停止重试"
+                    )
+                    return {"ok": False, "error": err_msg, "dropped_invalid": dropped}
+
+                current.remove(target)
+                dropped.append(target)
+                logger.warning(
+                    f"WB 拒绝词 '{target}' (尝试 {attempt+1}/{max_retries+1})，"
+                    f"自动剔除重试，剩余 {len(current)} 个"
+                )
+                if not current:
+                    logger.info(
+                        f"WB advert={advert_id} nm={nm_id} 所有新词均无效，"
+                        f"未调 set-minus（保留原有屏蔽列表）"
+                    )
+                    return {
+                        "ok": True, "dropped_invalid": dropped,
+                        "warn": "all_invalid_no_op",
+                    }
+
+        logger.error(
+            f"WB set-minus 重试 {max_retries} 次仍失败 advert={advert_id} nm={nm_id}"
+        )
+        return {
+            "ok": False, "error": f"达到最大剔除重试 {max_retries}",
+            "dropped_invalid": dropped,
+        }
 
     async def fetch_campaign_summary(
         self, advert_id: str,

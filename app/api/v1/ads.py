@@ -828,6 +828,8 @@ async def exclude_keywords(
         merged = list(existing | new_words)
 
         # 3. 全量写入 WB（body 字段名是 norm_queries —— wb.py 客户端已对齐）
+        # set_excluded_keywords 内部会自动剔除 WB 拒绝的无效词重试，
+        # 返回 dropped_invalid: [...] —— 这些词不会被写入屏蔽列表也不写日志
         result = await client.set_excluded_keywords(
             advert_id=camp.platform_campaign_id,
             nm_id=int(req.nm_id),
@@ -836,22 +838,25 @@ async def exclude_keywords(
         if not result.get("ok"):
             return error(92011, result.get("error", "WB 屏蔽接口调用失败"))
 
+        dropped_invalid = result.get("dropped_invalid") or []
+        dropped_lower = {w.lower().strip() for w in dropped_invalid}
+        # 真实新加入屏蔽的词 = 用户传入 - 白名单 - WB 拒绝
+        added_effective = [w for w in new_words if w.lower().strip() not in dropped_lower]
+
         logger.info(
             f"WB 屏蔽关键词成功 advert={camp.platform_campaign_id} "
-            f"nm={req.nm_id}: 新增{len(new_words)}个 总计{len(merged)}个 "
-            f"白名单跳过{len(skipped_protected)}个"
+            f"nm={req.nm_id}: 实际新增{len(added_effective)}个 / 总计{len(merged) - len(dropped_invalid)}个 / "
+            f"白名单跳过{len(skipped_protected)}个 / WB拒绝{len(dropped_invalid)}个"
         )
 
-        # 写自动屏蔽日志（source='manual'），统一进 ad_auto_exclude_log 账本
-        # 让全店"自动屏蔽节省"汇总能纳入用户手动一键屏蔽的贡献
-        if new_words:
-            from sqlalchemy import text
+        # 写自动屏蔽日志（source='manual'），仅对真实写入的词
+        if added_effective:
             from app.models.ad import AdAutoExcludeLog
             import uuid as _uuid
             from datetime import date as _date, timedelta as _td
             run_id = _uuid.uuid4().hex[:16]
             since = (_date.today() - _td(days=6)).isoformat()
-            for w in new_words:
+            for w in added_effective:
                 avg_daily = db.execute(text("""
                     SELECT AVG(spend) FROM keyword_daily_stats
                     WHERE tenant_id=:tid AND shop_id=:sid AND campaign_id=:cid
@@ -875,9 +880,10 @@ async def exclude_keywords(
     return success({
         "campaign_id": campaign_id,
         "nm_id": req.nm_id,
-        "added": list(new_words),
-        "total_excluded": len(merged),
+        "added": added_effective,
+        "total_excluded": len(merged) - len(dropped_invalid),
         "skipped_protected": skipped_protected,
+        "dropped_invalid": dropped_invalid,
     })
 
 
