@@ -47,11 +47,12 @@ const FIELDS = [
     group: 'waste',
     color: '#ff4d4f',
     icon: <WarningFilled />,
-    label: '浪费词',
-    desc: 'CTR 过低 且 花费超过平均（建议屏蔽）',
+    label: '浪费词 / 屏蔽规则',
+    desc: 'CTR 过低 且 花费超过平均（用于"关键词明细"标注 + "推广信息→活动→商品出价"屏蔽规则）',
     rows: [
       { key: 'waste_ctr_max', label: 'CTR ≤', suffix: '%', min: 0, max: 100, step: 0.1 },
       { key: 'waste_spend_min_ratio', label: '花费 ≥ 平均 ×', suffix: '倍', min: 0, max: 10, step: 0.05 },
+      { key: 'waste_min_days', label: '观察 ≥', suffix: '天', min: 1, max: 90, step: 1 },
     ],
   },
 ]

@@ -18,7 +18,7 @@ router = APIRouter()
 
 
 class EfficiencyRulesBody(BaseModel):
-    """7 项阈值都可选，后端会用 DEFAULT 填补缺失项"""
+    """8 项阈值都可选，后端会用 DEFAULT 填补缺失项"""
     min_impressions: int = Field(DEFAULT_RULES["min_impressions"])
     star_ctr_min: float = Field(DEFAULT_RULES["star_ctr_min"])
     star_cpc_max_ratio: float = Field(DEFAULT_RULES["star_cpc_max_ratio"])
@@ -26,6 +26,7 @@ class EfficiencyRulesBody(BaseModel):
     potential_impressions_max_ratio: float = Field(DEFAULT_RULES["potential_impressions_max_ratio"])
     waste_ctr_max: float = Field(DEFAULT_RULES["waste_ctr_max"])
     waste_spend_min_ratio: float = Field(DEFAULT_RULES["waste_spend_min_ratio"])
+    waste_min_days: int = Field(DEFAULT_RULES["waste_min_days"])
 
 
 @router.get("/summary")

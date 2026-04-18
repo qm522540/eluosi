@@ -22,6 +22,8 @@ import {
   getShopSummary,
 } from '@/api/ads'
 import { getListings } from '@/api/products'
+import { getEfficiencyRules } from '@/api/keyword_stats'
+import EfficiencyRulesDrawer from '@/pages/reports/EfficiencyRulesDrawer'
 import { PLATFORMS, AD_STATUS, AD_TYPES } from '@/utils/constants'
 
 const { Title, Text } = Typography
@@ -201,34 +203,45 @@ const AdsOverview = ({ shopId, platform, shops, searched, syncing, lastSyncTime,
   const [expandedSkuKeys, setExpandedSkuKeys] = useState([])
   const [keywordsBySku, setKeywordsBySku] = useState({})
   const [keywordsLoadingSku, setKeywordsLoadingSku] = useState({})
-  // 屏蔽规则配置（持久化到 localStorage）
-  const [excludeRules, setExcludeRules] = useState(() => {
-    try {
-      const saved = localStorage.getItem('wb_exclude_rules')
-      return saved ? JSON.parse(saved) : {
-        rule1: true,  rule1_views: 100,
-        rule2: true,  rule2_clicks: 5,
-        rule3: false, rule3_spend: 50, rule3_roas: 3.0,
-        min_days: 3,
-      }
-    } catch { return { rule1: true, rule1_views: 100, rule2: true, rule2_clicks: 5, rule3: false, rule3_spend: 50, rule3_roas: 3.0, min_days: 3 } }
-  })
-  const [excludeConfigOpen, setExcludeConfigOpen] = useState(false)
+  // 屏蔽规则：复用关键词效能规则（租户级，跟"关键词明细→效能规则"共用同一份）
+  // 判定为"建议屏蔽"必须同时满足：观察 ≥ waste_min_days + 曝光 ≥ min_impressions
+  //                                + CTR ≤ waste_ctr_max + 花费 ≥ 平均×waste_spend_min_ratio
+  const [excludeRules, setExcludeRules] = useState(null)
+  const [rulesDrawerOpen, setRulesDrawerOpen] = useState(false)
   const [excludingKws, setExcludingKws] = useState(false)
   const [qualityCheckedSku, setQualityCheckedSku] = useState(null)  // 当前质检的 SKU
   const [suggestedExcludeWords, setSuggestedExcludeWords] = useState([])  // 质检标出的词
-  const saveExcludeRules = (r) => { setExcludeRules(r); localStorage.setItem('wb_exclude_rules', JSON.stringify(r)) }
-  // 按规则筛选"建议屏蔽"关键词
+
+  const loadExcludeRules = useCallback(async () => {
+    try {
+      const r = await getEfficiencyRules()
+      setExcludeRules(r.data?.rules || null)
+    } catch {
+      setExcludeRules(null)  // 兜底走 DEFAULT_RULES
+    }
+  }, [])
+  useEffect(() => { loadExcludeRules() }, [loadExcludeRules])
+
+  // 按规则筛选"建议屏蔽"关键词（waste 判定 + 观察天数门槛）
   const getSuggestedExcludes = (kws) => {
     if (!kws || !kws.length) return []
-    const r = excludeRules
-    return kws.filter(kw => {
-      if (kw.is_excluded) return false
-      if (kw.active_days < (r.min_days || 3)) return false
-      if (r.rule1 && kw.views >= (r.rule1_views || 100) && kw.clicks === 0) return true
-      if (r.rule2 && kw.clicks >= (r.rule2_clicks || 5) && (kw.est_orders || 0) === 0) return true
-      if (r.rule3 && kw.sum >= (r.rule3_spend || 50) && (kw.est_roas || 0) < (r.rule3_roas || 3)) return true
-      return false
+    const r = excludeRules || {}
+    const minDays = r.waste_min_days ?? 5
+    const minImp = r.min_impressions ?? 20
+    const ctrMax = r.waste_ctr_max ?? 1.0
+    const spendRatio = r.waste_spend_min_ratio ?? 1.0
+    // 当前 SKU 关键词集合的平均花费（参与判定的基准）
+    const candidates = kws.filter(kw => !kw.is_excluded)
+    const avgSpend = candidates.length
+      ? candidates.reduce((s, k) => s + (k.sum || 0), 0) / candidates.length
+      : 0
+    return candidates.filter(kw => {
+      if ((kw.active_days || 0) < minDays) return false
+      if ((kw.views || 0) < minImp) return false
+      const ctr = kw.views > 0 ? (kw.clicks / kw.views * 100) : 0
+      if (ctr > ctrMax) return false
+      if (avgSpend <= 0 || (kw.sum || 0) < avgSpend * spendRatio) return false
+      return true
     })
   }
 
@@ -1027,7 +1040,7 @@ const AdsOverview = ({ shopId, platform, shops, searched, syncing, lastSyncTime,
               </Space>
               <Space size={8}>
                 <Button size="small" icon={<SettingOutlined />}
-                  onClick={() => setExcludeConfigOpen(!excludeConfigOpen)}>
+                  onClick={() => setRulesDrawerOpen(true)}>
                   屏蔽规则
                 </Button>
                 <Button size="small" type="primary"
@@ -1086,49 +1099,6 @@ const AdsOverview = ({ shopId, platform, shops, searched, syncing, lastSyncTime,
                 )}
               </Space>
             </div>
-            {/* 屏蔽规则配置面板 */}
-            {excludeConfigOpen && (
-              <div style={{ marginTop: 8, padding: 12, background: '#fff', border: '1px solid #f0f0f0', borderRadius: 6 }}>
-                <Space direction="vertical" size={6} style={{ width: '100%' }}>
-                  <Space>
-                    <input type="checkbox" checked={excludeRules.rule1}
-                      onChange={e => saveExcludeRules({ ...excludeRules, rule1: e.target.checked })} />
-                    <Text style={{ fontSize: 12 }}>
-                      曝光 ≥ <InputNumber size="small" style={{ width: 70 }} min={1}
-                        value={excludeRules.rule1_views}
-                        onChange={v => saveExcludeRules({ ...excludeRules, rule1_views: v })} /> 且点击=0（烧钱无效词）
-                    </Text>
-                  </Space>
-                  <Space>
-                    <input type="checkbox" checked={excludeRules.rule2}
-                      onChange={e => saveExcludeRules({ ...excludeRules, rule2: e.target.checked })} />
-                    <Text style={{ fontSize: 12 }}>
-                      点击 ≥ <InputNumber size="small" style={{ width: 70 }} min={1}
-                        value={excludeRules.rule2_clicks}
-                        onChange={v => saveExcludeRules({ ...excludeRules, rule2_clicks: v })} /> 且估算订单=0（点击不转化）
-                    </Text>
-                  </Space>
-                  <Space>
-                    <input type="checkbox" checked={excludeRules.rule3}
-                      onChange={e => saveExcludeRules({ ...excludeRules, rule3: e.target.checked })} />
-                    <Text style={{ fontSize: 12 }}>
-                      花费 ≥ <InputNumber size="small" style={{ width: 70 }} min={1}
-                        value={excludeRules.rule3_spend}
-                        onChange={v => saveExcludeRules({ ...excludeRules, rule3_spend: v })} /> 且ROAS {'<'} <InputNumber size="small" style={{ width: 60 }} min={0} step={0.5}
-                        value={excludeRules.rule3_roas}
-                        onChange={v => saveExcludeRules({ ...excludeRules, rule3_roas: v })} />（低ROAS）
-                    </Text>
-                  </Space>
-                  <Space>
-                    <Text style={{ fontSize: 12 }}>最低观察天数：</Text>
-                    <InputNumber size="small" style={{ width: 60 }} min={1} max={7}
-                      value={excludeRules.min_days}
-                      onChange={v => saveExcludeRules({ ...excludeRules, min_days: v })} />
-                    <Text type="secondary" style={{ fontSize: 11 }}>（少于此天数的新词不参与质检）</Text>
-                  </Space>
-                </Space>
-              </div>
-            )}
           </div>
           <Table
             size="small"
@@ -1912,6 +1882,12 @@ const AdsOverview = ({ shopId, platform, shops, searched, syncing, lastSyncTime,
           </Form.Item>
         </Form>
       </Modal>
+
+      <EfficiencyRulesDrawer
+        open={rulesDrawerOpen}
+        onClose={() => setRulesDrawerOpen(false)}
+        onSaved={loadExcludeRules}
+      />
     </>
   )
 }

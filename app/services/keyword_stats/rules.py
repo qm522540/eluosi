@@ -24,6 +24,7 @@ DEFAULT_RULES = {
     "potential_impressions_max_ratio": 2.0,
     "waste_ctr_max": 1.0,
     "waste_spend_min_ratio": 1.0,
+    "waste_min_days": 5,
 }
 
 # Pydantic 校验用的字段范围（防用户输入离谱值）
@@ -35,6 +36,7 @@ FIELD_BOUNDS = {
     "potential_impressions_max_ratio": (0.0, 10.0),
     "waste_ctr_max": (0.0, 100.0),
     "waste_spend_min_ratio": (0.0, 10.0),
+    "waste_min_days": (1, 90),
 }
 
 
