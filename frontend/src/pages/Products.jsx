@@ -21,6 +21,7 @@ import {
   aiSuggestCategory, aiSuggestAttributes,
 } from '@/api/mapping'
 import { useAuthStore } from '@/stores/authStore'
+import SearchInsightsSection from '@/components/SearchInsightsSection'
 
 const { Text } = Typography
 const { Option } = Select
@@ -1703,6 +1704,13 @@ const Products = () => {
               </Form.Item>
             </Col>
           </Row>
+
+          {editingProduct?.id && (
+            <>
+              <SectionTitle tip="仅 WB/Ozon，需订阅">搜索词洞察</SectionTitle>
+              <SearchInsightsSection productId={editingProduct.id} />
+            </>
+          )}
         </Form>
       </Drawer>
 
