@@ -3,6 +3,7 @@
 from datetime import date, datetime, timedelta, timezone
 from fastapi import APIRouter, Depends, Query, HTTPException
 from fastapi.responses import StreamingResponse
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 import io
 
@@ -844,6 +845,7 @@ async def exclude_keywords(
         # 写自动屏蔽日志（source='manual'），统一进 ad_auto_exclude_log 账本
         # 让全店"自动屏蔽节省"汇总能纳入用户手动一键屏蔽的贡献
         if new_words:
+            from sqlalchemy import text
             from app.models.ad import AdAutoExcludeLog
             import uuid as _uuid
             from datetime import date as _date, timedelta as _td
