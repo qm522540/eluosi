@@ -60,6 +60,7 @@ const menuItems = [
     label: '数据报表',
     children: [
       { key: '/reports/keywords', icon: <KeyOutlined />, label: '关键词统计' },
+      { key: '/reports/search-insights', icon: <SearchOutlined />, label: '搜索词洞察' },
       { key: '/reports/regions', icon: <EnvironmentOutlined />, label: '地区销售' },
       { key: '/reports', icon: <LineChartOutlined />, label: '综合报表' },
     ],

@@ -8,6 +8,7 @@ import Seo from '@/pages/Seo'
 import Reports from '@/pages/Reports'
 import KeywordStats from '@/pages/reports/KeywordStats'
 import RegionSales from '@/pages/reports/RegionSales'
+import SearchInsights from '@/pages/reports/SearchInsights'
 import Settings from '@/pages/Settings'
 import AppLayout from '@/components/AppLayout'
 import AuthRoute from '@/components/AuthRoute'
@@ -33,6 +34,7 @@ const App = () => {
         <Route path="reports" element={<Reports />} />
         <Route path="reports/keywords" element={<KeywordStats />} />
         <Route path="reports/regions" element={<RegionSales />} />
+        <Route path="reports/search-insights" element={<SearchInsights />} />
         <Route path="settings" element={<Settings />} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
