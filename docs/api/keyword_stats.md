@@ -104,6 +104,7 @@
 | sort_order | string | 否 | desc | asc / desc |
 | page | int | 否 | 1 | |
 | size | int | 否 | 50 | 最大 200 |
+| efficiency | string | 否 | | new / star / potential / waste / normal，按效能档位 server-side 过滤 |
 
 **响应 data**：
 
@@ -143,14 +144,17 @@
 
 | 值 | 默认条件 | 含义 | 前端颜色 |
 |---|---|---|---|
+| `new` | 曝光 < `min_impressions`（默认 20） | 新词/观察中（数据不足，所有指标都不可信） | 青 |
 | `star` | CTR ≥ `star_ctr_min`（默认5%）且 CPC ≤ 平均×`star_cpc_max_ratio`（默认1.0）| 高效词 | 绿 |
-| `potential` | CTR ≥ `potential_ctr_min`（默认3%）且 曝光 ≤ 平均×`potential_impressions_max_ratio`（默认1.0）| 潜力词 | 蓝 |
+| `potential` | CTR ≥ `potential_ctr_min`（默认3%）且 曝光 ≤ 平均×`potential_impressions_max_ratio`（默认2.0）| 潜力词 | 蓝 |
 | `waste` | CTR ≤ `waste_ctr_max`（默认1%）且 花费 ≥ 平均×`waste_spend_min_ratio`（默认1.0）| 浪费词 | 红 |
 | `normal` | 以上都不符合 | 普通 | 灰 |
 
-**优先级**：star → potential → waste → normal（命中即返，不会重复判定）
+**优先级**：new → star → potential → waste → normal（命中即返，不会重复判定）
 
-**可配置**：租户可通过 §3.6 / 3.7 / 3.8 接口自定义 6 项阈值；无自定义时走系统默认
+**可配置**：租户可通过 §3.7 / 3.8 / 3.9 接口自定义 7 项阈值；无自定义时走系统默认
+
+**重要**：`efficiency` 是 SQL 后派生字段，server-side filter（`?efficiency=xxx`）走"先全量聚合 → Python 算 → filter → 切片分页"，所以 `total` 字段是 filter 后的真实数量，分页准确。
 
 ### 3.2 关键词 SKU 明细（Ozon 展开用）
 
@@ -278,10 +282,11 @@
 ```json
 {
   "rules": {
+    "min_impressions": 20,
     "star_ctr_min": 5.0,
     "star_cpc_max_ratio": 1.0,
     "potential_ctr_min": 3.0,
-    "potential_impressions_max_ratio": 1.0,
+    "potential_impressions_max_ratio": 2.0,
     "waste_ctr_max": 1.0,
     "waste_spend_min_ratio": 1.0
   },
@@ -298,9 +303,10 @@
 
 **PUT** `/api/v1/keyword-stats/efficiency-rules`
 
-**请求体**（6 项全部必填，小数可选）：
+**请求体**（7 项全部可选，缺失字段后端用 DEFAULT 填补）：
 ```json
 {
+  "min_impressions": 30,
   "star_ctr_min": 7.0,
   "star_cpc_max_ratio": 0.9,
   "potential_ctr_min": 2.5,
@@ -311,6 +317,7 @@
 ```
 
 **字段范围校验**：
+- `min_impressions`：[0, 1000000]（整数次数）
 - 所有 `*_ctr_*` 字段：[0.0, 100.0]（百分比）
 - 所有 `*_ratio*` 字段：[0.0, 10.0]（倍数）
 - 越界返回 `code=10002` 错误
@@ -395,3 +402,4 @@
 |---|---|---|---|
 | 2026-04-17 | v1 | 小明 | 初稿 |
 | 2026-04-17 | v1.1 | 老林 | 效能评级规则租户级自定义：迁移 041 + 3 个 endpoint（§3.7/3.8/3.9）+ 前端 EfficiencyRulesDrawer。§3.1 `efficiency` 字段说明改为参数化 |
+| 2026-04-18 | v1.2 | 老林 | (1) 新增 `new` 档（曝光 < `min_impressions` 默认 20 的关键词，归"新词/观察中"）；(2) §3.1 加 `efficiency` query 参数 server-side filter 修复"客户端 sorter/filter + server 分页"互相冲突的"page 9 之后无数据但仍显示 39 页"bug；(3) `potential_impressions_max_ratio` 默认 1.0 → 2.0（v1.1 识别瑕疵：原默认潜力词命中率 0） |
