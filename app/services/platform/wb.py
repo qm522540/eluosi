@@ -101,11 +101,21 @@ class WBClient(BasePlatformClient):
                 await asyncio.sleep(2 * (attempt + 1))
 
             except httpx.HTTPStatusError as e:
+                # 把 WB 返回的 detail/title 等错误说明附到 exception，
+                # 让上层（业务层 + 前端 message）能看到具体原因，而不是裸 400/422
+                body_snip = ""
+                try:
+                    body_snip = e.response.text[:300]
+                except Exception:
+                    pass
                 logger.error(
                     f"WB API 错误，shop_id={self.shop_id}，"
-                    f"status={e.response.status_code}，url={url}"
+                    f"status={e.response.status_code}，url={url}，body={body_snip}"
                 )
-                raise
+                raise httpx.HTTPStatusError(
+                    f"WB {e.response.status_code}: {body_snip or e}",
+                    request=e.request, response=e.response,
+                )
 
         return {}
 
@@ -723,14 +733,17 @@ class WBClient(BasePlatformClient):
         """设置 SKU 级屏蔽关键词（替换模式：传入的 words 会覆盖已有列表）
 
         API: POST /adv/v0/normquery/set-minus
-        Body: {"advert_id": int, "nm_id": int, "words": ["词1", "词2"]}
+        Body: {"advert_id": int, "nm_id": int, "norm_queries": ["词1", "词2"]}
+
+        注意：WB API 实际接受的字段名是 norm_queries（不是 words）；用 words
+        WB 会静默忽略（200 OK 但实际不写入）—— 实测证据见 2026-04-18 日志。
         """
         try:
             url = f"{WB_ADVERT_API}/adv/v0/normquery/set-minus"
             body = {
                 "advert_id": int(advert_id),
                 "nm_id": int(nm_id),
-                "words": words,
+                "norm_queries": words,
             }
             await self._request("POST", url, json=body)
             logger.info(f"WB 设置屏蔽关键词成功 advert={advert_id} nm={nm_id} words={len(words)}")

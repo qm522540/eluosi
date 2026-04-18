@@ -1083,11 +1083,22 @@ const AdsOverview = ({ shopId, platform, shops, searched, syncing, lastSyncTime,
                             message.success(`已屏蔽 ${suggestedExcludeWords.length} 个关键词`)
                             setSuggestedExcludeWords([])
                             setQualityCheckedSku(null)
-                            setKeywordsBySku(m => ({ ...m, [sku]: undefined }))
-                            setExpandedSkuKeys(k => k.filter(x => x !== sku))
-                            setTimeout(() => handleProductRowExpand(true, record), 500)
+                            // 直接 refetch 替代"折叠 + 0.5s 后展开"——后者依赖
+                            // handleProductRowExpand 里读 keywordsBySku 判 undefined，
+                            // 但闭包捕获的是旧 state 快照（已被设为 undefined），
+                            // 走不进 fetch 分支 → 关键词列表消失
+                            if (platform === 'wb' && detailData?.id) {
+                              try {
+                                const r = await getCampaignKeywords(detailData.id, 7, sku)
+                                const kws = r.data?.keywords || []
+                                const excluded = r.data?.excluded_keywords || []
+                                setKeywordsBySku(m => ({
+                                  ...m, [sku]: kws, [`${sku}_excluded`]: excluded,
+                                }))
+                              } catch {}
+                            }
                           } catch (err) {
-                            message.error(err.message || '屏蔽失败')
+                            message.error(err.message || err?.response?.data?.msg || '屏蔽失败')
                           } finally {
                             setExcludingKws(false)
                           }
