@@ -30,6 +30,7 @@ celery_app.conf.update(
         "app.tasks.keyword_stats_task",
         "app.tasks.region_stats_task",
         "app.tasks.ad_auto_exclude_task",
+        "app.tasks.ozon_product_queries_task",
     ],
 )
 
@@ -74,5 +75,10 @@ celery_app.conf.beat_schedule = {
     "ad-auto-exclude-daily": {
         "task": "app.tasks.ad_auto_exclude_task.auto_exclude_keywords",
         "schedule": crontab(hour=1, minute=30),
+    },
+    # Ozon SKU × 搜索词同步（莫斯科凌晨5:30 = UTC 2:30，错开自动屏蔽）
+    "ozon-product-queries-daily": {
+        "task": "app.tasks.ozon_product_queries_task.sync_ozon_product_queries",
+        "schedule": crontab(hour=2, minute=30),
     },
 }
