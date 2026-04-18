@@ -18,6 +18,7 @@ import {
   getNegativeSuggestions, getKeywordSyncStatus, backfillKeywords,
   translateKeywords, getKeywordCampaigns, excludeKeyword,
 } from '@/api/keyword_stats'
+import { getAutoExcludeSummary } from '@/api/ads'
 
 const { Title, Text } = Typography
 const { Option } = Select
@@ -97,6 +98,12 @@ const KeywordStats = () => {
 
   // 效能规则 Drawer
   const [rulesDrawerOpen, setRulesDrawerOpen] = useState(false)
+  // 自动屏蔽全店成果（顶部条）
+  const [autoExcludeSummary, setAutoExcludeSummaryState] = useState(null)
+  const [autoExcludeExpand, setAutoExcludeExpand] = useState(false)
+  useEffect(() => {
+    getAutoExcludeSummary(30).then(r => setAutoExcludeSummaryState(r.data)).catch(() => {})
+  }, [])
 
   useEffect(() => {
     getShops({ page: 1, page_size: 100 })
@@ -417,6 +424,48 @@ const KeywordStats = () => {
   return (
     <div>
       <Title level={4}><KeyOutlined /> 关键词统计</Title>
+
+      {autoExcludeSummary && autoExcludeSummary.total_excluded > 0 && (
+        <Card
+          size="small"
+          style={{ marginBottom: 12, background: '#f6ffed', borderColor: '#b7eb8f' }}
+          bodyStyle={{ padding: '10px 14px' }}
+        >
+          <Row align="middle" gutter={12}>
+            <Col flex="auto">
+              <Space size={8}>
+                <span style={{ fontSize: 18 }}>💰</span>
+                <Text strong>自动屏蔽全店成果（最近 30 天）</Text>
+                <Text>
+                  共自动屏蔽 <Text strong style={{ color: '#cf1322' }}>{autoExcludeSummary.total_excluded}</Text> 个词
+                  · 估算节省 <Text strong style={{ color: '#52c41a' }}>¥{autoExcludeSummary.total_saved_estimated.toLocaleString()}</Text>
+                </Text>
+              </Space>
+            </Col>
+            <Col flex="none">
+              <Button size="small" type="link"
+                onClick={() => setAutoExcludeExpand(v => !v)}>
+                {autoExcludeExpand ? '收起' : '按活动展开 ▾'}
+              </Button>
+            </Col>
+          </Row>
+          {autoExcludeExpand && (autoExcludeSummary.by_campaign || []).length > 0 && (
+            <div style={{ marginTop: 8, paddingTop: 8, borderTop: '1px dashed #d9f7be' }}>
+              {autoExcludeSummary.by_campaign.map(c => (
+                <Row key={c.campaign_id} style={{ padding: '4px 0', fontSize: 12 }}>
+                  <Col flex="auto"><Text>{c.campaign_name}</Text></Col>
+                  <Col flex="none">
+                    <Space size={16}>
+                      <Text type="secondary">{c.excluded_count} 个词</Text>
+                      <Text strong style={{ color: '#52c41a' }}>¥{c.saved_estimated.toLocaleString()}</Text>
+                    </Space>
+                  </Col>
+                </Row>
+              ))}
+            </div>
+          )}
+        </Card>
+      )}
 
       {renderFilterBar()}
 

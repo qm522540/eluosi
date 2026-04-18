@@ -214,6 +214,28 @@ export function removeProtectedKeyword(campaignId, nmId, keyword) {
   })
 }
 
+// ==================== 活动级自动屏蔽托管 ====================
+
+export function getAutoExcludeConfig(campaignId) {
+  return request.get(`/ads/campaign-auto-exclude/${campaignId}`)
+}
+
+export function toggleAutoExclude(campaignId, enabled) {
+  return request.put(`/ads/campaign-auto-exclude/${campaignId}`, { enabled })
+}
+
+export function runAutoExcludeNow(campaignId) {
+  return request.post(`/ads/campaign-auto-exclude/${campaignId}/run`, {}, { timeout: 120000 })
+}
+
+export function getAutoExcludeLogs(campaignId, days = 30) {
+  return request.get(`/ads/campaign-auto-exclude/${campaignId}/logs`, { params: { days } })
+}
+
+export function getAutoExcludeSummary(days = 30) {
+  return request.get(`/ads/auto-exclude/summary`, { params: { days } })
+}
+
 export function getCampaignProducts(campaignId) {
   return request.get(`/ads/campaign-products/${campaignId}`)
 }

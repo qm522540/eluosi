@@ -3,6 +3,7 @@ import {
   Typography, Card, Table, Button, Tag, Space, Select, Row, Col,
   Statistic, Modal, Form, Input, InputNumber, message, DatePicker, Tooltip, Badge, Empty,
   Popconfirm, Tabs, Alert, Drawer, Descriptions, List, Divider, Progress, Checkbox, Popover,
+  Switch,
 } from 'antd'
 import {
   SearchOutlined, EditOutlined, EyeOutlined, SyncOutlined, PlusOutlined,
@@ -20,6 +21,7 @@ import {
   exportAdStats, getAlerts, getAlertConfig, updateAlertConfig,
   getCampaignProducts, getCampaignKeywords, excludeKeywords, updateCampaignBid, getCampaignBudget,
   getShopSummary, addProtectedKeyword, removeProtectedKeyword,
+  getAutoExcludeConfig, toggleAutoExclude, runAutoExcludeNow, getAutoExcludeLogs,
 } from '@/api/ads'
 import { getListings } from '@/api/products'
 import { getEfficiencyRules } from '@/api/keyword_stats'
@@ -146,6 +148,12 @@ const AdsOverview = ({ shopId, platform, shops, searched, syncing, lastSyncTime,
   const [detailVisible, setDetailVisible] = useState(false)
   const [detailData, setDetailData] = useState(null)
   const [detailLoading, setDetailLoading] = useState(false)
+  // 活动级自动屏蔽托管
+  const [autoExcludeCfg, setAutoExcludeCfg] = useState(null)
+  const [autoExcludeBusy, setAutoExcludeBusy] = useState(false)
+  const [autoExcludeLogsDrawer, setAutoExcludeLogsDrawer] = useState(false)
+  const [autoExcludeLogs, setAutoExcludeLogs] = useState([])
+  const [autoExcludeLogsLoading, setAutoExcludeLogsLoading] = useState(false)
   const [detailTab, setDetailTab] = useState('info')
 
   // 广告组
@@ -243,6 +251,56 @@ const AdsOverview = ({ shopId, platform, shops, searched, syncing, lastSyncTime,
       if (avgSpend <= 0 || (kw.sum || 0) < avgSpend * spendRatio) return false
       return true
     })
+  }
+
+  // ==================== 活动级自动屏蔽托管 ====================
+
+  const handleToggleAutoExclude = async (checked) => {
+    if (!detailData?.id) return
+    setAutoExcludeBusy(true)
+    try {
+      await toggleAutoExclude(detailData.id, checked)
+      const r = await getAutoExcludeConfig(detailData.id)
+      setAutoExcludeCfg(r.data)
+      message.success(checked ? '已开启：明天凌晨自动屏蔽' : '已关闭')
+    } catch (err) {
+      message.error(err.message || '操作失败')
+    } finally {
+      setAutoExcludeBusy(false)
+    }
+  }
+
+  const handleRunAutoExcludeNow = async () => {
+    if (!detailData?.id) return
+    setAutoExcludeBusy(true)
+    try {
+      const r = await runAutoExcludeNow(detailData.id)
+      const d = r.data || {}
+      message.success(
+        `本次屏蔽 ${d.excluded || 0} 个词，估算月省 ¥${(d.estimated_saved_per_month || 0).toLocaleString()}`,
+        4,
+      )
+      const cfg = await getAutoExcludeConfig(detailData.id)
+      setAutoExcludeCfg(cfg.data)
+    } catch (err) {
+      message.error(err.message || err?.response?.data?.msg || '运行失败')
+    } finally {
+      setAutoExcludeBusy(false)
+    }
+  }
+
+  const handleViewAutoExcludeLogs = async () => {
+    if (!detailData?.id) return
+    setAutoExcludeLogsDrawer(true)
+    setAutoExcludeLogsLoading(true)
+    try {
+      const r = await getAutoExcludeLogs(detailData.id, 30)
+      setAutoExcludeLogs(r.data?.items || [])
+    } catch {
+      setAutoExcludeLogs([])
+    } finally {
+      setAutoExcludeLogsLoading(false)
+    }
   }
 
   // 切换关键词的"智能屏蔽白名单"标记（A 粒度: campaign + nm_id + keyword）
@@ -421,6 +479,11 @@ const AdsOverview = ({ shopId, platform, shops, searched, syncing, lastSyncTime,
       fetchAdGroups(id)
       getCampaignBudget(id).then(r => setCampaignBudget(r.data)).catch(err => console.warn('预算加载失败', err))
       fetchCampaignProducts(id)
+      // WB 平台拉自动屏蔽配置
+      setAutoExcludeCfg(null)
+      if (res.data?.platform === 'wb') {
+        getAutoExcludeConfig(id).then(r => setAutoExcludeCfg(r.data)).catch(() => setAutoExcludeCfg(null))
+      }
       // 拉店铺全量 listings 以便把 sku 映射到 listing_id → ad_group_id
       if (res.data?.shop_id) {
         getListings({ shop_id: res.data.shop_id, page: 1, page_size: 200 })
@@ -1472,6 +1535,54 @@ const AdsOverview = ({ shopId, platform, shops, searched, syncing, lastSyncTime,
         width="85%"
         loading={detailLoading}
       >
+        {detailData && detailData.platform === 'wb' && (
+          <Card
+            size="small"
+            style={{ marginBottom: 12, background: autoExcludeCfg?.enabled ? '#f6ffed' : '#fafafa',
+                     borderColor: autoExcludeCfg?.enabled ? '#b7eb8f' : '#d9d9d9' }}
+            bodyStyle={{ padding: '10px 14px' }}
+          >
+            <Row align="middle" gutter={12} wrap={false}>
+              <Col flex="none">
+                <Space size={8}>
+                  <span style={{ fontSize: 18 }}>🤖</span>
+                  <Text strong>自动屏蔽托管</Text>
+                  <Switch
+                    size="default"
+                    checked={!!autoExcludeCfg?.enabled}
+                    loading={autoExcludeBusy}
+                    onChange={handleToggleAutoExclude}
+                  />
+                </Space>
+              </Col>
+              <Col flex="auto" style={{ paddingLeft: 16 }}>
+                <Text type="secondary" style={{ fontSize: 12 }}>
+                  规则复用「关键词效能规则」waste 档（
+                  <a onClick={() => setRulesDrawerOpen(true)}>查看/调整</a>
+                  ），跳过白名单 + 已屏蔽词
+                </Text>
+                <div style={{ marginTop: 4, fontSize: 13 }}>
+                  本月已屏蔽 <Text strong style={{ color: '#cf1322' }}>{autoExcludeCfg?.month_excluded_total ?? 0}</Text> 个词
+                  · 估算节省 <Text strong style={{ color: '#52c41a' }}>¥{(autoExcludeCfg?.month_saved_estimated ?? 0).toLocaleString()}</Text>
+                  {autoExcludeCfg?.last_run_at && (
+                    <Text type="secondary" style={{ marginLeft: 12, fontSize: 12 }}>
+                      · 最近运行 {formatMoscowTime(autoExcludeCfg.last_run_at)}
+                    </Text>
+                  )}
+                </div>
+              </Col>
+              <Col flex="none">
+                <Space size={6}>
+                  <Button size="small" onClick={handleViewAutoExcludeLogs}>查看详情</Button>
+                  <Button size="small" type="primary" icon={<SyncOutlined spin={autoExcludeBusy} />}
+                    loading={autoExcludeBusy} onClick={handleRunAutoExcludeNow}>
+                    立即跑一次
+                  </Button>
+                </Space>
+              </Col>
+            </Row>
+          </Card>
+        )}
         {detailData && (
           <Tabs activeKey={detailTab} onChange={setDetailTab} items={[
             {
@@ -1933,6 +2044,31 @@ const AdsOverview = ({ shopId, platform, shops, searched, syncing, lastSyncTime,
         onClose={() => setRulesDrawerOpen(false)}
         onSaved={loadExcludeRules}
       />
+
+      <Drawer
+        title={`🤖 自动屏蔽日志 — ${detailData?.name || ''}（最近 30 天）`}
+        open={autoExcludeLogsDrawer}
+        onClose={() => setAutoExcludeLogsDrawer(false)}
+        width={720}
+      >
+        <Table
+          size="small"
+          loading={autoExcludeLogsLoading}
+          dataSource={autoExcludeLogs}
+          rowKey={(r, i) => `${r.excluded_at}_${r.keyword}_${i}`}
+          pagination={{ pageSize: 30, size: 'small' }}
+          columns={[
+            { title: '屏蔽时间', dataIndex: 'excluded_at', width: 150,
+              render: v => formatMoscowTime(v) },
+            { title: '关键词', dataIndex: 'keyword', ellipsis: true },
+            { title: 'nm_id', dataIndex: 'nm_id', width: 110 },
+            { title: '触发理由', dataIndex: 'reason', width: 220, ellipsis: true,
+              render: v => <Text type="secondary" style={{ fontSize: 12 }}>{v || '-'}</Text> },
+            { title: '估算月省', dataIndex: 'saved_per_month', width: 110, align: 'right',
+              render: v => <Text strong style={{ color: '#52c41a' }}>¥{v?.toLocaleString() || 0}</Text> },
+          ]}
+        />
+      </Drawer>
     </>
   )
 }
