@@ -189,7 +189,8 @@ export function getBudgetSuggestions(params) {
 export function getCampaignKeywords(campaignId, days = 7, nmId = null) {
   const params = { days }
   if (nmId) params.nm_id = nmId
-  return request.get(`/ads/campaign-keywords/${campaignId}`, { params })
+  // WB 关键词接口可能因限速重试 ≥15s，放宽前端 timeout 到 60s
+  return request.get(`/ads/campaign-keywords/${campaignId}`, { params, timeout: 60000 })
 }
 
 /** 屏蔽关键词：把指定词加入 WB minus-phrases */
@@ -217,7 +218,8 @@ export function removeProtectedKeyword(campaignId, nmId, keyword) {
 // ==================== 活动汇总指标 ====================
 
 export function getCampaignSummary(campaignId, days = 7) {
-  return request.get(`/ads/campaign-summary/${campaignId}`, { params: { days } })
+  // WB fullstats 在限速时后端会重试 ≥15s，放宽前端 timeout 到 60s
+  return request.get(`/ads/campaign-summary/${campaignId}`, { params: { days }, timeout: 60000 })
 }
 
 // ==================== 活动级自动屏蔽托管 ====================

@@ -308,6 +308,15 @@ const AdsOverview = ({ shopId, platform, shops, searched, syncing, lastSyncTime,
     }
   }
 
+  // 懒加载：用户切到「基本信息」Tab 才拉 campaign summary（避免 WB 限速）
+  useEffect(() => {
+    if (detailVisible && detailTab === 'info' && detailData?.platform === 'wb'
+        && detailData?.id && !campaignSummaryData && !campaignSummaryLoading) {
+      reloadCampaignSummary(summaryDays)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [detailVisible, detailTab, detailData?.id])
+
   const handleViewAutoExcludeLogs = async () => {
     if (!detailData?.id) return
     setAutoExcludeLogsDrawer(true)
@@ -502,16 +511,13 @@ const AdsOverview = ({ shopId, platform, shops, searched, syncing, lastSyncTime,
       fetchAdGroups(id)
       getCampaignBudget(id).then(r => setCampaignBudget(r.data)).catch(err => console.warn('预算加载失败', err))
       fetchCampaignProducts(id)
-      // WB 平台拉自动屏蔽配置 + 活动汇总指标
+      // WB 平台拉自动屏蔽配置（轻：只查 DB，不调 WB）
+      // campaignSummaryData 改为 lazy load：detailTab='info' 时才拉，避免
+      // 与 getCampaignKeywords/getCampaignBudget 并发轰炸 WB 触发 429
       setAutoExcludeCfg(null)
       setCampaignSummaryData(null)
       if (res.data?.platform === 'wb') {
         getAutoExcludeConfig(id).then(r => setAutoExcludeCfg(r.data)).catch(() => setAutoExcludeCfg(null))
-        setCampaignSummaryLoading(true)
-        getCampaignSummary(id, summaryDays)
-          .then(r => setCampaignSummaryData(r.data))
-          .catch(() => setCampaignSummaryData(null))
-          .finally(() => setCampaignSummaryLoading(false))
       }
       // 拉店铺全量 listings 以便把 sku 映射到 listing_id → ad_group_id
       if (res.data?.shop_id) {
