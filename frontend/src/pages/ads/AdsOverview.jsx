@@ -235,7 +235,11 @@ const AdsOverview = ({ shopId, platform, shops, searched, syncing, lastSyncTime,
   }, [])
   useEffect(() => { loadExcludeRules() }, [loadExcludeRules])
 
-  // 按规则筛选"建议屏蔽"关键词（waste 判定 + 观察天数门槛 + 跳过白名单）
+  // WB API 限制：屏蔽词只支持单个词（不接受含空格短语）。含空格的搜索词
+  // 是 WB 系统返回的"用户实际搜索短语"，无法通过 set-minus 接口屏蔽
+  const isPhraseUnsupported = (kw) => (kw.keyword || '').trim().includes(' ')
+
+  // 按规则筛选"建议屏蔽"关键词（waste 判定 + 观察天数门槛 + 跳过白名单 + 跳过短语）
   const getSuggestedExcludes = (kws) => {
     if (!kws || !kws.length) return []
     const r = excludeRules || {}
@@ -244,7 +248,7 @@ const AdsOverview = ({ shopId, platform, shops, searched, syncing, lastSyncTime,
     const ctrMax = r.waste_ctr_max ?? 1.0
     const spendRatio = r.waste_spend_min_ratio ?? 1.0
     // 当前 SKU 关键词集合的平均花费（参与判定的基准）
-    const candidates = kws.filter(kw => !kw.is_excluded && !kw.is_protected)
+    const candidates = kws.filter(kw => !kw.is_excluded && !kw.is_protected && !isPhraseUnsupported(kw))
     const avgSpend = candidates.length
       ? candidates.reduce((s, k) => s + (k.sum || 0), 0) / candidates.length
       : 0
@@ -1207,9 +1211,9 @@ const AdsOverview = ({ shopId, platform, shops, searched, syncing, lastSyncTime,
                             const skipped = res.data?.skipped_protected || []
                             const dropped = res.data?.dropped_invalid || []
                             const parts = []
-                            if (added.length > 0) parts.push(`实际屏蔽 ${added.length} 个`)
+                            if (added.length > 0) parts.push(`屏蔽 ${added.length} 个`)
                             if (skipped.length > 0) parts.push(`白名单跳过 ${skipped.length} 个`)
-                            if (dropped.length > 0) parts.push(`WB 拒绝 ${dropped.length} 个 (${dropped.slice(0, 3).join('、')}${dropped.length > 3 ? '…' : ''})`)
+                            if (dropped.length > 0) parts.push(`${dropped.length} 个含空格短语 WB 不支持，请到 WB 后台手动屏蔽`)
                             if (added.length > 0) {
                               message.success(parts.join('；'), 5)
                             } else {
@@ -1261,11 +1265,17 @@ const AdsOverview = ({ shopId, platform, shops, searched, syncing, lastSyncTime,
                   }
                   const s = statusMap[r.status] || {}
                   const isSuggested = qualityCheckedSku === sku && suggestedExcludeWords.includes(v)
+                  const isPhrase = isPhraseUnsupported(r)
                   return (
                     <Space size={4}>
                       {r.is_excluded && <Tag color="red" style={{ margin: 0, fontSize: 11 }}>已屏蔽</Tag>}
+                      {isPhrase && !r.is_excluded && (
+                        <Tooltip title="WB 接口仅支持单词屏蔽，含空格短语无法通过 API 屏蔽。如确需屏蔽，请到 WB 后台手动添加">
+                          <Tag color="default" style={{ margin: 0, fontSize: 11, cursor: 'help' }}>短语</Tag>
+                        </Tooltip>
+                      )}
                       {isSuggested && !r.is_excluded && <Tag color="volcano" style={{ margin: 0, fontSize: 11 }}>建议屏蔽</Tag>}
-                      {!r.is_excluded && !isSuggested && s.label && <Tag color={s.color} style={{ margin: 0, fontSize: 11 }}>{s.label}</Tag>}
+                      {!r.is_excluded && !isSuggested && !isPhrase && s.label && <Tag color={s.color} style={{ margin: 0, fontSize: 11 }}>{s.label}</Tag>}
                       <Tooltip title={`${v}（${r.active_days || 0}/${r.total_days || 7}天出现${r.first_seen ? `，首次 ${r.first_seen}` : ''}${r.last_seen && r.last_seen !== r.first_seen ? `，末次 ${r.last_seen}` : ''}）`} placement="topLeft">
                         <span style={
                           r.is_excluded ? { textDecoration: 'line-through', color: '#999' }
