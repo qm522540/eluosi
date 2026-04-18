@@ -790,13 +790,14 @@ async def exclude_keywords(
         new_words = set(w.strip() for w in req.keywords if w.strip())
         merged = list(existing | new_words)
 
-        # 3. 全量写入 WB
-        url = f"https://advert-api.wildberries.ru/adv/v0/normquery/set-minus"
-        resp = await client._request("POST", url, json={
-            "advert_id": int(camp.platform_campaign_id),
-            "nm_id": int(req.nm_id),
-            "norm_queries": merged,
-        })
+        # 3. 全量写入 WB（复用客户端方法，body 字段是 "words" 不是 "norm_queries"）
+        result = await client.set_excluded_keywords(
+            advert_id=camp.platform_campaign_id,
+            nm_id=int(req.nm_id),
+            words=merged,
+        )
+        if not result.get("ok"):
+            return error(92011, result.get("error", "WB 屏蔽接口调用失败"))
 
         logger.info(
             f"WB 屏蔽关键词成功 advert={camp.platform_campaign_id} "
