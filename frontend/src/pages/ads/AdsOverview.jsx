@@ -1120,7 +1120,7 @@ const AdsOverview = ({ shopId, platform, shops, searched, syncing, lastSyncTime,
                                 setKeywordsBySku(m => ({
                                   ...m, [sku]: kws, [`${sku}_excluded`]: excluded,
                                 }))
-                              } catch {}
+                              } catch { /* refetch 失败不致命，UI 仍可见原数据 */ }
                             }
                           } catch (err) {
                             message.error(err.message || err?.response?.data?.msg || '屏蔽失败')
@@ -1216,7 +1216,7 @@ const AdsOverview = ({ shopId, platform, shops, searched, syncing, lastSyncTime,
                   const color = v >= 5 ? '#52c41a' : v >= 3 ? '#faad14' : '#ff4d4f'
                   return <span style={{ color, fontWeight: 500 }}>{v.toFixed(1)}x</span>
                 }},
-              { title: <Tooltip title="勾选后此词不会进入"建议屏蔽"，"一键屏蔽"也会跳过。可随时取消。">🛡 不屏蔽</Tooltip>,
+              { title: <Tooltip title="勾选后此词不会进入「建议屏蔽」，「一键屏蔽」也会跳过。可随时取消。">🛡 不屏蔽</Tooltip>,
                 key: 'is_protected', width: 90, align: 'center',
                 render: (_, r) => (
                   <Checkbox
