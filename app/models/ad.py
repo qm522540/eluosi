@@ -179,3 +179,5 @@ class AdAutoExcludeLog(BaseMixin, Base):
     )
     saved_per_day: Mapped[float] = mapped_column(DECIMAL(12, 4), nullable=False, default=0)
     reason: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
+    # auto=定时/立即跑 (ad_auto_exclude_task)，manual=用户在 SKU 行点"一键屏蔽"
+    source: Mapped[str] = mapped_column(String(10), nullable=False, default='auto')

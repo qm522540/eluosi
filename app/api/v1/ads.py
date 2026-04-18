@@ -840,6 +840,33 @@ async def exclude_keywords(
             f"nm={req.nm_id}: 新增{len(new_words)}个 总计{len(merged)}个 "
             f"白名单跳过{len(skipped_protected)}个"
         )
+
+        # 写自动屏蔽日志（source='manual'），统一进 ad_auto_exclude_log 账本
+        # 让全店"自动屏蔽节省"汇总能纳入用户手动一键屏蔽的贡献
+        if new_words:
+            from app.models.ad import AdAutoExcludeLog
+            import uuid as _uuid
+            from datetime import date as _date, timedelta as _td
+            run_id = _uuid.uuid4().hex[:16]
+            since = (_date.today() - _td(days=6)).isoformat()
+            for w in new_words:
+                avg_daily = db.execute(text("""
+                    SELECT AVG(spend) FROM keyword_daily_stats
+                    WHERE tenant_id=:tid AND shop_id=:sid AND campaign_id=:cid
+                      AND keyword=:kw AND stat_date >= :since
+                """), {
+                    "tid": tenant_id, "sid": shop.id, "cid": campaign_id,
+                    "kw": w, "since": since,
+                }).scalar() or 0
+                db.add(AdAutoExcludeLog(
+                    tenant_id=tenant_id, shop_id=shop.id,
+                    campaign_id=campaign_id, nm_id=int(req.nm_id),
+                    keyword=w, run_id=run_id,
+                    saved_per_day=float(avg_daily),
+                    reason="用户手动一键屏蔽",
+                    source="manual",
+                ))
+            db.commit()
     finally:
         await client.close()
 
@@ -1372,14 +1399,20 @@ def get_auto_exclude_config(
         AdCampaignAutoExclude.campaign_id == campaign_id,
     ).first()
 
-    # 累计：本月已屏蔽词数 + 累计估算节省
+    # 累计：本月已屏蔽词数 + 累计估算节省（按 source 分组）
     from datetime import date as _date
     month_start = _date.today().replace(day=1).isoformat()
-    agg = db.execute(text("""
-        SELECT COUNT(*) cnt, COALESCE(SUM(saved_per_day), 0) total_saved_per_day
+    rows = db.execute(text("""
+        SELECT source, COUNT(*) cnt, COALESCE(SUM(saved_per_day), 0) saved_per_day
         FROM ad_auto_exclude_log
         WHERE tenant_id=:tid AND campaign_id=:cid AND excluded_at >= :ms
-    """), {"tid": tenant_id, "cid": campaign_id, "ms": month_start}).fetchone()
+        GROUP BY source
+    """), {"tid": tenant_id, "cid": campaign_id, "ms": month_start}).fetchall()
+    by_source = {r.source: {"cnt": int(r.cnt), "saved": float(r.saved_per_day)} for r in rows}
+    auto_d = by_source.get("auto", {"cnt": 0, "saved": 0})
+    manual_d = by_source.get("manual", {"cnt": 0, "saved": 0})
+    total_cnt = auto_d["cnt"] + manual_d["cnt"]
+    total_saved = auto_d["saved"] + manual_d["saved"]
 
     return success({
         "campaign_id": campaign_id,
@@ -1387,8 +1420,12 @@ def get_auto_exclude_config(
         "last_run_at": cfg.last_run_at.isoformat() if cfg and cfg.last_run_at else None,
         "last_run_excluded": cfg.last_run_excluded if cfg else 0,
         "last_run_saved_monthly": float(cfg.last_run_saved) if cfg else 0,
-        "month_excluded_total": int(agg.cnt or 0),
-        "month_saved_estimated": round(float(agg.total_saved_per_day or 0) * 30, 2),
+        "month_excluded_total": total_cnt,
+        "month_saved_estimated": round(total_saved * 30, 2),
+        "month_excluded_auto": auto_d["cnt"],
+        "month_excluded_manual": manual_d["cnt"],
+        "month_saved_auto": round(auto_d["saved"] * 30, 2),
+        "month_saved_manual": round(manual_d["saved"] * 30, 2),
     })
 
 
@@ -1510,12 +1547,18 @@ def auto_exclude_summary(
     from datetime import date as _date, timedelta as _td
     since = (_date.today() - _td(days=days)).isoformat()
 
-    # 总数
-    total = db.execute(text("""
-        SELECT COUNT(*) cnt, COALESCE(SUM(saved_per_day), 0) total_saved
+    # 按 source 分组的总和
+    src_rows = db.execute(text("""
+        SELECT source, COUNT(*) cnt, COALESCE(SUM(saved_per_day), 0) saved_per_day
         FROM ad_auto_exclude_log
         WHERE tenant_id=:tid AND excluded_at >= :since
-    """), {"tid": tenant_id, "since": since}).fetchone()
+        GROUP BY source
+    """), {"tid": tenant_id, "since": since}).fetchall()
+    by_source = {r.source: {"cnt": int(r.cnt), "saved": float(r.saved_per_day)} for r in src_rows}
+    auto_d = by_source.get("auto", {"cnt": 0, "saved": 0})
+    manual_d = by_source.get("manual", {"cnt": 0, "saved": 0})
+    total_cnt = auto_d["cnt"] + manual_d["cnt"]
+    total_saved = auto_d["saved"] + manual_d["saved"]
 
     # 按活动展开
     by_camp = db.execute(text("""
@@ -1530,8 +1573,12 @@ def auto_exclude_summary(
 
     return success({
         "days": days,
-        "total_excluded": int(total.cnt or 0),
-        "total_saved_estimated": round(float(total.total_saved or 0) * 30, 2),
+        "total_excluded": total_cnt,
+        "total_saved_estimated": round(total_saved * 30, 2),
+        "auto_excluded": auto_d["cnt"],
+        "auto_saved_estimated": round(auto_d["saved"] * 30, 2),
+        "manual_excluded": manual_d["cnt"],
+        "manual_saved_estimated": round(manual_d["saved"] * 30, 2),
         "by_campaign": [{
             "campaign_id": int(r.campaign_id),
             "campaign_name": r.campaign_name,

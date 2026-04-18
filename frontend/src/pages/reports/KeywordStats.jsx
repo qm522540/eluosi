@@ -433,12 +433,16 @@ const KeywordStats = () => {
         >
           <Row align="middle" gutter={12}>
             <Col flex="auto">
-              <Space size={8}>
+              <Space size={8} wrap>
                 <span style={{ fontSize: 18 }}>💰</span>
-                <Text strong>自动屏蔽全店成果（最近 30 天）</Text>
+                <Text strong>屏蔽全店成果（最近 30 天）</Text>
                 <Text>
-                  共自动屏蔽 <Text strong style={{ color: '#cf1322' }}>{autoExcludeSummary.total_excluded}</Text> 个词
+                  共屏蔽 <Text strong style={{ color: '#cf1322' }}>{autoExcludeSummary.total_excluded}</Text> 个词
                   · 估算节省 <Text strong style={{ color: '#52c41a' }}>¥{autoExcludeSummary.total_saved_estimated.toLocaleString()}</Text>
+                </Text>
+                <Text type="secondary" style={{ fontSize: 12 }}>
+                  （自动托管 {autoExcludeSummary.auto_excluded ?? 0} · ¥{(autoExcludeSummary.auto_saved_estimated ?? 0).toLocaleString()}
+                  ｜手动一键 {autoExcludeSummary.manual_excluded ?? 0} · ¥{(autoExcludeSummary.manual_saved_estimated ?? 0).toLocaleString()}）
                 </Text>
               </Space>
             </Col>
