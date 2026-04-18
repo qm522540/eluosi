@@ -288,12 +288,17 @@
     "potential_ctr_min": 3.0,
     "potential_impressions_max_ratio": 2.0,
     "waste_ctr_max": 1.0,
-    "waste_spend_min_ratio": 1.0
+    "waste_spend_min_ratio": 1.0,
+    "waste_min_days": 5
   },
   "defaults": { "... 同上系统默认值 ..." },
   "is_default": true
 }
 ```
+
+**字段二次复用说明**：
+- `min_impressions` / `waste_ctr_max` / `waste_spend_min_ratio` / `waste_min_days` 同时被「**推广信息→活动详情→商品出价→屏蔽规则**」消费，判定"建议屏蔽"关键词。
+- 用户在任一处修改阈值都立即影响两侧。
 
 - `rules`：当前租户生效的规则（无自定义则等于 defaults）
 - `defaults`：系统默认值，前端用作输入框的"默认"提示和"恢复默认"基准
@@ -303,7 +308,7 @@
 
 **PUT** `/api/v1/keyword-stats/efficiency-rules`
 
-**请求体**（7 项全部可选，缺失字段后端用 DEFAULT 填补）：
+**请求体**（8 项全部可选，缺失字段后端用 DEFAULT 填补）：
 ```json
 {
   "min_impressions": 30,
@@ -312,12 +317,14 @@
   "potential_ctr_min": 2.5,
   "potential_impressions_max_ratio": 1.2,
   "waste_ctr_max": 0.8,
-  "waste_spend_min_ratio": 1.5
+  "waste_spend_min_ratio": 1.5,
+  "waste_min_days": 5
 }
 ```
 
 **字段范围校验**：
 - `min_impressions`：[0, 1000000]（整数次数）
+- `waste_min_days`：[1, 90]（整数天数，屏蔽规则最低观察天数）
 - 所有 `*_ctr_*` 字段：[0.0, 100.0]（百分比）
 - 所有 `*_ratio*` 字段：[0.0, 10.0]（倍数）
 - 越界返回 `code=10002` 错误
@@ -403,3 +410,4 @@
 | 2026-04-17 | v1 | 小明 | 初稿 |
 | 2026-04-17 | v1.1 | 老林 | 效能评级规则租户级自定义：迁移 041 + 3 个 endpoint（§3.7/3.8/3.9）+ 前端 EfficiencyRulesDrawer。§3.1 `efficiency` 字段说明改为参数化 |
 | 2026-04-18 | v1.2 | 老林 | (1) 新增 `new` 档（曝光 < `min_impressions` 默认 20 的关键词，归"新词/观察中"）；(2) §3.1 加 `efficiency` query 参数 server-side filter 修复"客户端 sorter/filter + server 分页"互相冲突的"page 9 之后无数据但仍显示 39 页"bug；(3) `potential_impressions_max_ratio` 默认 1.0 → 2.0（v1.1 识别瑕疵：原默认潜力词命中率 0） |
+| 2026-04-18 | v1.3 | 老林 | 新增 `waste_min_days`（默认 5）字段。`AdsOverview`「商品出价→屏蔽规则」复用本表 4 字段（`min_impressions` / `waste_ctr_max` / `waste_spend_min_ratio` / `waste_min_days`），废弃旧 localStorage rule1/rule2/rule3 |
