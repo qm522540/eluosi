@@ -1081,10 +1081,14 @@ async def _analyze_now_inner(db, tenant_id: int, shop_id: int,
                           else "history_data"),
                 "current_roas": round(current_roas, 2) if current_roas else None,
                 "expected_roas": (
-                    # 用实测 ROAS 等比换算，口径与 current_roas 一致
-                    # 假设 CTR/CR 短期不变：ROAS ∝ 1/bid
-                    # expected = current_roas × current_bid / new_bid
-                    round(current_roas * current_bid / optimal_bid, 2)
+                    # Bug C 修：纯数学外推（current_roas × current_bid / new_bid）
+                    # 假设 CTR/CR 不变，但实际降价大幅 → 曝光排不上 → 订单暴跌，
+                    # ROAS 不可能像数学公式那样涨 25 倍。给上限防误导：
+                    # 改善幅度封顶 50%（即 expected ≤ current × 1.5）
+                    min(
+                        round(current_roas * current_bid / optimal_bid, 2),
+                        round(current_roas * 1.5, 2),
+                    )
                     if optimal_bid > 0 and current_roas and current_bid > 0
                     # 无历史 ROAS 时降级用公式预测
                     else (
@@ -1572,7 +1576,10 @@ def _query_sku_history(db, shop_id: int, tenant_id: int, platform: str) -> dict:
         w2    = periods.get("week2") or _empty_metrics()
         w3    = periods.get("week3") or _empty_metrics()
         w4    = periods.get("week4") or _empty_metrics()
-        total = _merge_metrics(p5, l5)
+        # Bug A 修：data_days 用全 5 段合并（最多 28 天），不只 last5+prev5
+        # 之前只合 p5+l5 = 最多 10 天，导致跑了 30 天的成熟 SKU 被判为 6 天
+        # 冷启动 → 算法忽略 SKU 自身数据强用店铺均值算出极低出价
+        total = _merge_metrics(_merge_metrics(_merge_metrics(_merge_metrics(p5, l5), w2), w3), w4)
 
         if p5["days"] == 0 and l5["days"] == 0:
             trend = "new"
