@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 import io
 
 from pydantic import BaseModel, Field
-from app.dependencies import get_db, get_current_user, get_tenant_id
+from app.dependencies import get_db, get_current_user, get_tenant_id, get_owned_shop
 from app.utils.logger import setup_logger
 
 logger = setup_logger("api.ads")
@@ -1388,35 +1388,30 @@ async def manual_sync_shop(
 
 @router.get("/ozon-sku-queries")
 def ozon_sku_queries(
-    shop_id: int = Query(...),
     sku: str = Query(...),
     days: int = Query(7, ge=1, le=90),
     db: Session = Depends(get_db),
-    tenant_id: int = Depends(get_tenant_id),
+    shop=Depends(get_owned_shop),
 ):
-    """拉某 Ozon SKU 近 N 天的搜索词维度数据（来自本地 ozon_product_queries 表）
+    """拉某 Ozon SKU 近 N 天的搜索词维度数据
 
-    数据是 SEO 自然 + 广告综合，含完整漏斗：曝光→点击→加购→订单→营收。
+    数据源：product_search_queries（platform='ozon'），与老张的搜索词洞察共用表。
     本地表由 Celery 每日同步（莫斯科 05:30），主动触发用 /sync。
     """
-    from app.models.ozon_product_query import OzonProductQuery
-    from app.models.shop import Shop
-    from datetime import date as _date, timedelta as _td
+    from datetime import datetime as _dt, timedelta as _td
 
-    shop = db.query(Shop).filter(
-        Shop.id == shop_id, Shop.tenant_id == tenant_id, Shop.platform == "ozon",
-    ).first()
-    if not shop:
-        return error(30001, "店铺不存在或非 Ozon")
+    if shop.platform != "ozon":
+        return error(30001, "店铺非 Ozon")
 
-    cutoff = (_date.today() - _td(days=days)).isoformat()
+    cutoff = (_dt.now(timezone.utc).date() - _td(days=days)).isoformat()
     rows = db.execute(text("""
-        SELECT query, impressions, clicks, add_to_cart, orders, revenue,
-               frequency, view_conversion, stat_date, date_from, date_to
-        FROM ozon_product_queries
-        WHERE tenant_id=:tid AND shop_id=:sid AND sku=:sku AND stat_date >= :cutoff
+        SELECT query_text AS query, impressions, clicks, add_to_cart, orders, revenue,
+               frequency, view_conversion, stat_date, extra
+        FROM product_search_queries
+        WHERE tenant_id=:tid AND shop_id=:sid AND platform='ozon'
+              AND platform_sku_id=:sku AND stat_date >= :cutoff
         ORDER BY stat_date DESC, revenue DESC, orders DESC, clicks DESC
-    """), {"tid": tenant_id, "sid": shop_id, "sku": sku, "cutoff": cutoff}).fetchall()
+    """), {"tid": shop.tenant_id, "sid": shop.id, "sku": sku, "cutoff": cutoff}).fetchall()
 
     # 取最新日期那批数据（API 返回的是区间总和，每天拉一次会有多份"区间快照"）
     if rows:
@@ -1445,15 +1440,25 @@ def ozon_sku_queries(
             "view_conversion": float(r.view_conversion or 0),
         })
 
-    # 顶部摘要
+    # 从 extra JSON 取 date_from/date_to（task 写入时存的）
+    date_from_iso = date_to_iso = None
+    if rows and rows[0].extra:
+        import json
+        try:
+            blob = rows[0].extra if isinstance(rows[0].extra, dict) else json.loads(rows[0].extra)
+            date_from_iso = blob.get("date_from")
+            date_to_iso = blob.get("date_to")
+        except Exception:
+            pass
+
     total_clicks = sum(i["clicks"] for i in items)
     total_orders = sum(i["orders"] for i in items)
     total_revenue = sum(i["revenue"] for i in items)
     return success({
-        "shop_id": shop_id, "sku": sku, "days": days,
+        "shop_id": shop.id, "sku": sku, "days": days,
         "stat_date": rows[0].stat_date.isoformat() if rows else None,
-        "date_from": rows[0].date_from.isoformat() if rows else None,
-        "date_to": rows[0].date_to.isoformat() if rows else None,
+        "date_from": date_from_iso,
+        "date_to": date_to_iso,
         "total_queries": len(items),
         "total_clicks": total_clicks,
         "total_orders": total_orders,
@@ -1464,24 +1469,18 @@ def ozon_sku_queries(
 
 @router.post("/ozon-sku-queries/sync")
 def ozon_sku_queries_sync(
-    shop_id: int = Query(...),
     days: int = Query(7, ge=1, le=30),
-    db: Session = Depends(get_db),
-    tenant_id: int = Depends(get_tenant_id),
+    shop=Depends(get_owned_shop),
 ):
     """主动触发 Ozon SKU × 搜索词数据同步（"立即同步"按钮）
 
     异步触发 Celery 任务，前端轮询 /ozon-sku-queries 看是否有新数据。
     """
-    from app.models.shop import Shop
-    shop = db.query(Shop).filter(
-        Shop.id == shop_id, Shop.tenant_id == tenant_id, Shop.platform == "ozon",
-    ).first()
-    if not shop:
-        return error(30001, "店铺不存在或非 Ozon")
+    if shop.platform != "ozon":
+        return error(30001, "店铺非 Ozon")
 
     from app.tasks.ozon_product_queries_task import sync_ozon_product_queries_for_shop
-    task = sync_ozon_product_queries_for_shop.delay(shop_id, tenant_id, days)
+    task = sync_ozon_product_queries_for_shop.delay(shop.id, shop.tenant_id, days)
     return success({
         "task_id": task.id,
         "msg": f"同步任务已提交，预计 1-3 分钟（取决于商品数量）",
