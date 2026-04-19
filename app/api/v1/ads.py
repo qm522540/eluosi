@@ -2044,18 +2044,16 @@ async def today_summary_shop(
     from app.services.platform.wb import WBClient
     client = WBClient(shop_id=shop.id, api_key=shop.api_key)
     try:
-        # WB fullstats v3 单次请求 ids 参数支持多 advert_id 逗号分隔，但限制不明；
-        # 保险起见小批 5 个并发，避免触发 429
-        async def _fetch_one(camp):
-            return await client.fetch_campaign_summary(
-                advert_id=camp.platform_campaign_id,
+        # WB fullstats v3 限速严：实测并发 5 个就 429 → 单个 429 重试 3 次仍失败
+        # 就 return {} 丢数据。改串行 + 200ms 间隔，宁慢勿丢。10 个活动约 4-8 秒。
+        results = []
+        for c in camps:
+            r = await client.fetch_campaign_summary(
+                advert_id=c.platform_campaign_id,
                 date_from=today_iso, date_to=today_iso,
             )
-        results = []
-        BATCH = 5
-        for i in range(0, len(camps), BATCH):
-            batch = camps[i:i + BATCH]
-            results.extend(await _aio.gather(*[_fetch_one(c) for c in batch]))
+            results.append(r)
+            await _aio.sleep(0.2)
     finally:
         await client.close()
 
@@ -2118,25 +2116,25 @@ async def today_alerts_shop(
     from app.services.platform.wb import WBClient
     client = WBClient(shop_id=shop.id, api_key=shop.api_key)
     try:
-        async def _fetch_one(camp):
+        # 同样改串行避 429（同 today-summary/shop 修复）
+        results = []
+        for c in camps:
             try:
                 summary = await client.fetch_campaign_summary(
-                    advert_id=camp.platform_campaign_id,
+                    advert_id=c.platform_campaign_id,
                     date_from=today_iso, date_to=today_iso,
                 )
+                await _aio.sleep(0.2)
                 budget_data = await client._request(
                     "GET", "https://advert-api.wildberries.ru/adv/v1/budget",
-                    params={"id": int(camp.platform_campaign_id)},
+                    params={"id": int(c.platform_campaign_id)},
                 )
                 budget = budget_data.get("total") if isinstance(budget_data, dict) else None
-                return camp, summary, budget
-            except Exception:
-                return camp, {}, None
-        BATCH = 5
-        results = []
-        for i in range(0, len(camps), BATCH):
-            batch = camps[i:i + BATCH]
-            results.extend(await _aio.gather(*[_fetch_one(c) for c in batch]))
+                await _aio.sleep(0.2)
+                results.append((c, summary, budget))
+            except Exception as e:
+                logger.warning(f"today-alerts 拉 advert={c.platform_campaign_id} 失败: {e}")
+                results.append((c, {}, None))
     finally:
         await client.close()
 
