@@ -1,10 +1,14 @@
-"""SEO 候选词池引擎：付费词反哺自然词（多源融合）
+"""SEO 候选词池引擎：多源融合（付费 + 自然搜索）
 
-一期仅接入源 A（付费广告）+ C1-a（本店同类目付费聚合）。
-二期接源 B（自然搜索词，product_search_queries），三期接 Wordstat。
+源接入状态：
+- 源 A  paid self     本商品付费词    依赖 ad_keywords + ad_stats（WB/Ozon 当前都缺数据）
+- 源 A' paid category 同类目付费聚合  同上
+- 源 B  organic self  本商品自然搜索词 依赖 product_search_queries（Ozon Premium 通后有数据）
+- 源 B' organic category 同类目自然词  同上
+- 源 C  Wordstat 搜索引擎趋势         三期 Yandex OAuth 通后接
 
 核心函数：
-- analyze_paid_to_organic: 刷引擎，扫近 N 天付费数据 → upsert 候选池
+- analyze_paid_to_organic: 刷引擎，扫近 N 天 → upsert 候选池
 - list_candidates:          分页查询候选 + 统计 4 格汇总
 - adopt_candidate:          用户点"加入标题"
 - ignore_candidates:        批量忽略（数组入参）
@@ -185,6 +189,139 @@ def analyze_paid_to_organic(
                 cand["_attrs"] = pr.attrs or ""
                 cand["_cat_id"] = pr.cat_id
 
+    # ===== Step E: 自然搜索词 (源 B self) 从 product_search_queries 聚合 =====
+    # 门槛：近 N 天 frequency ≥ 5 或 orders ≥ 1。降低 scale 过滤 —— 这是 SEO 机会词
+    # 的直接信号（用户实际搜到你商品），比 ROAS 门槛更直接。
+    organic_self_sql = text("""
+        SELECT
+            q.query_text AS keyword,
+            q.product_id AS product_id,
+            ANY_VALUE(p.local_category_id) AS cat_id,
+            ANY_VALUE(COALESCE(pl.title_ru, '')) AS title,
+            ANY_VALUE(COALESCE(CAST(pl.variant_attrs AS CHAR), '')) AS attrs,
+            SUM(q.frequency) AS frequency,
+            SUM(q.impressions) AS impressions,
+            SUM(q.add_to_cart) AS add_to_cart,
+            SUM(q.orders) AS orders,
+            SUM(q.revenue) AS revenue
+        FROM product_search_queries q
+        JOIN products p ON p.id = q.product_id AND p.tenant_id = q.tenant_id
+        LEFT JOIN platform_listings pl ON pl.product_id = p.id
+                                       AND pl.tenant_id = p.tenant_id
+                                       AND pl.shop_id = q.shop_id
+                                       AND pl.status NOT IN ('deleted', 'archived')
+        WHERE q.tenant_id = :tid
+          AND q.shop_id = :sid
+          AND q.stat_date >= :since
+          AND q.product_id IS NOT NULL
+          AND (p.status != 'deleted' OR p.status IS NULL)
+        GROUP BY q.query_text, q.product_id
+        HAVING SUM(q.frequency) >= 5 OR SUM(q.orders) >= 1
+    """)
+    org_self_rows = db.execute(organic_self_sql, {
+        "tid": tenant_id, "sid": shop.id, "since": since,
+    }).fetchall()
+
+    for r in org_self_rows:
+        kw = (r.keyword or "").strip().lower()
+        if not kw or not r.product_id:
+            continue
+        key = (r.product_id, kw)
+        cand = candidates.setdefault(key, _new_candidate(r.product_id, kw))
+        already = any(
+            s["type"] == "organic" and s["scope"] == "self" for s in cand["sources"]
+        )
+        if not already:
+            cand["sources"].append({"type": "organic", "scope": "self"})
+        cand["organic_impressions"] = int(r.impressions or 0) or int(r.frequency or 0)
+        cand["organic_add_to_cart"] = int(r.add_to_cart or 0)
+        cand["organic_orders"] = int(r.orders or 0)
+        # 若 paid 未填，用 organic title/attrs 做覆盖判断兜底
+        if not cand.get("_title"):
+            cand["_title"] = r.title or ""
+            cand["_attrs"] = r.attrs or ""
+            cand["_cat_id"] = r.cat_id
+
+    # ===== Step F: 自然搜索词 (源 B' category) 同类目 ≥2 商品共享 =====
+    organic_cat_sql = text("""
+        SELECT
+            q.query_text AS keyword,
+            p.local_category_id AS cat_id,
+            COUNT(DISTINCT p.id) AS shared_products,
+            SUM(q.frequency) AS frequency,
+            SUM(q.impressions) AS impressions,
+            SUM(q.add_to_cart) AS add_to_cart,
+            SUM(q.orders) AS orders,
+            SUM(q.revenue) AS revenue
+        FROM product_search_queries q
+        JOIN products p ON p.id = q.product_id AND p.tenant_id = q.tenant_id
+        WHERE q.tenant_id = :tid
+          AND q.shop_id = :sid
+          AND q.stat_date >= :since
+          AND q.product_id IS NOT NULL
+          AND p.local_category_id IS NOT NULL
+          AND (p.status != 'deleted' OR p.status IS NULL)
+        GROUP BY q.query_text, p.local_category_id
+        HAVING COUNT(DISTINCT p.id) >= 2
+           AND (SUM(q.frequency) >= 10 OR SUM(q.orders) >= 1)
+    """)
+    org_cat_rows = db.execute(organic_cat_sql, {
+        "tid": tenant_id, "sid": shop.id, "since": since,
+    }).fetchall()
+
+    org_cat_kw_map = {}
+    for r in org_cat_rows:
+        kw = (r.keyword or "").strip().lower()
+        if not kw:
+            continue
+        org_cat_kw_map.setdefault(r.cat_id, []).append(
+            (kw, int(r.frequency or 0), int(r.impressions or 0),
+             int(r.add_to_cart or 0), int(r.orders or 0))
+        )
+
+    # 把 organic 类目词扩散到同类目全部商品
+    if org_cat_kw_map:
+        prod_cat_sql = text("""
+            SELECT
+                p.id AS product_id,
+                ANY_VALUE(p.local_category_id) AS cat_id,
+                ANY_VALUE(COALESCE(pl.title_ru, '')) AS title,
+                ANY_VALUE(COALESCE(CAST(pl.variant_attrs AS CHAR), '')) AS attrs
+            FROM products p
+            JOIN platform_listings pl ON pl.product_id = p.id
+                                       AND pl.tenant_id = p.tenant_id
+            WHERE p.tenant_id = :tid
+              AND pl.shop_id = :sid
+              AND pl.status NOT IN ('deleted', 'archived')
+              AND p.local_category_id IN :cat_ids
+              AND (p.status != 'deleted' OR p.status IS NULL)
+            GROUP BY p.id
+        """).bindparams(bindparam("cat_ids", expanding=True))
+        prod_cat_rows = db.execute(prod_cat_sql, {
+            "tid": tenant_id, "sid": shop.id,
+            "cat_ids": list(org_cat_kw_map.keys()),
+        }).fetchall()
+
+        for pr in prod_cat_rows:
+            for kw, freq, imp, atc, orders in org_cat_kw_map.get(pr.cat_id, []):
+                key = (pr.product_id, kw)
+                cand = candidates.setdefault(key, _new_candidate(pr.product_id, kw))
+                already = any(
+                    s["type"] == "organic" and s["scope"] == "category"
+                    for s in cand["sources"]
+                )
+                if not already:
+                    cand["sources"].append({"type": "organic", "scope": "category"})
+                # 类目指标不覆盖更强的 self 信号，仅在 self 未命中时填
+                if cand.get("organic_orders") is None:
+                    cand["organic_impressions"] = imp or freq
+                    cand["organic_add_to_cart"] = atc
+                    cand["organic_orders"] = orders
+                if not cand.get("_title"):
+                    cand["_title"] = pr.title or ""
+                    cand["_attrs"] = pr.attrs or ""
+                    cand["_cat_id"] = pr.cat_id
+
     # ===== Step D: 覆盖判断 + 算分 + 过滤已覆盖 =====
     finalized = []
     for (pid, kw), cand in candidates.items():
@@ -224,6 +361,10 @@ def _new_candidate(product_id: int, keyword: str) -> dict:
         "paid_orders": None,
         "paid_spend": None,
         "paid_revenue": None,
+        "organic_impressions": None,
+        "organic_add_to_cart": None,
+        "organic_orders": None,
+        "wordstat_volume": None,
         "in_title": 0,
         "in_attrs": 0,
         "score": 0,
@@ -231,12 +372,20 @@ def _new_candidate(product_id: int, keyword: str) -> dict:
 
 
 def _compute_score(cand: dict) -> float:
-    """综合得分：来源数 × 2 + ROAS + log10(订单+1) × 2，上限 100"""
+    """综合得分：来源数×2 + ROAS + log10(付费订单+1)×2 + log10(自然曝光+1) +
+       log10(自然订单+1)×2，上限 100"""
     src_count = len(cand.get("sources") or [])
     roas = float(cand.get("paid_roas") or 0)
-    orders = int(cand.get("paid_orders") or 0)
-    orders_log = math.log10(orders + 1) * 2
-    score = src_count * 2 + roas + orders_log
+    paid_orders = int(cand.get("paid_orders") or 0)
+    org_imp = int(cand.get("organic_impressions") or 0)
+    org_orders = int(cand.get("organic_orders") or 0)
+    score = (
+        src_count * 2
+        + roas
+        + math.log10(paid_orders + 1) * 2
+        + math.log10(org_imp + 1)
+        + math.log10(org_orders + 1) * 2
+    )
     return round(min(score, 100.0), 2)
 
 
@@ -252,10 +401,12 @@ def _upsert_candidates(db: Session, tenant_id: int, shop_id: int, rows: list) ->
         INSERT INTO seo_keyword_candidates
           (tenant_id, shop_id, product_id, keyword, sources, score,
            paid_roas, paid_orders, paid_spend, paid_revenue,
+           organic_impressions, organic_add_to_cart, organic_orders,
            in_title, in_attrs, status, created_at, updated_at)
         VALUES
           (:tid, :sid, :pid, :kw, :srcs, :score,
            :roas, :orders, :spend, :rev,
+           :o_imp, :o_atc, :o_orders,
            :in_t, :in_a, 'pending', :now, :now)
         ON DUPLICATE KEY UPDATE
           tenant_id = VALUES(tenant_id),
@@ -265,6 +416,9 @@ def _upsert_candidates(db: Session, tenant_id: int, shop_id: int, rows: list) ->
           paid_orders = VALUES(paid_orders),
           paid_spend = VALUES(paid_spend),
           paid_revenue = VALUES(paid_revenue),
+          organic_impressions = VALUES(organic_impressions),
+          organic_add_to_cart = VALUES(organic_add_to_cart),
+          organic_orders = VALUES(organic_orders),
           in_title = VALUES(in_title),
           in_attrs = VALUES(in_attrs),
           updated_at = VALUES(updated_at)
@@ -281,6 +435,9 @@ def _upsert_candidates(db: Session, tenant_id: int, shop_id: int, rows: list) ->
             "orders": r.get("paid_orders"),
             "spend": r.get("paid_spend"),
             "rev": r.get("paid_revenue"),
+            "o_imp": r.get("organic_impressions"),
+            "o_atc": r.get("organic_add_to_cart"),
+            "o_orders": r.get("organic_orders"),
             "in_t": r["in_title"], "in_a": r["in_attrs"],
             "now": now_utc,
         })
@@ -319,6 +476,10 @@ def list_candidates(
         where_parts.append("JSON_CONTAINS(c.sources, JSON_OBJECT('type','paid','scope','self'))")
     elif source_filter == "paid_category":
         where_parts.append("JSON_CONTAINS(c.sources, JSON_OBJECT('type','paid','scope','category'))")
+    elif source_filter == "organic_self":
+        where_parts.append("JSON_CONTAINS(c.sources, JSON_OBJECT('type','organic','scope','self'))")
+    elif source_filter == "organic_category":
+        where_parts.append("JSON_CONTAINS(c.sources, JSON_OBJECT('type','organic','scope','category'))")
     where_sql = " AND ".join(where_parts)
 
     # P0-3 修 2026-04-19：totals / items 的 LEFT JOIN platform_listings 无
@@ -332,7 +493,9 @@ def list_candidates(
     totals_sql = text(f"""
         SELECT
             COUNT(DISTINCT c.id) AS total,
-            SUM(CASE WHEN c.paid_orders > 0 THEN 1 ELSE 0 END) AS with_conversion,
+            SUM(CASE WHEN COALESCE(c.paid_orders,0) > 0
+                       OR COALESCE(c.organic_orders,0) > 0
+                     THEN 1 ELSE 0 END) AS with_conversion,
             SUM(CASE WHEN c.in_title = 0 AND c.in_attrs = 0 THEN 1 ELSE 0 END) AS gap,
             COUNT(DISTINCT c.product_id) AS products
         FROM seo_keyword_candidates c
