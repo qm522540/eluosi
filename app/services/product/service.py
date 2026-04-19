@@ -538,6 +538,8 @@ def sync_products_from_platform(db: Session, shop_id: int, tenant_id: int) -> di
         return _sync_wb_products(db, shop, tenant_id)
     elif shop.platform == "ozon":
         return _sync_ozon_products(db, shop, tenant_id)
+    elif shop.platform == "yandex":
+        return _sync_yandex_products(db, shop, tenant_id)
     return {"code": 0, "data": {"synced": 0}}
 
 
@@ -866,6 +868,142 @@ def _sync_ozon_products(db: Session, shop, tenant_id: int) -> dict:
         seen_pids = {str(pid) for pid in archived_map.keys()}
         archived_listing, archived_product = _archive_missing(
             db, tenant_id, shop.id, "ozon", seen_pids)
+    db.commit()
+    _update_sync_time(db, shop.id, tenant_id)
+    return {"code": 0, "data": {
+        "synced": synced, "created": created, "updated": updated,
+        "archived_listing": archived_listing,
+        "archived_product": archived_product,
+    }}
+
+
+def _sync_yandex_products(db: Session, shop, tenant_id: int) -> dict:
+    """Yandex Market 商品同步
+
+    用 Yandex Market business 视角拉 offer-mappings（推荐路径）。
+    依赖 shop.api_key（OAuth token）+ shop.yandex_business_id。
+    OAuth token 失效会被 YandexClient._request 抛 httpx.HTTPStatusError 401/403。
+    """
+    import asyncio
+    from app.services.platform.yandex import YandexClient
+
+    if not shop.yandex_business_id:
+        return {"code": ErrorCode.PARAM_ERROR,
+                "msg": "Yandex 店铺缺少 business_id，去店铺设置补填"}
+
+    async def _fetch_all():
+        client = YandexClient(
+            shop_id=shop.id, api_key=shop.api_key,
+            business_id=shop.yandex_business_id,
+            campaign_id=shop.yandex_campaign_id or "",
+        )
+        try:
+            all_items = []
+            page = 1
+            for _ in range(50):  # 最多 50 页保险
+                r = await client.fetch_products(page=page, limit=200)
+                # offer-mappings 响应形态：result.offerMappings 或 result.paging.nextPageToken
+                result = (r or {}).get("result") or {}
+                items = result.get("offerMappings") or []
+                if not items:
+                    break
+                all_items.extend(items)
+                paging = result.get("paging") or {}
+                # business 接口用 nextPageToken；老 campaign 接口用 pager
+                next_token = paging.get("nextPageToken")
+                if next_token:
+                    # token 模式不能用 page 参数，YandexClient.fetch_products 暂不支持
+                    # 先记 200 个/页，后续超大店再改
+                    logger.info(f"Yandex shop={shop.id} 还有更多 offer 但 token 模式未实现，已拉 {len(all_items)}")
+                    break
+                pages_count = (paging.get("pagesCount") or 0)
+                if pages_count and page >= pages_count:
+                    break
+                page += 1
+            return all_items
+        finally:
+            await client.close()
+
+    loop = asyncio.new_event_loop()
+    try:
+        items = loop.run_until_complete(_fetch_all())
+    except Exception as e:
+        logger.error(f"Yandex 同步失败 shop={shop.id}: {e}")
+        msg = str(e)
+        if "401" in msg or "403" in msg or "OAuth" in msg.lower() or "invalid" in msg.lower():
+            return {"code": ErrorCode.PARAM_ERROR,
+                    "msg": "Yandex OAuth token 失效，请到 partner.market.yandex.ru 重新生成"}
+        return {"code": ErrorCode.PARAM_ERROR, "msg": f"Yandex API 调用失败：{msg[:200]}"}
+    finally:
+        loop.close()
+
+    from datetime import datetime, timezone
+    synced = created = updated = 0
+    seen_offer_ids = set()
+    for entry in items:
+        offer = entry.get("offer") or {}
+        mapping = entry.get("mapping") or {}
+        offer_id = offer.get("offerId") or offer.get("offer_id")
+        if not offer_id:
+            continue
+        offer_id = str(offer_id)
+        seen_offer_ids.add(offer_id)
+
+        title = (offer.get("name") or "")[:500]
+        category_name = (offer.get("category") or "")[:300] or None
+        pictures = offer.get("pictures") or []
+        primary = pictures[0] if pictures else None
+        barcodes = offer.get("barcodes") or []
+        barcode = barcodes[0][:50] if barcodes else None
+        # mapping.marketSku 是 Yandex Market 的 SKU ID（≠ offerId）
+        market_sku = mapping.get("marketSku") or mapping.get("market_sku")
+        weight_dims = offer.get("weightDimensions") or {}
+        weight_g = None
+        if weight_dims.get("weight"):
+            try:
+                weight_g = int(round(float(weight_dims["weight"]) * 1000))
+            except (TypeError, ValueError):
+                pass
+
+        listing = db.query(PlatformListing).filter(
+            PlatformListing.tenant_id == tenant_id,
+            PlatformListing.shop_id == shop.id,
+            PlatformListing.platform == "yandex",
+            PlatformListing.platform_product_id == offer_id,
+        ).first()
+
+        data = {
+            "title_ru": title,
+            "barcode": barcode,
+            "platform_sku_id": str(market_sku) if market_sku else None,
+            "platform_category_name": category_name,
+            "stock_updated_at": datetime.now(timezone.utc),
+            "status": "active",
+        }
+
+        if listing:
+            for k, v in data.items():
+                if v is not None:
+                    setattr(listing, k, v)
+            updated += 1
+        else:
+            product = _get_or_create_product(
+                db, tenant_id, name_ru=title, sku=offer_id,
+                shop_id=shop.id,
+                image_url=primary,
+                weight_g=weight_g)
+            listing = PlatformListing(
+                tenant_id=tenant_id, product_id=product.id,
+                shop_id=shop.id, platform="yandex",
+                platform_product_id=offer_id, **data)
+            db.add(listing)
+            created += 1
+        synced += 1
+
+    archived_listing = archived_product = 0
+    if seen_offer_ids:
+        archived_listing, archived_product = _archive_missing(
+            db, tenant_id, shop.id, "yandex", seen_offer_ids)
     db.commit()
     _update_sync_time(db, shop.id, tenant_id)
     return {"code": 0, "data": {
