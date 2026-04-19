@@ -672,11 +672,14 @@ def _enrich_products_with_listing_id(
             p["listing_id"] = None
             p["product_code"] = None
         return products
-    # 统一按 platform_sku_id 反查 + JOIN products 拿商家编码 (products.sku)
+    # 统一按 platform_sku_id 反查 + JOIN products 拿商家编码 (products.sku) + 图片
+    # Ozon Performance API 不返图片，从本地 products.image_url 取（同步时存的）
     rows = db.query(
         PlatformListing.id.label("listing_id"),
         PlatformListing.platform_sku_id,
+        PlatformListing.title_ru.label("listing_title"),
         Product.sku.label("product_code"),
+        Product.image_url.label("product_image"),
     ).outerjoin(
         Product, Product.id == PlatformListing.product_id
     ).filter(
@@ -687,13 +690,25 @@ def _enrich_products_with_listing_id(
         PlatformListing.status != "deleted",
     ).all()
     info_map = {
-        str(r.platform_sku_id): {"listing_id": r.listing_id, "product_code": r.product_code}
+        str(r.platform_sku_id): {
+            "listing_id": r.listing_id,
+            "product_code": r.product_code,
+            "image_url": r.product_image,
+            "listing_title": r.listing_title,
+        }
         for r in rows
     }
     for p in products:
         info = info_map.get(str(p.get("sku") or ""), {})
         p["listing_id"] = info.get("listing_id")
         p["product_code"] = info.get("product_code")
+        # Ozon: 平台 API 不返 image，本地 DB 兜底；WB: 通常 nm_id 走 basket 服务，
+        # 但若 image 字段空也能 fallback 到本地 image_url
+        if not p.get("image"):
+            p["image"] = info.get("image_url")
+        # 标题兜底（平台 API 偶尔不返 name）
+        if not p.get("title") and not p.get("name"):
+            p["title"] = info.get("listing_title")
     return products
 
 
