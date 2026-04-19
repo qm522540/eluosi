@@ -82,6 +82,11 @@ class ErrorCode:
     SEARCH_INSIGHTS_SUBSCRIPTION_REQUIRED = 93001  # WB Jam / Ozon Premium 未开通
     SEARCH_INSIGHTS_FETCH_FAILED = 93002           # 平台 API 拉取失败（非订阅原因）
 
+    # SEO 优化候选池 94xxx
+    SEO_CANDIDATE_NOT_FOUND = 94001
+    SEO_CANDIDATE_INVALID_STATUS = 94002           # 状态不允许该操作（已 adopted 不能再 ignore 等）
+    SEO_REFRESH_FAILED = 94003                     # 引擎分析失败（数据源异常等）
+
 
 ERROR_MESSAGES = {
     ErrorCode.SUCCESS: "成功",
@@ -128,4 +133,7 @@ ERROR_MESSAGES = {
     ErrorCode.BID_SKU_LOCKED: "该SKU已被用户手动管理，不允许自动调价",
     ErrorCode.SEARCH_INSIGHTS_SUBSCRIPTION_REQUIRED: "该功能需开通 WB Jam 或 Ozon Premium 订阅",
     ErrorCode.SEARCH_INSIGHTS_FETCH_FAILED: "搜索词数据拉取失败",
+    ErrorCode.SEO_CANDIDATE_NOT_FOUND: "SEO 候选词不存在",
+    ErrorCode.SEO_CANDIDATE_INVALID_STATUS: "候选词当前状态不允许该操作",
+    ErrorCode.SEO_REFRESH_FAILED: "SEO 候选引擎分析失败",
 }

@@ -1,6 +1,6 @@
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
-from sqlalchemy import BigInteger, String, Enum, DateTime, Text, JSON
+from sqlalchemy import BigInteger, String, Enum, DateTime, Text, JSON, DECIMAL, Integer, SmallInteger
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database import Base
@@ -73,3 +73,52 @@ class SeoGeneratedContent(BaseMixin, Base):
     )
     approved_by: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
     applied_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+
+
+class SeoKeywordCandidate(Base):
+    """SEO 优化候选词池（多源融合，付费反哺自然）
+
+    一期仅接入源 A（付费词）+ C1-a（本店同类目付费聚合）。
+    二期接源 B（自然词），三期接 Wordstat。
+    sources JSON 数组元素为 {"type": "paid|organic|wordstat", "scope": "self|category"}。
+    """
+    __tablename__ = "seo_keyword_candidates"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    tenant_id: Mapped[int] = mapped_column(BigInteger, nullable=False, index=True)
+    shop_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    product_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    keyword: Mapped[str] = mapped_column(String(200), nullable=False)
+    sources: Mapped[list] = mapped_column(JSON, nullable=False)
+    score: Mapped[float] = mapped_column(DECIMAL(6, 2), nullable=False, default=0)
+
+    paid_roas: Mapped[Optional[float]] = mapped_column(DECIMAL(8, 2), nullable=True)
+    paid_orders: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    paid_spend: Mapped[Optional[float]] = mapped_column(DECIMAL(12, 2), nullable=True)
+    paid_revenue: Mapped[Optional[float]] = mapped_column(DECIMAL(12, 2), nullable=True)
+
+    organic_impressions: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    organic_add_to_cart: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    organic_orders: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+
+    wordstat_volume: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+
+    in_title: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=0)
+    in_attrs: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=0)
+
+    status: Mapped[str] = mapped_column(
+        Enum("pending", "adopted", "ignored", "processed", name="seo_cand_status"),
+        nullable=False, default="pending"
+    )
+    adopted_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    adopted_by: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+    )
