@@ -453,6 +453,7 @@ def _parse_uploaded_file(filename: str, content: bytes) -> tuple:
 @router.post("/import-margin/preview")
 async def import_margin_preview(
     file: UploadFile = File(...),
+    shop_id: int = Query(..., description="必填，限定更新范围避免跨店覆盖"),
     code_col_index: int = -1,  # 用户手动指定列（-1 表示自动识别）
     margin_col_index: int = -1,
     db: Session = Depends(get_db),
@@ -498,10 +499,16 @@ async def import_margin_preview(
             "msg": "未能自动识别列，请手动选择编码列 + 净毛利率列",
         })
 
-    # 拉取本地所有商品 SKU 集合
+    # 拉取本店商品 SKU 集合（按 shop_id 限定，同 SKU 在多店时只看本店）
+    from app.models.shop import Shop
+    shop = db.query(Shop).filter(
+        Shop.id == shop_id, Shop.tenant_id == tenant_id,
+    ).first()
+    if not shop:
+        return error(30001, "店铺不存在或无权限")
     local_codes = {
         str(r[0]).strip(): r[1] for r in db.query(Product.sku, Product.net_margin)
-        .filter(Product.tenant_id == tenant_id).all()
+        .filter(Product.tenant_id == tenant_id, Product.shop_id == shop_id).all()
         if r[0]
     }
 
@@ -559,15 +566,25 @@ def import_margin_confirm(
     db: Session = Depends(get_db),
     tenant_id: int = Depends(get_tenant_id),
 ):
-    """确认更新净毛利率：接收 [{code, margin_value}, ...] 批量 UPDATE products
+    """确认更新净毛利率：接收 {shop_id, items:[{code, margin_value}, ...]} 批量 UPDATE products
 
+    必须按 shop_id 限定更新范围：同一 SKU 在多店都存在时不会跨店覆盖。
     Q1=A 覆盖：默认覆盖已有值
     Q2=A 编码不存在：直接跳过 + 返回失败列表
     """
     from app.models.product import Product
+    from app.models.shop import Shop
     items = payload.get("items") or []
+    shop_id = payload.get("shop_id")
     if not items:
         return error(10002, "无更新条目")
+    if not shop_id:
+        return error(10002, "shop_id 必填")
+    shop = db.query(Shop).filter(
+        Shop.id == shop_id, Shop.tenant_id == tenant_id,
+    ).first()
+    if not shop:
+        return error(30001, "店铺不存在或无权限")
 
     updated = 0
     not_found = []
@@ -582,9 +599,11 @@ def import_margin_confirm(
             continue
         if margin <= 0 or margin >= 1:
             continue
-        # 按 sku 批量更新（同租户内）
+        # 按 sku + shop_id 批量更新（同租户 + 同店）
         n = db.query(Product).filter(
-            Product.tenant_id == tenant_id, Product.sku == code,
+            Product.tenant_id == tenant_id,
+            Product.shop_id == shop_id,
+            Product.sku == code,
         ).update({"net_margin": margin}, synchronize_session=False)
         if n == 0:
             not_found.append(code)

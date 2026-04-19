@@ -619,13 +619,18 @@ const Products = () => {
   const [importLoading, setImportLoading] = useState(false)
   const [importConfirming, setImportConfirming] = useState(false)
   const [importFile, setImportFile] = useState(null)
+  const [importShopId, setImportShopId] = useState(null)
   const handleImportFile = async (file, codeCol = -1, marginCol = -1) => {
+    if (!importShopId) {
+      message.warning('请先选择店铺')
+      return false
+    }
     setImportLoading(true)
     setImportFile(file)
     try {
       const fd = new FormData()
       fd.append('file', file)
-      const params = {}
+      const params = { shop_id: importShopId }
       if (codeCol >= 0) params.code_col_index = codeCol
       if (marginCol >= 0) params.margin_col_index = marginCol
       const res = await request.post('/products/import-margin/preview', fd, {
@@ -651,7 +656,7 @@ const Products = () => {
     }
     setImportConfirming(true)
     try {
-      const res = await request.post('/products/import-margin/confirm', { items })
+      const res = await request.post('/products/import-margin/confirm', { items, shop_id: importShopId })
       message.success(`更新 ${res.data.updated} 条`, 4)
       if (res.data.not_found_count > 0) {
         Modal.warning({
@@ -2181,27 +2186,49 @@ const Products = () => {
           <div>
             <Alert
               type="info" showIcon style={{ marginBottom: 16 }}
-              message="选择 Excel (.xlsx) 或 CSV 文件"
+              message="先选店铺，再上传文件"
               description={
                 <div>
+                  <div>同一编码可能在多个店铺都存在 — 必须指定店铺，避免跨店覆盖。</div>
                   <div>系统会自动识别表头里的「本地编码」和「净毛利率」列。</div>
-                  <div>净毛利率支持 28%、28、0.28 三种写法。</div>
-                  <div>已存在值会被覆盖，找不到编码的行会跳过并列出。</div>
+                  <div>净毛利率支持 28%、28、0.28 三种写法。已存在值会被覆盖。</div>
                 </div>
               }
             />
+            <div style={{ marginBottom: 16 }}>
+              <div style={{ fontSize: 13, marginBottom: 6 }}>
+                目标店铺 <span style={{ color: '#cf1322' }}>*</span>
+              </div>
+              <Select
+                style={{ width: '100%' }}
+                value={importShopId}
+                onChange={(v) => { setImportShopId(v); setImportPreview(null) }}
+                placeholder="选择要更新的店铺"
+                showSearch
+                optionFilterProp="label"
+                options={['wb', 'ozon', 'yandex'].flatMap(plat => {
+                  const list = shops.filter(s => s.platform === plat)
+                  if (!list.length) return []
+                  const cfg = PLATFORM_COLOR[plat] || { label: plat }
+                  return list.map(s => ({
+                    value: s.id,
+                    label: `${cfg.label} · ${s.name}`,
+                  }))
+                })}
+              />
+            </div>
             <Upload.Dragger
               accept=".xlsx,.xls,.csv"
               beforeUpload={handleImportFile}
               showUploadList={false}
-              disabled={importLoading}
+              disabled={importLoading || !importShopId}
             >
-              <p style={{ fontSize: 32, color: '#1677ff' }}>
+              <p style={{ fontSize: 32, color: importShopId ? '#1677ff' : '#ccc' }}>
                 <UploadOutlined />
               </p>
-              <p>点击或拖拽文件到此处</p>
+              <p>{importShopId ? '点击或拖拽文件到此处' : '请先选择店铺'}</p>
               <p style={{ color: '#999', fontSize: 12 }}>
-                {importLoading ? '解析中...' : '支持 .xlsx / .csv，单文件 ≤ 10MB'}
+                {importLoading ? '解析中...' : '支持 .xlsx / .xls / .csv，单文件 ≤ 10MB'}
               </p>
             </Upload.Dragger>
           </div>
