@@ -366,6 +366,7 @@ def _normalize_margin(raw) -> tuple:
     - "28" → 0.28（推断为百分数）
     - "0.28" → 0.28
     - "" / "-" / NA / None → (None, "空值")
+    - 0 → (None, "净毛利率为 0，跳过")
     """
     if raw is None:
         return None, "空值"
@@ -379,13 +380,16 @@ def _normalize_margin(raw) -> tuple:
         v = float(s)
     except ValueError:
         return None, f"无法解析为数字: {raw}"
-    # 归一化
     if is_pct:
         v = v / 100.0
-    elif v > 1:  # "28" 推断百分数
+    elif v > 1:
         v = v / 100.0
-    if v <= 0 or v >= 1:
-        return None, f"超出合理范围 (0~1): {v}"
+    if v == 0:
+        return None, "净毛利率为 0，跳过"
+    if v < 0:
+        return None, f"负值 ({v})，跳过"
+    if v >= 1:
+        return None, f"≥100% 不合理 ({v})，跳过"
     return round(v, 4), None
 
 

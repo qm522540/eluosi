@@ -1309,7 +1309,12 @@ const Products = () => {
           </Col>
           <Col>
             <Button icon={<UploadOutlined />}
-              onClick={() => { setImportPreview(null); setImportVisible(true) }}>
+              onClick={() => {
+                setImportPreview(null)
+                // 默认带入当前列表筛选的店铺，省一步选择
+                if (filters.shop_id) setImportShopId(filters.shop_id)
+                setImportVisible(true)
+              }}>
               上传数据
             </Button>
           </Col>
