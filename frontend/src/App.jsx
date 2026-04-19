@@ -4,7 +4,10 @@ import Dashboard from '@/pages/Dashboard'
 import Ads from '@/pages/ads'
 import Products from '@/pages/Products'
 import MappingManagement from '@/pages/products/MappingManagement'
-import Seo from '@/pages/Seo'
+import SeoOptimize from '@/pages/seo/Optimize'
+import SeoHealth from '@/pages/seo/Health'
+import SeoTracking from '@/pages/seo/Tracking'
+import SeoReport from '@/pages/seo/Report'
 import Reports from '@/pages/Reports'
 import KeywordStats from '@/pages/reports/KeywordStats'
 import RegionSales from '@/pages/reports/RegionSales'
@@ -30,7 +33,11 @@ const App = () => {
         <Route path="ads/bid-management" element={<Ads />} />
         <Route path="products" element={<Products />} />
         <Route path="products/mapping" element={<MappingManagement />} />
-        <Route path="seo" element={<Seo />} />
+        <Route path="seo" element={<Navigate to="/seo/optimize" replace />} />
+        <Route path="seo/optimize" element={<SeoOptimize />} />
+        <Route path="seo/health" element={<SeoHealth />} />
+        <Route path="seo/tracking" element={<SeoTracking />} />
+        <Route path="seo/report" element={<SeoReport />} />
         <Route path="reports" element={<Reports />} />
         <Route path="reports/keywords" element={<KeywordStats />} />
         <Route path="reports/regions" element={<RegionSales />} />

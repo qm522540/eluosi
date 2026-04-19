@@ -50,9 +50,15 @@ const menuItems = [
     ],
   },
   {
-    key: '/seo',
+    key: 'seo-group',
     icon: <SearchOutlined />,
-    label: 'SEO优化',
+    label: 'SEO管理',
+    children: [
+      { key: '/seo/optimize', icon: <FundOutlined />, label: '优化建议' },
+      { key: '/seo/health', icon: <DashboardOutlined />, label: '健康诊断' },
+      { key: '/seo/tracking', icon: <LineChartOutlined />, label: '排名追踪' },
+      { key: '/seo/report', icon: <BarChartOutlined />, label: '效果报表' },
+    ],
   },
   {
     key: 'reports-group',
@@ -134,6 +140,7 @@ const AppLayout = () => {
             location.pathname.startsWith('/products') && 'products-group',
             location.pathname.startsWith('/ads') && 'ads-group',
             location.pathname.startsWith('/reports') && 'reports-group',
+            location.pathname.startsWith('/seo') && 'seo-group',
           ].filter(Boolean)}
           items={menuItems}
           onClick={handleMenuClick}
