@@ -482,10 +482,21 @@ async def import_margin_preview(
     detected_margin_idx = margin_col_index if margin_col_index >= 0 else _detect_column(
         headers, _MARGIN_HEADER_KEYWORDS)
 
-    if detected_code_idx < 0:
-        return error(10002, "未能识别出「商品编码」列，请检查表头或手动指定")
-    if detected_margin_idx < 0:
-        return error(10002, "未能识别出「净毛利率」列，请检查表头或手动指定")
+    # 任一列识别失败 → 不报错，返回 headers 让前端弹手动选列 UI
+    if detected_code_idx < 0 or detected_margin_idx < 0:
+        # 返前 5 行样本帮用户判断哪列是哪列
+        sample_rows = []
+        for r in rows[:5]:
+            sample_rows.append([("" if c is None else str(c)) for c in r])
+        return success({
+            "auto_detect_failed": True,
+            "headers": [str(h) if h is not None else "" for h in headers],
+            "sample_rows": sample_rows,
+            "detected_code_col": detected_code_idx,
+            "detected_margin_col": detected_margin_idx,
+            "items_total": len(rows),
+            "msg": "未能自动识别列，请手动选择编码列 + 净毛利率列",
+        })
 
     # 拉取本地所有商品 SKU 集合
     local_codes = {

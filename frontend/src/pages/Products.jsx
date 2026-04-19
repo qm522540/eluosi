@@ -618,13 +618,19 @@ const Products = () => {
   const [importPreview, setImportPreview] = useState(null)
   const [importLoading, setImportLoading] = useState(false)
   const [importConfirming, setImportConfirming] = useState(false)
-  const handleImportFile = async (file) => {
+  const [importFile, setImportFile] = useState(null)
+  const handleImportFile = async (file, codeCol = -1, marginCol = -1) => {
     setImportLoading(true)
+    setImportFile(file)
     try {
       const fd = new FormData()
       fd.append('file', file)
+      const params = {}
+      if (codeCol >= 0) params.code_col_index = codeCol
+      if (marginCol >= 0) params.margin_col_index = marginCol
       const res = await request.post('/products/import-margin/preview', fd, {
         headers: { 'Content-Type': 'multipart/form-data' },
+        params,
       })
       setImportPreview(res.data)
     } catch (e) {
@@ -634,6 +640,8 @@ const Products = () => {
     }
     return false  // 阻止 Upload 自动上传
   }
+  const [manualCodeCol, setManualCodeCol] = useState(-1)
+  const [manualMarginCol, setManualMarginCol] = useState(-1)
   const handleImportConfirm = async () => {
     if (!importPreview) return
     const items = importPreview.items.filter(i => i.matched && i.margin_value != null)
@@ -2199,7 +2207,65 @@ const Products = () => {
           </div>
         )}
 
-        {importPreview && (
+        {importPreview?.auto_detect_failed && (
+          <div>
+            <Alert
+              type="warning" showIcon style={{ marginBottom: 12 }}
+              message="未能自动识别列"
+              description="请从下方下拉框手动选择哪一列是「本地编码」和「净毛利率」。"
+            />
+            <Row gutter={12} style={{ marginBottom: 12 }}>
+              <Col span={12}>
+                <div style={{ fontSize: 12, color: '#999', marginBottom: 4 }}>本地编码列</div>
+                <Select
+                  style={{ width: '100%' }}
+                  value={manualCodeCol >= 0 ? manualCodeCol : undefined}
+                  onChange={setManualCodeCol}
+                  placeholder="选择列"
+                  options={(importPreview.headers || []).map((h, i) => ({
+                    value: i, label: `${i + 1}. ${h || '(空表头)'}`,
+                  }))}
+                />
+              </Col>
+              <Col span={12}>
+                <div style={{ fontSize: 12, color: '#999', marginBottom: 4 }}>净毛利率列</div>
+                <Select
+                  style={{ width: '100%' }}
+                  value={manualMarginCol >= 0 ? manualMarginCol : undefined}
+                  onChange={setManualMarginCol}
+                  placeholder="选择列"
+                  options={(importPreview.headers || []).map((h, i) => ({
+                    value: i, label: `${i + 1}. ${h || '(空表头)'}`,
+                  }))}
+                />
+              </Col>
+            </Row>
+            <Button type="primary" disabled={manualCodeCol < 0 || manualMarginCol < 0}
+              loading={importLoading}
+              onClick={() => handleImportFile(importFile, manualCodeCol, manualMarginCol)}>
+              用选择的列重新解析
+            </Button>
+            <Divider />
+            <div style={{ fontSize: 12, color: '#999', marginBottom: 4 }}>表格前 5 行预览：</div>
+            <Table
+              size="small"
+              pagination={false}
+              scroll={{ x: 'max-content' }}
+              dataSource={(importPreview.sample_rows || []).map((r, i) => {
+                const obj = { key: i }
+                ;(importPreview.headers || []).forEach((h, j) => { obj[`c${j}`] = r[j] || '' })
+                return obj
+              })}
+              columns={(importPreview.headers || []).map((h, i) => ({
+                title: `${i + 1}. ${h || '(空)'}`,
+                dataIndex: `c${i}`,
+                ellipsis: true,
+              }))}
+            />
+          </div>
+        )}
+
+        {importPreview && !importPreview.auto_detect_failed && (
           <div>
             <Alert
               type={importPreview.summary?.matched > 0 ? 'success' : 'warning'}
