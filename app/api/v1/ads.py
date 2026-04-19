@@ -1990,3 +1990,93 @@ async def today_summary_campaign(
     }
     _set_cached_today("camp", campaign_id, result)
     return success(result)
+
+
+@router.get("/today-summary/shop/{shop_id}")
+async def today_summary_shop(
+    refresh: bool = Query(False),
+    db: Session = Depends(get_db),
+    shop=Depends(get_owned_shop),
+):
+    """店铺级当日实时汇总：聚合所有 active WB 活动
+
+    用于关键词统计页顶部条。WB 限速，并发拉所有活动 fullstats 后聚合。
+    """
+    from app.models.ad import AdCampaign
+    from datetime import date as _date
+    import asyncio as _aio
+
+    if not refresh:
+        cached = _get_cached_today("shop", shop.id)
+        if cached is not None:
+            cached["from_cache"] = True
+            return success(cached)
+
+    today_iso = _date.today().isoformat()
+    if shop.platform != "wb":
+        result = {
+            "today_date": today_iso, "platform": shop.platform,
+            "spend": 0, "orders": 0, "views": 0, "clicks": 0,
+            "atbs": 0, "revenue": 0, "ctr": 0, "roas": 0,
+            "campaign_count": 0, "active_campaign_count": 0,
+            "msg": "Ozon / Yandex 当日汇总后续接入",
+        }
+        _set_cached_today("shop", shop.id, result)
+        result["from_cache"] = False
+        return success(result)
+
+    # 拉店铺下 active WB 活动
+    camps = db.query(AdCampaign).filter(
+        AdCampaign.shop_id == shop.id, AdCampaign.tenant_id == shop.tenant_id,
+        AdCampaign.platform == "wb", AdCampaign.status == "active",
+    ).all()
+    if not camps:
+        result = {
+            "today_date": today_iso, "platform": "wb",
+            "spend": 0, "orders": 0, "views": 0, "clicks": 0,
+            "atbs": 0, "revenue": 0, "ctr": 0, "roas": 0,
+            "campaign_count": 0, "active_campaign_count": 0,
+        }
+        _set_cached_today("shop", shop.id, result)
+        result["from_cache"] = False
+        return success(result)
+
+    from app.services.platform.wb import WBClient
+    client = WBClient(shop_id=shop.id, api_key=shop.api_key)
+    try:
+        # WB fullstats v3 单次请求 ids 参数支持多 advert_id 逗号分隔，但限制不明；
+        # 保险起见小批 5 个并发，避免触发 429
+        async def _fetch_one(camp):
+            return await client.fetch_campaign_summary(
+                advert_id=camp.platform_campaign_id,
+                date_from=today_iso, date_to=today_iso,
+            )
+        results = []
+        BATCH = 5
+        for i in range(0, len(camps), BATCH):
+            batch = camps[i:i + BATCH]
+            results.extend(await _aio.gather(*[_fetch_one(c) for c in batch]))
+    finally:
+        await client.close()
+
+    spend = sum(float(r.get("sum") or 0) for r in results)
+    revenue = sum(float(r.get("sum_price") or 0) for r in results)
+    views = sum(int(r.get("views") or 0) for r in results)
+    clicks = sum(int(r.get("clicks") or 0) for r in results)
+    orders = sum(int(r.get("orders") or 0) for r in results)
+    atbs = sum(int(r.get("atbs") or 0) for r in results)
+
+    result = {
+        "today_date": today_iso, "platform": "wb",
+        "spend": round(spend, 2),
+        "revenue": round(revenue, 2),
+        "views": views, "clicks": clicks,
+        "orders": orders, "atbs": atbs,
+        "ctr": round(clicks / views * 100, 2) if views > 0 else 0,
+        "roas": round(revenue / spend, 2) if spend > 0 else 0,
+        "campaign_count": len(camps),
+        "active_campaign_count": len(camps),
+        "from_cache": False,
+    }
+    _set_cached_today("shop", shop.id, result)
+    return success(result)

@@ -347,3 +347,10 @@ export function getTodaySummaryByCampaign(campaignId, refresh = false) {
     params: refresh ? { refresh: true } : {},
   })
 }
+
+/** 店铺级当日实时汇总（聚合店铺下所有 active 活动） */
+export function getTodaySummaryByShop(shopId, refresh = false) {
+  return request.get(`/ads/today-summary/shop/${shopId}`, {
+    params: refresh ? { refresh: true } : {},
+  })
+}
