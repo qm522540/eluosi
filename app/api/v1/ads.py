@@ -34,8 +34,38 @@ from app.services.ad.service import (
     get_budget_overview, get_budget_suggestions,
 )
 from app.utils.response import success, error
+from app.config import settings
 
 router = APIRouter()
+
+
+# ==================== WB summary 缓存（避免 fullstats v3 限流） ====================
+
+_SUMMARY_CACHE_TTL = 300  # 5 分钟
+
+def _summary_cache_key(advert_id, df: str, dt: str) -> str:
+    return f"wb:camp_summary:{advert_id}:{df}:{dt}"
+
+def _get_cached_summary(advert_id, df: str, dt: str):
+    """Redis 不可用 / miss 时返回 None，调用方降级回拉 WB"""
+    try:
+        import redis as redis_lib
+        import json
+        r = redis_lib.Redis.from_url(settings.REDIS_URL, decode_responses=True)
+        raw = r.get(_summary_cache_key(advert_id, df, dt))
+        return json.loads(raw) if raw else None
+    except Exception:
+        return None
+
+def _set_cached_summary(advert_id, df: str, dt: str, summary):
+    try:
+        import redis as redis_lib
+        import json
+        r = redis_lib.Redis.from_url(settings.REDIS_URL, decode_responses=True)
+        r.setex(_summary_cache_key(advert_id, df, dt), _SUMMARY_CACHE_TTL,
+                json.dumps(summary, ensure_ascii=False, default=str))
+    except Exception:
+        pass
 
 
 # ==================== 广告活动 ====================
@@ -686,11 +716,21 @@ async def campaign_keywords(
         df = date_from.strftime("%Y-%m-%d")
         dt = date_to.strftime("%Y-%m-%d")
         import asyncio as _aio
-        kw_task = client.fetch_campaign_keywords(
-            advert_id=camp.platform_campaign_id, date_from=df, date_to=dt)
-        summary_task = client.fetch_campaign_summary(
-            advert_id=camp.platform_campaign_id, date_from=df, date_to=dt)
-        keywords, summary = await _aio.gather(kw_task, summary_task)
+
+        # 活动 summary 是活动级总数据，所有 SKU 共享。每个 SKU 展开都重拉
+        # 触发 WB fullstats v3 的 3-5 req/min 限流 → 429。Redis 缓存 5 分钟，
+        # 同活动多 SKU 展开走缓存。
+        summary = _get_cached_summary(camp.platform_campaign_id, df, dt)
+        if summary is None:
+            kw_task = client.fetch_campaign_keywords(
+                advert_id=camp.platform_campaign_id, date_from=df, date_to=dt)
+            summary_task = client.fetch_campaign_summary(
+                advert_id=camp.platform_campaign_id, date_from=df, date_to=dt)
+            keywords, summary = await _aio.gather(kw_task, summary_task)
+            _set_cached_summary(camp.platform_campaign_id, df, dt, summary)
+        else:
+            keywords = await client.fetch_campaign_keywords(
+                advert_id=camp.platform_campaign_id, date_from=df, date_to=dt)
 
         # 有 nm_id 时拉屏蔽词
         excluded_map = {}
