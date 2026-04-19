@@ -565,14 +565,18 @@ def get_suggestions(
             s.status, s.generated_at, s.executed_at,
             c.name AS campaign_name, c.platform_campaign_id,
             pl.url AS product_url,
+            pl.platform_product_id AS platform_product_id,
+            p.sku AS product_code,
             p.image_url AS image_url,
             COALESCE(ag.user_managed, 0) AS is_ignored
         FROM ai_pricing_suggestions s
         JOIN ad_campaigns c ON s.campaign_id = c.id
+        -- Ozon: s.platform_sku_id 存的是广告 SKU，匹配 pl.platform_sku_id（不是 platform_product_id）
+        -- WB:   两者相等（nm_id 同时是 platform_sku_id 和 platform_product_id），也能匹配
         LEFT JOIN platform_listings pl
           ON pl.tenant_id = s.tenant_id
          AND pl.shop_id = s.shop_id
-         AND pl.platform_product_id = s.platform_sku_id
+         AND pl.platform_sku_id = s.platform_sku_id
         LEFT JOIN products p ON p.id = pl.product_id
         LEFT JOIN ad_groups ag
           ON ag.tenant_id = s.tenant_id
@@ -595,6 +599,8 @@ def get_suggestions(
         groups[cid]["suggestions"].append({
             "id": r.id,
             "platform_sku_id": r.platform_sku_id,
+            "platform_product_id": r.platform_product_id,
+            "product_code": r.product_code,
             "sku_name": r.sku_name,
             "current_bid": float(r.current_bid),
             "suggested_bid": float(r.suggested_bid),

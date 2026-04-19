@@ -779,7 +779,10 @@ const OzonAIPricing = ({ shopId, platform = 'ozon' }) => {
         <div style={{ fontSize: 13, lineHeight: 1.8 }}>
           <div>
             商品：<strong>{record.sku_name || record.platform_sku_id}</strong>
-            <span style={{ color: '#999', marginLeft: 6 }}>SKU：{record.platform_sku_id}</span>
+            <span style={{ color: '#999', marginLeft: 6 }}>
+              {record.platform_product_id ? `商品ID ${record.platform_product_id}` : ''}
+              {record.product_code ? ` · 本地编码 ${record.product_code}` : ''}
+            </span>
           </div>
           <div>活动：<strong>{record.campaign_name || `#${record.campaign_id}`}</strong></div>
           <div style={{
@@ -814,7 +817,10 @@ const OzonAIPricing = ({ shopId, platform = 'ozon' }) => {
         <div style={{ fontSize: 13, lineHeight: 1.8 }}>
           <div>
             商品：<strong>{record.sku_name || record.platform_sku_id}</strong>
-            <span style={{ color: '#999', marginLeft: 6 }}>SKU：{record.platform_sku_id}</span>
+            <span style={{ color: '#999', marginLeft: 6 }}>
+              {record.platform_product_id ? `商品ID ${record.platform_product_id}` : ''}
+              {record.product_code ? ` · 本地编码 ${record.product_code}` : ''}
+            </span>
           </div>
           <div>活动：<strong>{record.campaign_name || `#${record.campaign_id}`}</strong></div>
           <div style={{ marginTop: 10, padding: 10, background: '#fff2f0', borderRadius: 4, color: '#cf1322' }}>
@@ -850,8 +856,11 @@ const OzonAIPricing = ({ shopId, platform = 'ozon' }) => {
         <div style={{ fontSize: 13, lineHeight: 1.8 }}>
           <div>
             商品：<strong>{skuName}</strong>
-            {record?.platform_sku_id && (
-              <span style={{ color: '#999', marginLeft: 6 }}>SKU：{record.platform_sku_id}</span>
+            {(record?.platform_product_id || record?.product_code) && (
+              <span style={{ color: '#999', marginLeft: 6 }}>
+                {record.platform_product_id ? `商品ID ${record.platform_product_id}` : ''}
+                {record.product_code ? ` · 本地编码 ${record.product_code}` : ''}
+              </span>
             )}
           </div>
           <div style={{ marginTop: 10, padding: 10, background: '#fffbe6', borderRadius: 4, color: '#874d00' }}>
@@ -1018,11 +1027,10 @@ const OzonAIPricing = ({ shopId, platform = 'ozon' }) => {
               {productUrl ? (
                 <a href={productUrl} target="_blank" rel="noopener noreferrer" style={{ fontSize: 13 }}>{name}</a>
               ) : <span style={{ fontSize: 13 }}>{name}</span>}
-              {r.platform_sku_id && (
-                <div style={{ fontSize: 11, color: '#999', marginTop: 2 }}>
-                  SKU：{r.platform_sku_id}
-                </div>
-              )}
+              <div style={{ fontSize: 11, color: '#999', marginTop: 2 }}>
+                {r.platform_product_id && <span>商品ID {r.platform_product_id}</span>}
+                {r.product_code && <span style={{ marginLeft: 8 }}>本地编码 {r.product_code}</span>}
+              </div>
             </div>
           </div>
         )
@@ -1223,9 +1231,10 @@ const OzonAIPricing = ({ shopId, platform = 'ozon' }) => {
             {img}
             <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>
               <div style={{ fontSize: 13 }}>{name}</div>
-              {r.platform_sku_id && (
-                <div style={{ fontSize: 11, color: '#999' }}>SKU：{r.platform_sku_id}</div>
-              )}
+              <div style={{ fontSize: 11, color: '#999' }}>
+                {r.platform_product_id && <span>商品ID {r.platform_product_id}</span>}
+                {r.product_code && <span style={{ marginLeft: 8 }}>本地编码 {r.product_code}</span>}
+              </div>
             </div>
           </div>
         )
