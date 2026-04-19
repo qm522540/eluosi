@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
+import { useNavigate } from 'react-router-dom'
 import {
   Typography, Card, Table, Button, Space, Select, Row, Col, Statistic, Tag,
   Segmented, Spin, message, Tooltip, Alert, Input,
@@ -37,6 +38,7 @@ const TAG_TABS = [
 ]
 
 const SearchInsights = () => {
+  const navigate = useNavigate()
   const [shops, setShops] = useState([])
   const [shopId, setShopId] = useState(null)
   const [shopPlatform, setShopPlatform] = useState(null)
@@ -173,6 +175,14 @@ const SearchInsights = () => {
         <Text type="secondary" style={{ fontSize: 14, marginLeft: 12, fontWeight: 'normal' }}>
           用户搜哪些词找到我的商品 (SEO 流量)
         </Text>
+        <Button
+          type="link"
+          size="small"
+          style={{ marginLeft: 12, fontSize: 13 }}
+          onClick={() => navigate('/seo/optimize')}
+        >
+          → 进入 SEO 优化建议
+        </Button>
       </Title>
 
       <Alert

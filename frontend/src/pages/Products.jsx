@@ -7,8 +7,9 @@ import {
 } from 'antd'
 import {
   SyncOutlined, PlusOutlined, EditOutlined,
-  RobotOutlined, SendOutlined, ShopOutlined, UploadOutlined,
+  RobotOutlined, SendOutlined, ShopOutlined, UploadOutlined, SearchOutlined,
 } from '@ant-design/icons'
+import { useNavigate } from 'react-router-dom'
 import request from '@/api'
 import {
   getProducts, syncProducts, checkSyncNeeded,
