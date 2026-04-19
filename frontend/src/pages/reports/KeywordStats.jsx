@@ -17,6 +17,7 @@ import {
   getKeywordSummary, getKeywordTrend, getKeywordSkuDetail,
   getNegativeSuggestions, getKeywordSyncStatus, backfillKeywords,
   translateKeywords, getKeywordCampaigns, excludeKeyword,
+  getWordChanges,
 } from '@/api/keyword_stats'
 import { getAutoExcludeSummary } from '@/api/ads'
 
@@ -104,6 +105,14 @@ const KeywordStats = () => {
   useEffect(() => {
     if (!shopId) { setAutoExcludeSummaryState(null); return }
     getAutoExcludeSummary(shopId, 30).then(r => setAutoExcludeSummaryState(r.data)).catch(() => {})
+  }, [shopId])
+
+  // 新词 / 消失词预警
+  const [wordChanges, setWordChanges] = useState(null)
+  const [wcDrawerType, setWcDrawerType] = useState(null)  // 'new' | 'vanished' | null
+  useEffect(() => {
+    if (!shopId) { setWordChanges(null); return }
+    getWordChanges(shopId).then(r => setWordChanges(r.data)).catch(() => {})
   }, [shopId])
 
   useEffect(() => {
@@ -478,6 +487,80 @@ const KeywordStats = () => {
   return (
     <div>
       <Title level={4}><KeyOutlined /> 关键词统计</Title>
+
+      {/* 新词 / 消失词预警 Tag 条 */}
+      {wordChanges && (wordChanges.new_today_count > 0 || wordChanges.vanished_count > 0) && (
+        <div style={{ marginBottom: 12, display: 'flex', gap: 8, alignItems: 'center' }}>
+          {wordChanges.new_today_count > 0 && (
+            <Tag color="success" style={{ cursor: 'pointer', padding: '4px 10px', fontSize: 12 }}
+              onClick={() => setWcDrawerType('new')}>
+              ⚡ 今日新增 {wordChanges.new_today_count} 个新词
+            </Tag>
+          )}
+          {wordChanges.vanished_count > 0 && (
+            <Tag color="warning" style={{ cursor: 'pointer', padding: '4px 10px', fontSize: 12 }}
+              onClick={() => setWcDrawerType('vanished')}>
+              💤 近 3 天消失 {wordChanges.vanished_count} 个曾活跃词
+            </Tag>
+          )}
+          <Text type="secondary" style={{ fontSize: 11 }}>点击查看明细</Text>
+        </div>
+      )}
+
+      {/* 新词 / 消失词 Drawer */}
+      <Drawer
+        title={wcDrawerType === 'new' ? '今日新增关键词' : wcDrawerType === 'vanished' ? '近 3 天消失关键词' : ''}
+        open={!!wcDrawerType}
+        onClose={() => setWcDrawerType(null)}
+        width={680}
+      >
+        {wcDrawerType === 'new' && (
+          <Table
+            size="small" rowKey="keyword"
+            dataSource={wordChanges?.new_today || []}
+            pagination={{ pageSize: 20 }}
+            columns={[
+              { title: '关键词', dataIndex: 'keyword', ellipsis: true,
+                render: (v) => {
+                  const zh = kwTranslations[v]
+                  return (
+                    <div>
+                      <div style={{ fontSize: 13 }}>{v}</div>
+                      {zh && zh !== v && <div style={{ fontSize: 11, color: '#999' }}>{zh}</div>}
+                    </div>
+                  )
+                }},
+              { title: '首次', dataIndex: 'first_seen', width: 90, render: v => v ? v.slice(5) : '-' },
+              { title: '曝光', dataIndex: 'impressions', width: 80, align: 'right', render: v => (v||0).toLocaleString() },
+              { title: '点击', dataIndex: 'clicks', width: 70, align: 'right' },
+              { title: '花费', dataIndex: 'spend', width: 90, align: 'right', render: v => `₽${(v||0).toFixed(2)}` },
+            ]}
+          />
+        )}
+        {wcDrawerType === 'vanished' && (
+          <Table
+            size="small" rowKey="keyword"
+            dataSource={wordChanges?.vanished || []}
+            pagination={{ pageSize: 20 }}
+            columns={[
+              { title: '关键词', dataIndex: 'keyword', ellipsis: true,
+                render: (v) => {
+                  const zh = kwTranslations[v]
+                  return (
+                    <div>
+                      <div style={{ fontSize: 13 }}>{v}</div>
+                      {zh && zh !== v && <div style={{ fontSize: 11, color: '#999' }}>{zh}</div>}
+                    </div>
+                  )
+                }},
+              { title: '末次', dataIndex: 'last_seen', width: 90, render: v => v ? v.slice(5) : '-' },
+              { title: '活跃天', dataIndex: 'active_days', width: 70, align: 'center' },
+              { title: '历史曝光', dataIndex: 'impressions', width: 90, align: 'right', render: v => (v||0).toLocaleString() },
+              { title: '历史花费', dataIndex: 'spend', width: 90, align: 'right', render: v => `₽${(v||0).toFixed(2)}` },
+            ]}
+          />
+        )}
+      </Drawer>
 
       {autoExcludeSummary && autoExcludeSummary.total_excluded > 0 && (
         <Card

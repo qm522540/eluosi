@@ -50,3 +50,7 @@ export function setEfficiencyRules(rules) {
 export function resetEfficiencyRules() {
   return request.post(`${BASE}/efficiency-rules/reset`)
 }
+
+export function getWordChanges(shopId) {
+  return request.get(`${BASE}/word-changes`, { params: { shop_id: shopId } })
+}

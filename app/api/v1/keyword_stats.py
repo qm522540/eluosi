@@ -137,6 +137,74 @@ def keyword_sync_status(
     return success(result["data"])
 
 
+@router.get("/word-changes")
+def word_changes(
+    shop_id: int = Query(...),
+    db: Session = Depends(get_db),
+    tenant_id: int = Depends(get_tenant_id),
+):
+    """新词预警 + 消失词预警
+
+    - 今日新增（new_today）：first_seen = today，且不是单日昙花
+    - 近 3 天消失（vanished）：last_seen 在 (today-30, today-3) 之间且 today 没有
+    """
+    from sqlalchemy import text
+    from datetime import date as _date, timedelta as _td
+
+    today = _date.today()
+    yest = today - _td(days=1)
+    cutoff_vanish = today - _td(days=30)
+    cutoff_active = today - _td(days=3)
+
+    # 新增：first_seen = today（必须用绝对 MIN 而非范围内）
+    new_today_rows = db.execute(text("""
+        SELECT keyword, MIN(stat_date) first_seen, MAX(stat_date) last_seen,
+               COUNT(DISTINCT stat_date) days,
+               SUM(impressions) imp, SUM(clicks) clk, SUM(spend) sp
+        FROM keyword_daily_stats
+        WHERE tenant_id = :tid AND shop_id = :sid
+        GROUP BY keyword
+        HAVING MIN(stat_date) = :today
+        ORDER BY imp DESC LIMIT 50
+    """), {"tid": tenant_id, "sid": shop_id, "today": today}).fetchall()
+
+    # 消失：曾经活跃（在 today-30 到 today-3 之间出现过），但 today-3 之后无数据
+    vanished_rows = db.execute(text("""
+        SELECT keyword, MAX(stat_date) last_seen,
+               COUNT(DISTINCT stat_date) days,
+               SUM(impressions) imp, SUM(clicks) clk, SUM(spend) sp
+        FROM keyword_daily_stats
+        WHERE tenant_id = :tid AND shop_id = :sid
+          AND stat_date >= :cutoff_vanish
+        GROUP BY keyword
+        HAVING MAX(stat_date) < :cutoff_active AND days >= 2
+        ORDER BY sp DESC LIMIT 50
+    """), {
+        "tid": tenant_id, "sid": shop_id,
+        "cutoff_vanish": cutoff_vanish, "cutoff_active": cutoff_active,
+    }).fetchall()
+
+    return success({
+        "new_today": [{
+            "keyword": r.keyword,
+            "first_seen": r.first_seen.isoformat(),
+            "impressions": int(r.imp or 0),
+            "clicks": int(r.clk or 0),
+            "spend": float(r.sp or 0),
+        } for r in new_today_rows],
+        "new_today_count": len(new_today_rows),
+        "vanished": [{
+            "keyword": r.keyword,
+            "last_seen": r.last_seen.isoformat(),
+            "active_days": int(r.days or 0),
+            "impressions": int(r.imp or 0),
+            "clicks": int(r.clk or 0),
+            "spend": float(r.sp or 0),
+        } for r in vanished_rows],
+        "vanished_count": len(vanished_rows),
+    })
+
+
 import math
 from pydantic import BaseModel, Field
 from typing import List
