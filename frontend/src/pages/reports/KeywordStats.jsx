@@ -18,7 +18,7 @@ import {
   getNegativeSuggestions, getKeywordSyncStatus, backfillKeywords,
   translateKeywords, getKeywordCampaigns, excludeKeyword,
 } from '@/api/keyword_stats'
-import { getAutoExcludeSummary, getTodaySummaryByShop } from '@/api/ads'
+import { getAutoExcludeSummary } from '@/api/ads'
 
 const { Title, Text } = Typography
 const { Option } = Select
@@ -105,26 +105,6 @@ const KeywordStats = () => {
     if (!shopId) { setAutoExcludeSummaryState(null); return }
     getAutoExcludeSummary(shopId, 30).then(r => setAutoExcludeSummaryState(r.data)).catch(() => {})
   }, [shopId])
-
-  // 当日实时汇总（店铺级，5 分钟缓存）
-  const [todaySummary, setTodaySummary] = useState(null)
-  const [todayLoading, setTodayLoading] = useState(false)
-  const loadTodaySummary = useCallback(async (sid, refresh = false) => {
-    if (!sid) return
-    setTodayLoading(true)
-    try {
-      const r = await getTodaySummaryByShop(sid, refresh)
-      setTodaySummary(r.data || null)
-    } catch {
-      setTodaySummary(null)
-    } finally {
-      setTodayLoading(false)
-    }
-  }, [])
-  useEffect(() => {
-    if (!shopId) { setTodaySummary(null); return }
-    loadTodaySummary(shopId)
-  }, [shopId, loadTodaySummary])
 
   useEffect(() => {
     getShops({ page: 1, page_size: 100 })
@@ -445,83 +425,6 @@ const KeywordStats = () => {
   return (
     <div>
       <Title level={4}><KeyOutlined /> 关键词统计</Title>
-
-      {/* 当日实时汇总（店铺级，5 分钟缓存） */}
-      {shopId && (
-        <Card
-          size="small"
-          style={{ marginBottom: 12, background: '#fafbff', borderColor: '#e6edff' }}
-          bodyStyle={{ padding: '10px 14px' }}
-        >
-          <Spin spinning={todayLoading}>
-            <Row gutter={16} align="middle" wrap={false}>
-              <Col flex="none">
-                <Space size={6}>
-                  <Text strong style={{ fontSize: 13 }}>今日</Text>
-                  <Tooltip title="WB 数据有几小时延迟，早上常空，下午陆续就位。聚合店铺下所有 active 活动。">
-                    <Text type="secondary" style={{ fontSize: 11, cursor: 'help' }}>
-                      {todaySummary?.today_date || '-'}
-                      {todaySummary?.active_campaign_count != null
-                        ? ` · ${todaySummary.active_campaign_count} 活动`
-                        : ''}
-                    </Text>
-                  </Tooltip>
-                </Space>
-              </Col>
-              <Col flex="auto">
-                <Row gutter={16}>
-                  <Col span={4}>
-                    <div style={{ fontSize: 11, color: '#999' }}>花费</div>
-                    <div style={{ fontSize: 16, fontWeight: 600 }}>
-                      ₽{(todaySummary?.spend ?? 0).toLocaleString()}
-                    </div>
-                  </Col>
-                  <Col span={4}>
-                    <div style={{ fontSize: 11, color: '#999' }}>订单</div>
-                    <div style={{ fontSize: 16, fontWeight: 600, color: '#52c41a' }}>
-                      {todaySummary?.orders ?? 0}
-                    </div>
-                  </Col>
-                  <Col span={4}>
-                    <div style={{ fontSize: 11, color: '#999' }}>曝光</div>
-                    <div style={{ fontSize: 16, fontWeight: 600 }}>
-                      {(todaySummary?.views ?? 0).toLocaleString()}
-                    </div>
-                  </Col>
-                  <Col span={4}>
-                    <div style={{ fontSize: 11, color: '#999' }}>点击</div>
-                    <div style={{ fontSize: 16, fontWeight: 600 }}>
-                      {todaySummary?.clicks ?? 0}
-                    </div>
-                  </Col>
-                  <Col span={4}>
-                    <div style={{ fontSize: 11, color: '#999' }}>CTR</div>
-                    <div style={{ fontSize: 16, fontWeight: 600 }}>
-                      {todaySummary?.ctr ? `${todaySummary.ctr}%` : '-'}
-                    </div>
-                  </Col>
-                  <Col span={4}>
-                    <div style={{ fontSize: 11, color: '#999' }}>ROAS</div>
-                    <div style={{
-                      fontSize: 16, fontWeight: 600,
-                      color: (todaySummary?.roas ?? 0) >= 2 ? '#52c41a'
-                           : (todaySummary?.roas ?? 0) > 0 ? '#faad14' : '#999',
-                    }}>
-                      {todaySummary?.roas ? `${todaySummary.roas}x` : '-'}
-                    </div>
-                  </Col>
-                </Row>
-              </Col>
-              <Col flex="none">
-                <Button size="small" icon={<SyncOutlined spin={todayLoading} />}
-                  onClick={() => loadTodaySummary(shopId, true)}>
-                  刷新
-                </Button>
-              </Col>
-            </Row>
-          </Spin>
-        </Card>
-      )}
 
       {autoExcludeSummary && autoExcludeSummary.total_excluded > 0 && (
         <Card
