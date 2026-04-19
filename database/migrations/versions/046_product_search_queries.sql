@@ -1,6 +1,6 @@
--- Migration: 043_product_search_queries.sql
+-- Migration: 046_product_search_queries.sql
 -- Author: 老张
--- Date: 2026-04-18
+-- Date: 2026-04-18（重号 2026-04-19，原 043，与 ad_campaign_auto_exclude 撞号）
 -- Description:
 --   搜索词洞察（SEO流量分析）底表：商品被搜索词每日统计
 --   数据源：
@@ -8,6 +8,12 @@
 --     Ozon POST /v1/analytics/product-queries/details   （需 Premium 订阅）
 --   字段按两平台并集；平台特有字段放 extra JSON
 --   数据保留 90 天，每日清理过期
+--
+--   重号说明：原 043 与老林同日并行的 043_ad_campaign_auto_exclude 撞号；
+--   生产已两张表都建好（deploy_remote.sh 没有版本表，靠文件名手动跑），仓库
+--   重命名仅修复历史记录，不需要在生产重跑。
+--   2026-04-19 老林合并 ozon_product_queries → 此表（platform='ozon'），047 会
+--   DROP 老林的旧表。
 
 SET NAMES utf8mb4;
 
