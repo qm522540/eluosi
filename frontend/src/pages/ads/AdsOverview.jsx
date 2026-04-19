@@ -1285,12 +1285,12 @@ const AdsOverview = ({ shopId, platform, shops, searched, syncing, lastSyncTime,
           <Space size={4} style={{ marginTop: 4 }}>
             {productId && (
               <Tag style={{ marginRight: 0, fontFamily: 'ui-monospace, monospace', fontSize: 11 }}>
-                商品ID {productId}
+                {productId}
               </Tag>
             )}
             {record.product_code && (
               <Tag color="blue" style={{ fontSize: 11, fontFamily: 'ui-monospace, monospace' }}>
-                本地编码 {record.product_code}
+                {record.product_code}
               </Tag>
             )}
           </Space>

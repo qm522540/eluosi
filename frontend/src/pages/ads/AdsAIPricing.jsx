@@ -1027,6 +1027,13 @@ const OzonAIPricing = ({ shopId, platform = 'ozon' }) => {
               {productUrl ? (
                 <a href={productUrl} target="_blank" rel="noopener noreferrer" style={{ fontSize: 13 }}>{name}</a>
               ) : <span style={{ fontSize: 13 }}>{name}</span>}
+              {(r.platform_product_id || r.product_code) && (
+                <div style={{ fontSize: 11, color: '#999', marginTop: 2 }}>
+                  {r.platform_product_id}
+                  {r.platform_product_id && r.product_code ? ' · ' : ''}
+                  {r.product_code}
+                </div>
+              )}
             </div>
           </div>
         )
@@ -1227,6 +1234,13 @@ const OzonAIPricing = ({ shopId, platform = 'ozon' }) => {
             {img}
             <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>
               <div style={{ fontSize: 13 }}>{name}</div>
+              {(r.platform_product_id || r.product_code) && (
+                <div style={{ fontSize: 11, color: '#999' }}>
+                  {r.platform_product_id}
+                  {r.platform_product_id && r.product_code ? ' · ' : ''}
+                  {r.product_code}
+                </div>
+              )}
             </div>
           </div>
         )
