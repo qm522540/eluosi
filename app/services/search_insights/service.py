@@ -180,29 +180,35 @@ def list_by_product(
 
     用于编辑 Drawer 的"搜索词洞察" Tab，结果不做标签分类
     （单品视角关心的是词本身+频次，不是店铺相对热度）。
+
+    防御：JOIN products 强制 q.shop_id = p.shop_id，防 product_search_queries
+    被错误 shop_id 写入时的跨店数据泄漏。
     """
     date_from, date_to = _default_dates(date_from, date_to)
 
     # 先校验 product 属租户
     row = db.execute(text(
-        "SELECT id FROM products WHERE id = :pid AND tenant_id = :tid"
+        "SELECT id, shop_id FROM products WHERE id = :pid AND tenant_id = :tid"
     ), {"pid": product_id, "tid": tenant_id}).fetchone()
     if not row:
         return {"code": ErrorCode.PRODUCT_NOT_FOUND, "msg": "商品不存在或无访问权限"}
 
     agg_sql = """
-        SELECT query_text,
-               SUM(frequency) AS frequency,
-               SUM(impressions) AS impressions,
-               SUM(clicks) AS clicks,
-               SUM(add_to_cart) AS add_to_cart,
-               SUM(orders) AS orders,
-               SUM(revenue) AS revenue,
-               AVG(median_position) AS median_position
-        FROM product_search_queries
-        WHERE tenant_id = :tid AND product_id = :pid
-          AND stat_date BETWEEN :df AND :dt
-        GROUP BY query_text
+        SELECT q.query_text,
+               SUM(q.frequency) AS frequency,
+               SUM(q.impressions) AS impressions,
+               SUM(q.clicks) AS clicks,
+               SUM(q.add_to_cart) AS add_to_cart,
+               SUM(q.orders) AS orders,
+               SUM(q.revenue) AS revenue,
+               AVG(q.median_position) AS median_position
+        FROM product_search_queries q
+        JOIN products p ON p.id = q.product_id
+                       AND p.tenant_id = q.tenant_id
+                       AND p.shop_id = q.shop_id
+        WHERE q.tenant_id = :tid AND q.product_id = :pid
+          AND q.stat_date BETWEEN :df AND :dt
+        GROUP BY q.query_text
         ORDER BY frequency DESC
         LIMIT :size OFFSET :offset
     """
@@ -241,7 +247,8 @@ def _upsert_rows(db: Session, tenant_id: int, shop_id: int, platform: str,
                  rows: list) -> int:
     """批量 upsert 到 product_search_queries。返回写入行数。
 
-    规则 1 纵深：INSERT 带 tenant_id，ON DUPLICATE KEY UPDATE 不改 tenant_id。
+    规则 1 纵深：INSERT 带 tenant_id，ON DUPLICATE KEY UPDATE 也 SET tenant_id
+    （CLAUDE.md 明文要求"哪怕 UNIQUE KEY 是 shop_id 也务必 SET tenant_id"）。
     """
     if not rows:
         return 0
@@ -257,6 +264,7 @@ def _upsert_rows(db: Session, tenant_id: int, shop_id: int, platform: str,
            :atc, :orders, :rev, :mp, :c2o,
            :vc, :ex)
         ON DUPLICATE KEY UPDATE
+          tenant_id = VALUES(tenant_id),
           frequency = VALUES(frequency),
           impressions = VALUES(impressions),
           clicks = VALUES(clicks),
