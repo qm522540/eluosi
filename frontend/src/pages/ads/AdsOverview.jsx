@@ -362,7 +362,9 @@ const AdsOverview = ({ shopId, platform, shops, searched, syncing, lastSyncTime,
   // 是 WB 系统返回的"用户实际搜索短语"，无法通过 set-minus 接口屏蔽
   const isPhraseUnsupported = (kw) => (kw.keyword || '').trim().includes(' ')
 
-  // 按规则筛选"建议屏蔽"关键词（waste 判定 + 观察天数门槛 + 跳过白名单 + 跳过短语）
+  // 按规则筛选"建议屏蔽"关键词（waste 判定 + 观察天数门槛 + 跳过白名单）
+  // 注：04-19 移除"含空格短语跳过" — WB 文档实际支持空格短语（需为已识别的
+  // norm_query），由 WB 实际反馈处理（dropped_invalid 透传到前端）
   const getSuggestedExcludes = (kws) => {
     if (!kws || !kws.length) return []
     const r = excludeRules || {}
@@ -371,7 +373,7 @@ const AdsOverview = ({ shopId, platform, shops, searched, syncing, lastSyncTime,
     const ctrMax = r.waste_ctr_max ?? 1.0
     const spendRatio = r.waste_spend_min_ratio ?? 1.0
     // 当前 SKU 关键词集合的平均花费（参与判定的基准）
-    const candidates = kws.filter(kw => !kw.is_excluded && !kw.is_protected && !isPhraseUnsupported(kw))
+    const candidates = kws.filter(kw => !kw.is_excluded && !kw.is_protected)
     const avgSpend = candidates.length
       ? candidates.reduce((s, k) => s + (k.sum || 0), 0) / candidates.length
       : 0
@@ -1376,34 +1378,26 @@ const AdsOverview = ({ shopId, platform, shops, searched, syncing, lastSyncTime,
                         okText: '确认屏蔽',
                         okType: 'danger',
                         onOk: async () => {
-                          // 兜底：发请求前再过滤一次含空格短语，防止 stale state
-                          const sendable = suggestedExcludeWords.filter(w => !w.includes(' '))
-                          const phraseDropped = suggestedExcludeWords.filter(w => w.includes(' '))
-                          if (sendable.length === 0) {
-                            message.info(`${phraseDropped.length} 个候选词都是含空格短语，WB 不支持屏蔽，请到 WB 后台手动添加`, 5)
-                            return
-                          }
+                          // 04-19: 不再前端预过滤含空格短语 — WB 文档支持，由 WB 实际拒绝时反馈
                           setExcludingKws(true)
                           try {
-                            const res = await excludeKeywords(detailData.id, parseInt(sku), sendable)
+                            const res = await excludeKeywords(detailData.id, parseInt(sku), suggestedExcludeWords)
                             const added = res.data?.added || []
                             const skipped = res.data?.skipped_protected || []
                             const dropped = res.data?.dropped_invalid || []
-                            const wbRejected = dropped.filter(d => !d.includes(' '))
-                            const allPhraseDropped = [...phraseDropped, ...dropped.filter(d => d.includes(' '))]
+                            const wbRejected = dropped  // 不再区分含空格 vs 单词，统一为 WB 拒绝
 
                             // 简洁顶部提示
                             const headParts = []
                             if (added.length > 0) headParts.push(`屏蔽 ${added.length} 个`)
                             if (skipped.length > 0) headParts.push(`白名单跳过 ${skipped.length} 个`)
-                            if (allPhraseDropped.length > 0) headParts.push(`${allPhraseDropped.length} 个含空格短语未送 WB`)
                             if (wbRejected.length > 0) headParts.push(`WB 拒绝 ${wbRejected.length} 个`)
                             const headMsg = headParts.length ? headParts.join('；') : '未屏蔽任何词'
                             if (added.length > 0) message.success(headMsg, 4)
                             else message.info(headMsg, 4)
 
-                            // 有 WB 拒绝词或含空格短语 → 弹 notification 列出具体词 + 解释
-                            if (wbRejected.length > 0 || allPhraseDropped.length > 0) {
+                            // 有 WB 拒绝词 → 弹 notification 列出具体词 + 解释
+                            if (wbRejected.length > 0) {
                               notification.warning({
                                 message: '部分关键词未屏蔽',
                                 duration: 0,  // 用户手动关
@@ -1419,19 +1413,6 @@ const AdsOverview = ({ shopId, platform, shops, searched, syncing, lastSyncTime,
                                         </div>
                                         <div>{wbRejected.map(w => (
                                           <Tag key={w} color="volcano" style={{ margin: 2, fontSize: 11 }}>{w}</Tag>
-                                        ))}</div>
-                                      </div>
-                                    )}
-                                    {allPhraseDropped.length > 0 && (
-                                      <div>
-                                        <div style={{ marginBottom: 4 }}>
-                                          <strong>含空格短语未送 WB（{allPhraseDropped.length} 个）：</strong>
-                                          <Tooltip title="当前前端兜底跳过含空格短语。WB 文档实际支持空格短语，但需要是该商品的归一化 norm_query。后续会改成「按 WB 实际反馈处理」。">
-                                            <span style={{ color: '#1677ff', cursor: 'help', marginLeft: 4 }}>说明</span>
-                                          </Tooltip>
-                                        </div>
-                                        <div>{allPhraseDropped.map(w => (
-                                          <Tag key={w} color="default" style={{ margin: 2, fontSize: 11 }}>{w}</Tag>
                                         ))}</div>
                                       </div>
                                     )}
@@ -1524,17 +1505,11 @@ const AdsOverview = ({ shopId, platform, shops, searched, syncing, lastSyncTime,
                   }
                   const s = statusMap[r.status] || {}
                   const isSuggested = qualityCheckedSku === sku && suggestedExcludeWords.includes(v)
-                  const isPhrase = isPhraseUnsupported(r)
                   return (
                     <Space size={4}>
                       {r.is_excluded && <Tag color="red" style={{ margin: 0, fontSize: 11 }}>已屏蔽</Tag>}
-                      {isPhrase && !r.is_excluded && (
-                        <Tooltip title="WB 接口仅支持单词屏蔽，含空格短语无法通过 API 屏蔽。如确需屏蔽，请到 WB 后台手动添加">
-                          <Tag color="default" style={{ margin: 0, fontSize: 11, cursor: 'help' }}>短语</Tag>
-                        </Tooltip>
-                      )}
                       {isSuggested && !r.is_excluded && <Tag color="volcano" style={{ margin: 0, fontSize: 11 }}>建议屏蔽</Tag>}
-                      {!r.is_excluded && !isSuggested && !isPhrase && s.label && <Tag color={s.color} style={{ margin: 0, fontSize: 11 }}>{s.label}</Tag>}
+                      {!r.is_excluded && !isSuggested && s.label && <Tag color={s.color} style={{ margin: 0, fontSize: 11 }}>{s.label}</Tag>}
                       <Tooltip title={`${v}（${r.active_days || 0}/${r.total_days || 7}天出现${r.first_seen ? `，首次 ${r.first_seen}` : ''}${r.last_seen && r.last_seen !== r.first_seen ? `，末次 ${r.last_seen}` : ''}）`} placement="topLeft">
                         <span style={
                           r.is_excluded ? { textDecoration: 'line-through', color: '#999' }

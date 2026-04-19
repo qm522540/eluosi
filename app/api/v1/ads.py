@@ -931,10 +931,9 @@ async def exclude_keywords(
     protected_lower = {r.keyword.lower().strip() for r in protected_rows}
     requested = [w.strip() for w in req.keywords if w.strip()]
     skipped_protected = [w for w in requested if w.lower() in protected_lower]
-    after_white = [w for w in requested if w.lower() not in protected_lower]
-    # 后端兜底：剔除含空格短语（WB API 不接受），归入 dropped_invalid
-    skipped_phrase = [w for w in after_white if ' ' in w]
-    effective = [w for w in after_white if ' ' not in w]
+    effective = [w for w in requested if w.lower() not in protected_lower]
+    # 04-19 移除"含空格短语兜底过滤" — WB 文档实际支持空格短语（需为 norm_query），
+    # 由 WB 实际拒绝时返回 dropped_invalid 透传
 
     if not effective:
         return success({
@@ -943,8 +942,8 @@ async def exclude_keywords(
             "added": [],
             "total_excluded": 0,
             "skipped_protected": skipped_protected,
-            "dropped_invalid": skipped_phrase,
-            "msg": "传入关键词全部为白名单或含空格短语，未屏蔽任何词",
+            "dropped_invalid": [],
+            "msg": "传入关键词全部为白名单，未屏蔽任何词",
         })
 
     from app.services.platform.wb import WBClient
@@ -973,9 +972,9 @@ async def exclude_keywords(
         # 写后失效：屏蔽词列表已变化，下次 /campaign-keywords 必须重新拉 WB
         _invalidate_excluded(camp.platform_campaign_id, int(req.nm_id))
 
-        dropped_invalid = (result.get("dropped_invalid") or []) + skipped_phrase
+        dropped_invalid = result.get("dropped_invalid") or []
         dropped_lower = {w.lower().strip() for w in dropped_invalid}
-        # 真实新加入屏蔽的词 = 用户传入 - 白名单 - 短语 - WB 拒绝
+        # 真实新加入屏蔽的词 = 用户传入 - 白名单 - WB 拒绝
         added_effective = [w for w in new_words if w.lower().strip() not in dropped_lower]
 
         logger.info(
