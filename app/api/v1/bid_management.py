@@ -842,25 +842,33 @@ def get_bid_logs(
     shop: Shop = Depends(get_owned_shop),
     db: Session = Depends(get_db),
 ):
-    where = ["shop_id = :shop_id", "tenant_id = :tenant_id"]
+    # 构造两套 where 条件：count 用裸表名前缀；list 用 l. 别名前缀（join 用）
+    where_count = ["shop_id = :shop_id", "tenant_id = :tenant_id"]
+    where_join = ["l.shop_id = :shop_id", "l.tenant_id = :tenant_id"]
     params = {"shop_id": shop.id, "tenant_id": shop.tenant_id}
     if execute_type and execute_type != "all":
-        where.append("execute_type = :execute_type")
+        where_count.append("execute_type = :execute_type")
+        where_join.append("l.execute_type = :execute_type")
         params["execute_type"] = execute_type
     if campaign_id:
-        where.append("campaign_id = :campaign_id")
+        where_count.append("campaign_id = :campaign_id")
+        where_join.append("l.campaign_id = :campaign_id")
         params["campaign_id"] = campaign_id
     if start_date:
-        where.append("DATE(created_at) >= :start_date")
+        where_count.append("DATE(created_at) >= :start_date")
+        where_join.append("DATE(l.created_at) >= :start_date")
         params["start_date"] = start_date
     if end_date:
-        where.append("DATE(created_at) <= :end_date")
+        where_count.append("DATE(created_at) <= :end_date")
+        where_join.append("DATE(l.created_at) <= :end_date")
         params["end_date"] = end_date
     if success_filter is not None:
-        where.append("success = :success")
+        where_count.append("success = :success")
+        where_join.append("l.success = :success")
         params["success"] = 1 if success_filter else 0
 
-    where_sql = " AND ".join(where)
+    where_sql = " AND ".join(where_count)
+    where_sql_join = " AND ".join(where_join)
     total = db.execute(
         text(f"SELECT COUNT(*) AS total FROM bid_adjustment_logs WHERE {where_sql}"),
         params,
@@ -871,14 +879,21 @@ def get_bid_logs(
     page_params["offset"] = (page - 1) * size
     rows = db.execute(text(f"""
         SELECT
-            id, tenant_id, shop_id, campaign_id, campaign_name,
-            platform_sku_id, sku_name,
-            old_bid, new_bid, adjust_pct,
-            execute_type, time_period, period_ratio,
-            product_stage, moscow_hour, success, error_msg, created_at
-        FROM bid_adjustment_logs
-        WHERE {where_sql}
-        ORDER BY created_at DESC
+            l.id, l.tenant_id, l.shop_id, l.campaign_id, l.campaign_name,
+            l.platform_sku_id, l.sku_name,
+            l.old_bid, l.new_bid, l.adjust_pct,
+            l.execute_type, l.time_period, l.period_ratio,
+            l.product_stage, l.moscow_hour, l.success, l.error_msg, l.created_at,
+            pl.platform_product_id AS platform_product_id,
+            p.sku AS product_code
+        FROM bid_adjustment_logs l
+        LEFT JOIN platform_listings pl
+          ON pl.tenant_id = l.tenant_id
+         AND pl.shop_id = l.shop_id
+         AND pl.platform_sku_id = l.platform_sku_id
+        LEFT JOIN products p ON p.id = pl.product_id
+        WHERE {where_sql_join}
+        ORDER BY l.created_at DESC
         LIMIT :limit OFFSET :offset
     """), page_params).fetchall()
 
@@ -887,6 +902,8 @@ def get_bid_logs(
         "campaign_id": r.campaign_id,
         "campaign_name": r.campaign_name,
         "platform_sku_id": r.platform_sku_id,
+        "platform_product_id": r.platform_product_id,
+        "product_code": r.product_code,
         "sku_name": r.sku_name,
         "old_bid": float(r.old_bid),
         "new_bid": float(r.new_bid),

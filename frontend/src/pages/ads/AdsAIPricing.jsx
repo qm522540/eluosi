@@ -1229,18 +1229,13 @@ const OzonAIPricing = ({ shopId, platform = 'ozon' }) => {
         const img = platform === 'wb'
           ? <WbProductImg nmId={r.platform_sku_id} size={28} />
           : null
+        const idSuffix = [r.platform_product_id, r.product_code].filter(Boolean).join(' · ')
         return (
           <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
             {img}
             <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>
-              <div style={{ fontSize: 13 }}>{name}</div>
-              {(r.platform_product_id || r.product_code) && (
-                <div style={{ fontSize: 11, color: '#999' }}>
-                  {r.platform_product_id}
-                  {r.platform_product_id && r.product_code ? ' · ' : ''}
-                  {r.product_code}
-                </div>
-              )}
+              <span style={{ fontSize: 13 }}>{name}</span>
+              {idSuffix && <span style={{ fontSize: 11, color: '#999', marginLeft: 6 }}>{idSuffix}</span>}
             </div>
           </div>
         )
