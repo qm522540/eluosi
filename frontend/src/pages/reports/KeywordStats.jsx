@@ -336,6 +336,26 @@ const KeywordStats = () => {
       render: v => v != null ? `${v} ₽` : '-',
     },
     {
+      title: <Tooltip title="近 7 天每天的曝光趋势（从左到右，最右是今天）"><span style={{ cursor: 'help' }}>趋势 <span style={{ fontSize: 10, color: '#bbb' }}>ⓘ</span></span></Tooltip>,
+      dataIndex: 'trend_7d', key: 'trend_7d', width: 90,
+      render: (arr) => {
+        const data = arr || [0, 0, 0, 0, 0, 0, 0]
+        const max = Math.max(...data, 1)
+        const w = 70, h = 22, n = data.length
+        const step = w / (n - 1 || 1)
+        const points = data.map((v, i) => `${i * step},${h - (v / max) * (h - 2) - 1}`).join(' ')
+        const area = `0,${h} ${points} ${w},${h}`
+        return (
+          <Tooltip title={data.map((v, i) => `D-${6 - i}: ${v.toLocaleString()}`).join(' · ')}>
+            <svg width={w} height={h} style={{ display: 'block', cursor: 'help' }}>
+              <polygon points={area} fill="#e6f4ff" />
+              <polyline points={points} fill="none" stroke="#1677ff" strokeWidth="1.5" />
+            </svg>
+          </Tooltip>
+        )
+      },
+    },
+    {
       title: <Tooltip title="该关键词花费占总花费的百分比"><span style={{ cursor: 'help' }}>占比 <span style={{ fontSize: 10, color: '#bbb' }}>ⓘ</span></span></Tooltip>,
       dataIndex: 'spend_pct', key: 'spend_pct', width: 80,
       render: v => v != null ? `${v}%` : '-',

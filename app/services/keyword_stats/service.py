@@ -176,6 +176,34 @@ def summary(
                 kw_roas_map[kw]["est_orders"] += ct["orders"] * ratio
                 kw_roas_map[kw]["est_revenue"] += ct["revenue"] * ratio
 
+    # 7 天曝光趋势 sparkline 数据：最近 7 天每天的 impressions
+    # 不受 date_from/date_to 影响，固定取近 7 天（包含今天）
+    from datetime import date as _date, timedelta as _td
+    spark_today = _date.today()
+    spark_start = spark_today - _td(days=6)
+    trend_map = {}  # {keyword: [imp_d0, imp_d1, ..., imp_d6]}
+    if rows:
+        kws = [r.keyword for r in rows]
+        from sqlalchemy import bindparam
+        sp_sql = text("""
+            SELECT keyword, stat_date, SUM(impressions) imp
+            FROM keyword_daily_stats
+            WHERE tenant_id = :tid AND shop_id = :sid
+              AND keyword IN :kws AND stat_date BETWEEN :df AND :dt
+            GROUP BY keyword, stat_date
+        """).bindparams(bindparam("kws", expanding=True))
+        sp_rows = db.execute(sp_sql, {
+            "tid": tenant_id, "sid": shop_id, "kws": kws,
+            "df": spark_start, "dt": spark_today,
+        }).fetchall()
+        # 初始化每个词 7 天数组（默认 0）
+        for kw in kws:
+            trend_map[kw] = [0] * 7
+        for sr in sp_rows:
+            day_idx = (sr.stat_date - spark_start).days
+            if 0 <= day_idx < 7:
+                trend_map[sr.keyword][day_idx] = int(sr.imp or 0)
+
     # 效能标签计算：租户规则 > 系统默认
     rules = get_rules(db, tenant_id)
     distinct_count = len(rows)
@@ -216,6 +244,7 @@ def summary(
             "est_orders": est_orders,
             "est_revenue": est_revenue,
             "est_roas": est_roas,
+            "trend_7d": trend_map.get(r.keyword, [0] * 7),
         })
 
     # 效能 server-side filter（在 classify 之后）
