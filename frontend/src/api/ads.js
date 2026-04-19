@@ -250,8 +250,8 @@ export function getAutoExcludeLogs(campaignId, days = 30) {
   return request.get(`/ads/campaign-auto-exclude/${campaignId}/logs`, { params: { days } })
 }
 
-export function getAutoExcludeSummary(days = 30) {
-  return request.get(`/ads/auto-exclude/summary`, { params: { days } })
+export function getAutoExcludeSummary(shopId, days = 30) {
+  return request.get(`/ads/auto-exclude/summary`, { params: { shop_id: shopId, days } })
 }
 
 export function getCampaignProducts(campaignId) {

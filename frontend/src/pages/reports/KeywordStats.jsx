@@ -98,12 +98,13 @@ const KeywordStats = () => {
 
   // 效能规则 Drawer
   const [rulesDrawerOpen, setRulesDrawerOpen] = useState(false)
-  // 自动屏蔽全店成果（顶部条）
+  // 自动屏蔽店铺成果（顶部条，按当前选中店铺过滤 — 规则 4）
   const [autoExcludeSummary, setAutoExcludeSummaryState] = useState(null)
   const [autoExcludeExpand, setAutoExcludeExpand] = useState(false)
   useEffect(() => {
-    getAutoExcludeSummary(30).then(r => setAutoExcludeSummaryState(r.data)).catch(() => {})
-  }, [])
+    if (!shopId) { setAutoExcludeSummaryState(null); return }
+    getAutoExcludeSummary(shopId, 30).then(r => setAutoExcludeSummaryState(r.data)).catch(() => {})
+  }, [shopId])
 
   useEffect(() => {
     getShops({ page: 1, page_size: 100 })

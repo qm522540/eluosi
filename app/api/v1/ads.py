@@ -1717,35 +1717,37 @@ def list_auto_exclude_logs(
 def auto_exclude_summary(
     days: int = Query(30, ge=1, le=180),
     db: Session = Depends(get_db),
-    tenant_id: int = Depends(get_tenant_id),
+    shop=Depends(get_owned_shop),
 ):
-    """全租户自动屏蔽成果汇总（关键词统计页顶部条用）"""
-    from datetime import date as _date, timedelta as _td
-    since = (_date.today() - _td(days=days)).isoformat()
+    """店铺级自动屏蔽成果汇总（关键词统计页顶部条用）
 
-    # 按 source 分组的总和
+    规则 4：手动触发型聚合接口必须按 shop_id 过滤；用户先选店铺再操作。
+    """
+    since = (datetime.now(timezone.utc).date() - timedelta(days=days)).isoformat()
+
+    # 按 source 分组的总和（限定本店）
     src_rows = db.execute(text("""
         SELECT source, COUNT(*) cnt, COALESCE(SUM(saved_per_day), 0) saved_per_day
         FROM ad_auto_exclude_log
-        WHERE tenant_id=:tid AND excluded_at >= :since
+        WHERE tenant_id=:tid AND shop_id=:sid AND excluded_at >= :since
         GROUP BY source
-    """), {"tid": tenant_id, "since": since}).fetchall()
+    """), {"tid": shop.tenant_id, "sid": shop.id, "since": since}).fetchall()
     by_source = {r.source: {"cnt": int(r.cnt), "saved": float(r.saved_per_day)} for r in src_rows}
     auto_d = by_source.get("auto", {"cnt": 0, "saved": 0})
     manual_d = by_source.get("manual", {"cnt": 0, "saved": 0})
     total_cnt = auto_d["cnt"] + manual_d["cnt"]
     total_saved = auto_d["saved"] + manual_d["saved"]
 
-    # 按活动展开
+    # 按活动展开（JOIN 加 c.tenant_id 兜底，防跨租户 campaign_id 碰撞）
     by_camp = db.execute(text("""
         SELECT l.campaign_id, c.name campaign_name,
                COUNT(*) excluded_cnt, COALESCE(SUM(l.saved_per_day), 0) saved_per_day
         FROM ad_auto_exclude_log l
-        JOIN ad_campaigns c ON c.id = l.campaign_id
-        WHERE l.tenant_id=:tid AND l.excluded_at >= :since
+        JOIN ad_campaigns c ON c.id = l.campaign_id AND c.tenant_id = l.tenant_id
+        WHERE l.tenant_id=:tid AND l.shop_id=:sid AND l.excluded_at >= :since
         GROUP BY l.campaign_id, c.name
         ORDER BY saved_per_day DESC
-    """), {"tid": tenant_id, "since": since}).fetchall()
+    """), {"tid": shop.tenant_id, "sid": shop.id, "since": since}).fetchall()
 
     return success({
         "days": days,
