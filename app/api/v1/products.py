@@ -464,9 +464,9 @@ async def import_margin_preview(
         headers, _MARGIN_HEADER_KEYWORDS)
 
     if detected_code_idx < 0:
-        return error(10002, "未能识别出"商品编码"列，请检查表头或手动指定")
+        return error(10002, "未能识别出「商品编码」列，请检查表头或手动指定")
     if detected_margin_idx < 0:
-        return error(10002, "未能识别出"净毛利率"列，请检查表头或手动指定")
+        return error(10002, "未能识别出「净毛利率」列，请检查表头或手动指定")
 
     # 拉取本地所有商品 SKU 集合
     local_codes = {
