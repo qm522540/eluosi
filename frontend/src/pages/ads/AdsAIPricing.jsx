@@ -1027,10 +1027,6 @@ const OzonAIPricing = ({ shopId, platform = 'ozon' }) => {
               {productUrl ? (
                 <a href={productUrl} target="_blank" rel="noopener noreferrer" style={{ fontSize: 13 }}>{name}</a>
               ) : <span style={{ fontSize: 13 }}>{name}</span>}
-              <div style={{ fontSize: 11, color: '#999', marginTop: 2 }}>
-                {r.platform_product_id && <span>商品ID {r.platform_product_id}</span>}
-                {r.product_code && <span style={{ marginLeft: 8 }}>本地编码 {r.product_code}</span>}
-              </div>
             </div>
           </div>
         )
@@ -1231,10 +1227,6 @@ const OzonAIPricing = ({ shopId, platform = 'ozon' }) => {
             {img}
             <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>
               <div style={{ fontSize: 13 }}>{name}</div>
-              <div style={{ fontSize: 11, color: '#999' }}>
-                {r.platform_product_id && <span>商品ID {r.platform_product_id}</span>}
-                {r.product_code && <span style={{ marginLeft: 8 }}>本地编码 {r.product_code}</span>}
-              </div>
             </div>
           </div>
         )
