@@ -340,6 +340,25 @@ const KeywordStats = () => {
       dataIndex: 'spend_pct', key: 'spend_pct', width: 80,
       render: v => v != null ? `${v}%` : '-',
     },
+    {
+      title: (
+        <Tooltip title="按该关键词点击占比 × 活动总订单/营收 估算的 ROAS。≥3x 盈利 / 1.5-3x 中等 / <1.5x 亏损">
+          <span style={{ cursor: 'help' }}>ROAS估 <span style={{ fontSize: 10, color: '#bbb' }}>ⓘ</span></span>
+        </Tooltip>
+      ),
+      dataIndex: 'est_roas', key: 'est_roas', width: 90,
+      render: (v, r) => {
+        if (!v || v === 0) {
+          return <Text type="secondary" style={{ fontSize: 12 }}>-</Text>
+        }
+        const color = v >= 3 ? '#52c41a' : v >= 1.5 ? '#faad14' : '#ff4d4f'
+        return (
+          <Tooltip title={`估算订单 ${r.est_orders || 0} · 估算营收 ¥${(r.est_revenue || 0).toLocaleString()}`}>
+            <Text strong style={{ color, cursor: 'help' }}>{v}x</Text>
+          </Tooltip>
+        )
+      },
+    },
   ]
 
   const isOzon = shopPlatform === 'ozon'
@@ -615,6 +634,13 @@ const KeywordStats = () => {
             dataSource={items}
             columns={columns}
             loading={loading}
+            rowClassName={(r) => {
+              const v = r.est_roas
+              if (!v || v === 0) return ''
+              if (v >= 3) return 'kw-row-profitable'
+              if (v < 1.5) return 'kw-row-losing'
+              return ''
+            }}
             pagination={{
               current: page,
               pageSize: 50,

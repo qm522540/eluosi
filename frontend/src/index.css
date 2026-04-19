@@ -34,3 +34,17 @@ body {
 .row-suggested-exclude:hover td {
   background: #ffe7d6 !important;
 }
+
+/* 关键词统计：按 ROAS 估算分色 */
+.kw-row-profitable td {
+  background: #f6ffed !important;
+}
+.kw-row-profitable:hover td {
+  background: #d9f7be !important;
+}
+.kw-row-losing td {
+  background: #fff1f0 !important;
+}
+.kw-row-losing:hover td {
+  background: #ffccc7 !important;
+}

@@ -99,7 +99,6 @@ def summary(
     first_seen_map = {}
     if rows:
         kws = [r.keyword for r in rows]
-        # IN 列表用 expanding bindparam
         from sqlalchemy import bindparam
         fs_sql = text("""
             SELECT keyword, MIN(stat_date) first_seen
@@ -109,6 +108,73 @@ def summary(
         """).bindparams(bindparam("kws", expanding=True))
         fs_rows = db.execute(fs_sql, {"tid": tenant_id, "sid": shop_id, "kws": kws}).fetchall()
         first_seen_map = {r.keyword: r.first_seen for r in fs_rows}
+
+    # 关键词级 ROAS 估算：按"该关键词点击占比 × 活动总订单/营收"分摊
+    # 同一关键词可能在多个活动里，按其涉及活动的总点击-订单-营收聚合算
+    # 数据来源：ad_stats（活动级真实订单/营收）+ 当前 keyword_daily_stats 算点击占比
+    kw_roas_map = {}
+    if rows:
+        kws = [r.keyword for r in rows]
+        # 收集涉及的所有活动
+        camp_ids = set()
+        for r in rows:
+            for cid in (r.campaign_ids or "").split(","):
+                if cid.strip().isdigit():
+                    camp_ids.add(int(cid))
+        if camp_ids:
+            # 拉这些活动在同 date_from~date_to 内的总订单 + 营收 + 总点击
+            from sqlalchemy import bindparam
+            camp_totals_sql = text("""
+                SELECT campaign_id,
+                       SUM(orders) tot_orders,
+                       SUM(revenue) tot_revenue,
+                       SUM(clicks) tot_clicks
+                FROM ad_stats
+                WHERE tenant_id = :tid AND campaign_id IN :cids
+                  AND stat_date BETWEEN :df AND :dt
+                GROUP BY campaign_id
+            """).bindparams(bindparam("cids", expanding=True))
+            ct_rows = db.execute(camp_totals_sql, {
+                "tid": tenant_id, "cids": list(camp_ids),
+                "df": date_from, "dt": date_to,
+            }).fetchall()
+            camp_totals = {r.campaign_id: {
+                "orders": int(r.tot_orders or 0),
+                "revenue": float(r.tot_revenue or 0),
+                "clicks": int(r.tot_clicks or 0),
+            } for r in ct_rows}
+
+            # 拉每个 (keyword, campaign_id) 在期内的点击数（已在 items_sql 里按 keyword 聚合，
+            # 这里需要细化到 campaign 维度才能算占比）
+            kw_camp_sql = text("""
+                SELECT keyword, campaign_id, SUM(clicks) clicks
+                FROM keyword_daily_stats
+                WHERE tenant_id = :tid AND shop_id = :sid
+                  AND keyword IN :kws AND campaign_id IN :cids
+                  AND stat_date BETWEEN :df AND :dt
+                GROUP BY keyword, campaign_id
+            """).bindparams(
+                bindparam("kws", expanding=True),
+                bindparam("cids", expanding=True),
+            )
+            kc_rows = db.execute(kw_camp_sql, {
+                "tid": tenant_id, "sid": shop_id,
+                "kws": kws, "cids": list(camp_ids),
+                "df": date_from, "dt": date_to,
+            }).fetchall()
+            # 聚合按 keyword：sum(this_kw_clicks_in_camp / camp_total_clicks × camp_orders)
+            for kc in kc_rows:
+                kw = kc.keyword
+                cid = kc.campaign_id
+                kw_clk = int(kc.clicks or 0)
+                ct = camp_totals.get(cid)
+                if not ct or ct["clicks"] == 0 or kw_clk == 0:
+                    continue
+                ratio = kw_clk / ct["clicks"]
+                if kw not in kw_roas_map:
+                    kw_roas_map[kw] = {"est_orders": 0, "est_revenue": 0.0}
+                kw_roas_map[kw]["est_orders"] += ct["orders"] * ratio
+                kw_roas_map[kw]["est_revenue"] += ct["revenue"] * ratio
 
     # 效能标签计算：租户规则 > 系统默认
     rules = get_rules(db, tenant_id)
@@ -131,6 +197,10 @@ def summary(
         )
 
         fs = first_seen_map.get(r.keyword)
+        rd = kw_roas_map.get(r.keyword) or {}
+        est_orders = round(rd.get("est_orders", 0), 1) if rd else 0
+        est_revenue = round(rd.get("est_revenue", 0), 2) if rd else 0
+        est_roas = round(est_revenue / sp, 2) if sp > 0 and est_revenue > 0 else 0
         items_all.append({
             "keyword": r.keyword,
             "impressions": imp,
@@ -143,6 +213,9 @@ def summary(
             "skus": [x for x in (r.skus or "").split(",") if x.strip() and x.strip() != "None"],
             "efficiency": eff,
             "first_seen": fs.isoformat() if fs else None,
+            "est_orders": est_orders,
+            "est_revenue": est_revenue,
+            "est_roas": est_roas,
         })
 
     # 效能 server-side filter（在 classify 之后）
