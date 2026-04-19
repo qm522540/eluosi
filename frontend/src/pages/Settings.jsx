@@ -67,6 +67,10 @@ const Settings = () => {
       name: shop.name,
       platform: shop.platform,
       platform_seller_id: shop.platform_seller_id,
+      client_id: shop.client_id,
+      perf_client_id: shop.perf_client_id,
+      yandex_business_id: shop.yandex_business_id,
+      yandex_campaign_id: shop.yandex_campaign_id,
       currency: shop.currency,
       timezone: shop.timezone,
     })
@@ -288,17 +292,36 @@ const Settings = () => {
 
         {/* ===== Yandex ===== */}
         {platform === 'yandex' && (
-          <Form.Item
-            name="api_key"
-            label="API Key"
-            rules={editingShop ? [] : [{ required: true, message: '请输入API Key' }]}
-            extra="获取路径：Yandex Market 合作伙伴后台 → 设置 → API → 生成 Api-Key"
-          >
-            <Input.Password
-              placeholder={editingShop ? '不修改请留空' : '请输入Yandex API Key'}
-              iconRender={() => <EyeInvisibleOutlined />}
-            />
-          </Form.Item>
+          <>
+            <div style={{ background: '#f6f8fa', padding: '12px 16px', borderRadius: 6, marginBottom: 16, fontSize: 13, color: '#555' }}>
+              Yandex Market 同步商品需要 3 个字段：<b>OAuth Token</b> + <b>Business ID</b> + <b>Campaign ID</b>。
+            </div>
+            <Form.Item
+              name="api_key"
+              label="OAuth Token"
+              rules={editingShop ? [] : [{ required: true, message: '请输入 OAuth Token' }]}
+              extra="获取路径：partner.market.yandex.ru → 个人中心 → API access → 生成 OAuth token（约 54 字符，前缀 ACMA: 或 y0_）"
+            >
+              <Input.Password
+                placeholder={editingShop ? '不修改请留空' : 'ACMA:xxx... 或 y0_xxx...'}
+                iconRender={() => <EyeInvisibleOutlined />}
+              />
+            </Form.Item>
+            <Form.Item
+              name="yandex_business_id"
+              label="Business ID"
+              extra="拉商品列表必需。获取路径：partner.market.yandex.ru → 右上角账户菜单 → ID кабинета（账户 ID 即 business ID）"
+            >
+              <Input placeholder="例如：12345678" />
+            </Form.Item>
+            <Form.Item
+              name="yandex_campaign_id"
+              label="Campaign ID"
+              extra="拉订单/库存/广告必需。获取路径：partner.market.yandex.ru → 推广 → 广告活动 → URL 末尾数字"
+            >
+              <Input placeholder="例如：87654321" />
+            </Form.Item>
+          </>
         )}
       </>
     )

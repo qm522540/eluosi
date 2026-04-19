@@ -203,13 +203,21 @@ def _iso_utc(dt: datetime | None) -> str | None:
 
 
 def _shop_to_dict(shop: Shop) -> dict:
-    """将Shop ORM对象转为字典（不暴露敏感凭证）"""
+    """将Shop ORM对象转为字典（不暴露敏感凭证）
+
+    yandex_business_id / yandex_campaign_id 不算敏感（不能用来直接调 API），
+    平显示给用户便于编辑确认，跟 client_id 同等级。
+    """
     return {
         "id": shop.id,
         "tenant_id": shop.tenant_id,
         "name": shop.name,
         "platform": shop.platform,
         "platform_seller_id": shop.platform_seller_id,
+        "client_id": shop.client_id,
+        "perf_client_id": shop.perf_client_id,
+        "yandex_business_id": shop.yandex_business_id,
+        "yandex_campaign_id": shop.yandex_campaign_id,
         "currency": shop.currency,
         "timezone": shop.timezone,
         "status": shop.status,

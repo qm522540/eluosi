@@ -16,6 +16,8 @@ class ShopCreate(BaseModel):
     oauth_refresh_token: Optional[str] = Field(None, description="OAuth Refresh Token (Yandex)")
     perf_client_id: Optional[str] = Field(None, description="Ozon广告API Client ID")
     perf_client_secret: Optional[str] = Field(None, description="Ozon广告API Client Secret")
+    yandex_business_id: Optional[str] = Field(None, description="Yandex Market Business ID")
+    yandex_campaign_id: Optional[str] = Field(None, description="Yandex Market Campaign ID")
     currency: str = Field("RUB", description="货币")
     timezone: str = Field("Europe/Moscow", description="时区")
 
@@ -30,6 +32,8 @@ class ShopUpdate(BaseModel):
     oauth_refresh_token: Optional[str] = None
     perf_client_id: Optional[str] = None
     perf_client_secret: Optional[str] = None
+    yandex_business_id: Optional[str] = None
+    yandex_campaign_id: Optional[str] = None
     currency: Optional[str] = None
     timezone: Optional[str] = None
     status: Optional[str] = Field(None, pattern="^(active|inactive)$")
