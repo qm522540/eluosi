@@ -1816,58 +1816,57 @@ const AdsOverview = ({ shopId, platform, shops, searched, syncing, lastSyncTime,
                 return (
                   <div>
                     {/* 顶部 4 卡片：预算 + 平台 + 状态 + 付费类型 */}
-                    <Row gutter={12} style={{ marginBottom: 16 }}>
+                    <Row gutter={12} style={{ marginBottom: 12 }}>
                       <Col span={9}>
                         <Card size="small" style={{
-                          background: 'linear-gradient(135deg, #f6ffed 0%, #d9f7be 100%)',
-                          borderColor: '#b7eb8f', height: '100%',
-                        }}>
-                          <div style={{ fontSize: 12, color: '#666' }}>💰 预算余额</div>
-                          <div style={{ fontSize: 30, fontWeight: 700, color: '#389e0d', lineHeight: 1.3 }}>
-                            {budgetVal != null ? `${budgetVal.toLocaleString()} ₽` : '-'}
+                          background: '#fafbff', borderColor: '#e6edff', height: '100%',
+                        }} bodyStyle={{ padding: '12px 14px' }}>
+                          <div style={{ fontSize: 12, color: '#999' }}>预算余额</div>
+                          <div style={{ fontSize: 22, fontWeight: 600, color: '#1677ff', lineHeight: 1.4, marginTop: 4 }}>
+                            {budgetVal != null ? `₽${budgetVal.toLocaleString()}` : '-'}
                           </div>
-                          {campaignBudget && (
-                            <div style={{ fontSize: 11, color: '#999' }}>实时余额</div>
-                          )}
+                          <div style={{ fontSize: 11, color: '#bbb' }}>
+                            {campaignBudget ? '实时余额' : '配置预算'}
+                          </div>
                         </Card>
                       </Col>
                       <Col span={5}>
-                        <Card size="small" style={{ height: '100%' }}>
+                        <Card size="small" style={{ height: '100%' }} bodyStyle={{ padding: '12px 14px' }}>
                           <div style={{ fontSize: 12, color: '#999' }}>平台</div>
-                          <div style={{ marginTop: 8 }}>
-                            <Tag color={PLATFORMS[detailData.platform]?.color} style={{ fontSize: 14, padding: '2px 10px' }}>
+                          <div style={{ marginTop: 6 }}>
+                            <Tag color={PLATFORMS[detailData.platform]?.color} style={{ fontSize: 12 }}>
                               {PLATFORMS[detailData.platform]?.label}
                             </Tag>
                           </div>
-                          <div style={{ fontSize: 11, color: '#bbb', marginTop: 8 }}>
+                          <div style={{ fontSize: 11, color: '#bbb', marginTop: 6 }}>
                             {AD_TYPES[detailData.ad_type]?.label || detailData.ad_type}
                           </div>
                         </Card>
                       </Col>
                       <Col span={5}>
-                        <Card size="small" style={{ height: '100%' }}>
+                        <Card size="small" style={{ height: '100%' }} bodyStyle={{ padding: '12px 14px' }}>
                           <div style={{ fontSize: 12, color: '#999' }}>状态</div>
-                          <div style={{ marginTop: 8 }}>
+                          <div style={{ marginTop: 6 }}>
                             <Badge color={AD_STATUS[detailData.status]?.color}
-                              text={<Text strong>{AD_STATUS[detailData.status]?.label || detailData.status}</Text>} />
+                              text={<Text style={{ fontSize: 13 }}>{AD_STATUS[detailData.status]?.label || detailData.status}</Text>} />
                           </div>
                           {runDays !== null && (
-                            <div style={{ fontSize: 11, color: '#bbb', marginTop: 8 }}>
+                            <div style={{ fontSize: 11, color: '#bbb', marginTop: 6 }}>
                               已运行 {runDays} 天
                             </div>
                           )}
                         </Card>
                       </Col>
                       <Col span={5}>
-                        <Card size="small" style={{ height: '100%' }}>
+                        <Card size="small" style={{ height: '100%' }} bodyStyle={{ padding: '12px 14px' }}>
                           <div style={{ fontSize: 12, color: '#999' }}>付费方式</div>
-                          <div style={{ marginTop: 8 }}>
-                            <Tag color={ptCfg.color} style={{ fontSize: 13, padding: '2px 8px' }}>{ptCfg.label}</Tag>
+                          <div style={{ marginTop: 6 }}>
+                            <Tag color={ptCfg.color} style={{ fontSize: 12 }}>{ptCfg.label}</Tag>
                           </div>
-                          <div style={{ fontSize: 11, marginTop: 8 }}>
+                          <div style={{ fontSize: 11, marginTop: 6 }}>
                             {aiSupported
-                              ? <Text type="success">✓ AI 调价支持</Text>
-                              : <Text type="secondary" style={{ color: '#bbb' }}>AI 调价不支持</Text>}
+                              ? <Text type="success" style={{ fontSize: 11 }}>AI 调价支持</Text>
+                              : <Text type="secondary" style={{ fontSize: 11, color: '#bbb' }}>AI 调价不支持</Text>}
                           </div>
                         </Card>
                       </Col>
@@ -1888,10 +1887,10 @@ const AdsOverview = ({ shopId, platform, shops, searched, syncing, lastSyncTime,
                     {plat === 'wb' && (
                       <Card
                         size="small"
-                        style={{ marginBottom: 16 }}
+                        style={{ marginBottom: 12 }}
                         title={
                           <Space>
-                            <span>📊 流量与转化</span>
+                            <span style={{ fontSize: 13 }}>流量与转化</span>
                             {campaignSummaryData?.date_from && (
                               <Text type="secondary" style={{ fontSize: 12, fontWeight: 400 }}>
                                 {campaignSummaryData.date_from} ~ {campaignSummaryData.date_to}
@@ -1942,17 +1941,17 @@ const AdsOverview = ({ shopId, platform, shops, searched, syncing, lastSyncTime,
                                   {cells.map((c, i) => (
                                     <Col xs={12} sm={6} key={i} style={{ marginBottom: 8 }}>
                                       <Tooltip title={c.tip}>
-                                        <div style={{ background: '#fafbfe', padding: '10px 12px',
-                                                      borderRadius: 6, cursor: 'help' }}>
+                                        <div style={{ background: '#fafbff', border: '1px solid #e6edff',
+                                                      padding: '10px 12px', borderRadius: 4, cursor: 'help' }}>
                                           <div style={{ fontSize: 11, color: '#999' }}>{c.title}</div>
                                           <div style={{
-                                            fontSize: 20, fontWeight: 600, color: c.color,
+                                            fontSize: 18, fontWeight: 600, color: c.color || '#1677ff',
                                             marginTop: 2,
                                           }}>
                                             {c.value != null
                                               ? (typeof c.value === 'number' ? c.value.toLocaleString() : c.value)
                                               : '-'}
-                                            <span style={{ fontSize: 12, fontWeight: 400, marginLeft: 2 }}>
+                                            <span style={{ fontSize: 12, fontWeight: 400, marginLeft: 2, color: '#999' }}>
                                               {c.suffix}
                                             </span>
                                           </div>
@@ -1965,16 +1964,16 @@ const AdsOverview = ({ shopId, platform, shops, searched, syncing, lastSyncTime,
                                 <Row gutter={16}>
                                   <Col span={12}>
                                     <Space>
-                                      <Text type="secondary">花费：</Text>
-                                      <Text strong style={{ fontSize: 16, color: '#cf1322' }}>
+                                      <Text type="secondary" style={{ fontSize: 12 }}>花费</Text>
+                                      <Text strong style={{ fontSize: 14 }}>
                                         ₽{(s.spend || 0).toLocaleString()}
                                       </Text>
                                     </Space>
                                   </Col>
                                   <Col span={12}>
                                     <Space>
-                                      <Text type="secondary">营收：</Text>
-                                      <Text strong style={{ fontSize: 16, color: '#52c41a' }}>
+                                      <Text type="secondary" style={{ fontSize: 12 }}>营收</Text>
+                                      <Text strong style={{ fontSize: 14 }}>
                                         ₽{(s.revenue || 0).toLocaleString()}
                                       </Text>
                                     </Space>
@@ -1988,23 +1987,23 @@ const AdsOverview = ({ shopId, platform, shops, searched, syncing, lastSyncTime,
                     )}
 
                     {/* 详细信息 */}
-                    <Card size="small" title="活动详情" bodyStyle={{ padding: 0 }}>
+                    <Card size="small" title={<span style={{ fontSize: 13 }}>活动详情</span>} bodyStyle={{ padding: 0 }}>
                       <Descriptions
                         column={2} bordered size="small"
-                        labelStyle={{ width: 120, background: '#fafafa', color: '#666' }}
+                        labelStyle={{ width: 120, background: '#fafbff', color: '#666' }}
                       >
-                        <Descriptions.Item label="📛 活动名称" span={2}>
+                        <Descriptions.Item label="活动名称" span={2}>
                           <Text strong>{detailData.name}</Text>
                         </Descriptions.Item>
-                        <Descriptions.Item label="🆔 活动 ID">
-                          <Text code style={{ fontSize: 13 }}>{detailData.platform_campaign_id || '-'}</Text>
+                        <Descriptions.Item label="活动 ID">
+                          <Text code style={{ fontSize: 12 }}>{detailData.platform_campaign_id || '-'}</Text>
                         </Descriptions.Item>
-                        <Descriptions.Item label="💸 总预算">
+                        <Descriptions.Item label="总预算">
                           {detailData.total_budget != null
                             ? <Text strong>₽{detailData.total_budget?.toLocaleString()}</Text>
                             : <Text type="secondary">不限</Text>}
                         </Descriptions.Item>
-                        <Descriptions.Item label="📅 投放周期" span={2}>
+                        <Descriptions.Item label="投放周期" span={2}>
                           {detailData.start_date
                             ? <>
                                 <Text>{detailData.start_date} ~ {detailData.end_date || '至今'}</Text>
