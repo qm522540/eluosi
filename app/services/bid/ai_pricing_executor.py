@@ -998,8 +998,19 @@ async def _analyze_now_inner(db, tenant_id: int, shop_id: int,
             # 替代旧的"按 CPA 公式倒推 bid"策略（容易把已盈利 SKU 加到亏损）
             current_roas = sku_stat.get("roas") or 0
             trend = sku_stat.get("trend", "stable")
-            max_adjust_pct_cfg = float((cfg.default_config or {}).get("max_adjust_pct") or 30) \
-                if hasattr(cfg, 'default_config') else 30.0
+            # cfg.default_config 在 DB 是 TEXT 存 JSON，可能是 dict 或 str
+            _dc = getattr(cfg, 'default_config', None)
+            if isinstance(_dc, str):
+                try:
+                    _dc = json.loads(_dc)
+                except Exception:
+                    _dc = {}
+            elif not isinstance(_dc, dict):
+                _dc = {}
+            try:
+                max_adjust_pct_cfg = float(_dc.get("max_adjust_pct") or 30)
+            except (TypeError, ValueError):
+                max_adjust_pct_cfg = 30.0
             pm_decision = _profit_max_decision(
                 current_roas=current_roas, breakeven_roas=breakeven_roas,
                 data_days=data_days, trend=trend, max_adjust_pct=max_adjust_pct_cfg,
