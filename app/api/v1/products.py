@@ -418,7 +418,6 @@ def _parse_uploaded_file(filename: str, content: bytes) -> tuple:
         all_rows = list(rows_iter)
         if not all_rows:
             return [], []
-        # 跳过开头空行（找第一行有内容的当 header）
         header_idx = 0
         for i, row in enumerate(all_rows):
             if any(c is not None and str(c).strip() for c in row):
@@ -427,8 +426,28 @@ def _parse_uploaded_file(filename: str, content: bytes) -> tuple:
         headers = [c if c is not None else "" for c in all_rows[header_idx]]
         body = all_rows[header_idx + 1:]
         return headers, [list(r) for r in body]
+    elif name_lower.endswith(".xls"):
+        # 老 Excel 二进制格式，用 xlrd（仅支持 .xls 不支持 .xlsx）
+        try:
+            import xlrd
+            import io
+            wb = xlrd.open_workbook(file_contents=content)
+            ws = wb.sheet_by_index(0)
+            all_rows = []
+            for r in range(ws.nrows):
+                all_rows.append([ws.cell_value(r, c) for c in range(ws.ncols)])
+            if not all_rows:
+                return [], []
+            header_idx = 0
+            for i, row in enumerate(all_rows):
+                if any(c is not None and str(c).strip() for c in row):
+                    header_idx = i
+                    break
+            return all_rows[header_idx], all_rows[header_idx + 1:]
+        except ImportError:
+            raise ValueError(".xls 旧格式需要 xlrd 库未安装。请把文件另存为 .xlsx 或 .csv 重试")
     else:
-        raise ValueError(f"不支持的文件格式（仅 .csv / .xlsx）: {filename}")
+        raise ValueError(f"不支持的文件格式（仅 .csv / .xlsx / .xls）: {filename}")
 
 
 @router.post("/import-margin/preview")
