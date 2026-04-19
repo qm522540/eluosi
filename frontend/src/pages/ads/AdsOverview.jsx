@@ -1256,12 +1256,14 @@ const AdsOverview = ({ shopId, platform, shops, searched, syncing, lastSyncTime,
 
   // ==================== 渲染 ====================
 
-  // 商品单元格：图 + 标题 + SKU 徽章（Ozon 有 image/title；WB 用 WbProductImg 探测 basket）
+  // 商品单元格：图 + 标题 + 商品ID + 本地编码
   const renderProductCell = (record) => {
     const sku = record.sku
-    const title = record.title || record.subject_name || `nm_id ${sku}`
+    const title = record.title || record.subject_name || `商品 ${sku}`
     const img = record.image
     const isWb = detailData?.platform === 'wb'
+    // 商品ID：Ozon=商家货品ID（≠广告SKU），WB=nm_id（platform_product_id 与 nm_id 相同）
+    const productId = record.platform_product_id || (isWb ? sku : null)
     return (
       <Space align="center" size="middle">
         {isWb ? (
@@ -1281,12 +1283,14 @@ const AdsOverview = ({ shopId, platform, shops, searched, syncing, lastSyncTime,
             }}>{title}</div>
           </Tooltip>
           <Space size={4} style={{ marginTop: 4 }}>
-            <Tag style={{ marginRight: 0, fontFamily: 'ui-monospace, monospace', fontSize: 11 }}>
-              {detailData?.platform === 'wb' ? `nm_id ${sku}` : `SKU ${sku}`}
-            </Tag>
+            {productId && (
+              <Tag style={{ marginRight: 0, fontFamily: 'ui-monospace, monospace', fontSize: 11 }}>
+                商品ID {productId}
+              </Tag>
+            )}
             {record.product_code && (
               <Tag color="blue" style={{ fontSize: 11, fontFamily: 'ui-monospace, monospace' }}>
-                编码 {record.product_code}
+                本地编码 {record.product_code}
               </Tag>
             )}
           </Space>
