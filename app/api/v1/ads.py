@@ -705,9 +705,11 @@ async def campaign_keywords(
         return success({"campaign_id": campaign_id, "keywords": [],
                         "msg": "当前仅支持 WB 平台的关键词统计"})
 
-    date_to = _date.today()
+    # WB 数据有 ~1 天延迟，今天那格通常是空的；用 [today-7, today-1] 拿满 7 天数据。
     # WB 限制：from 和 to 跨度最多 7 天（差值 ≤ 6 天），否则 400
-    date_from = date_to - _td(days=min(days, 7) - 1)
+    span = min(days, 7) - 1
+    date_to = _date.today() - _td(days=1)
+    date_from = date_to - _td(days=span)
 
     from app.services.platform.wb import WBClient
     client = WBClient(shop_id=shop.id, api_key=shop.api_key)
