@@ -34,8 +34,9 @@ from app.services.ad.service import (
     get_budget_overview, get_budget_suggestions,
 )
 from app.utils.response import success, error
-from app.config import settings
+from app.config import get_settings
 
+settings = get_settings()
 router = APIRouter()
 
 
