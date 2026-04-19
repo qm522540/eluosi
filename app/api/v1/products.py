@@ -205,6 +205,20 @@ def sync_products(
     db: Session = Depends(get_db),
     tenant_id: int = Depends(get_tenant_id),
 ):
+    # 同步前置校验：店铺存在 + 平台凭证齐全（避免 Celery 拿到任务才发现配置错而前端不感知）
+    from app.models.shop import Shop
+    shop = db.query(Shop).filter(
+        Shop.id == req.shop_id, Shop.tenant_id == tenant_id, Shop.status == "active",
+    ).first()
+    if not shop:
+        return error(30001, "店铺不存在或已停用")
+    if not shop.api_key:
+        return error(10002, "店铺未配置 API Key，去店铺设置补填")
+    if shop.platform == "ozon" and not shop.client_id:
+        return error(10002, "Ozon 店铺缺少 Client ID，去店铺设置补填")
+    if shop.platform == "yandex" and not shop.yandex_business_id:
+        return error(10002, "Yandex 店铺缺少 Business ID，去店铺设置补填")
+
     check = check_sync_needed(db, req.shop_id, tenant_id, force=req.force)
     if not check["need_sync"]:
         return success({"syncing": False, "message": "无需重复同步"})

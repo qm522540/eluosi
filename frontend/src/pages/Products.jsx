@@ -682,7 +682,9 @@ const Products = () => {
         message.info(res.data?.message || '无需同步')
       }
     } catch (e) {
-      message.error('同步失败')
+      // interceptor 把 code != 0 包成 Error(msg)；同步前置校验
+      // （缺 business_id / 缺 client_id / token 失效等）的提示要透传给用户
+      message.error(e?.message || '同步失败', 6)
     } finally {
       setSyncing(false)
     }
