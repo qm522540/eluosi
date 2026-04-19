@@ -20,10 +20,10 @@ import {
   getAdStats, getAdSummary,
   exportAdStats, getAlerts, getAlertConfig, updateAlertConfig,
   getCampaignProducts, getCampaignKeywords, excludeKeywords, updateCampaignBid, getCampaignBudget,
-  getShopSummary, addProtectedKeyword, removeProtectedKeyword,
+  addProtectedKeyword, removeProtectedKeyword,
   getAutoExcludeConfig, toggleAutoExclude, runAutoExcludeNow, getAutoExcludeLogs,
   getCampaignSummary, getOzonSkuQueries, syncOzonSkuQueries,
-  getTodaySummaryByCampaign,
+  getTodaySummaryByCampaign, getTodaySummaryByShop, getTodayAlertsByShop,
 } from '@/api/ads'
 import { getListings } from '@/api/products'
 import { getEfficiencyRules } from '@/api/keyword_stats'
@@ -88,33 +88,138 @@ const ColumnSelector = ({ platform, allColumns, visibleColumns, defaultColumns, 
 
 // ==================== 汇总卡片 ====================
 
-const TodaySummaryCards = ({ shopId }) => {
+const TodaySummaryBar = ({ shopId }) => {
   const [summary, setSummary] = useState(null)
+  const [alerts, setAlerts] = useState(null)
+  const [loading, setLoading] = useState(false)
 
-  useEffect(() => {
-    if (!shopId) return
-    getShopSummary(shopId).then(res => setSummary(res.data)).catch(() => {})
+  const load = useCallback(async (refresh = false) => {
+    if (!shopId) { setSummary(null); setAlerts(null); return }
+    setLoading(true)
+    try {
+      const [s, a] = await Promise.all([
+        getTodaySummaryByShop(shopId, refresh),
+        getTodayAlertsByShop(shopId),
+      ])
+      setSummary(s.data)
+      setAlerts(a.data)
+    } catch {
+      setSummary(null); setAlerts(null)
+    } finally { setLoading(false) }
   }, [shopId])
 
-  if (!summary) return null
+  useEffect(() => { load() }, [load])
 
-  const cards = [
-    { label: '今日总花费', value: `₽${(summary.today_spend || 0).toLocaleString()}`, sub: `昨日 ₽${(summary.yesterday_spend || 0).toLocaleString()}` },
-    { label: '店铺整体ROAS', value: `${summary.today_roas || '-'}x`, sub: `7天均值 ${summary.avg_roas_7d || '-'}x`, color: (summary.today_roas || 0) >= 3 ? '#52c41a' : (summary.today_roas || 0) >= 1.8 ? '#faad14' : '#ff4d4f' },
-    { label: '今日总订单', value: summary.today_orders || '-', sub: `7天均值 ${summary.avg_orders_7d || '-'}单/天` },
-    { label: '投放中活动', value: `${summary.active_count || 0}个`, sub: `共${summary.total_count || 0}个活动` },
-  ]
+  if (!shopId) return null
 
   return (
-    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginBottom: 16 }}>
-      {cards.map((card, i) => (
-        <div key={i} style={{ background: '#fafafa', borderRadius: 8, padding: '12px 16px' }}>
-          <div style={{ fontSize: 13, color: '#999', marginBottom: 4 }}>{card.label}</div>
-          <div style={{ fontSize: 22, fontWeight: 500, color: card.color || '#333' }}>{card.value}</div>
-          <div style={{ fontSize: 12, color: '#999', marginTop: 4 }}>{card.sub}</div>
-        </div>
-      ))}
-    </div>
+    <>
+      <Card
+        size="small"
+        style={{ marginBottom: 12, background: '#fafbff', borderColor: '#e6edff' }}
+        bodyStyle={{ padding: '10px 14px' }}
+      >
+        <Spin spinning={loading}>
+          <Row gutter={16} align="middle" wrap={false}>
+            <Col flex="none">
+              <Space size={6}>
+                <Text strong style={{ fontSize: 13 }}>今日</Text>
+                <Tooltip title="WB 数据有几小时延迟，早上常空，下午陆续就位。聚合店铺下所有 active 活动。">
+                  <Text type="secondary" style={{ fontSize: 11, cursor: 'help' }}>
+                    {summary?.today_date || '-'}
+                    {summary?.active_campaign_count != null
+                      ? ` · ${summary.active_campaign_count} 活动` : ''}
+                  </Text>
+                </Tooltip>
+              </Space>
+            </Col>
+            <Col flex="auto">
+              <Row gutter={16}>
+                <Col span={4}>
+                  <div style={{ fontSize: 11, color: '#999' }}>花费</div>
+                  <div style={{ fontSize: 16, fontWeight: 600 }}>
+                    ₽{(summary?.spend ?? 0).toLocaleString()}
+                  </div>
+                </Col>
+                <Col span={4}>
+                  <div style={{ fontSize: 11, color: '#999' }}>订单</div>
+                  <div style={{ fontSize: 16, fontWeight: 600, color: '#52c41a' }}>
+                    {summary?.orders ?? 0}
+                  </div>
+                </Col>
+                <Col span={4}>
+                  <div style={{ fontSize: 11, color: '#999' }}>曝光</div>
+                  <div style={{ fontSize: 16, fontWeight: 600 }}>
+                    {(summary?.views ?? 0).toLocaleString()}
+                  </div>
+                </Col>
+                <Col span={4}>
+                  <div style={{ fontSize: 11, color: '#999' }}>点击</div>
+                  <div style={{ fontSize: 16, fontWeight: 600 }}>
+                    {summary?.clicks ?? 0}
+                  </div>
+                </Col>
+                <Col span={4}>
+                  <div style={{ fontSize: 11, color: '#999' }}>CTR</div>
+                  <div style={{ fontSize: 16, fontWeight: 600 }}>
+                    {summary?.ctr ? `${summary.ctr}%` : '-'}
+                  </div>
+                </Col>
+                <Col span={4}>
+                  <div style={{ fontSize: 11, color: '#999' }}>ROAS</div>
+                  <div style={{
+                    fontSize: 16, fontWeight: 600,
+                    color: (summary?.roas ?? 0) >= 2 ? '#52c41a'
+                         : (summary?.roas ?? 0) > 0 ? '#faad14' : '#999',
+                  }}>
+                    {summary?.roas ? `${summary.roas}x` : '-'}
+                  </div>
+                </Col>
+              </Row>
+            </Col>
+            <Col flex="none">
+              <Button size="small" icon={<SyncOutlined spin={loading} />}
+                onClick={() => load(true)}>刷新</Button>
+            </Col>
+          </Row>
+        </Spin>
+      </Card>
+
+      {/* 异常告警条 */}
+      {alerts && alerts.alert_count > 0 && (
+        <Card
+          size="small"
+          style={{ marginBottom: 12, background: '#fff', borderColor: '#ffccc7' }}
+          bodyStyle={{ padding: '10px 14px' }}
+        >
+          <div style={{ marginBottom: 6 }}>
+            <Text strong style={{ fontSize: 12, color: '#cf1322' }}>
+              ⚠ 今日异常 {alerts.alert_count} 项（共扫 {alerts.checked_count} 个活动）
+            </Text>
+          </div>
+          <Space direction="vertical" size={4} style={{ width: '100%' }}>
+            {alerts.alerts.slice(0, 8).map((a, i) => {
+              const tagColor = a.severity === 'high' ? 'red' : 'orange'
+              const tagText = a.type === 'zero_order_waste' ? '烧钱无单'
+                : a.type === 'low_roas' ? 'ROAS 低'
+                : a.type === 'low_budget' ? '预算低' : '异常'
+              return (
+                <div key={i} style={{ fontSize: 12, display: 'flex', gap: 8, alignItems: 'center' }}>
+                  <Tag color={tagColor} style={{ margin: 0, fontSize: 11 }}>{tagText}</Tag>
+                  <Text strong style={{ fontSize: 12 }}>{a.campaign_name}</Text>
+                  <Text type="secondary" style={{ fontSize: 12 }}>{a.msg}</Text>
+                </div>
+              )
+            })}
+            {alerts.alerts.length > 8 && (
+              <Text type="secondary" style={{ fontSize: 11 }}>
+                还有 {alerts.alerts.length - 8} 项，未列出
+              </Text>
+            )}
+          </Space>
+        </Card>
+      )}
+    </>
   )
 }
 
@@ -1675,8 +1780,8 @@ const AdsOverview = ({ shopId, platform, shops, searched, syncing, lastSyncTime,
 
   return (
     <>
-      {/* 顶部汇总卡片 */}
-      <TodaySummaryCards shopId={shopId} />
+      {/* 今日实时汇总 + 异常告警 */}
+      <TodaySummaryBar shopId={shopId} />
 
       {/* 活动列表 */}
       <Card

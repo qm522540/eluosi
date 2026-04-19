@@ -354,3 +354,8 @@ export function getTodaySummaryByShop(shopId, refresh = false) {
     params: refresh ? { refresh: true } : {},
   })
 }
+
+/** 店铺级当日异常告警（烧钱无单 / ROAS<1 / 预算低） */
+export function getTodayAlertsByShop(shopId) {
+  return request.get(`/ads/today-alerts/shop/${shopId}`)
+}

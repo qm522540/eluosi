@@ -2080,3 +2080,116 @@ async def today_summary_shop(
     }
     _set_cached_today("shop", shop.id, result)
     return success(result)
+
+
+@router.get("/today-alerts/shop/{shop_id}")
+async def today_alerts_shop(
+    db: Session = Depends(get_db),
+    shop=Depends(get_owned_shop),
+):
+    """店铺级当日异常告警：今日 0 单但烧钱 / 预算余额低 / ROAS < 1
+
+    遍历店铺下 active WB 活动，按规则筛出需要立即关注的活动。
+    Redis 缓存 5 分钟。
+    """
+    from app.models.ad import AdCampaign
+    from datetime import date as _date
+    import asyncio as _aio
+
+    cached = _get_cached_today("alerts", shop.id)
+    if cached is not None:
+        return success(cached)
+
+    today_iso = _date.today().isoformat()
+    if shop.platform != "wb":
+        result = {"today_date": today_iso, "alerts": [], "msg": "Ozon/Yandex 后续接入"}
+        _set_cached_today("alerts", shop.id, result)
+        return success(result)
+
+    camps = db.query(AdCampaign).filter(
+        AdCampaign.shop_id == shop.id, AdCampaign.tenant_id == shop.tenant_id,
+        AdCampaign.platform == "wb", AdCampaign.status == "active",
+    ).all()
+    if not camps:
+        result = {"today_date": today_iso, "alerts": []}
+        _set_cached_today("alerts", shop.id, result)
+        return success(result)
+
+    from app.services.platform.wb import WBClient
+    client = WBClient(shop_id=shop.id, api_key=shop.api_key)
+    try:
+        async def _fetch_one(camp):
+            try:
+                summary = await client.fetch_campaign_summary(
+                    advert_id=camp.platform_campaign_id,
+                    date_from=today_iso, date_to=today_iso,
+                )
+                budget_data = await client._request(
+                    "GET", "https://advert-api.wildberries.ru/adv/v1/budget",
+                    params={"id": int(camp.platform_campaign_id)},
+                )
+                budget = budget_data.get("total") if isinstance(budget_data, dict) else None
+                return camp, summary, budget
+            except Exception:
+                return camp, {}, None
+        BATCH = 5
+        results = []
+        for i in range(0, len(camps), BATCH):
+            batch = camps[i:i + BATCH]
+            results.extend(await _aio.gather(*[_fetch_one(c) for c in batch]))
+    finally:
+        await client.close()
+
+    # 三类告警规则
+    alerts = []
+    for camp, s, budget in results:
+        spend = float(s.get("sum") or 0)
+        orders = int(s.get("orders") or 0)
+        revenue = float(s.get("sum_price") or 0)
+        roas = (revenue / spend) if spend > 0 else 0
+
+        # 1. 烧钱无单（spend > 200 但 0 单）
+        if spend > 200 and orders == 0:
+            alerts.append({
+                "type": "zero_order_waste",
+                "severity": "high",
+                "campaign_id": camp.id,
+                "campaign_name": camp.name,
+                "msg": f"今日已花 ¥{spend:.0f} 但 0 单",
+                "spend": round(spend, 2),
+                "orders": 0,
+            })
+        # 2. ROAS < 1（亏损，spend > 100）
+        elif roas > 0 and roas < 1 and spend > 100:
+            alerts.append({
+                "type": "low_roas",
+                "severity": "medium",
+                "campaign_id": camp.id,
+                "campaign_name": camp.name,
+                "msg": f"ROAS {roas:.2f}x（亏损中），今日花 ¥{spend:.0f}",
+                "spend": round(spend, 2),
+                "roas": round(roas, 2),
+            })
+        # 3. 预算余额低（< 100 RUB）
+        if budget is not None and budget < 100:
+            alerts.append({
+                "type": "low_budget",
+                "severity": "medium",
+                "campaign_id": camp.id,
+                "campaign_name": camp.name,
+                "msg": f"预算余额仅 ¥{budget:.0f}",
+                "budget_remaining": round(float(budget), 2),
+            })
+
+    # 按 severity 排序：high 在前
+    sev_order = {"high": 0, "medium": 1, "low": 2}
+    alerts.sort(key=lambda a: sev_order.get(a["severity"], 9))
+
+    result = {
+        "today_date": today_iso,
+        "checked_count": len(camps),
+        "alert_count": len(alerts),
+        "alerts": alerts,
+    }
+    _set_cached_today("alerts", shop.id, result)
+    return success(result)
