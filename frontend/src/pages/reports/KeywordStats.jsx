@@ -271,12 +271,22 @@ const KeywordStats = () => {
       render: (v, record) => {
         const zh = kwTranslations[v]
         const hasZh = zh && zh !== v
+        const fs = record.first_seen
+        const fsShort = fs ? fs.slice(5) : ''  // MM-DD
         return (
           <div style={{ display: 'flex', alignItems: 'flex-start', gap: 6 }}>
             <div style={{ minWidth: 0, flex: 1 }}>
               <div style={{ fontSize: 13, fontWeight: 500, lineHeight: 1.3 }}>{v}</div>
-              <div style={{ fontSize: 11, color: '#999', lineHeight: 1.3, marginTop: 1 }}>
-                {hasZh ? zh : <span style={{ color: '#ccc' }}>翻译中...</span>}
+              <div style={{ fontSize: 11, color: '#999', lineHeight: 1.3, marginTop: 1,
+                            display: 'flex', justifyContent: 'space-between', gap: 8 }}>
+                <span>{hasZh ? zh : <span style={{ color: '#ccc' }}>翻译中...</span>}</span>
+                {fs && (
+                  <Tooltip title={`首次出现 ${fs}（本地累积起点 04-10）`}>
+                    <span style={{ color: '#bbb', fontSize: 10, cursor: 'help', whiteSpace: 'nowrap' }}>
+                      首次 {fsShort}
+                    </span>
+                  </Tooltip>
+                )}
               </div>
             </div>
             <Tooltip title="查看引用此关键词的活动和商品">

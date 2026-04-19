@@ -94,6 +94,22 @@ def summary(
     """
     rows = db.execute(text(items_sql), params).fetchall()
 
+    # 单独查每个关键词的"绝对首次出现日期"（不受 date_from/date_to 过滤影响）
+    # MIN(stat_date) 跨整个本店的历史，用户切换日期筛选时该字段不变
+    first_seen_map = {}
+    if rows:
+        kws = [r.keyword for r in rows]
+        # IN 列表用 expanding bindparam
+        from sqlalchemy import bindparam
+        fs_sql = text("""
+            SELECT keyword, MIN(stat_date) first_seen
+            FROM keyword_daily_stats
+            WHERE tenant_id = :tid AND shop_id = :sid AND keyword IN :kws
+            GROUP BY keyword
+        """).bindparams(bindparam("kws", expanding=True))
+        fs_rows = db.execute(fs_sql, {"tid": tenant_id, "sid": shop_id, "kws": kws}).fetchall()
+        first_seen_map = {r.keyword: r.first_seen for r in fs_rows}
+
     # 效能标签计算：租户规则 > 系统默认
     rules = get_rules(db, tenant_id)
     distinct_count = len(rows)
@@ -114,6 +130,7 @@ def summary(
             rules=rules,
         )
 
+        fs = first_seen_map.get(r.keyword)
         items_all.append({
             "keyword": r.keyword,
             "impressions": imp,
@@ -125,6 +142,7 @@ def summary(
             "campaigns": [int(x) for x in (r.campaign_ids or "").split(",") if x.strip().isdigit()],
             "skus": [x for x in (r.skus or "").split(",") if x.strip() and x.strip() != "None"],
             "efficiency": eff,
+            "first_seen": fs.isoformat() if fs else None,
         })
 
     # 效能 server-side filter（在 classify 之后）
