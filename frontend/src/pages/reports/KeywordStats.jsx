@@ -270,17 +270,21 @@ const KeywordStats = () => {
       title: '关键词', dataIndex: 'keyword', key: 'keyword',
       render: (v, record) => {
         const zh = kwTranslations[v]
+        const hasZh = zh && zh !== v
         return (
-          <Space size={6}>
-            <Tooltip title={zh && zh !== v ? `中文：${zh}` : '翻译加载中...'}>
-              <Text strong style={{ fontSize: 13, cursor: 'help' }}>{v}</Text>
-            </Tooltip>
+          <div style={{ display: 'flex', alignItems: 'flex-start', gap: 6 }}>
+            <div style={{ minWidth: 0, flex: 1 }}>
+              <div style={{ fontSize: 13, fontWeight: 500, lineHeight: 1.3 }}>{v}</div>
+              <div style={{ fontSize: 11, color: '#999', lineHeight: 1.3, marginTop: 1 }}>
+                {hasZh ? zh : <span style={{ color: '#ccc' }}>翻译中...</span>}
+              </div>
+            </div>
             <Tooltip title="查看引用此关键词的活动和商品">
               <Button size="small" type="text" icon={<EyeOutlined />}
-                style={{ fontSize: 11, padding: '0 4px', height: 20 }}
+                style={{ fontSize: 11, padding: '0 4px', height: 20, flex: 'none' }}
                 onClick={() => handleViewKeywordCampaigns(v, record.efficiency)} />
             </Tooltip>
-          </Space>
+          </div>
         )
       },
     },
