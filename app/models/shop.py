@@ -25,6 +25,9 @@ class Shop(BaseMixin, Base):
     # Ozon Performance API（广告）独立凭证
     perf_client_id: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
     perf_client_secret: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    # Yandex Market 专用（YandexClient.fetch_products 必需）
+    yandex_business_id: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    yandex_campaign_id: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     currency: Mapped[str] = mapped_column(String(3), nullable=False, default="RUB")
     timezone: Mapped[str] = mapped_column(String(50), nullable=False, default="Europe/Moscow")
     status: Mapped[str] = mapped_column(
