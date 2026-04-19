@@ -3,7 +3,7 @@ import {
   Typography, Card, Table, Button, Tag, Space, Select, Row, Col,
   Statistic, Modal, Form, Input, InputNumber, message, DatePicker, Tooltip, Badge, Empty,
   Popconfirm, Tabs, Alert, Drawer, Descriptions, List, Divider, Progress, Checkbox, Popover,
-  Switch, Segmented, Spin,
+  Switch, Segmented, Spin, notification,
 } from 'antd'
 import {
   SearchOutlined, EditOutlined, EyeOutlined, SyncOutlined, PlusOutlined,
@@ -1232,18 +1232,55 @@ const AdsOverview = ({ shopId, platform, shops, searched, syncing, lastSyncTime,
                             const added = res.data?.added || []
                             const skipped = res.data?.skipped_protected || []
                             const dropped = res.data?.dropped_invalid || []
-                            const parts = []
-                            if (added.length > 0) parts.push(`屏蔽 ${added.length} 个`)
-                            if (skipped.length > 0) parts.push(`白名单跳过 ${skipped.length} 个`)
+                            const wbRejected = dropped.filter(d => !d.includes(' '))
                             const allPhraseDropped = [...phraseDropped, ...dropped.filter(d => d.includes(' '))]
-                            if (allPhraseDropped.length > 0) parts.push(`${allPhraseDropped.length} 个含空格短语 WB 不支持`)
-                            if (dropped.filter(d => !d.includes(' ')).length > 0) {
-                              parts.push(`WB 拒绝 ${dropped.filter(d => !d.includes(' ')).length} 个`)
-                            }
-                            if (added.length > 0) {
-                              message.success(parts.join('；'), 5)
-                            } else {
-                              message.info(parts.length ? parts.join('；') : '未屏蔽任何词', 5)
+
+                            // 简洁顶部提示
+                            const headParts = []
+                            if (added.length > 0) headParts.push(`屏蔽 ${added.length} 个`)
+                            if (skipped.length > 0) headParts.push(`白名单跳过 ${skipped.length} 个`)
+                            if (allPhraseDropped.length > 0) headParts.push(`${allPhraseDropped.length} 个含空格短语未送 WB`)
+                            if (wbRejected.length > 0) headParts.push(`WB 拒绝 ${wbRejected.length} 个`)
+                            const headMsg = headParts.length ? headParts.join('；') : '未屏蔽任何词'
+                            if (added.length > 0) message.success(headMsg, 4)
+                            else message.info(headMsg, 4)
+
+                            // 有 WB 拒绝词或含空格短语 → 弹 notification 列出具体词 + 解释
+                            if (wbRejected.length > 0 || allPhraseDropped.length > 0) {
+                              notification.warning({
+                                message: '部分关键词未屏蔽',
+                                duration: 0,  // 用户手动关
+                                description: (
+                                  <div style={{ fontSize: 12 }}>
+                                    {wbRejected.length > 0 && (
+                                      <div style={{ marginBottom: 8 }}>
+                                        <div style={{ marginBottom: 4 }}>
+                                          <strong>WB 拒绝（{wbRejected.length} 个）：</strong>
+                                          <Tooltip title="WB 接口报 'norm_query is not valid for nm'。常见原因：①该词是商品类目核心词（如卖饰品时屏蔽 «украшения»），WB 不允许屏蔽自己的核心词；②该词形不在 WB 对该商品的可识别 norm_query 集合里。可到 WB 后台手动尝试。">
+                                            <span style={{ color: '#1677ff', cursor: 'help', marginLeft: 4 }}>为什么？</span>
+                                          </Tooltip>
+                                        </div>
+                                        <div>{wbRejected.map(w => (
+                                          <Tag key={w} color="volcano" style={{ margin: 2, fontSize: 11 }}>{w}</Tag>
+                                        ))}</div>
+                                      </div>
+                                    )}
+                                    {allPhraseDropped.length > 0 && (
+                                      <div>
+                                        <div style={{ marginBottom: 4 }}>
+                                          <strong>含空格短语未送 WB（{allPhraseDropped.length} 个）：</strong>
+                                          <Tooltip title="当前前端兜底跳过含空格短语。WB 文档实际支持空格短语，但需要是该商品的归一化 norm_query。后续会改成「按 WB 实际反馈处理」。">
+                                            <span style={{ color: '#1677ff', cursor: 'help', marginLeft: 4 }}>说明</span>
+                                          </Tooltip>
+                                        </div>
+                                        <div>{allPhraseDropped.map(w => (
+                                          <Tag key={w} color="default" style={{ margin: 2, fontSize: 11 }}>{w}</Tag>
+                                        ))}</div>
+                                      </div>
+                                    )}
+                                  </div>
+                                ),
+                              })
                             }
                             setSuggestedExcludeWords([])
                             setQualityCheckedSku(null)
