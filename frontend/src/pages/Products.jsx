@@ -3,11 +3,13 @@ import {
   Typography, Card, Table, Button, Tag, Space, Row, Col,
   Input, Select, InputNumber, Modal, Form, Tooltip, Empty,
   Badge, message, Alert, Spin, Drawer, Divider, Image, Switch,
+  Upload,
 } from 'antd'
 import {
   SyncOutlined, PlusOutlined, EditOutlined,
-  RobotOutlined, SendOutlined, ShopOutlined,
+  RobotOutlined, SendOutlined, ShopOutlined, UploadOutlined,
 } from '@ant-design/icons'
+import request from '@/api'
 import {
   getProducts, syncProducts, checkSyncNeeded,
   updateProductMargin, generateDescription, optimizeTitle,
@@ -577,6 +579,7 @@ const dayjsLike = (iso) => {
 }
 
 const Products = () => {
+  const navigate = useNavigate()
   const tenant = useAuthStore(s => s.tenant)
   const tenantId = tenant?.id
 
@@ -608,6 +611,54 @@ const Products = () => {
   const [generatedDesc, setGeneratedDesc] = useState('')
 
   const [selectedRowKeys, setSelectedRowKeys] = useState([])
+
+  // 净毛利率上传
+  const [importVisible, setImportVisible] = useState(false)
+  const [importPreview, setImportPreview] = useState(null)
+  const [importLoading, setImportLoading] = useState(false)
+  const [importConfirming, setImportConfirming] = useState(false)
+  const handleImportFile = async (file) => {
+    setImportLoading(true)
+    try {
+      const fd = new FormData()
+      fd.append('file', file)
+      const res = await request.post('/products/import-margin/preview', fd, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      })
+      setImportPreview(res.data)
+    } catch (e) {
+      message.error(e?.message || '解析失败')
+    } finally {
+      setImportLoading(false)
+    }
+    return false  // 阻止 Upload 自动上传
+  }
+  const handleImportConfirm = async () => {
+    if (!importPreview) return
+    const items = importPreview.items.filter(i => i.matched && i.margin_value != null)
+    if (items.length === 0) {
+      message.warning('没有可更新的条目')
+      return
+    }
+    setImportConfirming(true)
+    try {
+      const res = await request.post('/products/import-margin/confirm', { items })
+      message.success(`更新 ${res.data.updated} 条`, 4)
+      if (res.data.not_found_count > 0) {
+        Modal.warning({
+          title: `${res.data.not_found_count} 条编码本地找不到`,
+          content: <pre style={{ maxHeight: 300, overflow: 'auto' }}>{(res.data.not_found || []).join('\n')}</pre>,
+        })
+      }
+      setImportVisible(false)
+      setImportPreview(null)
+      fetchProducts(page)
+    } catch (e) {
+      message.error(e?.message || '更新失败')
+    } finally {
+      setImportConfirming(false)
+    }
+  }
 
   // 商品编辑弹窗
   const [editModal, setEditModal] = useState(false)
@@ -1243,8 +1294,22 @@ const Products = () => {
             </Button>
           </Col>
           <Col>
+            <Button icon={<UploadOutlined />}
+              onClick={() => { setImportPreview(null); setImportVisible(true) }}>
+              上传数据
+            </Button>
+          </Col>
+          <Col>
             <Button type="primary" icon={<PlusOutlined />}
               onClick={() => {}}>新增商品</Button>
+          </Col>
+          <Col>
+            <Tooltip title="分析付费广告中的高 ROAS 词，找出标题未覆盖的反哺候选">
+              <Button icon={<SearchOutlined />}
+                onClick={() => navigate('/seo/optimize')}>
+                SEO 优化建议
+              </Button>
+            </Tooltip>
           </Col>
           {selectedRowKeys.length > 0 && (
             <Col>
@@ -2082,6 +2147,117 @@ const Products = () => {
           </div>
         )}
       </Drawer>
+
+      {/* 上传净毛利率 Modal */}
+      <Modal
+        title="上传数据更新净毛利率"
+        open={importVisible}
+        onCancel={() => { setImportVisible(false); setImportPreview(null) }}
+        width={900}
+        footer={
+          importPreview
+            ? [
+                <Button key="re" onClick={() => setImportPreview(null)}>重新选文件</Button>,
+                <Button key="cancel" onClick={() => { setImportVisible(false); setImportPreview(null) }}>取消</Button>,
+                <Button key="ok" type="primary" loading={importConfirming}
+                  disabled={!(importPreview.summary?.matched > 0)}
+                  onClick={handleImportConfirm}>
+                  确认更新 {importPreview.summary?.matched || 0} 条
+                </Button>,
+              ]
+            : [<Button key="cancel" onClick={() => setImportVisible(false)}>取消</Button>]
+        }
+      >
+        {!importPreview && (
+          <div>
+            <Alert
+              type="info" showIcon style={{ marginBottom: 16 }}
+              message="选择 Excel (.xlsx) 或 CSV 文件"
+              description={
+                <div>
+                  <div>系统会自动识别表头里的「本地编码」和「净毛利率」列。</div>
+                  <div>净毛利率支持 28%、28、0.28 三种写法。</div>
+                  <div>已存在值会被覆盖，找不到编码的行会跳过并列出。</div>
+                </div>
+              }
+            />
+            <Upload.Dragger
+              accept=".xlsx,.xls,.csv"
+              beforeUpload={handleImportFile}
+              showUploadList={false}
+              disabled={importLoading}
+            >
+              <p style={{ fontSize: 32, color: '#1677ff' }}>
+                <UploadOutlined />
+              </p>
+              <p>点击或拖拽文件到此处</p>
+              <p style={{ color: '#999', fontSize: 12 }}>
+                {importLoading ? '解析中...' : '支持 .xlsx / .csv，单文件 ≤ 10MB'}
+              </p>
+            </Upload.Dragger>
+          </div>
+        )}
+
+        {importPreview && (
+          <div>
+            <Alert
+              type={importPreview.summary?.matched > 0 ? 'success' : 'warning'}
+              showIcon
+              style={{ marginBottom: 12 }}
+              message={
+                <Space wrap>
+                  <span>共 {importPreview.summary?.total || 0} 行</span>
+                  <span style={{ color: '#52c41a' }}>可更新 {importPreview.summary?.matched || 0} 条</span>
+                  {importPreview.summary?.code_not_found > 0 && (
+                    <span style={{ color: '#faad14' }}>编码不存在 {importPreview.summary.code_not_found}</span>
+                  )}
+                  {importPreview.summary?.format_err > 0 && (
+                    <span style={{ color: '#cf1322' }}>格式错 {importPreview.summary.format_err}</span>
+                  )}
+                </Space>
+              }
+              description={
+                <div style={{ fontSize: 12 }}>
+                  自动识别：编码列 = <Tag>{importPreview.detected_code_header}</Tag>
+                  净毛利率列 = <Tag>{importPreview.detected_margin_header}</Tag>
+                </div>
+              }
+            />
+            <Table
+              size="small"
+              rowKey="row_no"
+              dataSource={importPreview.items}
+              pagination={{ pageSize: 10, size: 'small' }}
+              scroll={{ y: 360 }}
+              columns={[
+                { title: '行', dataIndex: 'row_no', width: 60 },
+                { title: '本地编码', dataIndex: 'code', width: 130 },
+                {
+                  title: '原值', dataIndex: 'old_margin', width: 90,
+                  render: v => v != null ? `${(v * 100).toFixed(0)}%` : '-',
+                },
+                {
+                  title: '新值', dataIndex: 'margin_value', width: 90,
+                  render: (v, r) => v != null
+                    ? <Tag color="blue">{(v * 100).toFixed(1)}%</Tag>
+                    : <Tag color="default">{r.margin_raw || '-'}</Tag>,
+                },
+                {
+                  title: '状态', dataIndex: 'matched', width: 130,
+                  render: (m, r) => m
+                    ? <Tag color="green">可更新</Tag>
+                    : <Tag color="orange">{r.error || '跳过'}</Tag>,
+                },
+              ]}
+            />
+            {importPreview.items_total > importPreview.items.length && (
+              <div style={{ marginTop: 8, fontSize: 12, color: '#999' }}>
+                列表只显示前 {importPreview.items.length} 行，共 {importPreview.items_total} 行将处理
+              </div>
+            )}
+          </div>
+        )}
+      </Modal>
     </div>
   )
 }
