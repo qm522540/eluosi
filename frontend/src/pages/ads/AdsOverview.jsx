@@ -1168,7 +1168,7 @@ const AdsOverview = ({ shopId, platform, shops, searched, syncing, lastSyncTime,
         )
       }
       return (
-        <div style={{ padding: 8, background: '#fafafa', borderRadius: 4 }}>
+        <div style={{ padding: 8, background: '#fafbff', borderRadius: 4, border: '1px solid #e6edff' }}>
           {/* 顶部信息 + 操作按钮栏 */}
           <div style={{ marginBottom: 8 }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -1177,7 +1177,7 @@ const AdsOverview = ({ shopId, platform, shops, searched, syncing, lastSyncTime,
                 <Text strong style={{ fontSize: 13 }}>{kws.length} 个</Text>
                 <Text type="secondary" style={{ fontSize: 12 }}>· 近7天实际触发</Text>
                 {excluded.length > 0 && (
-                  <Tag color="red" style={{ marginLeft: 8 }}>🚫 已屏蔽 {excluded.length} 个</Tag>
+                  <Tag color="default" style={{ marginLeft: 8, fontSize: 11 }}>已屏蔽 {excluded.length} 个</Tag>
                 )}
               </Space>
               <Space size={8}>
@@ -1313,11 +1313,11 @@ const AdsOverview = ({ shopId, platform, shops, searched, syncing, lastSyncTime,
             </div>
           </div>
           {qualityCheckedSku === sku && suggestedExcludeWords.length > 0 && (
-            <div style={{ marginBottom: 8, padding: '8px 12px', background: '#fff7e6',
-                          border: '1px solid #ffd591', borderRadius: 4 }}>
+            <div style={{ marginBottom: 8, padding: '8px 12px', background: '#fff',
+                          border: '1px solid #ffccc7', borderRadius: 4 }}>
               <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8 }}>
-                <Text strong style={{ fontSize: 12, color: '#d46b08', whiteSpace: 'nowrap' }}>
-                  🔍 质检发现 {suggestedExcludeWords.length} 个建议屏蔽词：
+                <Text strong style={{ fontSize: 12, color: '#cf1322', whiteSpace: 'nowrap' }}>
+                  质检发现 {suggestedExcludeWords.length} 个建议屏蔽词：
                 </Text>
                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, flex: 1 }}>
                   {suggestedExcludeWords.map(w => {
@@ -2030,17 +2030,15 @@ const AdsOverview = ({ shopId, platform, shops, searched, syncing, lastSyncTime,
                   {detailData.platform === 'wb' && (
                     <Card
                       size="small"
-                      style={{ marginBottom: 12, background: autoExcludeCfg?.enabled ? '#f6ffed' : '#fafafa',
-                               borderColor: autoExcludeCfg?.enabled ? '#b7eb8f' : '#d9d9d9' }}
+                      style={{ marginBottom: 12, background: '#fafbff', borderColor: '#e6edff' }}
                       bodyStyle={{ padding: '10px 14px' }}
                     >
                       <Row align="middle" gutter={12} wrap={false}>
                         <Col flex="none">
                           <Space size={8}>
-                            <span style={{ fontSize: 18 }}>🤖</span>
-                            <Text strong>自动屏蔽托管</Text>
+                            <Text strong style={{ fontSize: 13 }}>自动屏蔽托管</Text>
                             <Switch
-                              size="default"
+                              size="small"
                               checked={!!autoExcludeCfg?.enabled}
                               loading={autoExcludeBusy}
                               onChange={handleToggleAutoExclude}
@@ -2053,9 +2051,11 @@ const AdsOverview = ({ shopId, platform, shops, searched, syncing, lastSyncTime,
                             <a onClick={() => setRulesDrawerOpen(true)}>查看/调整</a>
                             ），跳过白名单 + 已屏蔽词
                           </Text>
-                          <div style={{ marginTop: 4, fontSize: 13 }}>
-                            本月已屏蔽 <Text strong style={{ color: '#cf1322' }}>{autoExcludeCfg?.month_excluded_total ?? 0}</Text> 个词
-                            · 估算节省 <Text strong style={{ color: '#52c41a' }}>¥{(autoExcludeCfg?.month_saved_estimated ?? 0).toLocaleString()}</Text>
+                          <div style={{ marginTop: 4, fontSize: 12 }}>
+                            <Text type="secondary">本月已屏蔽 </Text>
+                            <Text strong>{autoExcludeCfg?.month_excluded_total ?? 0}</Text>
+                            <Text type="secondary"> 个词 · 估算节省 </Text>
+                            <Text strong>¥{(autoExcludeCfg?.month_saved_estimated ?? 0).toLocaleString()}</Text>
                             {autoExcludeCfg?.last_run_at && (
                               <Text type="secondary" style={{ marginLeft: 12, fontSize: 12 }}>
                                 · 最近运行 {formatMoscowTime(autoExcludeCfg.last_run_at)}
@@ -2077,59 +2077,60 @@ const AdsOverview = ({ shopId, platform, shops, searched, syncing, lastSyncTime,
                   )}
                   {/* 顶部汇总条 */}
                   {campaignProducts.length > 0 && (
-                    <Card size="small" style={{ marginBottom: 12, background: '#fafbfe', borderColor: '#e6ecf5' }}>
+                    <Card size="small" style={{ marginBottom: 12, background: '#fafbff', borderColor: '#e6edff' }}
+                      bodyStyle={{ padding: '12px 16px' }}>
                       <Row gutter={24}>
                         <Col span={6}>
                           <Statistic
-                            title="商品数"
+                            title={<span style={{ fontSize: 12, color: '#999' }}>商品数</span>}
                             value={campaignProducts.length}
-                            valueStyle={{ fontSize: 20 }}
+                            valueStyle={{ fontSize: 18, fontWeight: 600 }}
                           />
                         </Col>
                         {detailData.platform === 'ozon' ? (
                           <Col span={9}>
                             <Statistic
-                              title="平均出价"
+                              title={<span style={{ fontSize: 12, color: '#999' }}>平均出价</span>}
                               value={Math.round(
                                 campaignProducts.reduce((s, p) => s + Number(p.bid || 0), 0)
                                 / Math.max(campaignProducts.length, 1) / 1000000
                               )}
                               suffix="₽"
-                              valueStyle={{ fontSize: 20, color: '#1677ff' }}
+                              valueStyle={{ fontSize: 18, fontWeight: 600, color: '#1677ff' }}
                             />
                           </Col>
                         ) : (
                           <>
                             <Col span={6}>
                               <Statistic
-                                title="搜索均价"
+                                title={<span style={{ fontSize: 12, color: '#999' }}>搜索均价</span>}
                                 value={(
                                   campaignProducts.reduce((s, p) => s + Number(p.bid_search || 0), 0)
                                   / Math.max(campaignProducts.length, 1)
                                 ).toFixed(0)}
                                 suffix="₽"
-                                valueStyle={{ fontSize: 20, color: '#1677ff' }}
+                                valueStyle={{ fontSize: 18, fontWeight: 600, color: '#1677ff' }}
                               />
                             </Col>
                             <Col span={6}>
                               <Statistic
-                                title="推荐均价"
+                                title={<span style={{ fontSize: 12, color: '#999' }}>推荐均价</span>}
                                 value={(
                                   campaignProducts.reduce((s, p) => s + Number(p.bid_recommendations || 0), 0)
                                   / Math.max(campaignProducts.length, 1)
                                 ).toFixed(0)}
                                 suffix="₽"
-                                valueStyle={{ fontSize: 20, color: '#722ed1' }}
+                                valueStyle={{ fontSize: 18, fontWeight: 600, color: '#1677ff' }}
                               />
                             </Col>
                           </>
                         )}
                         <Col span={detailData.platform === 'ozon' ? 9 : 6}>
                           <Statistic
-                            title="已绑定广告组"
+                            title={<span style={{ fontSize: 12, color: '#999' }}>已绑定广告组</span>}
                             value={campaignProducts.filter(p => getAdGroupIdBySku(p.sku)).length}
                             suffix={`/ ${campaignProducts.length}`}
-                            valueStyle={{ fontSize: 20, color: '#52c41a' }}
+                            valueStyle={{ fontSize: 18, fontWeight: 600, color: '#52c41a' }}
                           />
                         </Col>
                       </Row>
