@@ -69,6 +69,45 @@ def _set_cached_summary(advert_id, df: str, dt: str, summary):
         pass
 
 
+# ==================== WB excluded-keywords 缓存 ====================
+# WB get-minus 接口典型 19-23 秒，是 /campaign-keywords 主要瓶颈。
+# 屏蔽词列表只在 exclude_keywords / 自动屏蔽 task 跑后才变 → 写后失效模型。
+
+_EXCL_CACHE_TTL = 300  # 5 分钟
+
+def _excl_cache_key(advert_id, nm_id) -> str:
+    return f"wb:excl:{advert_id}:{nm_id}"
+
+def _get_cached_excluded(advert_id, nm_id):
+    try:
+        import redis as redis_lib
+        import json
+        r = redis_lib.Redis.from_url(settings.REDIS_URL, decode_responses=True)
+        raw = r.get(_excl_cache_key(advert_id, nm_id))
+        return json.loads(raw) if raw else None
+    except Exception:
+        return None
+
+def _set_cached_excluded(advert_id, nm_id, words: list):
+    try:
+        import redis as redis_lib
+        import json
+        r = redis_lib.Redis.from_url(settings.REDIS_URL, decode_responses=True)
+        r.setex(_excl_cache_key(advert_id, nm_id), _EXCL_CACHE_TTL,
+                json.dumps(words, ensure_ascii=False))
+    except Exception:
+        pass
+
+def _invalidate_excluded(advert_id, nm_id):
+    """写后失效：exclude_keywords / 自动屏蔽成功后调用"""
+    try:
+        import redis as redis_lib
+        r = redis_lib.Redis.from_url(settings.REDIS_URL, decode_responses=True)
+        r.delete(_excl_cache_key(advert_id, nm_id))
+    except Exception:
+        pass
+
+
 # ==================== 广告活动 ====================
 
 @router.get("/campaigns")
@@ -735,11 +774,19 @@ async def campaign_keywords(
             keywords = await client.fetch_campaign_keywords(
                 advert_id=camp.platform_campaign_id, date_from=df, date_to=dt)
 
-        # 有 nm_id 时拉屏蔽词
+        # 有 nm_id 时拉屏蔽词（先查缓存，WB get-minus 慢 19-23s）
         excluded_map = {}
         if nm_id:
-            excluded_map = await client.fetch_excluded_keywords(
-                advert_id=camp.platform_campaign_id, nm_ids=[nm_id])
+            cached = _get_cached_excluded(camp.platform_campaign_id, nm_id)
+            if cached is not None:
+                excluded_map = {int(nm_id): cached}
+            else:
+                excluded_map = await client.fetch_excluded_keywords(
+                    advert_id=camp.platform_campaign_id, nm_ids=[nm_id])
+                _set_cached_excluded(
+                    camp.platform_campaign_id, nm_id,
+                    excluded_map.get(int(nm_id), []),
+                )
     finally:
         await client.close()
 
@@ -884,6 +931,9 @@ async def exclude_keywords(
         )
         if not result.get("ok"):
             return error(92011, result.get("error", "WB 屏蔽接口调用失败"))
+
+        # 写后失效：屏蔽词列表已变化，下次 /campaign-keywords 必须重新拉 WB
+        _invalidate_excluded(camp.platform_campaign_id, int(req.nm_id))
 
         dropped_invalid = (result.get("dropped_invalid") or []) + skipped_phrase
         dropped_lower = {w.lower().strip() for w in dropped_invalid}

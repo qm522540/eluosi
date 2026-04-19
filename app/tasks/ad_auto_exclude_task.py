@@ -147,6 +147,13 @@ async def _exclude_one_campaign(db, shop, camp, run_id):
                 )
                 continue
 
+            # 写后失效：屏蔽词列表已变化，前端 /campaign-keywords 缓存失效
+            try:
+                from app.api.v1.ads import _invalidate_excluded
+                _invalidate_excluded(camp.platform_campaign_id, int(nm_id))
+            except Exception:
+                pass
+
             # 剔除 WB 拒绝的无效词，不计入"已屏蔽"账本，避免污染节省统计
             dropped_lower = {w.lower().strip() for w in (result.get("dropped_invalid") or [])}
             new_kws_meta = [
