@@ -2,12 +2,12 @@ import { useState, useEffect, useCallback } from 'react'
 import {
   Typography, Card, Table, Button, Space, Select, Row, Col, Statistic, Tag,
   Empty, Spin, Alert, message, Tooltip, DatePicker, Radio, Segmented, Badge,
-  Drawer, Popconfirm,
+  Drawer, Popconfirm, Modal, Input,
 } from 'antd'
 import {
   KeyOutlined, DownloadOutlined, ReloadOutlined, SyncOutlined,
   StarFilled, BulbOutlined, WarningFilled, SearchOutlined,
-  StopOutlined, EyeOutlined, SettingOutlined,
+  StopOutlined, EyeOutlined, SettingOutlined, EditOutlined,
 } from '@ant-design/icons'
 import EfficiencyRulesDrawer from './EfficiencyRulesDrawer'
 import ReactECharts from 'echarts-for-react'
@@ -17,7 +17,7 @@ import {
   getKeywordSummary, getKeywordTrend, getKeywordSkuDetail,
   getNegativeSuggestions, getKeywordSyncStatus, backfillKeywords,
   translateKeywords, getKeywordCampaigns, excludeKeyword,
-  getWordChanges,
+  getWordChanges, updateTranslation,
 } from '@/api/keyword_stats'
 import { getAutoExcludeSummary } from '@/api/ads'
 
@@ -281,14 +281,51 @@ const KeywordStats = () => {
         const zh = kwTranslations[v]
         const hasZh = zh && zh !== v
         const fs = record.first_seen
-        const fsShort = fs ? fs.slice(5) : ''  // MM-DD
+        const fsShort = fs ? fs.slice(5) : ''
+        const wtMap = {
+          single: { label: '单词', color: 'default' },
+          short:  { label: '短词', color: 'blue' },
+          long:   { label: '长尾', color: 'purple' },
+        }
+        const wt = wtMap[record.word_type]
         return (
           <div style={{ display: 'flex', alignItems: 'flex-start', gap: 6 }}>
             <div style={{ minWidth: 0, flex: 1 }}>
-              <div style={{ fontSize: 13, fontWeight: 500, lineHeight: 1.3 }}>{v}</div>
+              <div style={{ fontSize: 13, fontWeight: 500, lineHeight: 1.3, display: 'flex', alignItems: 'center', gap: 4 }}>
+                <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{v}</span>
+                {wt && (
+                  <Tag color={wt.color} style={{ margin: 0, fontSize: 10, padding: '0 4px', lineHeight: '14px' }}>
+                    {wt.label}
+                  </Tag>
+                )}
+              </div>
               <div style={{ fontSize: 11, color: '#999', lineHeight: 1.3, marginTop: 1,
-                            display: 'flex', justifyContent: 'space-between', gap: 8 }}>
-                <span>{hasZh ? zh : <span style={{ color: '#ccc' }}>翻译中...</span>}</span>
+                            display: 'flex', justifyContent: 'space-between', gap: 8, alignItems: 'center' }}>
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                  {hasZh ? zh : <span style={{ color: '#ccc' }}>翻译中...</span>}
+                  <EditOutlined
+                    style={{ fontSize: 10, color: '#bbb', cursor: 'pointer' }}
+                    onClick={() => {
+                      Modal.confirm({
+                        title: '编辑中文翻译',
+                        icon: null,
+                        content: (
+                          <div style={{ marginTop: 12 }}>
+                            <div style={{ fontSize: 12, color: '#999', marginBottom: 6 }}>俄文：{v}</div>
+                            <Input id={`tr-input-${v}`} defaultValue={zh || ''} placeholder="输入中文翻译" />
+                          </div>
+                        ),
+                        onOk: async () => {
+                          const newVal = document.getElementById(`tr-input-${v}`)?.value?.trim()
+                          if (!newVal) return
+                          await updateTranslation(v, newVal)
+                          setKwTranslations(prev => ({ ...prev, [v]: newVal }))
+                          message.success('翻译已更新')
+                        },
+                      })
+                    }}
+                  />
+                </span>
                 {fs && (
                   <Tooltip title={`首次出现 ${fs}（本地累积起点 04-10）`}>
                     <span style={{ color: '#bbb', fontSize: 10, cursor: 'help', whiteSpace: 'nowrap' }}>

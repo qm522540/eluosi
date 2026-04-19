@@ -465,3 +465,33 @@ async def translate_keywords(
     from app.services.keyword_stats.translator import translate_keywords_cached
     result = await translate_keywords_cached(req.keywords, db=db)
     return success(result)
+
+
+class UpdateTranslationRequest(BaseModel):
+    keyword: str = Field(..., min_length=1, max_length=500)
+    translation: str = Field(..., min_length=1, max_length=500)
+
+
+@router.post("/update-translation")
+def update_translation(
+    req: UpdateTranslationRequest,
+    db: Session = Depends(get_db),
+    tenant_id: int = Depends(get_tenant_id),
+):
+    """手动覆盖某关键词的中文翻译。写 ru_zh_dict source='manual'，下次不再被 AI 覆盖。"""
+    import hashlib
+    from sqlalchemy import text
+    from app.services.keyword_stats.translator import _cache, _FIELD_TYPE
+    h = hashlib.md5(req.keyword.encode("utf-8")).hexdigest()
+    db.execute(text("""
+        INSERT INTO ru_zh_dict (text_ru_hash, text_ru, text_zh, field_type, source, created_at, updated_at)
+        VALUES (:h, :ru, :zh, :ft, 'manual', NOW(), NOW())
+        ON DUPLICATE KEY UPDATE
+            text_zh = VALUES(text_zh),
+            source = 'manual',
+            updated_at = NOW()
+    """), {"h": h, "ru": req.keyword[:500], "zh": req.translation[:500], "ft": _FIELD_TYPE})
+    db.commit()
+    # 同步刷 L1 进程缓存
+    _cache[req.keyword] = req.translation
+    return success({"keyword": req.keyword, "translation": req.translation})

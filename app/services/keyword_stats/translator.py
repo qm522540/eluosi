@@ -42,12 +42,13 @@ def _save_db_cache(db: Session, translations: dict):
     """批量写 ru_zh_dict（INSERT ... ON DUPLICATE KEY UPDATE）"""
     if not translations or db is None:
         return
+    # Kimi 翻译写入：如果该词已被用户手动改过 (source='manual')，不覆盖
     sql = text("""
         INSERT INTO ru_zh_dict (text_ru_hash, text_ru, text_zh, field_type, source, created_at, updated_at)
         VALUES (:h, :ru, :zh, :ft, 'kimi', NOW(), NOW())
         ON DUPLICATE KEY UPDATE
-            text_zh = VALUES(text_zh),
-            updated_at = NOW()
+            text_zh = IF(source = 'manual', text_zh, VALUES(text_zh)),
+            updated_at = IF(source = 'manual', updated_at, NOW())
     """)
     try:
         for ru, zh in translations.items():

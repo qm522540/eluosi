@@ -33,6 +33,18 @@ def _float(v):
 _VALID_EFF = {"new", "star", "potential", "waste", "normal"}
 
 
+def _classify_word_type(keyword: str) -> str:
+    """按词数分类关键词：单词 / 短词 / 长尾"""
+    if not keyword:
+        return "unknown"
+    n = len(keyword.strip().split())
+    if n <= 1:
+        return "single"   # 1 词
+    if n <= 4:
+        return "short"    # 2-4 词
+    return "long"         # 5+ 词长尾
+
+
 def summary(
     db: Session, tenant_id: int, shop_id: int,
     date_from: str = None, date_to: str = None,
@@ -245,6 +257,7 @@ def summary(
             "est_revenue": est_revenue,
             "est_roas": est_roas,
             "trend_7d": trend_map.get(r.keyword, [0] * 7),
+            "word_type": _classify_word_type(r.keyword),
         })
 
     # 效能 server-side filter（在 classify 之后）
