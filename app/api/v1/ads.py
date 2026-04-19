@@ -2044,8 +2044,9 @@ async def today_summary_shop(
     from app.services.platform.wb import WBClient
     client = WBClient(shop_id=shop.id, api_key=shop.api_key)
     try:
-        # WB fullstats v3 限速严：实测并发 5 个就 429 → 单个 429 重试 3 次仍失败
-        # 就 return {} 丢数据。改串行 + 200ms 间隔，宁慢勿丢。10 个活动约 4-8 秒。
+        # WB fullstats v3 限速严：实测并发触发 429，串行 200ms 仍 50% 失败
+        # （限速约 30 req/min）。改串行 + 2 秒间隔，宁慢勿丢。
+        # 10 个活动约 20 秒首次，缓存命中后秒出。
         results = []
         for c in camps:
             r = await client.fetch_campaign_summary(
@@ -2053,7 +2054,7 @@ async def today_summary_shop(
                 date_from=today_iso, date_to=today_iso,
             )
             results.append(r)
-            await _aio.sleep(0.2)
+            await _aio.sleep(2.0)
     finally:
         await client.close()
 
@@ -2124,13 +2125,13 @@ async def today_alerts_shop(
                     advert_id=c.platform_campaign_id,
                     date_from=today_iso, date_to=today_iso,
                 )
-                await _aio.sleep(0.2)
+                await _aio.sleep(2.0)
                 budget_data = await client._request(
                     "GET", "https://advert-api.wildberries.ru/adv/v1/budget",
                     params={"id": int(c.platform_campaign_id)},
                 )
                 budget = budget_data.get("total") if isinstance(budget_data, dict) else None
-                await _aio.sleep(0.2)
+                await _aio.sleep(2.0)
                 results.append((c, summary, budget))
             except Exception as e:
                 logger.warning(f"today-alerts 拉 advert={c.platform_campaign_id} 失败: {e}")
