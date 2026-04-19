@@ -41,13 +41,16 @@ def analyze_paid_to_organic(
     candidates = {}  # (product_id, keyword_lower) -> dict
 
     # ===== Step A: 商品维 =====
+    # P0-1 修 2026-04-19：原 GROUP BY 含 pl.variant_attrs (JSON) 在 sql_mode=
+    # ONLY_FULL_GROUP_BY 下兼容风险（部分 MySQL 版本报 3908）。改 GROUP BY
+    # 到 (keyword, product_id) 主键层，其他 SELECT 字段用 ANY_VALUE 包裹。
     self_sql = text("""
         SELECT
             kw.keyword AS keyword,
             p.id AS product_id,
-            p.local_category_id AS cat_id,
-            COALESCE(pl.title_ru, '') AS title,
-            COALESCE(CAST(pl.variant_attrs AS CHAR), '') AS attrs,
+            ANY_VALUE(p.local_category_id) AS cat_id,
+            ANY_VALUE(COALESCE(pl.title_ru, '')) AS title,
+            ANY_VALUE(COALESCE(CAST(pl.variant_attrs AS CHAR), '')) AS attrs,
             SUM(s.impressions) AS imps,
             SUM(s.clicks) AS clicks,
             SUM(s.orders) AS orders,
@@ -65,7 +68,7 @@ def analyze_paid_to_organic(
           AND c.shop_id = :sid
           AND kw.is_negative = 0
           AND (p.status != 'deleted' OR p.status IS NULL)
-        GROUP BY kw.keyword, p.id, p.local_category_id, pl.title_ru, pl.variant_attrs
+        GROUP BY kw.keyword, p.id
         HAVING SUM(s.orders) >= :min_orders
            AND SUM(s.spend) > 0
            AND (SUM(s.revenue) / SUM(s.spend)) >= :roas_th
@@ -134,20 +137,26 @@ def analyze_paid_to_organic(
         )
 
     # ===== Step C: 把类目维词扩散到同类目所有商品 =====
+    # P0-2 修 2026-04-19：同商品可能有多个 platform_listings（variant 变体 /
+    # 已归档），不过滤 + 不聚合会出笛卡尔积。后续 Step D dict 去重时 _title/
+    # _attrs 被随机覆盖，覆盖判断不稳。修法：过滤死 listings + GROUP BY p.id
+    # + ANY_VALUE 取 title/attrs 其一（同商品的 variants title 基本一致）。
     if cat_kw_map:
         prod_sql = text("""
             SELECT
                 p.id AS product_id,
-                p.local_category_id AS cat_id,
-                COALESCE(pl.title_ru, '') AS title,
-                COALESCE(CAST(pl.variant_attrs AS CHAR), '') AS attrs
+                ANY_VALUE(p.local_category_id) AS cat_id,
+                ANY_VALUE(COALESCE(pl.title_ru, '')) AS title,
+                ANY_VALUE(COALESCE(CAST(pl.variant_attrs AS CHAR), '')) AS attrs
             FROM products p
             JOIN platform_listings pl ON pl.product_id = p.id
                                        AND pl.tenant_id = p.tenant_id
             WHERE p.tenant_id = :tid
               AND pl.shop_id = :sid
+              AND pl.status NOT IN ('deleted', 'archived')
               AND p.local_category_id IN :cat_ids
               AND (p.status != 'deleted' OR p.status IS NULL)
+            GROUP BY p.id
         """).bindparams(bindparam("cat_ids", expanding=True))
 
         prod_rows = db.execute(prod_sql, {
@@ -312,10 +321,17 @@ def list_candidates(
         where_parts.append("JSON_CONTAINS(c.sources, JSON_OBJECT('type','paid','scope','category'))")
     where_sql = " AND ".join(where_parts)
 
+    # P0-3 修 2026-04-19：totals / items 的 LEFT JOIN platform_listings 无
+    # listing status 过滤，同商品多 listings 时：
+    # - totals.COUNT(*) 被笛卡尔积放大 → 前端 4 格数字偏高（严重数据错）
+    # - items 一个 candidate 因多 listings 重复出现在分页
+    # 修法：LEFT JOIN 加 pl.status 过滤 + COUNT(DISTINCT c.id) + GROUP BY c.id
+    # + 其他 JOIN 字段用 ANY_VALUE 包裹。
+
     # 4 格 totals（不分页）
     totals_sql = text(f"""
         SELECT
-            COUNT(*) AS total,
+            COUNT(DISTINCT c.id) AS total,
             SUM(CASE WHEN c.paid_orders > 0 THEN 1 ELSE 0 END) AS with_conversion,
             SUM(CASE WHEN c.in_title = 0 AND c.in_attrs = 0 THEN 1 ELSE 0 END) AS gap,
             COUNT(DISTINCT c.product_id) AS products
@@ -332,16 +348,18 @@ def list_candidates(
             c.organic_impressions, c.organic_add_to_cart, c.organic_orders,
             c.wordstat_volume, c.in_title, c.in_attrs, c.status,
             c.adopted_at, c.adopted_by, c.updated_at,
-            p.name_zh AS product_name,
-            p.local_category_id AS cat_id,
-            pl.title_ru AS current_title,
-            pl.oss_images AS images
+            ANY_VALUE(p.name_zh) AS product_name,
+            ANY_VALUE(p.local_category_id) AS cat_id,
+            ANY_VALUE(pl.title_ru) AS current_title,
+            ANY_VALUE(pl.oss_images) AS images
         FROM seo_keyword_candidates c
         JOIN products p ON p.id = c.product_id AND p.tenant_id = c.tenant_id
         LEFT JOIN platform_listings pl ON pl.product_id = p.id
                                        AND pl.shop_id = c.shop_id
                                        AND pl.tenant_id = c.tenant_id
+                                       AND pl.status NOT IN ('deleted', 'archived')
         WHERE {where_sql}
+        GROUP BY c.id
         ORDER BY c.score DESC, c.paid_orders DESC
         LIMIT :offset, :size
     """)
