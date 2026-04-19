@@ -2080,28 +2080,46 @@ const AdsOverview = ({ shopId, platform, shops, searched, syncing, lastSyncTime,
                     <Card size="small" style={{ marginBottom: 12, background: '#fafbff', borderColor: '#e6edff' }}
                       bodyStyle={{ padding: '12px 16px' }}>
                       <Row gutter={24}>
-                        <Col span={6}>
-                          <Statistic
-                            title={<span style={{ fontSize: 12, color: '#999' }}>商品数</span>}
-                            value={campaignProducts.length}
-                            valueStyle={{ fontSize: 18, fontWeight: 600 }}
-                          />
-                        </Col>
                         {detailData.platform === 'ozon' ? (
-                          <Col span={9}>
-                            <Statistic
-                              title={<span style={{ fontSize: 12, color: '#999' }}>平均出价</span>}
-                              value={Math.round(
-                                campaignProducts.reduce((s, p) => s + Number(p.bid || 0), 0)
-                                / Math.max(campaignProducts.length, 1) / 1000000
-                              )}
-                              suffix="₽"
-                              valueStyle={{ fontSize: 18, fontWeight: 600, color: '#1677ff' }}
-                            />
-                          </Col>
-                        ) : (
                           <>
-                            <Col span={6}>
+                            <Col span={8}>
+                              <Statistic
+                                title={<span style={{ fontSize: 12, color: '#999' }}>商品数</span>}
+                                value={campaignProducts.length}
+                                valueStyle={{ fontSize: 18, fontWeight: 600 }}
+                              />
+                            </Col>
+                            <Col span={8}>
+                              <Statistic
+                                title={<span style={{ fontSize: 12, color: '#999' }}>平均出价</span>}
+                                value={Math.round(
+                                  campaignProducts.reduce((s, p) => s + Number(p.bid || 0), 0)
+                                  / Math.max(campaignProducts.length, 1) / 1000000
+                                )}
+                                suffix="₽"
+                                valueStyle={{ fontSize: 18, fontWeight: 600, color: '#1677ff' }}
+                              />
+                            </Col>
+                            <Col span={8}>
+                              <Statistic
+                                title={<span style={{ fontSize: 12, color: '#999' }}>已绑定广告组</span>}
+                                value={campaignProducts.filter(p => getAdGroupIdBySku(p.sku)).length}
+                                suffix={`/ ${campaignProducts.length}`}
+                                valueStyle={{ fontSize: 18, fontWeight: 600, color: '#52c41a' }}
+                              />
+                            </Col>
+                          </>
+                        ) : (
+                          // WB 没有"广告组"概念（活动级出价），隐藏该格
+                          <>
+                            <Col span={8}>
+                              <Statistic
+                                title={<span style={{ fontSize: 12, color: '#999' }}>商品数</span>}
+                                value={campaignProducts.length}
+                                valueStyle={{ fontSize: 18, fontWeight: 600 }}
+                              />
+                            </Col>
+                            <Col span={8}>
                               <Statistic
                                 title={<span style={{ fontSize: 12, color: '#999' }}>搜索均价</span>}
                                 value={(
@@ -2112,7 +2130,7 @@ const AdsOverview = ({ shopId, platform, shops, searched, syncing, lastSyncTime,
                                 valueStyle={{ fontSize: 18, fontWeight: 600, color: '#1677ff' }}
                               />
                             </Col>
-                            <Col span={6}>
+                            <Col span={8}>
                               <Statistic
                                 title={<span style={{ fontSize: 12, color: '#999' }}>推荐均价</span>}
                                 value={(
@@ -2125,14 +2143,6 @@ const AdsOverview = ({ shopId, platform, shops, searched, syncing, lastSyncTime,
                             </Col>
                           </>
                         )}
-                        <Col span={detailData.platform === 'ozon' ? 9 : 6}>
-                          <Statistic
-                            title={<span style={{ fontSize: 12, color: '#999' }}>已绑定广告组</span>}
-                            value={campaignProducts.filter(p => getAdGroupIdBySku(p.sku)).length}
-                            suffix={`/ ${campaignProducts.length}`}
-                            valueStyle={{ fontSize: 18, fontWeight: 600, color: '#52c41a' }}
-                          />
-                        </Col>
                       </Row>
                     </Card>
                   )}
@@ -2262,7 +2272,8 @@ const AdsOverview = ({ shopId, platform, shops, searched, syncing, lastSyncTime,
                 </div>
               ),
             },
-            {
+            // 广告组 Tab：WB 隐藏（WB 没有"组"概念，活动级出价 + 关键词在商品出价 Tab）
+            ...(detailData.platform === 'wb' ? [] : [{
               key: 'groups',
               label: `广告组 (${adGroups.length})`,
               children: (
@@ -2288,7 +2299,7 @@ const AdsOverview = ({ shopId, platform, shops, searched, syncing, lastSyncTime,
                   )}
                 </div>
               ),
-            },
+            }]),
           ]} />
         )}
       </Drawer>
