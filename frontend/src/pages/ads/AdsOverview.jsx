@@ -224,6 +224,7 @@ const AdsOverview = ({ shopId, platform, shops, searched, syncing, lastSyncTime,
   const [excludingKws, setExcludingKws] = useState(false)
   const [qualityCheckedSku, setQualityCheckedSku] = useState(null)  // 当前质检的 SKU
   const [suggestedExcludeWords, setSuggestedExcludeWords] = useState([])  // 质检标出的词
+  const [kwTablePageMap, setKwTablePageMap] = useState({})  // 每个 SKU 关键词表的当前页
 
   const loadExcludeRules = useCallback(async () => {
     try {
@@ -1274,11 +1275,50 @@ const AdsOverview = ({ shopId, platform, shops, searched, syncing, lastSyncTime,
               </Space>
             </div>
           </div>
+          {qualityCheckedSku === sku && suggestedExcludeWords.length > 0 && (
+            <div style={{ marginBottom: 8, padding: '8px 12px', background: '#fff7e6',
+                          border: '1px solid #ffd591', borderRadius: 4 }}>
+              <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8 }}>
+                <Text strong style={{ fontSize: 12, color: '#d46b08', whiteSpace: 'nowrap' }}>
+                  🔍 质检发现 {suggestedExcludeWords.length} 个建议屏蔽词：
+                </Text>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, flex: 1 }}>
+                  {suggestedExcludeWords.map(w => {
+                    const row = kws.find(k => k.keyword === w)
+                    const tip = row
+                      ? `点击定位 · 曝光${(row.views||0).toLocaleString()} · 点击${row.clicks||0} · CTR ${row.ctr||0}% · 花费¥${(row.sum||0).toFixed(2)}`
+                      : '点击定位'
+                    return (
+                      <Tooltip key={w} title={tip}>
+                        <Tag color="volcano" style={{ margin: 0, fontSize: 11, cursor: 'pointer' }}
+                          onClick={() => {
+                            const idx = kws.findIndex(k => k.keyword === w)
+                            if (idx >= 0) {
+                              setKwTablePageMap(m => ({ ...m, [sku]: Math.floor(idx / 20) + 1 }))
+                            }
+                          }}>
+                          {w}
+                        </Tag>
+                      </Tooltip>
+                    )
+                  })}
+                </div>
+              </div>
+            </div>
+          )}
           <Table
             size="small"
             rowKey="keyword"
             dataSource={kws}
-            pagination={{ pageSize: 20, size: 'small', showSizeChanger: false }}
+            pagination={{
+              pageSize: 20, size: 'small', showSizeChanger: false,
+              current: kwTablePageMap[sku] || 1,
+              onChange: (p) => setKwTablePageMap(m => ({ ...m, [sku]: p })),
+            }}
+            rowClassName={(r) =>
+              qualityCheckedSku === sku && suggestedExcludeWords.includes(r.keyword)
+                ? 'row-suggested-exclude' : ''
+            }
             columns={[
               { title: '关键词', dataIndex: 'keyword', key: 'keyword', ellipsis: true,
                 render: (v, r) => {

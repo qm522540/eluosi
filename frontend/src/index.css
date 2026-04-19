@@ -26,3 +26,11 @@ body {
 .row-low-data td {
   background: #FFFBE6 !important;
 }
+
+/* 广告关键词质检：被建议屏蔽的行整行高亮 */
+.row-suggested-exclude td {
+  background: #fff2e8 !important;
+}
+.row-suggested-exclude:hover td {
+  background: #ffe7d6 !important;
+}
