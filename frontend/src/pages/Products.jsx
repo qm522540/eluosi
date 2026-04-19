@@ -1322,14 +1322,6 @@ const Products = () => {
             <Button type="primary" icon={<PlusOutlined />}
               onClick={() => {}}>新增商品</Button>
           </Col>
-          <Col>
-            <Tooltip title="分析付费广告中的高 ROAS 词，找出标题未覆盖的反哺候选">
-              <Button icon={<SearchOutlined />}
-                onClick={() => navigate('/seo/optimize')}>
-                SEO 优化建议
-              </Button>
-            </Tooltip>
-          </Col>
           {selectedRowKeys.length > 0 && (
             <Col>
               <Button
