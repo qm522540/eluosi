@@ -524,6 +524,31 @@ const AdsOverview = ({ shopId, platform, shops, searched, syncing, lastSyncTime,
       const res = await getCampaigns(params)
       setCampaigns(res.data.items)
       setTotal(res.data.total)
+
+      // 异步合并今日实时数据：表格先出（昨日及之前），today-summary 拉完
+      // （N×2s 串行避 429）后填进 today_spend / today_orders / today_roas /
+      // budget_used_pct，避免列表里这些列永远显示 0。
+      // 缓存命中（5 分钟）时秒出。
+      if (shopId && platform === 'wb') {
+        getTodaySummaryByShop(shopId).then(tr => {
+          const perCamp = tr.data?.per_campaign || {}
+          setCampaigns(prev => prev.map(c => {
+            const t = perCamp[c.id]
+            if (!t) return c
+            const todaySpend = t.spend || 0
+            return {
+              ...c,
+              today_spend: todaySpend,
+              today_orders: t.orders || 0,
+              today_roas: t.roas || 0,
+              today_ctr: t.ctr || 0,
+              budget_used_pct: c.daily_budget && Number(c.daily_budget) > 0
+                ? Math.round(todaySpend / Number(c.daily_budget) * 1000) / 10
+                : c.budget_used_pct,
+            }
+          }))
+        }).catch(() => { /* 静默：列表仍可用，只是 today_* 不更新 */ })
+      }
     } catch {
       message.error('获取广告活动列表失败')
     } finally {

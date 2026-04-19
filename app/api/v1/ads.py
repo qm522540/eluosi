@@ -2043,6 +2043,7 @@ async def today_summary_shop(
 
     from app.services.platform.wb import WBClient
     client = WBClient(shop_id=shop.id, api_key=shop.api_key)
+    per_camp = {}
     try:
         # WB fullstats v3 限速严：实测并发触发 429，串行 200ms 仍 50% 失败
         # （限速约 30 req/min）。改串行 + 2 秒间隔，宁慢勿丢。
@@ -2054,6 +2055,17 @@ async def today_summary_shop(
                 date_from=today_iso, date_to=today_iso,
             )
             results.append(r)
+            spend_c = float(r.get("sum") or 0)
+            rev_c = float(r.get("sum_price") or 0)
+            per_camp[c.id] = {
+                "spend": round(spend_c, 2),
+                "orders": int(r.get("orders") or 0),
+                "revenue": round(rev_c, 2),
+                "views": int(r.get("views") or 0),
+                "clicks": int(r.get("clicks") or 0),
+                "roas": round(rev_c / spend_c, 2) if spend_c > 0 else 0,
+                "ctr": float(r.get("ctr") or 0),
+            }
             await _aio.sleep(2.0)
     finally:
         await client.close()
@@ -2075,6 +2087,7 @@ async def today_summary_shop(
         "roas": round(revenue / spend, 2) if spend > 0 else 0,
         "campaign_count": len(camps),
         "active_campaign_count": len(camps),
+        "per_campaign": per_camp,
         "from_cache": False,
     }
     _set_cached_today("shop", shop.id, result)
