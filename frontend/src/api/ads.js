@@ -340,3 +340,10 @@ export function getAIPricingTemplates() {
 export function updateCampaignPricingConfig(campaignId, data) {
   return request.put(`/ai-pricing/campaigns/${campaignId}/config`, data)
 }
+
+/** 活动级当日实时汇总（今日花费/订单/曝光/点击/ROAS + 预算余额） */
+export function getTodaySummaryByCampaign(campaignId, refresh = false) {
+  return request.get(`/ads/today-summary/campaign/${campaignId}`, {
+    params: refresh ? { refresh: true } : {},
+  })
+}

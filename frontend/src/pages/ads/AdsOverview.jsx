@@ -23,6 +23,7 @@ import {
   getShopSummary, addProtectedKeyword, removeProtectedKeyword,
   getAutoExcludeConfig, toggleAutoExclude, runAutoExcludeNow, getAutoExcludeLogs,
   getCampaignSummary, getOzonSkuQueries, syncOzonSkuQueries,
+  getTodaySummaryByCampaign,
 } from '@/api/ads'
 import { getListings } from '@/api/products'
 import { getEfficiencyRules } from '@/api/keyword_stats'
@@ -226,6 +227,22 @@ const AdsOverview = ({ shopId, platform, shops, searched, syncing, lastSyncTime,
   const [suggestedExcludeWords, setSuggestedExcludeWords] = useState([])  // 质检标出的词
   const [kwTablePageMap, setKwTablePageMap] = useState({})  // 每个 SKU 关键词表的当前页
 
+  // 当日实时汇总（活动级，商品出价 Tab 顶部条）
+  const [todaySummary, setTodaySummary] = useState(null)
+  const [todayLoading, setTodayLoading] = useState(false)
+  const loadTodaySummary = useCallback(async (cId, refresh = false) => {
+    if (!cId) return
+    setTodayLoading(true)
+    try {
+      const r = await getTodaySummaryByCampaign(cId, refresh)
+      setTodaySummary(r.data || null)
+    } catch {
+      setTodaySummary(null)
+    } finally {
+      setTodayLoading(false)
+    }
+  }, [])
+
   const loadExcludeRules = useCallback(async () => {
     try {
       const r = await getEfficiencyRules()
@@ -318,6 +335,16 @@ const AdsOverview = ({ shopId, platform, shops, searched, syncing, lastSyncTime,
     if (detailVisible && detailTab === 'info' && detailData?.platform === 'wb'
         && detailData?.id && !campaignSummaryData && !campaignSummaryLoading) {
       reloadCampaignSummary(summaryDays)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [detailVisible, detailTab, detailData?.id])
+
+  // 切到商品出价 Tab → 拉今日实时汇总（5 分钟缓存，反复切不会反复打 WB）
+  useEffect(() => {
+    if (detailVisible && detailTab === 'products' && detailData?.id) {
+      loadTodaySummary(detailData.id)
+    } else if (!detailVisible) {
+      setTodaySummary(null)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [detailVisible, detailTab, detailData?.id])
@@ -2026,6 +2053,81 @@ const AdsOverview = ({ shopId, platform, shops, searched, syncing, lastSyncTime,
               label: `商品出价 (${campaignProducts.length})`,
               children: (
                 <div>
+                  {/* 当日实时汇总（仅 WB；几小时延迟，5 分钟缓存） */}
+                  {detailData.platform === 'wb' && (
+                    <Card
+                      size="small"
+                      style={{ marginBottom: 12, background: '#fafbff', borderColor: '#e6edff' }}
+                      bodyStyle={{ padding: '10px 14px' }}
+                    >
+                      <Spin spinning={todayLoading}>
+                        <Row gutter={16} align="middle" wrap={false}>
+                          <Col flex="none">
+                            <Space size={6}>
+                              <Text strong style={{ fontSize: 13 }}>今日</Text>
+                              <Tooltip title="WB fullstats v3 数据有几小时延迟，早上常空，下午陆续就位。点刷新强制重新拉。">
+                                <Text type="secondary" style={{ fontSize: 11, cursor: 'help' }}>
+                                  {todaySummary?.today_date || '-'}
+                                </Text>
+                              </Tooltip>
+                            </Space>
+                          </Col>
+                          <Col flex="auto">
+                            <Row gutter={16}>
+                              <Col span={4}>
+                                <div style={{ fontSize: 11, color: '#999' }}>花费</div>
+                                <div style={{ fontSize: 16, fontWeight: 600 }}>
+                                  ₽{(todaySummary?.spend ?? 0).toLocaleString()}
+                                </div>
+                              </Col>
+                              <Col span={4}>
+                                <div style={{ fontSize: 11, color: '#999' }}>订单</div>
+                                <div style={{ fontSize: 16, fontWeight: 600, color: '#52c41a' }}>
+                                  {todaySummary?.orders ?? 0}
+                                </div>
+                              </Col>
+                              <Col span={4}>
+                                <div style={{ fontSize: 11, color: '#999' }}>曝光</div>
+                                <div style={{ fontSize: 16, fontWeight: 600 }}>
+                                  {(todaySummary?.views ?? 0).toLocaleString()}
+                                </div>
+                              </Col>
+                              <Col span={4}>
+                                <div style={{ fontSize: 11, color: '#999' }}>点击</div>
+                                <div style={{ fontSize: 16, fontWeight: 600 }}>
+                                  {todaySummary?.clicks ?? 0}
+                                </div>
+                              </Col>
+                              <Col span={4}>
+                                <div style={{ fontSize: 11, color: '#999' }}>ROAS</div>
+                                <div style={{
+                                  fontSize: 16, fontWeight: 600,
+                                  color: (todaySummary?.roas ?? 0) >= 2 ? '#52c41a'
+                                       : (todaySummary?.roas ?? 0) > 0 ? '#faad14' : '#999',
+                                }}>
+                                  {todaySummary?.roas ? `${todaySummary.roas}x` : '-'}
+                                </div>
+                              </Col>
+                              <Col span={4}>
+                                <div style={{ fontSize: 11, color: '#999' }}>预算余额</div>
+                                <div style={{ fontSize: 16, fontWeight: 600, color: '#1677ff' }}>
+                                  {todaySummary?.budget_remaining != null
+                                    ? `₽${todaySummary.budget_remaining.toLocaleString()}`
+                                    : '-'}
+                                </div>
+                              </Col>
+                            </Row>
+                          </Col>
+                          <Col flex="none">
+                            <Button size="small" icon={<SyncOutlined spin={todayLoading} />}
+                              onClick={() => loadTodaySummary(detailData.id, true)}>
+                              刷新
+                            </Button>
+                          </Col>
+                        </Row>
+                      </Spin>
+                    </Card>
+                  )}
                   {/* 自动屏蔽托管（仅 WB） */}
                   {detailData.platform === 'wb' && (
                     <Card

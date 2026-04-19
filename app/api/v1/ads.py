@@ -108,6 +108,44 @@ def _invalidate_excluded(advert_id, nm_id):
         pass
 
 
+# ==================== 今日实时汇总缓存 ====================
+# 当日数据用户期望"实时"但 WB fullstats 限流 + 几小时延迟，缓存 5 分钟避反复打。
+# 用户点"刷新"按钮可绕过缓存（直接清 key）。
+
+_TODAY_CACHE_TTL = 300  # 5 分钟
+
+def _today_cache_key(scope: str, scope_id) -> str:
+    return f"wb:today_summary:{scope}:{scope_id}"
+
+def _get_cached_today(scope: str, scope_id):
+    try:
+        import redis as redis_lib
+        import json
+        r = redis_lib.Redis.from_url(settings.REDIS_URL, decode_responses=True)
+        raw = r.get(_today_cache_key(scope, scope_id))
+        return json.loads(raw) if raw else None
+    except Exception:
+        return None
+
+def _set_cached_today(scope: str, scope_id, data: dict):
+    try:
+        import redis as redis_lib
+        import json
+        r = redis_lib.Redis.from_url(settings.REDIS_URL, decode_responses=True)
+        r.setex(_today_cache_key(scope, scope_id), _TODAY_CACHE_TTL,
+                json.dumps(data, ensure_ascii=False, default=str))
+    except Exception:
+        pass
+
+def _invalidate_today(scope: str, scope_id):
+    try:
+        import redis as redis_lib
+        r = redis_lib.Redis.from_url(settings.REDIS_URL, decode_responses=True)
+        r.delete(_today_cache_key(scope, scope_id))
+    except Exception:
+        pass
+
+
 # ==================== 广告活动 ====================
 
 @router.get("/campaigns")
@@ -1857,3 +1895,98 @@ def auto_exclude_summary(
             "saved_estimated": round(float(r.saved_per_day) * 30, 2),
         } for r in by_camp],
     })
+
+
+# ==================== 当日实时汇总 ====================
+
+@router.get("/today-summary/campaign/{campaign_id}")
+async def today_summary_campaign(
+    campaign_id: int,
+    refresh: bool = Query(False, description="true 跳过缓存直接拉平台"),
+    db: Session = Depends(get_db),
+    tenant_id: int = Depends(get_tenant_id),
+):
+    """活动级当日实时汇总：今日花费 / 订单 / 曝光 / 点击 / CTR / ROAS + 预算余额
+
+    用于商品出价 Tab 顶部条。WB 数据有几小时延迟（早上常空，下午陆续就位）。
+    Redis 缓存 5 分钟避反复打 fullstats（限流 3-5 req/min）。
+    """
+    from app.models.ad import AdCampaign
+    from app.models.shop import Shop
+    from datetime import date as _date
+
+    camp = db.query(AdCampaign).filter(
+        AdCampaign.id == campaign_id, AdCampaign.tenant_id == tenant_id,
+    ).first()
+    if not camp:
+        return error(50001, "广告活动不存在")
+    shop = db.query(Shop).filter(Shop.id == camp.shop_id).first()
+    if not shop:
+        return error(30001, "店铺不存在")
+
+    # 缓存命中
+    if not refresh:
+        cached = _get_cached_today("camp", campaign_id)
+        if cached is not None:
+            cached["from_cache"] = True
+            return success(cached)
+
+    today_iso = _date.today().isoformat()
+
+    if camp.platform != "wb":
+        # Ozon / Yandex 后续接入；先返个空结构让前端渲染
+        result = {
+            "today_date": today_iso, "platform": camp.platform,
+            "spend": 0, "orders": 0, "views": 0, "clicks": 0,
+            "atbs": 0, "revenue": 0, "ctr": 0, "cpc": 0, "cr": 0, "roas": 0,
+            "budget_remaining": None,
+            "msg": "Ozon / Yandex 当日汇总后续接入",
+        }
+        _set_cached_today("camp", campaign_id, result)
+        result["from_cache"] = False
+        return success(result)
+
+    from app.services.platform.wb import WBClient
+    import asyncio as _aio
+    client = WBClient(shop_id=shop.id, api_key=shop.api_key)
+    try:
+        # 并行：今日 fullstats + 当前预算余额
+        async def _fetch_budget():
+            try:
+                r = await client._request(
+                    "GET", "https://advert-api.wildberries.ru/adv/v1/budget",
+                    params={"id": int(camp.platform_campaign_id)},
+                )
+                return r.get("total") if isinstance(r, dict) else None
+            except Exception:
+                return None
+
+        summary, budget_remaining = await _aio.gather(
+            client.fetch_campaign_summary(
+                advert_id=camp.platform_campaign_id,
+                date_from=today_iso, date_to=today_iso),
+            _fetch_budget(),
+        )
+    finally:
+        await client.close()
+
+    spend = float(summary.get("sum") or 0)
+    revenue = float(summary.get("sum_price") or 0)
+    result = {
+        "today_date": today_iso,
+        "platform": "wb",
+        "spend": round(spend, 2),
+        "orders": int(summary.get("orders") or 0),
+        "atbs": int(summary.get("atbs") or 0),
+        "views": int(summary.get("views") or 0),
+        "clicks": int(summary.get("clicks") or 0),
+        "ctr": float(summary.get("ctr") or 0),
+        "cpc": float(summary.get("cpc") or 0),
+        "cr": float(summary.get("cr") or 0),
+        "revenue": round(revenue, 2),
+        "roas": round(revenue / spend, 2) if spend > 0 else 0,
+        "budget_remaining": budget_remaining,
+        "from_cache": False,
+    }
+    _set_cached_today("camp", campaign_id, result)
+    return success(result)
