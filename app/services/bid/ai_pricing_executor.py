@@ -153,6 +153,74 @@ def _get_growth_count(db, campaign_id: int, sku: str, tenant_id: int,
     return min(count, 6)
 
 
+# ==================== 利润最大化决策（主决策器） ====================
+
+def _profit_max_decision(current_roas: float, breakeven_roas: float,
+                         data_days: int, trend: str,
+                         max_adjust_pct: float = 30.0) -> dict:
+    """利润最大化决策：以 current_roas/breakeven 比值为锚，决定是否调价 + 方向 + 幅度。
+
+    核心原则：利润 = Revenue × net_margin - Spend = (ROAS × net_margin - 1) × Spend
+    - ROAS > breakeven (=1/net_margin)：spend 越多利润越多（但有边际递减）
+    - ROAS < breakeven：spend 越多亏越多
+    - 利润最大点不在 ROAS 极大处，而在 ROAS 略高于 breakeven 的"甜点区"
+
+    分档规则（ratio = current_roas / breakeven_roas）：
+    - ratio < 0.5  → 严重亏损，big_down -30%（或 max_adjust_pct）
+    - ratio < 1.0  → 亏损，small_down -15%
+    - 1.0 ≤ ratio ≤ 1.5  → 利润最大化甜点区，no_change（不修没坏的）
+    - ratio > 1.5 + 趋势 up/stable → small_up +5% 试探
+    - ratio > 1.5 + 趋势 down → no_change（高位但下行不冒险）
+
+    数据不足（<7天）：偏保守 — 已盈利不动，亏损小幅降。
+
+    Returns: {action, multiplier, reason}
+      action ∈ {"no_change", "small_up", "small_down", "big_down", "skip"}
+    """
+    if not breakeven_roas or breakeven_roas <= 0:
+        return {"action": "skip", "multiplier": 1.0,
+                "reason": "无法算保本ROAS（净毛利率缺失）"}
+
+    if current_roas is None or current_roas < 0:
+        return {"action": "skip", "multiplier": 1.0, "reason": "无 ROAS 历史"}
+
+    # 数据不足兜底：偏保守
+    if data_days < 7:
+        if current_roas == 0:
+            return {"action": "skip", "multiplier": 1.0,
+                    "reason": f"数据{data_days}天且无订单，先观察不调价"}
+        if current_roas >= breakeven_roas:
+            return {"action": "no_change", "multiplier": 1.0,
+                    "reason": f"数据少{data_days}天 但当前 ROAS {current_roas:.2f}x ≥ 保本 {breakeven_roas:.2f}x，先观察不动"}
+        return {"action": "small_down", "multiplier": 0.85,
+                "reason": f"数据少{data_days}天 当前 ROAS {current_roas:.2f}x < 保本 {breakeven_roas:.2f}x，谨慎降价 -15%"}
+
+    if current_roas == 0:
+        return {"action": "small_down", "multiplier": 0.7,
+                "reason": f"{data_days}天0订单，主动降价 -30% 减少烧钱"}
+
+    ratio = current_roas / breakeven_roas
+
+    if ratio < 0.5:
+        # 严重亏损 — 大降，受 max_adjust_pct 上限保护
+        mult = 1.0 - min(max_adjust_pct, 30.0) / 100.0
+        return {"action": "big_down", "multiplier": mult,
+                "reason": f"严重亏损 ROAS {current_roas:.2f}x < 保本 {breakeven_roas:.2f}x × 0.5，大降 {(1-mult)*100:.0f}%"}
+    if ratio < 1.0:
+        return {"action": "small_down", "multiplier": 0.85,
+                "reason": f"亏损 ROAS {current_roas:.2f}x < 保本 {breakeven_roas:.2f}x，降价 -15% 减耗等改善"}
+    if ratio <= 1.5:
+        return {"action": "no_change", "multiplier": 1.0,
+                "reason": f"利润最大化甜点区 ROAS {current_roas:.2f}x（保本 {breakeven_roas:.2f}x×1.0~1.5），不动"}
+
+    # ratio > 1.5 — 远超保本
+    if trend == "down":
+        return {"action": "no_change", "multiplier": 1.0,
+                "reason": f"ROAS {current_roas:.2f}x 偏高但下降趋势，不冒险加价等观察"}
+    return {"action": "small_up", "multiplier": 1.05,
+            "reason": f"ROAS {current_roas:.2f}x 远超保本 {breakeven_roas:.2f}x×1.5，小幅 +5% 试探多赚总额"}
+
+
 # ==================== A' 偏离保护（14-20天） ====================
 
 def _check_a_prime_protection(sku_stat: dict, shop_avg: dict,
@@ -925,7 +993,29 @@ async def _analyze_now_inner(db, tenant_id: int, shop_id: int,
                         })
                         continue
 
-            # ── Step 2: 选取 CTR/CR 来源（新规则） ──
+            # ── Step 1.5: 利润最大化决策（主决策器，2026-04-19 引入） ──
+            # 用 current_roas 与 breakeven_roas 比值决定是否调价 + 方向 + 幅度
+            # 替代旧的"按 CPA 公式倒推 bid"策略（容易把已盈利 SKU 加到亏损）
+            current_roas = sku_stat.get("roas") or 0
+            trend = sku_stat.get("trend", "stable")
+            max_adjust_pct_cfg = float((cfg.default_config or {}).get("max_adjust_pct") or 30) \
+                if hasattr(cfg, 'default_config') else 30.0
+            pm_decision = _profit_max_decision(
+                current_roas=current_roas, breakeven_roas=breakeven_roas,
+                data_days=data_days, trend=trend, max_adjust_pct=max_adjust_pct_cfg,
+            )
+            if pm_decision["action"] == "no_change" or pm_decision["action"] == "skip":
+                logger.info(f"sku={sku} 利润决策跳过：{pm_decision['reason']}")
+                continue
+            # 决策直接给出新出价：current_bid × multiplier
+            optimal_bid = int(round(current_bid * pm_decision["multiplier"]))
+            if optimal_bid < MIN_BID:
+                optimal_bid = MIN_BID
+            # 仍走下方的平台最低价校验、ROAS 门控等保护
+            data_note = pm_decision["reason"]
+
+            # 冷启动 / 利润策略不需要 CPA 公式重算，但保留 CTR/CR 计算供后续 expected_roas 等用
+            # ── Step 2 (legacy): 选取 CTR/CR 来源（旧 CPA 公式备用，仅供 expected_roas 兜底） ──
             if data_days == 0:
                 # 冷启动：shop_avg × 40%/20%
                 ctr = shop_avg.get("ctr", 0) * 0.40
@@ -965,21 +1055,14 @@ async def _analyze_now_inner(db, tenant_id: int, shop_id: int,
                     logger.info(f"sku={sku} CR=0且均值CR=0，跳过")
                     continue
 
-            # ── Step 3: 确定 cpa_ratio ──
+            # ── Step 3-4: 已被利润最大化决策器替代（见 Step 1.5）──
+            # optimal_bid 已在 Step 1.5 由 _profit_max_decision 给出
+            # 仍计算 target_cpa 给 reason 文案用
             sku_cpa_ratio = None
             if data_days >= 21:
                 sku_cpa_ratio = _get_sku_cpa_ratio(db, tenant_id, camp.id, sku)
-            cpa_ratio, data_note = _get_cpa_ratio(data_days, sku_cpa_ratio)
+            cpa_ratio, _ = _get_cpa_ratio(data_days, sku_cpa_ratio)
             target_cpa = max_cpa * cpa_ratio
-
-            # ── Step 4: 计算最优出价 ──
-            optimal_bid = _calc_optimal_bid(
-                platform=platform, target_cpa=target_cpa,
-                ctr=ctr, cr=cr,
-                time_multiplier=time_multiplier,
-                day_multiplier=day_multiplier,
-                max_cpa=max_cpa,
-            )
 
             # ── Step 5: 平台"推荐竞争价"警告 + 降价反拉保护 ──
             # /bids/min API 返回的是"推荐竞争价"（实测常与硬最低一致）
