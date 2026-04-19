@@ -366,9 +366,29 @@ async def refresh_shop(
         oz = OzonClient(shop_id=shop.id, api_key=shop.api_key,
                         client_id=getattr(shop, "client_id", None))
         try:
-            # Ozon 每批 ≤ 50 sku
+            # 正向映射：传入的 sku (=platform_sku_id) → product_id
             sku_to_pid = {str(l.psk): l.pid for l in listings if l.psk}
             all_skus = list(sku_to_pid.keys())
+
+            # 反查兜底：Ozon 返回的 sku 可能是"平台全局 SKU"，与 platform_sku_id /
+            # platform_product_id 都不一定相等。补一张全 platform_* 字段映射表。
+            fallback_sql = text("""
+                SELECT pl.platform_sku_id AS psk, pl.platform_product_id AS ppd,
+                       pl.product_id AS pid
+                FROM platform_listings pl
+                WHERE pl.shop_id = :sid AND pl.platform = 'ozon'
+                  AND pl.tenant_id = :tid
+            """)
+            fallback_rows = db.execute(
+                fallback_sql, {"sid": shop.id, "tid": tenant_id}
+            ).fetchall()
+            pid_lookup = {}
+            for r in fallback_rows:
+                if r.psk:
+                    pid_lookup[str(r.psk)] = r.pid
+                if r.ppd:
+                    pid_lookup.setdefault(str(r.ppd), r.pid)
+
             for i in range(0, len(all_skus), 50):
                 batch = all_skus[i:i + 50]
                 try:
@@ -380,15 +400,16 @@ async def refresh_shop(
                         "code": ErrorCode.SEARCH_INSIGHTS_SUBSCRIPTION_REQUIRED,
                         "msg": f"Ozon 店铺未开通 Premium 订阅：{e.detail[:80]}",
                     }
-                # 按 sku 分组写入
+                # 按 sku 分组写入；product_id 反查不到就留 NULL（不阻塞写入）
                 grouped = {}
                 for it in items or []:
                     grouped.setdefault(it.get("sku"), []).append(it)
                 for sku, rows in grouped.items():
-                    pid = sku_to_pid.get(str(sku))
+                    sku_str = str(sku)
+                    pid = sku_to_pid.get(sku_str) or pid_lookup.get(sku_str)
                     total_rows += _upsert_rows(
                         db, tenant_id, shop.id, "ozon",
-                        str(sku), pid, date_to,
+                        sku_str, pid, date_to,
                         [{"text": r.get("query"), **r} for r in rows],
                     )
         finally:
