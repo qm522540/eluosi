@@ -1933,6 +1933,50 @@ async def today_summary_campaign(
 
     today_iso = _date.today().isoformat()
 
+    # 优先复用店铺级缓存里的 per_campaign 数据（避免 WB 限速重复打）
+    # 用户打开活动详情时，活动列表的 today-summary/shop 已经在 5 分钟内拉过
+    if not refresh and camp.platform == "wb":
+        shop_cached = _get_cached_today("shop", camp.shop_id)
+        if shop_cached and isinstance(shop_cached.get("per_campaign"), dict):
+            pc = shop_cached["per_campaign"].get(str(campaign_id)) \
+                or shop_cached["per_campaign"].get(campaign_id)
+            if pc:
+                spend = float(pc.get("spend") or 0)
+                revenue = float(pc.get("revenue") or 0)
+                # budget 仍要调一次 WB（单接口压力小），失败 None 不阻断
+                from app.services.platform.wb import WBClient
+                budget_remaining = None
+                client = WBClient(shop_id=shop.id, api_key=shop.api_key)
+                try:
+                    try:
+                        bd = await client._request(
+                            "GET", "https://advert-api.wildberries.ru/adv/v1/budget",
+                            params={"id": int(camp.platform_campaign_id)},
+                        )
+                        budget_remaining = bd.get("total") if isinstance(bd, dict) else None
+                    except Exception:
+                        pass
+                finally:
+                    await client.close()
+                result = {
+                    "today_date": today_iso, "platform": "wb",
+                    "spend": round(spend, 2),
+                    "orders": int(pc.get("orders") or 0),
+                    "atbs": 0,
+                    "views": int(pc.get("views") or 0),
+                    "clicks": int(pc.get("clicks") or 0),
+                    "ctr": float(pc.get("ctr") or 0),
+                    "cpc": 0.0,
+                    "cr": 0.0,
+                    "revenue": round(revenue, 2),
+                    "roas": round(revenue / spend, 2) if spend > 0 else 0,
+                    "budget_remaining": budget_remaining,
+                    "from_cache": False,
+                    "from_shop_cache": True,
+                }
+                _set_cached_today("camp", campaign_id, result)
+                return success(result)
+
     if camp.platform != "wb":
         # Ozon / Yandex 后续接入；先返个空结构让前端渲染
         result = {
