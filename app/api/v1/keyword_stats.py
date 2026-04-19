@@ -390,9 +390,10 @@ def _default_dates(date_from, date_to):
 @router.post("/translate-keywords")
 async def translate_keywords(
     req: TranslateKeywordsRequest,
+    db: Session = Depends(get_db),
     tenant_id: int = Depends(get_tenant_id),
 ):
-    """批量翻译俄文关键词为中文（Kimi AI，带内存缓存）"""
+    """批量翻译俄文关键词为中文（Kimi AI，带 DB + 内存双层缓存）"""
     from app.services.keyword_stats.translator import translate_keywords_cached
-    result = await translate_keywords_cached(req.keywords)
+    result = await translate_keywords_cached(req.keywords, db=db)
     return success(result)
