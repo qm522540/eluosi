@@ -33,6 +33,19 @@ const ScoreBig = ({ score, grade }) => {
 }
 
 const DimensionBar = ({ label, detail }) => {
+  if (detail.data_insufficient) {
+    return (
+      <Tooltip title={detail.hint || '该维度无可用数据，已从评分中豁免'}>
+        <div style={{ marginBottom: 2 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, color: '#999' }}>
+            <span>{label}</span>
+            <span style={{ fontStyle: 'italic' }}>无数据 · 已豁免</span>
+          </div>
+          <div style={{ height: 6, background: '#f5f5f5', borderRadius: 3, marginTop: 2 }} />
+        </div>
+      </Tooltip>
+    )
+  }
   const pct = Math.round((detail.score / detail.weight) * 100)
   const color = pct >= 70 ? '#52c41a' : (pct >= 40 ? '#faad14' : '#ff4d4f')
   return (
