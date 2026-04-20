@@ -2167,10 +2167,16 @@ const AdsOverview = ({ shopId, platform, shops, searched, syncing, lastSyncTime,
                         <Row gutter={16} align="middle" wrap={false}>
                           <Col flex="none">
                             <Space size={6}>
-                              <Text strong style={{ fontSize: 13 }}>今日</Text>
-                              <Tooltip title="WB fullstats v3 数据有几小时延迟，早上常空，下午陆续就位。点刷新强制重新拉。">
+                              <Text strong style={{ fontSize: 13 }}>
+                                {todaySummary?.data_source === 'local_yesterday' ? '昨日' : '今日'}
+                              </Text>
+                              <Tooltip title={
+                                todaySummary?.data_source === 'local_yesterday'
+                                  ? 'WB fullstats 今日数据 T+1 延迟，当前展示昨日完整数据。点刷新强制拉今日实时。'
+                                  : 'WB fullstats v3 今日数据有几小时延迟，早上常空，下午陆续就位。无数据时自动回落昨日。'
+                              }>
                                 <Text type="secondary" style={{ fontSize: 11, cursor: 'help' }}>
-                                  {todaySummary?.today_date || '-'}
+                                  {todaySummary?.data_date || todaySummary?.today_date || '-'}
                                 </Text>
                               </Tooltip>
                             </Space>

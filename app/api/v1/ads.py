@@ -2005,7 +2005,60 @@ async def today_summary_campaign(
         result["from_cache"] = False
         return success(result)
 
+    # 优先查本地 ad_stats 昨日数据（WB T+1 延迟，今日实时 API 多半返空）
+    # 对齐店铺级 today-summary/shop 的 fallback 逻辑（04-20 commit 2c98096）
+    from datetime import timedelta as _td
+    yesterday = _date.today() - _td(days=1)
+    local = db.execute(text("""
+        SELECT SUM(views) AS views, SUM(clicks) AS clicks,
+               SUM(orders) AS orders, SUM(atbs) AS atbs,
+               SUM(spend) AS spend, SUM(revenue) AS revenue
+        FROM ad_stats
+        WHERE campaign_id = :cid AND stat_date = :d AND platform = 'wb'
+    """), {"cid": camp.id, "d": yesterday}).fetchone()
+
     from app.services.platform.wb import WBClient
+
+    # 本地有昨日数据 → 用本地 + 只调 WB budget 接口（快）
+    if local and (local.spend or local.views or local.orders):
+        spend = float(local.spend or 0)
+        revenue = float(local.revenue or 0)
+        views_v = int(local.views or 0)
+        clicks_v = int(local.clicks or 0)
+
+        client = WBClient(shop_id=shop.id, api_key=shop.api_key)
+        budget_remaining = None
+        try:
+            try:
+                bd = await client._request(
+                    "GET", "https://advert-api.wildberries.ru/adv/v1/budget",
+                    params={"id": int(camp.platform_campaign_id)},
+                )
+                budget_remaining = bd.get("total") if isinstance(bd, dict) else None
+            except Exception:
+                pass
+        finally:
+            await client.close()
+
+        result = {
+            "today_date": today_iso, "platform": "wb",
+            "data_date": yesterday.isoformat(), "data_source": "local_yesterday",
+            "spend": round(spend, 2),
+            "orders": int(local.orders or 0),
+            "atbs": int(local.atbs or 0),
+            "views": views_v, "clicks": clicks_v,
+            "ctr": round(clicks_v / views_v * 100, 2) if views_v > 0 else 0,
+            "cpc": round(spend / clicks_v, 2) if clicks_v > 0 else 0,
+            "cr": round(int(local.orders or 0) / clicks_v * 100, 2) if clicks_v > 0 else 0,
+            "revenue": round(revenue, 2),
+            "roas": round(revenue / spend, 2) if spend > 0 else 0,
+            "budget_remaining": budget_remaining,
+            "from_cache": False,
+        }
+        _set_cached_today("camp", campaign_id, result)
+        return success(result)
+
+    # 本地无数据 → fallback 实时 WB（首次用或 smart_sync 未跑过）
     import asyncio as _aio
     client = WBClient(shop_id=shop.id, api_key=shop.api_key)
     try:
@@ -2034,6 +2087,7 @@ async def today_summary_campaign(
     result = {
         "today_date": today_iso,
         "platform": "wb",
+        "data_date": today_iso, "data_source": "wb_realtime",
         "spend": round(spend, 2),
         "orders": int(summary.get("orders") or 0),
         "atbs": int(summary.get("atbs") or 0),
