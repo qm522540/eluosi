@@ -16,17 +16,17 @@ const ScoreBig = ({ score, grade }) => {
     <Tooltip title={`${meta.label}等 · 点击旁边按钮跳到 AI 优化`}>
       <div style={{
         display: 'inline-block',
-        minWidth: 68,
-        padding: '6px 10px',
+        minWidth: 52,
+        padding: '4px 8px',
         textAlign: 'center',
-        background: meta.bg,
-        border: `1px solid ${meta.color}`,
+        background: '#fafbff',
+        border: '1px solid #e6edff',
         borderRadius: 4,
       }}>
-        <div style={{ fontSize: 20, fontWeight: 600, color: meta.color, lineHeight: 1.2 }}>
+        <div style={{ fontSize: 16, fontWeight: 600, color: meta.color, lineHeight: 1.2 }}>
           {score.toFixed(1)}
         </div>
-        <div style={{ fontSize: 11, color: meta.color }}>{meta.label}等</div>
+        <div style={{ fontSize: 11, color: '#999' }}>{meta.label}等</div>
       </div>
     </Tooltip>
   )
