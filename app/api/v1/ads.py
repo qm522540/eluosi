@@ -2007,11 +2007,12 @@ async def today_summary_campaign(
 
     # 优先查本地 ad_stats 昨日数据（WB T+1 延迟，今日实时 API 多半返空）
     # 对齐店铺级 today-summary/shop 的 fallback 逻辑（04-20 commit 2c98096）
+    # ad_stats 表字段是 impressions（不是 views），且无 atbs 列
     from datetime import timedelta as _td
     yesterday = _date.today() - _td(days=1)
     local = db.execute(text("""
-        SELECT SUM(views) AS views, SUM(clicks) AS clicks,
-               SUM(orders) AS orders, SUM(atbs) AS atbs,
+        SELECT SUM(impressions) AS impressions, SUM(clicks) AS clicks,
+               SUM(orders) AS orders,
                SUM(spend) AS spend, SUM(revenue) AS revenue
         FROM ad_stats
         WHERE campaign_id = :cid AND stat_date = :d AND platform = 'wb'
@@ -2020,10 +2021,10 @@ async def today_summary_campaign(
     from app.services.platform.wb import WBClient
 
     # 本地有昨日数据 → 用本地 + 只调 WB budget 接口（快）
-    if local and (local.spend or local.views or local.orders):
+    if local and (local.spend or local.impressions or local.orders):
         spend = float(local.spend or 0)
         revenue = float(local.revenue or 0)
-        views_v = int(local.views or 0)
+        views_v = int(local.impressions or 0)
         clicks_v = int(local.clicks or 0)
 
         client = WBClient(shop_id=shop.id, api_key=shop.api_key)
@@ -2045,7 +2046,7 @@ async def today_summary_campaign(
             "data_date": yesterday.isoformat(), "data_source": "local_yesterday",
             "spend": round(spend, 2),
             "orders": int(local.orders or 0),
-            "atbs": int(local.atbs or 0),
+            "atbs": 0,
             "views": views_v, "clicks": clicks_v,
             "ctr": round(clicks_v / views_v * 100, 2) if views_v > 0 else 0,
             "cpc": round(spend / clicks_v, 2) if clicks_v > 0 else 0,
@@ -2159,10 +2160,11 @@ async def today_summary_shop(
     # ad_stats 表由 smart_sync 入库，数据到昨日（今日实时 WB 那份反正也是昨日）。
     from datetime import timedelta as _td
     yesterday = _date.today() - _td(days=1)
+    # ad_stats 表字段是 impressions（不是 views），且无 atbs 列 — 按 impressions 查
     local_stats = db.execute(text("""
         SELECT s.campaign_id,
-               SUM(s.views) AS views, SUM(s.clicks) AS clicks,
-               SUM(s.orders) AS orders, SUM(s.atbs) AS atbs,
+               SUM(s.impressions) AS impressions, SUM(s.clicks) AS clicks,
+               SUM(s.orders) AS orders,
                SUM(s.spend) AS spend, SUM(s.revenue) AS revenue
         FROM ad_stats s
         WHERE s.campaign_id IN :cids
@@ -2184,7 +2186,7 @@ async def today_summary_shop(
                 continue
             spend_c = float(s.spend or 0)
             rev_c = float(s.revenue or 0)
-            views_c = int(s.views or 0)
+            views_c = int(s.impressions or 0)
             clicks_c = int(s.clicks or 0)
             per_camp[c.id] = {
                 "spend": round(spend_c, 2),
@@ -2198,7 +2200,7 @@ async def today_summary_shop(
             results.append({
                 "sum": spend_c, "sum_price": rev_c,
                 "views": views_c, "clicks": clicks_c,
-                "orders": int(s.orders or 0), "atbs": int(s.atbs or 0),
+                "orders": int(s.orders or 0), "atbs": 0,
             })
     else:
         # 本地无数据 fallback 实时 WB（首次用或 smart_sync 未跑过）
