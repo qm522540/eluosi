@@ -75,7 +75,7 @@ const SeoCandidatesTable = ({
       title: '来源',
       dataIndex: 'sources',
       key: 'sources',
-      width: 100,
+      width: 84,
       render: (s) => <SourceBadges sources={s} />,
     },
     {
