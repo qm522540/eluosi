@@ -17,6 +17,13 @@ const roasColor = (r) => (r == null ? '#999' : r >= 5 ? '#3f8600' : r >= 2 ? '#f
 
 const scoreColor = (s) => (s >= 8 ? 'green' : s >= 5 ? 'gold' : 'default')
 
+const evidenceTier = (orders, impr) => {
+  if (orders > 0) return { label: '强', color: '#52c41a', bg: '#f6ffed', border: '#b7eb8f', tip: '有真实订单证明这个词能带量' }
+  if (impr >= 20) return { label: '中', color: '#faad14', bg: '#fffbe6', border: '#ffe58f', tip: '有曝光量但尚未转化，值得一试' }
+  if (impr > 0) return { label: '弱', color: '#999', bg: '#fafafa', border: '#eee', tip: '曝光很少，证据不足' }
+  return null
+}
+
 const CoverDot = ({ ok, label }) => (
   <Tooltip title={`${label}${ok ? '已覆盖' : '未覆盖'}`}>
     {ok
@@ -95,16 +102,34 @@ const SeoCandidatesTable = ({
       render: (_, r) => {
         const orders = (r.paid_orders || 0) + (r.organic_orders || 0)
         const impr = r.organic_impressions || 0
-        if (!orders && !impr) return <Text type="secondary">-</Text>
+        const tier = evidenceTier(orders, impr)
+        if (!tier) return <Text type="secondary">-</Text>
+        const badge = (
+          <Tooltip title={tier.tip}>
+            <span style={{
+              display: 'inline-block',
+              padding: '0 6px',
+              marginRight: 6,
+              fontSize: 11,
+              lineHeight: '16px',
+              color: tier.color,
+              background: tier.bg,
+              border: `1px solid ${tier.border}`,
+              borderRadius: 3,
+              fontWeight: 600,
+            }}>{tier.label}</span>
+          </Tooltip>
+        )
         if (orders > 0) {
           return (
             <div style={{ lineHeight: 1.4 }}>
               <div>
-                <Tag color="red" style={{ marginRight: 4 }}>订单 {orders}</Tag>
-                <span style={{ color: '#888', fontSize: 12 }}>曝光 {impr}</span>
+                {badge}
+                <span style={{ color: '#cf1322', fontWeight: 600 }}>订单 {orders}</span>
+                <span style={{ color: '#888', fontSize: 12, marginLeft: 6 }}>曝光 {impr}</span>
               </div>
               {r.organic_add_to_cart > 0 && (
-                <div style={{ color: '#999', fontSize: 11 }}>加购 {r.organic_add_to_cart}</div>
+                <div style={{ color: '#999', fontSize: 11, marginLeft: 22 }}>加购 {r.organic_add_to_cart}</div>
               )}
             </div>
           )
@@ -112,9 +137,10 @@ const SeoCandidatesTable = ({
         return (
           <div style={{ lineHeight: 1.4 }}>
             <div>
+              {badge}
               <span style={{ color: '#555' }}>曝光 <strong>{impr}</strong></span>
             </div>
-            <div style={{ color: '#bbb', fontSize: 11 }}>暂无订单</div>
+            <div style={{ color: '#bbb', fontSize: 11, marginLeft: 22 }}>暂无订单</div>
           </div>
         )
       },

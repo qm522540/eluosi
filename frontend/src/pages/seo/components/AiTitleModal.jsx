@@ -164,6 +164,38 @@ const AiTitleModal = ({
             )}
           </div>
 
+          {result.preserved_keywords?.length > 0 && (
+            <Alert
+              type={result.dropped_preserve?.length ? 'warning' : 'info'}
+              showIcon
+              style={{ marginBottom: 12 }}
+              message={(
+                <span>
+                  已识别 <strong>{result.preserved_keywords.length}</strong> 个原标题里的高价值词（有订单或曝光 ≥ 20），AI 已被要求保留：
+                </span>
+              )}
+              description={(
+                <div>
+                  <Space size={4} wrap style={{ marginBottom: result.dropped_preserve?.length ? 6 : 0 }}>
+                    {result.preserved_keywords.map((kw, i) => {
+                      const dropped = result.dropped_preserve?.includes(kw)
+                      return (
+                        <Tag key={i} color={dropped ? 'red' : 'green'} style={{ margin: 0 }}>
+                          {dropped ? '✗ ' : '✓ '}{kw}
+                        </Tag>
+                      )
+                    })}
+                  </Space>
+                  {result.dropped_preserve?.length > 0 && (
+                    <Text type="danger" style={{ fontSize: 12 }}>
+                      ⚠️ AI 未保留红色标签的词，采用前请留意 —— 建议点「重新生成」再试，或手动补回。
+                    </Text>
+                  )}
+                </div>
+              )}
+            />
+          )}
+
           <Text type="secondary" style={{ fontSize: 12 }}>
             一期仅生成建议，请复制新标题到「商品管理 → 编辑商品」手动粘贴。
           </Text>

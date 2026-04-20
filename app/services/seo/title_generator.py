@@ -42,6 +42,7 @@ SYSTEM_PROMPT = """你是俄罗斯跨境电商（WB / Ozon / Yandex）SEO 标题
 4. 搜索量/订单数高的词放前面
 5. 全部小写，不用标点符号（电商平台 SEO 惯例），短语之间用单个空格分隔
 6. 不编造原标题没有的属性（比如原品没说"防水"，不要加"водостойкий"）
+7. **绝对不能丢失**"必须保留的高价值词"列表里的词（这些词已在原标题出现且带来过真实订单/曝光，丢了会直接降流量）
 
 输出严格 JSON 格式：
 {
@@ -62,6 +63,7 @@ def _build_user_prompt(
     current_title_ru: Optional[str],
     variant_attrs: Any,
     candidates: list[dict],
+    preserve_keywords: Optional[list[str]] = None,
 ) -> str:
     """拼用户侧 prompt。候选词按 score 降序传入。"""
     lines = [
@@ -81,6 +83,12 @@ def _build_user_prompt(
         if len(attrs_str) > 400:
             attrs_str = attrs_str[:400] + "...(截断)"
         lines.append(f"属性：{attrs_str}")
+
+    if preserve_keywords:
+        lines.append("")
+        lines.append(f"【必须保留的高价值词（共 {len(preserve_keywords)} 个，已在当前标题出现且带过真实订单/曝光，绝对不能丢）】")
+        for kw in preserve_keywords:
+            lines.append(f"- {kw}")
 
     lines.append("")
     lines.append(f"【用户选中要融合的反哺关键词（共 {len(candidates)} 个，按重要性排序）】")
@@ -218,6 +226,23 @@ async def generate_title(
         for r in cand_rows
     ]
 
+    # ---------- 2.5 查已在当前标题里的"高价值保留词"（防止 AI 换新词时丢失已验证的高转化词）----------
+    preserve_rows = db.execute(text("""
+        SELECT keyword
+        FROM seo_keyword_candidates
+        WHERE tenant_id = :tid
+          AND shop_id = :sid
+          AND product_id = :pid
+          AND in_title = 1
+          AND (COALESCE(paid_orders, 0) > 0
+               OR COALESCE(organic_orders, 0) > 0
+               OR COALESCE(organic_impressions, 0) >= 20)
+        ORDER BY (COALESCE(paid_orders,0) + COALESCE(organic_orders,0)) DESC,
+                 score DESC
+        LIMIT 10
+    """), {"tid": tenant_id, "sid": shop_id, "pid": product_id}).fetchall()
+    preserve_keywords = [r.keyword for r in preserve_rows]
+
     # ---------- 3. 拼 prompt & 调 AI（GLM）----------
     user_prompt = _build_user_prompt(
         name_zh=prod_row.name_zh or "",
@@ -227,11 +252,13 @@ async def generate_title(
         current_title_ru=prod_row.title_ru,
         variant_attrs=prod_row.variant_attrs,
         candidates=candidates,
+        preserve_keywords=preserve_keywords,
     )
 
     logger.info(
         f"SEO title generate: tenant={tenant_id} shop={shop_id} product={product_id} "
-        f"candidates={len(candidates)} prompt_chars={len(user_prompt)}"
+        f"candidates={len(candidates)} preserve={len(preserve_keywords)} "
+        f"prompt_chars={len(user_prompt)}"
     )
 
     try:
@@ -276,12 +303,23 @@ async def generate_title(
     db.commit()
     db.refresh(gen)
 
+    # 检查 AI 是否真的保留了所有高价值词（不强制拦截，仅 log + 回传让前端透明）
+    new_title_lower = (parsed["new_title"] or "").lower()
+    dropped_preserve = [kw for kw in preserve_keywords if kw.lower() not in new_title_lower]
+    if dropped_preserve:
+        logger.warning(
+            f"SEO title generate: AI dropped preserve keywords product={product_id}: "
+            f"{dropped_preserve}"
+        )
+
     return {
         "code": ErrorCode.SUCCESS,
         "data": {
             "new_title": parsed["new_title"],
             "reasoning": parsed["reasoning"],
             "included_keywords": parsed["included_keywords"] or [c["keyword"] for c in candidates],
+            "preserved_keywords": preserve_keywords,
+            "dropped_preserve": dropped_preserve,
             "ai_model": ai_result["model"],
             "decision_id": ai_result["decision_id"],
             "generated_content_id": gen.id,
