@@ -16,6 +16,7 @@ from app.services.seo.service import (
     adopt_candidate, ignore_candidates,
 )
 from app.services.seo.title_generator import generate_title
+from app.services.seo.health_service import compute_shop_health
 from app.utils.response import success, error
 
 router = APIRouter()
@@ -110,6 +111,29 @@ def batch_ignore(
 ):
     """批量忽略候选（幂等，已 adopted 的跳过）"""
     result = ignore_candidates(db, tenant_id, shop.id, body.ids)
+    if result.get("code") != 0:
+        return error(result["code"], result.get("msg", ""))
+    return success(result["data"])
+
+
+@router.get("/shop/{shop_id}/health")
+def shop_health(
+    shop_id: int,
+    score_range: str = Query("all", description="all / poor / fair / good / data_insufficient"),
+    sort: str = Query("score_asc", description="score_asc / score_desc / gaps_desc"),
+    keyword: str = Query("", description="商品名模糊搜索"),
+    page: int = Query(1, ge=1),
+    size: int = Query(20, ge=1, le=100),
+    db: Session = Depends(get_db),
+    tenant_id: int = Depends(get_tenant_id),
+    shop=Depends(get_owned_shop),
+):
+    """店铺 SEO 健康分诊断 + Top 缺词。"""
+    result = compute_shop_health(
+        db, tenant_id, shop,
+        score_range=score_range, sort=sort, keyword=keyword,
+        page=page, size=size,
+    )
     if result.get("code") != 0:
         return error(result["code"], result.get("msg", ""))
     return success(result["data"])
