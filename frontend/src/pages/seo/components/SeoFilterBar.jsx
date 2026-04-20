@@ -89,6 +89,8 @@ const SeoFilterBar = ({
               { label: '全部', value: 'all' },
               { label: '付费·本商品', value: 'paid_self' },
               { label: '付费·类目', value: 'paid_category' },
+              { label: '自然·本商品', value: 'organic_self' },
+              { label: '自然·类目', value: 'organic_category' },
             ]}
           />
           <span style={{ color: '#999' }}>状态：</span>
