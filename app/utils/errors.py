@@ -86,6 +86,8 @@ class ErrorCode:
     SEO_CANDIDATE_NOT_FOUND = 94001
     SEO_CANDIDATE_INVALID_STATUS = 94002           # 状态不允许该操作（已 adopted 不能再 ignore 等）
     SEO_REFRESH_FAILED = 94003                     # 引擎分析失败（数据源异常等）
+    SEO_TITLE_GENERATE_FAILED = 94004              # AI 生成标题失败（模型超时 / 返回异常 / 解析失败）
+    SEO_PRODUCT_NOT_FOUND = 94005                  # 商品在当前店铺找不到 listing（需先同步商品）
 
 
 ERROR_MESSAGES = {
@@ -136,4 +138,6 @@ ERROR_MESSAGES = {
     ErrorCode.SEO_CANDIDATE_NOT_FOUND: "SEO 候选词不存在",
     ErrorCode.SEO_CANDIDATE_INVALID_STATUS: "候选词当前状态不允许该操作",
     ErrorCode.SEO_REFRESH_FAILED: "SEO 候选引擎分析失败",
+    ErrorCode.SEO_TITLE_GENERATE_FAILED: "AI 生成标题失败",
+    ErrorCode.SEO_PRODUCT_NOT_FOUND: "当前店铺找不到该商品 listing",
 }
