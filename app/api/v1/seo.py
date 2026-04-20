@@ -15,6 +15,7 @@ from app.services.seo.service import (
     analyze_paid_to_organic, list_candidates,
     adopt_candidate, ignore_candidates,
 )
+from app.services.seo.title_generator import generate_title
 from app.utils.response import success, error
 
 router = APIRouter()
@@ -28,6 +29,12 @@ class RefreshBody(BaseModel):
     days: int = Field(30, ge=7, le=90, description="回溯天数")
     roas_threshold: float = Field(2.0, gt=0, le=100, description="ROAS 阈值")
     min_orders: int = Field(1, ge=0, description="订单数下限")
+
+
+class GenerateTitleBody(BaseModel):
+    product_id: int = Field(..., gt=0, description="products.id")
+    candidate_ids: List[int] = Field(..., min_items=1, max_items=30,
+                                     description="要融合的候选词 id，最多 30 个")
 
 
 @router.get("/shop/{shop_id}/candidates")
@@ -103,6 +110,32 @@ def batch_ignore(
 ):
     """批量忽略候选（幂等，已 adopted 的跳过）"""
     result = ignore_candidates(db, tenant_id, shop.id, body.ids)
+    if result.get("code") != 0:
+        return error(result["code"], result.get("msg", ""))
+    return success(result["data"])
+
+
+@router.post("/shop/{shop_id}/generate-title")
+async def generate_title_for_product(
+    shop_id: int,
+    body: GenerateTitleBody,
+    db: Session = Depends(get_db),
+    tenant_id: int = Depends(get_tenant_id),
+    shop=Depends(get_owned_shop),
+    current_user=Depends(get_current_user),
+):
+    """AI 融合候选词生成商品新俄语标题（走 GLM）。
+
+    入参 product_id + candidate_ids，service 会三重校验 (tenant/shop/product)。
+    生成内容入库 seo_generated_contents 表，可后续 approve 写回商品（三期）。
+    """
+    user_id = getattr(current_user, "id", None)
+    result = await generate_title(
+        db, tenant_id, shop,
+        product_id=body.product_id,
+        candidate_ids=body.candidate_ids,
+        user_id=user_id,
+    )
     if result.get("code") != 0:
         return error(result["code"], result.get("msg", ""))
     return success(result["data"])
