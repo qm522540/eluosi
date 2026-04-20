@@ -87,7 +87,20 @@ const SeoCandidatesTable = ({
     },
     {
       title: (
-        <Tooltip title="这个词在你店里的真实历史表现：曝光=被展示次数，订单=带来的真实成交。有订单的是强证据（最该优先改标题）。">
+        <Tooltip
+          overlayStyle={{ maxWidth: 360 }}
+          title={(
+            <div style={{ lineHeight: 1.6 }}>
+              <div><strong>这个词在你店里的真实历史表现：</strong></div>
+              <div>• <strong>曝光</strong>：用户搜这个词后，<u>你这个商品</u>出现在搜索结果里的次数（不是全网搜索量）</div>
+              <div>• <strong>订单</strong>：用户搜这个词 → 点进你商品 → 最终下单的次数（平台按最后一次搜索词归因）</div>
+              <div>• <strong>加购</strong>：搜这个词进来后加了购物车但未必下单</div>
+              <div style={{ marginTop: 4, color: '#ffd591' }}>
+                有订单 = 强证据（这个词真能带成交，最该优先改标题）。Ozon 店订单基本都是自然搜索来的（付费广告 API 不做关键词级归因）。
+              </div>
+            </div>
+          )}
+        >
           实证表现
         </Tooltip>
       ),
