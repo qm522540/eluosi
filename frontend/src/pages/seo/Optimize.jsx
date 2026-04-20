@@ -280,7 +280,11 @@ const Optimize = () => {
           onReload={() => { setPage(1); fetchCandidates() }}
         />
 
-        <SeoStatsCards totals={data?.totals} />
+        <SeoStatsCards
+          totals={data?.totals}
+          currentSource={source}
+          onSelectWithOrders={(v) => { setSource(v); setPage(1); setSelectedKeys([]) }}
+        />
 
         {selectedKeys.length > 0 && (
           <div style={{

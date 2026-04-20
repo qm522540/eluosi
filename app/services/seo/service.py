@@ -457,9 +457,12 @@ def list_candidates(
     """分页拉候选清单 + 4 格汇总。
 
     source_filter:
-      - all          全部
-      - paid_self    只来自商品维付费
-      - paid_category 只来自类目维付费
+      - all            全部
+      - paid_self      只来自商品维付费
+      - paid_category  只来自类目维付费
+      - organic_self   只来自自然搜索（本商品）
+      - organic_category 只来自自然搜索（同类目）
+      - with_orders    只看带真实订单的（强证据，paid_orders OR organic_orders > 0）
 
     product_id: 可选，只返回指定商品的候选（Health → Optimize 闭环用）
     """
@@ -486,6 +489,8 @@ def list_candidates(
         where_parts.append("JSON_CONTAINS(c.sources, JSON_OBJECT('type','organic','scope','self'))")
     elif source_filter == "organic_category":
         where_parts.append("JSON_CONTAINS(c.sources, JSON_OBJECT('type','organic','scope','category'))")
+    elif source_filter == "with_orders":
+        where_parts.append("(COALESCE(c.paid_orders,0) > 0 OR COALESCE(c.organic_orders,0) > 0)")
     where_sql = " AND ".join(where_parts)
 
     # P0-3 修 2026-04-19：totals / items 的 LEFT JOIN platform_listings 无
@@ -529,7 +534,9 @@ def list_candidates(
                                        AND pl.status NOT IN ('deleted', 'archived')
         WHERE {where_sql}
         GROUP BY c.id
-        ORDER BY c.score DESC, c.paid_orders DESC
+        ORDER BY (COALESCE(c.paid_orders,0) + COALESCE(c.organic_orders,0)) DESC,
+                 c.score DESC,
+                 COALESCE(c.organic_impressions,0) DESC
         LIMIT :offset, :size
     """)
     params2 = dict(params, offset=offset, size=size)

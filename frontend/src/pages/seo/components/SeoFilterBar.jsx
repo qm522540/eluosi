@@ -87,6 +87,7 @@ const SeoFilterBar = ({
             onChange={onSourceChange}
             options={[
               { label: '全部', value: 'all' },
+              { label: '✅ 带订单', value: 'with_orders' },
               { label: '付费·本商品', value: 'paid_self' },
               { label: '付费·类目', value: 'paid_category' },
               { label: '自然·本商品', value: 'organic_self' },

@@ -78,6 +78,47 @@ const SeoCandidatesTable = ({
       sorter: (a, b) => (a.score || 0) - (b.score || 0),
       render: (v) => <Tag color={scoreColor(v || 0)} style={{ fontSize: 13, minWidth: 36, textAlign: 'center' }}>{(v || 0).toFixed(1)}</Tag>,
     },
+    {
+      title: (
+        <Tooltip title="这个词在你店里的真实历史表现：曝光=被展示次数，订单=带来的真实成交。有订单的是强证据（最该优先改标题）。">
+          实证表现
+        </Tooltip>
+      ),
+      key: 'evidence',
+      width: 160,
+      sorter: (a, b) => {
+        const aOrd = (a.paid_orders || 0) + (a.organic_orders || 0)
+        const bOrd = (b.paid_orders || 0) + (b.organic_orders || 0)
+        if (aOrd !== bOrd) return aOrd - bOrd
+        return (a.organic_impressions || 0) - (b.organic_impressions || 0)
+      },
+      render: (_, r) => {
+        const orders = (r.paid_orders || 0) + (r.organic_orders || 0)
+        const impr = r.organic_impressions || 0
+        if (!orders && !impr) return <Text type="secondary">-</Text>
+        if (orders > 0) {
+          return (
+            <div style={{ lineHeight: 1.4 }}>
+              <div>
+                <Tag color="red" style={{ marginRight: 4 }}>订单 {orders}</Tag>
+                <span style={{ color: '#888', fontSize: 12 }}>曝光 {impr}</span>
+              </div>
+              {r.organic_add_to_cart > 0 && (
+                <div style={{ color: '#999', fontSize: 11 }}>加购 {r.organic_add_to_cart}</div>
+              )}
+            </div>
+          )
+        }
+        return (
+          <div style={{ lineHeight: 1.4 }}>
+            <div>
+              <span style={{ color: '#555' }}>曝光 <strong>{impr}</strong></span>
+            </div>
+            <div style={{ color: '#bbb', fontSize: 11 }}>暂无订单</div>
+          </div>
+        )
+      },
+    },
     showPaid && {
       title: (
         <Tooltip title="从付费广告点击后搜到这个词的数据。仅 WB 店有，Ozon 店暂无（平台 API 限制）。">
@@ -173,7 +214,7 @@ const SeoCandidatesTable = ({
       }}
       pagination={pagination}
       onChange={onPaginationChange}
-      scroll={{ x: 1200 }}
+      scroll={{ x: 1400 }}
     />
   )
 }
