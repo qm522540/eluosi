@@ -71,16 +71,43 @@ def _score_title_length(title: Optional[str]) -> tuple[float, dict]:
 
 
 def _score_rating(rating: Optional[float]) -> tuple[float, dict]:
-    """评分得分，上限 20。
-    无评分 / rating=0：0
-    1-5：rating/5 × 20
+    """评分得分，上限 20（若维度无数据会在 _finalize_score 被重分权）。
+
+    Ozon Seller API /v3/product/info/list 不返 rating 字段，Ozon 商品此维度
+    会标 data_insufficient=True，由 _finalize_score 把权重重分配到其他维度。
+    WB listing.rating 同步正常，走 1-5 打分路径。
     """
-    if rating is None or rating <= 0:
-        return 0.0, {"weight": 20, "rating": None, "hint": "无评分（可能是新品）"}
+    if rating is None:
+        return 0.0, {
+            "weight": 20, "rating": None,
+            "data_insufficient": True,
+            "hint": "该平台 API 不返回评分（已从评分中豁免，权重已重分配到其他维度）",
+        }
+    if rating <= 0:
+        return 0.0, {"weight": 20, "rating": 0, "hint": "0 分或无评价（可能是新品）"}
     r = max(0.0, min(5.0, float(rating)))
     sc = round(r / 5 * 20, 1)
     hint = "好评" if r >= 4 else ("中评" if r >= 3 else "差评需处理")
     return sc, {"weight": 20, "rating": round(r, 2), "hint": hint}
+
+
+def _finalize_score(dims: list[dict]) -> float:
+    """按可用维度动态重分权得出 0-100 总分。
+
+    规则：
+    - 维度 data_insufficient=True → 权重 = 0，不参与计分
+    - 其他维度的总得分按 (sum_score / sum_available_weight) * 100 放大
+    - 例：Ozon 商品 rating 无数据 → available_weight = 60+20 = 80 → 总分 = raw × 100/80
+    - 所有维度都无数据（极罕见）→ 0
+    """
+    avail = [d for d in dims if not d.get("data_insufficient")]
+    if not avail:
+        return 0.0
+    avail_weight = sum(d["weight"] for d in avail)
+    raw = sum(d["score"] for d in avail)
+    if avail_weight <= 0:
+        return 0.0
+    return round(raw / avail_weight * 100, 1)
 
 
 def _classify(score: float) -> str:
@@ -160,7 +187,12 @@ def compute_shop_health(
         tit_score, tit_detail = _score_title_length(r.title_ru)
         rat_score, rat_detail = _score_rating(r.rating)
 
-        total_score = round(cov_score + tit_score + rat_score, 1)
+        dims_for_final = [
+            {"score": cov_score, **cov_detail},
+            {"score": tit_score, **tit_detail},
+            {"score": rat_score, **rat_detail},
+        ]
+        total_score = _finalize_score(dims_for_final)
         grade = _classify(total_score)
         totals[grade] += 1
         totals["sum_score"] += total_score
