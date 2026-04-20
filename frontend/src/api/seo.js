@@ -32,3 +32,8 @@ export function generateSeoTitle(shopId, productId, candidateIds) {
     { timeout: 60000 },
   )
 }
+
+/** 店铺 SEO 健康分诊断 + Top 缺词 */
+export function getSeoHealth(shopId, params) {
+  return request.get(`${BASE}/shop/${shopId}/health`, { params })
+}
