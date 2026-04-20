@@ -354,6 +354,10 @@ async def refresh_shop(
                         "code": ErrorCode.SEARCH_INSIGHTS_SUBSCRIPTION_REQUIRED,
                         "msg": f"WB 店铺未开通 Jam 订阅：{e.detail[:80]}",
                     }
+                except Exception as e:
+                    errors.append({"nm_id": nm_id, "error": str(e)[:200]})
+                    logger.warning(f"WB fetch_product_search_texts nm={nm_id} 失败: {e}")
+                    continue
                 if items:
                     total_rows += _upsert_rows(
                         db, tenant_id, shop.id, "wb",
@@ -400,6 +404,10 @@ async def refresh_shop(
                         "code": ErrorCode.SEARCH_INSIGHTS_SUBSCRIPTION_REQUIRED,
                         "msg": f"Ozon 店铺未开通 Premium 订阅：{e.detail[:80]}",
                     }
+                except Exception as e:
+                    errors.append({"skus": batch[:5], "error": str(e)[:200]})
+                    logger.warning(f"Ozon fetch_product_queries_details batch={len(batch)} 失败: {e}")
+                    continue
                 # 按 sku 分组写入；product_id 反查不到就留 NULL（不阻塞写入）
                 grouped = {}
                 for it in items or []:
