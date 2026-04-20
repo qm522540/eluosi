@@ -4,6 +4,32 @@
 
 set -e
 
+# ==== 数据库迁移版本号撞号检查 ====
+# 04-18（043）+ 04-19（048）连撞两次。硬拦防第 3 次。
+staged_migrations=$(git diff --cached --name-only --diff-filter=A | grep -E '^database/migrations/versions/[0-9]{3}_.*\.sql$' || true)
+if [ -n "$staged_migrations" ]; then
+    echo "==== 迁移版本号撞号检查 ===="
+    conflict=0
+    for new_file in $staged_migrations; do
+        ver=$(basename "$new_file" | cut -c1-3)
+        # 查 versions/ 目录下同版本号的所有文件（排除自己）
+        existing=$(ls "database/migrations/versions/${ver}_"*.sql 2>/dev/null | grep -v "^${new_file}$" || true)
+        if [ -n "$existing" ]; then
+            echo "ERROR: 迁移版本号 ${ver} 已被占用"
+            echo "  新加: $new_file"
+            echo "  已有: $existing"
+            conflict=1
+        fi
+    done
+    if [ $conflict -eq 1 ]; then
+        echo ""
+        echo "请把你的迁移文件重命名为下一个可用版本号后再 commit。"
+        echo "查看当前最大版本号：ls database/migrations/versions/ | tail -5"
+        exit 1
+    fi
+    echo "通过（$(echo "$staged_migrations" | wc -l) 个迁移）"
+fi
+
 # 只检查 staged 的 Python 文件
 staged_py=$(git diff --cached --name-only --diff-filter=ACM | grep -E '^app/.*\.py$' || true)
 
