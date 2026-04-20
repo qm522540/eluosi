@@ -86,9 +86,9 @@ const SeoCandidatesTable = ({
       ),
       dataIndex: 'score',
       key: 'score',
-      width: 100,
+      width: 72,
       sorter: (a, b) => (a.score || 0) - (b.score || 0),
-      render: (v) => <Tag color={scoreColor(v || 0)} style={{ fontSize: 13, minWidth: 36, textAlign: 'center' }}>{(v || 0).toFixed(1)}</Tag>,
+      render: (v) => <Tag color={scoreColor(v || 0)} style={{ fontSize: 11, minWidth: 28, textAlign: 'center', margin: 0 }}>{(v || 0).toFixed(1)}</Tag>,
     },
     {
       title: (
