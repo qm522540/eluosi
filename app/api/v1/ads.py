@@ -3,7 +3,7 @@
 from datetime import date, datetime, timedelta, timezone
 from fastapi import APIRouter, Depends, Query, HTTPException
 from fastapi.responses import StreamingResponse
-from sqlalchemy import text
+from sqlalchemy import bindparam, text
 from sqlalchemy.orm import Session
 import io
 
@@ -2100,34 +2100,77 @@ async def today_summary_shop(
         result["from_cache"] = False
         return success(result)
 
-    from app.services.platform.wb import WBClient
-    client = WBClient(shop_id=shop.id, api_key=shop.api_key)
+    # 优先从本地 ad_stats 查昨日数据（WB 有 1 天延迟）——避免 WB fullstats
+    # 26+ 个活动串行 2s 间隔 + 429 重试累计 10+ 分钟导致前端超时。
+    # ad_stats 表由 smart_sync 入库，数据到昨日（今日实时 WB 那份反正也是昨日）。
+    from datetime import timedelta as _td
+    yesterday = _date.today() - _td(days=1)
+    local_stats = db.execute(text("""
+        SELECT s.campaign_id,
+               SUM(s.views) AS views, SUM(s.clicks) AS clicks,
+               SUM(s.orders) AS orders, SUM(s.atbs) AS atbs,
+               SUM(s.spend) AS spend, SUM(s.revenue) AS revenue
+        FROM ad_stats s
+        WHERE s.campaign_id IN :cids
+          AND s.stat_date = :d
+          AND s.platform = 'wb'
+        GROUP BY s.campaign_id
+    """).bindparams(bindparam("cids", expanding=True)), {
+        "cids": [c.id for c in camps], "d": yesterday,
+    }).fetchall()
+
     per_camp = {}
-    try:
-        # WB fullstats v3 限速严：实测并发触发 429，串行 200ms 仍 50% 失败
-        # （限速约 30 req/min）。改串行 + 2 秒间隔，宁慢勿丢。
-        # 10 个活动约 20 秒首次，缓存命中后秒出。
-        results = []
+    results = []
+    if local_stats:
+        # 本地有昨日数据，直接用
+        by_cid = {s.campaign_id: s for s in local_stats}
         for c in camps:
-            r = await client.fetch_campaign_summary(
-                advert_id=c.platform_campaign_id,
-                date_from=today_iso, date_to=today_iso,
-            )
-            results.append(r)
-            spend_c = float(r.get("sum") or 0)
-            rev_c = float(r.get("sum_price") or 0)
+            s = by_cid.get(c.id)
+            if not s:
+                continue
+            spend_c = float(s.spend or 0)
+            rev_c = float(s.revenue or 0)
+            views_c = int(s.views or 0)
+            clicks_c = int(s.clicks or 0)
             per_camp[c.id] = {
                 "spend": round(spend_c, 2),
-                "orders": int(r.get("orders") or 0),
+                "orders": int(s.orders or 0),
                 "revenue": round(rev_c, 2),
-                "views": int(r.get("views") or 0),
-                "clicks": int(r.get("clicks") or 0),
+                "views": views_c,
+                "clicks": clicks_c,
                 "roas": round(rev_c / spend_c, 2) if spend_c > 0 else 0,
-                "ctr": float(r.get("ctr") or 0),
+                "ctr": round(clicks_c / views_c * 100, 2) if views_c > 0 else 0,
             }
-            await _aio.sleep(2.0)
-    finally:
-        await client.close()
+            results.append({
+                "sum": spend_c, "sum_price": rev_c,
+                "views": views_c, "clicks": clicks_c,
+                "orders": int(s.orders or 0), "atbs": int(s.atbs or 0),
+            })
+    else:
+        # 本地无数据 fallback 实时 WB（首次用或 smart_sync 未跑过）
+        from app.services.platform.wb import WBClient
+        client = WBClient(shop_id=shop.id, api_key=shop.api_key)
+        try:
+            for c in camps:
+                r = await client.fetch_campaign_summary(
+                    advert_id=c.platform_campaign_id,
+                    date_from=yesterday.isoformat(), date_to=yesterday.isoformat(),
+                )
+                results.append(r)
+                spend_c = float(r.get("sum") or 0)
+                rev_c = float(r.get("sum_price") or 0)
+                per_camp[c.id] = {
+                    "spend": round(spend_c, 2),
+                    "orders": int(r.get("orders") or 0),
+                    "revenue": round(rev_c, 2),
+                    "views": int(r.get("views") or 0),
+                    "clicks": int(r.get("clicks") or 0),
+                    "roas": round(rev_c / spend_c, 2) if spend_c > 0 else 0,
+                    "ctr": float(r.get("ctr") or 0),
+                }
+                await _aio.sleep(2.0)
+        finally:
+            await client.close()
 
     spend = sum(float(r.get("sum") or 0) for r in results)
     revenue = sum(float(r.get("sum_price") or 0) for r in results)
