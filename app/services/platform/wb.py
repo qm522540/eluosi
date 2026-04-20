@@ -776,17 +776,15 @@ class WBClient(BasePlatformClient):
                     return {"ok": False, "error": err_msg, "dropped_invalid": dropped}
 
                 invalid_word = m.group(1)
-                target = next(
-                    (w for w in current if w.strip().lower() == invalid_word.strip().lower()),
-                    None,
-                )
-                if target is None:
+                try:
+                    idx = current.index(invalid_word)
+                except ValueError:
                     logger.warning(
-                        f"WB 报无效词 '{invalid_word}' 但不在请求集，停止重试"
+                        f"WB 报无效词 '{invalid_word}' 精确匹配不在请求集，停止重试"
                     )
                     return {"ok": False, "error": err_msg, "dropped_invalid": dropped}
 
-                current.remove(target)
+                target = current.pop(idx)
                 dropped.append(target)
                 logger.warning(
                     f"WB 拒绝词 '{target}' (尝试 {attempt+1}/{max_retries+1})，"
