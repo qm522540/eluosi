@@ -217,7 +217,7 @@ const Optimize = () => {
         message="如何使用：勾选同一商品的若干反哺词（建议 3-8 个）→ 点「AI 生成标题」→ 复制新俄语标题 → 去商品列表粘贴"
         description={(
           <span>
-            当前已接入付费数据（源 A）+ 自然搜索数据（源 B）。开通 <strong>WB Jam / Ozon Premium</strong> 会让"自然·本商品"数据更精细。
+            当前已接入付费数据（源 A）+ 自然搜索数据（源 B）。开通 <strong>WB Jam / Ozon Premium</strong> 会让「自然·本商品」数据更精细。
             三期将支持「一键写回商品」。更多搜索词细节见「搜索词洞察」菜单。
           </span>
         )}
