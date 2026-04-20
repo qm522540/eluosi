@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import { Typography, Card, Space, Alert, message, Modal, Button } from 'antd'
-import { ExclamationCircleOutlined } from '@ant-design/icons'
+import { ExclamationCircleOutlined, RobotOutlined } from '@ant-design/icons'
 import { getShops } from '@/api/shops'
 import {
   getSeoCandidates, refreshSeo, adoptSeoCandidate, batchIgnoreCandidates,
@@ -8,6 +8,7 @@ import {
 import SeoFilterBar from './components/SeoFilterBar'
 import SeoStatsCards from './components/SeoStatsCards'
 import SeoCandidatesTable from './components/SeoCandidatesTable'
+import AiTitleModal from './components/AiTitleModal'
 
 const { Title, Text } = Typography
 
@@ -28,6 +29,7 @@ const Optimize = () => {
   const [size, setSize] = useState(20)
 
   const [selectedKeys, setSelectedKeys] = useState([])
+  const [aiModal, setAiModal] = useState({ open: false, product: null, candidates: [] })
 
   useEffect(() => {
     getShops({ page: 1, page_size: 100 })
@@ -98,6 +100,27 @@ const Optimize = () => {
     }
   }
 
+  const handleOpenAiTitle = () => {
+    if (!selectedKeys.length || !data?.items?.length) return
+    const rows = data.items.filter(r => selectedKeys.includes(r.id))
+    if (!rows.length) return
+    const productIds = [...new Set(rows.map(r => r.product_id))]
+    if (productIds.length > 1) {
+      message.warning(`当前选中涉及 ${productIds.length} 个不同商品，AI 生成标题只能针对单个商品。请取消跨商品选择后再试。`)
+      return
+    }
+    const first = rows[0]
+    setAiModal({
+      open: true,
+      product: {
+        id: first.product_id,
+        name: first.product_name,
+        currentTitle: first.current_title,
+      },
+      candidates: rows,
+    })
+  }
+
   const handleIgnore = (ids) => {
     const idsArr = Array.isArray(ids) ? ids : [ids]
     if (!idsArr.length || !shopId) return
@@ -156,11 +179,11 @@ const Optimize = () => {
         type="info"
         showIcon
         style={{ marginBottom: 16 }}
-        message="当前 SEO 分析基于付费广告数据 + 本店同类目聚合。"
+        message="如何使用：勾选同一商品的若干反哺词（建议 3-8 个）→ 点「AI 生成标题」→ 复制新俄语标题 → 去商品列表粘贴"
         description={(
           <span>
-            开通 <strong>WB Jam / Ozon Premium</strong> 后，会自动接入自然搜索词（源 B），分析精度约 3 倍提升。
-            更多详情见「搜索词洞察」菜单。
+            当前已接入付费数据（源 A）+ 自然搜索数据（源 B）。开通 <strong>WB Jam / Ozon Premium</strong> 会让"自然·本商品"数据更精细。
+            三期将支持「一键写回商品」。更多搜索词细节见「搜索词洞察」菜单。
           </span>
         )}
       />
@@ -197,6 +220,14 @@ const Optimize = () => {
           }}>
             <Space>
               <Text>已选 <strong>{selectedKeys.length}</strong> 个候选词</Text>
+              <Button
+                size="small"
+                type="primary"
+                icon={<RobotOutlined />}
+                onClick={handleOpenAiTitle}
+              >
+                AI 生成标题
+              </Button>
               <Button size="small" danger onClick={() => handleIgnore(selectedKeys)}>批量忽略</Button>
               <Button size="small" onClick={() => setSelectedKeys([])}>清空</Button>
             </Space>
@@ -230,6 +261,16 @@ const Optimize = () => {
           onPaginationChange={onPaginationChange}
         />
       </Card>
+
+      <AiTitleModal
+        open={aiModal.open}
+        onClose={() => setAiModal({ open: false, product: null, candidates: [] })}
+        shopId={shopId}
+        productId={aiModal.product?.id}
+        productName={aiModal.product?.name}
+        currentTitle={aiModal.product?.currentTitle}
+        selectedCandidates={aiModal.candidates}
+      />
     </div>
   )
 }
