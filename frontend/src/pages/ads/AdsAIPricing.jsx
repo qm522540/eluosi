@@ -1871,17 +1871,22 @@ const AdsAIPricing = ({ shopId, platform, searched }) => {
 
   if (dataStatus && !dataStatus.is_initialized) {
     return (
-      <div style={{ textAlign: 'center', padding: '60px 0' }}>
-        <Spin size="large" />
-        <div style={{ marginTop: 24, fontSize: 16, fontWeight: 500 }}>
-          正在拉取历史广告数据
-        </div>
-        <div style={{ marginTop: 8, color: '#999', fontSize: 14 }}>
-          首次进入需要拉取近 14 天数据，约需 1-3 分钟
-          <br />
-          页面将自动刷新，请稍候...
-        </div>
-      </div>
+      <Card>
+        <Alert
+          type="info"
+          showIcon
+          message="本店尚未首次同步广告数据"
+          description={
+            <div>
+              <div>AI 智能调价需要近 30 天历史广告数据作为算法基数。</div>
+              <div style={{ marginTop: 6 }}>
+                请点击页面右上角「更新数据源」按钮触发首次拉取，约需 2-5 分钟。
+                数据到位后本页会自动刷新。
+              </div>
+            </div>
+          }
+        />
+      </Card>
     )
   }
 
