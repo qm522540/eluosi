@@ -138,6 +138,7 @@ const SeoCandidatesTable = ({
             }}>{tier.label}</span>
           </Tooltip>
         )
+        const cart = r.organic_add_to_cart || 0
         if (orders > 0) {
           return (
             <div style={{ lineHeight: 1.4 }}>
@@ -146,8 +147,8 @@ const SeoCandidatesTable = ({
                 <span style={{ color: '#cf1322', fontWeight: 600 }}>订单 {orders}</span>
                 <span style={{ color: '#888', fontSize: 12, marginLeft: 6 }}>曝光 {impr}</span>
               </div>
-              {r.organic_add_to_cart > 0 && (
-                <div style={{ color: '#999', fontSize: 11, marginLeft: 22 }}>加购 {r.organic_add_to_cart}</div>
+              {cart > 0 && (
+                <div style={{ color: '#999', fontSize: 11, marginLeft: 22 }}>加购 {cart}</div>
               )}
             </div>
           )
@@ -157,8 +158,13 @@ const SeoCandidatesTable = ({
             <div>
               {badge}
               <span style={{ color: '#555' }}>曝光 <strong>{impr}</strong></span>
+              {cart > 0 && (
+                <span style={{ color: '#fa8c16', fontSize: 12, marginLeft: 6 }}>加购 {cart}</span>
+              )}
             </div>
-            <div style={{ color: '#bbb', fontSize: 11, marginLeft: 22 }}>暂无订单</div>
+            <div style={{ color: '#bbb', fontSize: 11, marginLeft: 22 }}>
+              {cart > 0 ? '有加购未下单' : '暂无订单'}
+            </div>
           </div>
         )
       },
