@@ -31,7 +31,7 @@ const META = {
 const SourceBadges = ({ sources }) => {
   if (!sources || !sources.length) return null
   return (
-    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 2 }}>
       {sources.map((s, idx) => {
         const key = `${s.type}:${s.scope}`
         const meta = META[key] || { label: key, color: 'default' }
