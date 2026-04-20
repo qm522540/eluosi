@@ -600,6 +600,69 @@ def list_candidates(
     }
 
 
+# ==================== 跨商品爆款词发现 ====================
+
+def list_champion_keywords(
+    db: Session, tenant_id: int, shop,
+    limit: int = 10,
+    min_products: int = 2,
+) -> dict:
+    """跨商品爆款词：同一关键词在多个商品的候选池里都带过订单。
+
+    业务价值：改一个词，全店多个商品受益。用户首屏能看到"该批量改哪个词"。
+
+    筛选条件：
+    - 带订单（paid_orders OR organic_orders > 0）—— 强证据
+    - 当前商品标题/属性都没这个词（in_title=0 AND in_attrs=0）—— 真正的反哺机会
+    - status = pending
+    - 至少涉及 min_products 个商品（默认 2）
+
+    排序：覆盖商品数 DESC, 总订单 DESC。
+    """
+    limit = min(max(1, int(limit)), 30)
+    min_products = max(2, int(min_products))
+
+    rows = db.execute(text("""
+        SELECT c.keyword,
+               COUNT(DISTINCT c.product_id) AS product_count,
+               SUM(COALESCE(c.paid_orders,0) + COALESCE(c.organic_orders,0)) AS total_orders,
+               SUM(COALESCE(c.organic_impressions,0)) AS total_impr,
+               ROUND(MAX(c.score), 1) AS max_score,
+               SUBSTRING_INDEX(
+                   GROUP_CONCAT(DISTINCT p.name_zh ORDER BY p.id SEPARATOR '|'),
+                   '|', 3
+               ) AS top_product_names
+        FROM seo_keyword_candidates c
+        JOIN products p ON p.id = c.product_id AND p.tenant_id = c.tenant_id
+        WHERE c.tenant_id = :tid
+          AND c.shop_id = :sid
+          AND (COALESCE(c.paid_orders,0) > 0 OR COALESCE(c.organic_orders,0) > 0)
+          AND c.in_title = 0 AND c.in_attrs = 0
+          AND c.status = 'pending'
+        GROUP BY c.keyword
+        HAVING product_count >= :minp
+        ORDER BY product_count DESC, total_orders DESC
+        LIMIT :lim
+    """), {
+        "tid": tenant_id, "sid": shop.id,
+        "minp": min_products, "lim": limit,
+    }).fetchall()
+
+    items = [
+        {
+            "keyword": r.keyword,
+            "product_count": int(r.product_count or 0),
+            "total_orders": int(r.total_orders or 0),
+            "total_impressions": int(r.total_impr or 0),
+            "max_score": float(r.max_score or 0),
+            "top_product_names": (r.top_product_names or "").split("|")[:3],
+        }
+        for r in rows
+    ]
+
+    return {"code": ErrorCode.SUCCESS, "data": {"items": items}}
+
+
 # ==================== 用户处理：adopt / ignore ====================
 
 def adopt_candidate(

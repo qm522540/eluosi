@@ -14,6 +14,7 @@ from app.dependencies import get_db, get_tenant_id, get_owned_shop, get_current_
 from app.services.seo.service import (
     analyze_paid_to_organic, list_candidates,
     adopt_candidate, ignore_candidates,
+    list_champion_keywords,
 )
 from app.services.seo.title_generator import generate_title
 from app.services.seo.health_service import compute_shop_health
@@ -37,6 +38,28 @@ class GenerateTitleBody(BaseModel):
     product_id: int = Field(..., gt=0, description="products.id")
     candidate_ids: List[int] = Field(..., min_length=1, max_length=30,
                                      description="要融合的候选词 id，最多 30 个")
+
+
+@router.get("/shop/{shop_id}/champion-keywords")
+def list_shop_champion_keywords(
+    shop_id: int,
+    limit: int = Query(10, ge=1, le=30, description="返回 Top N"),
+    min_products: int = Query(2, ge=2, le=50, description="至少覆盖 N 个商品才算爆款词"),
+    db: Session = Depends(get_db),
+    tenant_id: int = Depends(get_tenant_id),
+    shop=Depends(get_owned_shop),
+):
+    """跨商品爆款词：带订单 + 多个商品标题/属性都未覆盖。
+
+    业务场景：用户一眼看到"该批量改哪个词，全店多少商品能受益"。
+    """
+    result = list_champion_keywords(
+        db, tenant_id, shop,
+        limit=limit, min_products=min_products,
+    )
+    if result.get("code") != 0:
+        return error(result["code"], result.get("msg", ""))
+    return success(result["data"])
 
 
 @router.get("/shop/{shop_id}/candidates")

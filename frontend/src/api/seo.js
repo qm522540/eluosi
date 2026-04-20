@@ -7,6 +7,11 @@ export function getSeoCandidates(shopId, params) {
   return request.get(`${BASE}/shop/${shopId}/candidates`, { params })
 }
 
+/** 跨商品爆款词：带订单且多个商品未覆盖，改一个词全店受益 */
+export function getChampionKeywords(shopId, params) {
+  return request.get(`${BASE}/shop/${shopId}/champion-keywords`, { params })
+}
+
 /** 手动触发引擎扫描（付费反哺 + 类目聚合），可能较慢 */
 export function refreshSeo(shopId, body = {}) {
   return request.post(`${BASE}/shop/${shopId}/refresh`, body, {

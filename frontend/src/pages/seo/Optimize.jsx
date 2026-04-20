@@ -10,6 +10,7 @@ import SeoFilterBar from './components/SeoFilterBar'
 import SeoStatsCards from './components/SeoStatsCards'
 import SeoCandidatesTable from './components/SeoCandidatesTable'
 import AiTitleModal from './components/AiTitleModal'
+import ChampionKeywordsCard from './components/ChampionKeywordsCard'
 
 const { Title, Text } = Typography
 
@@ -259,6 +260,17 @@ const Optimize = () => {
           )}
         />
       )}
+
+      <ChampionKeywordsCard
+        shopId={shopId}
+        onPickKeyword={(kw) => {
+          setKeyword(kw)
+          setStatus('pending')
+          setSource('all')
+          setPage(1)
+          setSelectedKeys([])
+        }}
+      />
 
       <Card>
         <SeoFilterBar
