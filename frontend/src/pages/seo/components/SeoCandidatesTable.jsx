@@ -56,13 +56,18 @@ const SeoCandidatesTable = ({
       width: 220,
       ellipsis: true,
       render: (v, r) => (
-        <Space size={4}>
+        <Space size={4} align="start">
           {r.image_url && (
-            <img src={r.image_url} alt="" style={{ width: 28, height: 28, objectFit: 'cover', borderRadius: 2 }} />
+            <img src={r.image_url} alt="" style={{ width: 28, height: 28, objectFit: 'cover', borderRadius: 2, marginTop: 2 }} />
           )}
-          <Tooltip title={r.current_title || v}>
-            <span>{v}</span>
-          </Tooltip>
+          <div style={{ lineHeight: 1.3, minWidth: 0 }}>
+            <Tooltip title={r.current_title || v}>
+              <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{v}</div>
+            </Tooltip>
+            {r.product_code && (
+              <div style={{ fontSize: 11, color: '#999' }}>{r.product_code}</div>
+            )}
+          </div>
         </Space>
       ),
     },

@@ -536,7 +536,7 @@ class TestListCandidates:
             organic_orders=None, wordstat_volume=None,
             in_title=0, in_attrs=0, status="pending",
             adopted_at=None, adopted_by=None, updated_at=None,
-            product_name="商品A", cat_id=1,
+            product_name="商品A", product_code="QQ-B001", cat_id=1,
             current_title="тест", images=None,
         )
         defaults.update(overrides)

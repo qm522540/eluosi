@@ -527,6 +527,7 @@ def list_candidates(
             c.wordstat_volume, c.in_title, c.in_attrs, c.status,
             c.adopted_at, c.adopted_by, c.updated_at,
             ANY_VALUE(p.name_zh) AS product_name,
+            ANY_VALUE(p.sku) AS product_code,
             ANY_VALUE(p.local_category_id) AS cat_id,
             ANY_VALUE(pl.title_ru) AS current_title,
             ANY_VALUE(pl.oss_images) AS images
@@ -568,6 +569,7 @@ def list_candidates(
             "keyword": r.keyword,
             "product_id": r.product_id,
             "product_name": r.product_name,
+            "product_code": r.product_code,
             "current_title": r.current_title,
             "category_id": r.cat_id,
             "image_url": first_image,
