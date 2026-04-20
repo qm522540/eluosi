@@ -8,15 +8,23 @@ import {
   ShoppingCartOutlined,
   DollarOutlined,
   SyncOutlined,
+  DashboardOutlined,
+  ArrowRightOutlined,
 } from '@ant-design/icons'
+import { useNavigate } from 'react-router-dom'
 import { healthCheck } from '@/api/system'
 import { getShops } from '@/api/shops'
 import { getTodaySummaryByShop } from '@/api/ads'
+import { getSeoHealth } from '@/api/seo'
 import { useAuthStore } from '@/stores/authStore'
 
 const { Title, Text } = Typography
 
+const GRADE_COLOR = { poor: '#cf1322', fair: '#faad14', good: '#3f8600' }
+const GRADE_BG = { poor: '#fff1f0', fair: '#fffbe6', good: '#f6ffed' }
+
 const Dashboard = () => {
+  const navigate = useNavigate()
   const user = useAuthStore((s) => s.user)
   const [health, setHealth] = useState(null)
   const [healthLoading, setHealthLoading] = useState(true)
@@ -60,6 +68,31 @@ const Dashboard = () => {
     }
   }, [])
   useEffect(() => { loadShopsToday() }, [loadShopsToday])
+
+  // SEO 健康概览（各店铺均分 + Top 3 待优化）
+  const [seoByShop, setSeoByShop] = useState([])
+  const [seoLoading, setSeoLoading] = useState(false)
+  const loadSeoHealth = useCallback(async () => {
+    setSeoLoading(true)
+    try {
+      const r = await getShops({ page: 1, page_size: 100 })
+      const shops = (r.data?.items || []).filter(s => ['wb', 'ozon'].includes(s.platform))
+      const results = await Promise.all(shops.map(async (s) => {
+        try {
+          const hr = await getSeoHealth(s.id, { sort: 'score_asc', page: 1, size: 3 })
+          return { ...s, seo: hr.data }
+        } catch {
+          return { ...s, seo: null }
+        }
+      }))
+      setSeoByShop(results)
+    } finally {
+      setSeoLoading(false)
+    }
+  }, [])
+  useEffect(() => { loadSeoHealth() }, [loadSeoHealth])
+
+  const classifyScore = (s) => (s >= 70 ? 'good' : s >= 40 ? 'fair' : 'poor')
 
   const fmt = (v) => (v ?? 0).toLocaleString()
   const totalSpend = shopsToday.reduce((s, x) => s + (x.today?.spend || 0), 0)
@@ -154,6 +187,108 @@ const Dashboard = () => {
               />
             </Col>
           </Row>
+        </Spin>
+      </Card>
+
+      {/* SEO 健康概览 */}
+      <Card
+        size="small"
+        style={{ marginBottom: 16, background: '#fafbff', borderColor: '#e6edff' }}
+        bodyStyle={{ padding: '12px 16px' }}
+        title={
+          <Space>
+            <DashboardOutlined />
+            <Text strong style={{ fontSize: 13 }}>SEO 健康概览</Text>
+            <Text type="secondary" style={{ fontSize: 11 }}>
+              评分越低越需要优化 · 点卡片跳诊断页
+            </Text>
+          </Space>
+        }
+        extra={
+          <Button size="small" icon={<SyncOutlined spin={seoLoading} />} onClick={loadSeoHealth}>
+            刷新
+          </Button>
+        }
+      >
+        <Spin spinning={seoLoading}>
+          {seoByShop.length === 0 && !seoLoading ? (
+            <Text type="secondary" style={{ fontSize: 12 }}>暂无 WB / Ozon 店铺</Text>
+          ) : (
+            <Row gutter={[12, 12]}>
+              {seoByShop.map(s => {
+                const t = s.seo?.totals
+                const items = s.seo?.items || []
+                const grade = t ? classifyScore(t.avg_score) : 'fair'
+                return (
+                  <Col xs={24} sm={12} lg={8} key={s.id}>
+                    <Card
+                      size="small"
+                      hoverable
+                      onClick={() => navigate(`/seo/health?shopId=${s.id}`)}
+                      bodyStyle={{ padding: 10 }}
+                      style={{ cursor: 'pointer' }}
+                    >
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 8 }}>
+                        <Space>
+                          <Tag color={PLATFORM_COLOR[s.platform]} style={{ fontSize: 11, margin: 0 }}>
+                            {PLATFORM_LABEL[s.platform] || s.platform}
+                          </Tag>
+                          <Text strong style={{ fontSize: 13 }}>{s.name}</Text>
+                        </Space>
+                        {t ? (
+                          <div style={{
+                            minWidth: 56, padding: '2px 8px', textAlign: 'center',
+                            background: GRADE_BG[grade],
+                            border: `1px solid ${GRADE_COLOR[grade]}`,
+                            borderRadius: 3,
+                          }}>
+                            <div style={{ fontSize: 18, fontWeight: 600, color: GRADE_COLOR[grade], lineHeight: 1.1 }}>
+                              {t.avg_score?.toFixed(1) || '-'}
+                            </div>
+                            <div style={{ fontSize: 10, color: GRADE_COLOR[grade] }}>均分</div>
+                          </div>
+                        ) : null}
+                      </div>
+                      {t ? (
+                        <>
+                          <Space size={8} style={{ marginBottom: 8, fontSize: 11 }}>
+                            <Tag color="error" style={{ margin: 0 }}>差 {t.poor}</Tag>
+                            <Tag color="warning" style={{ margin: 0 }}>中 {t.fair}</Tag>
+                            <Tag color="success" style={{ margin: 0 }}>优 {t.good}</Tag>
+                            <Text type="secondary" style={{ fontSize: 11 }}>共 {t.all} 个商品</Text>
+                          </Space>
+                          {items.length > 0 && (
+                            <div style={{ fontSize: 11, color: '#666' }}>
+                              <Text type="secondary" style={{ fontSize: 11 }}>最差 Top 3：</Text>
+                              {items.slice(0, 3).map((p, i) => (
+                                <div key={p.product_id} style={{ marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                  {i + 1}. <Text style={{ fontSize: 11 }}>{p.product_name || `pid ${p.product_id}`}</Text>
+                                  {' '}
+                                  <Tag color={GRADE_COLOR[p.grade]} style={{ fontSize: 10, margin: 0, padding: '0 4px' }}>
+                                    {p.score}
+                                  </Tag>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                          <Button
+                            type="link"
+                            size="small"
+                            style={{ padding: 0, marginTop: 4, fontSize: 11 }}
+                            onClick={(e) => { e.stopPropagation(); navigate(`/seo/health?shopId=${s.id}`) }}
+                          >
+                            去 SEO 健康诊断 <ArrowRightOutlined />
+                          </Button>
+                        </>
+                      ) : (
+                        <Text type="secondary" style={{ fontSize: 12 }}>暂无 SEO 数据</Text>
+                      )}
+                    </Card>
+                  </Col>
+                )
+              })}
+            </Row>
+          )}
         </Spin>
       </Card>
 

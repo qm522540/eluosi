@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useMemo } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { Typography, Card, Alert, message } from 'antd'
 import { getShops } from '@/api/shops'
 import { getSeoHealth } from '@/api/seo'
@@ -9,6 +10,7 @@ import HealthProductsTable from './components/HealthProductsTable'
 const { Title, Text } = Typography
 
 const Health = () => {
+  const [searchParams] = useSearchParams()
   const [shops, setShops] = useState([])
   const [shopId, setShopId] = useState(null)
   const [scoreRange, setScoreRange] = useState('all')
@@ -26,7 +28,9 @@ const Health = () => {
       .then(r => {
         const items = (r.data?.items || []).filter(s => ['wb', 'ozon'].includes(s.platform))
         setShops(items)
-        if (items.length && !shopId) setShopId(items[0].id)
+        const urlShopId = Number(searchParams.get('shopId'))
+        const preferId = urlShopId && items.find(s => s.id === urlShopId) ? urlShopId : (items[0]?.id || null)
+        if (preferId && !shopId) setShopId(preferId)
       })
       .catch(() => setShops([]))
     // eslint-disable-next-line react-hooks/exhaustive-deps
