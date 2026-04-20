@@ -31,7 +31,9 @@ const SeoCandidatesTable = ({
   selectedKeys, onSelectChange,
   onAdopt, onIgnore,
   pagination, onPaginationChange,
+  platform,
 }) => {
+  const showPaid = platform !== 'ozon'
   const columns = [
     {
       title: '关键词',
@@ -66,8 +68,8 @@ const SeoCandidatesTable = ({
     },
     {
       title: (
-        <Tooltip title="来源数×2 + ROAS + log10(订单+1)×2">
-          综合得分
+        <Tooltip title="越高越值得优先改标题。计算方式：来源数×2 + ROAS + log(订单+1)×2 + log(曝光+1) + log(自然订单+1)×2">
+          优先级分
         </Tooltip>
       ),
       dataIndex: 'score',
@@ -76,8 +78,12 @@ const SeoCandidatesTable = ({
       sorter: (a, b) => (a.score || 0) - (b.score || 0),
       render: (v) => <Tag color={scoreColor(v || 0)} style={{ fontSize: 13, minWidth: 36, textAlign: 'center' }}>{(v || 0).toFixed(1)}</Tag>,
     },
-    {
-      title: '付费数据',
+    showPaid && {
+      title: (
+        <Tooltip title="从付费广告点击后搜到这个词的数据。仅 WB 店有，Ozon 店暂无（平台 API 限制）。">
+          付费数据
+        </Tooltip>
+      ),
       key: 'paid',
       width: 200,
       render: (_, r) => {
@@ -160,7 +166,7 @@ const SeoCandidatesTable = ({
       size="small"
       loading={loading}
       dataSource={data || []}
-      columns={columns}
+      columns={columns.filter(Boolean)}
       rowSelection={{
         selectedRowKeys: selectedKeys,
         onChange: onSelectChange,

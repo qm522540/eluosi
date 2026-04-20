@@ -204,9 +204,9 @@ const Optimize = () => {
   return (
     <div>
       <div style={{ marginBottom: 16 }}>
-        <Title level={4} style={{ marginBottom: 4 }}>SEO 优化建议 · 付费词反哺自然词</Title>
+        <Title level={4} style={{ marginBottom: 4 }}>SEO 优化建议 · 反哺候选词库</Title>
         <Text type="secondary">
-          扫描高 ROAS 付费词 + 同类目共性词 → 找出当前商品标题/属性未覆盖的反哺候选。一期仅基于付费数据（源 A）。
+          基于买家真实搜索数据，告诉你「哪个商品的俄语标题里应该加哪些关键词」才能多吃免费曝光。
         </Text>
       </div>
 
@@ -214,12 +214,26 @@ const Optimize = () => {
         type="info"
         showIcon
         style={{ marginBottom: 16 }}
-        message="如何使用：勾选同一商品的若干反哺词（建议 3-8 个）→ 点「AI 生成标题」→ 复制新俄语标题 → 去商品列表粘贴"
-        description={(
+        message={(
           <span>
-            当前已接入付费数据（源 A）+ 自然搜索数据（源 B）。开通 <strong>WB Jam / Ozon Premium</strong> 会让「自然·本商品」数据更精细。
-            三期将支持「一键写回商品」。更多搜索词细节见「搜索词洞察」菜单。
+            <strong>每一行 = 一条反哺建议</strong>：系统发现「<Text code>商品 A</Text>」可以在俄语标题里加上「<Text code>关键词 X</Text>」，
+            因为有买家这么搜过、但你当前标题/属性里没写这词 —— 加上就有机会吃到这些免费流量。
           </span>
+        )}
+        description={(
+          <div style={{ marginTop: 6 }}>
+            <div>
+              <Text type="secondary">举例：</Text>
+              <Text>商品「Серьги шары крупные」+ 关键词「серьги треугольные」（35 次月曝光、1 单）→ 改标题加上这个词，预计月增 40+ 曝光。</Text>
+            </div>
+            <div style={{ marginTop: 6 }}>
+              <Text strong>怎么用（3 步闭环）：</Text>
+              <Text> ① 勾同一商品的若干高分词（建议 3-8 个） ② 点顶部「AI 生成标题」 ③ 复制新俄语标题去商品列表粘贴保存。</Text>
+            </div>
+            <div style={{ marginTop: 6, color: '#999', fontSize: 12 }}>
+              推荐从「SEO 健康诊断」页选差商品 → 点「AI 优化标题」跳进来，系统自动按商品筛 + 选 Top 5，闭环更顺。
+            </div>
+          </div>
         )}
       />
 
@@ -317,6 +331,7 @@ const Optimize = () => {
           onIgnore={handleIgnore}
           pagination={pagination}
           onPaginationChange={onPaginationChange}
+          platform={shops.find(s => s.id === shopId)?.platform}
         />
       </Card>
 
