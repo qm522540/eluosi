@@ -76,7 +76,7 @@ const Report = () => {
     }
   }
 
-  const handleMarkApplied = async (row) => {
+  const handleMarkApplied = useCallback((row) => {
     Modal.confirm({
       title: '确认已应用到商品？',
       content: `确认后状态变为「已应用」，记录时间作为后续 ROI 对比的基线。
@@ -97,7 +97,7 @@ const Report = () => {
         }
       },
     })
-  }
+  }, [shopId, fetchData])
 
   const columns = useMemo(() => [
     {
@@ -188,7 +188,7 @@ const Report = () => {
         </Space>
       ),
     },
-  ], [shopId])
+  ], [handleMarkApplied])
 
   const pagination = useMemo(() => ({
     current: page,

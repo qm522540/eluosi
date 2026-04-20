@@ -37,7 +37,7 @@ const Dashboard = () => {
     try {
       const res = await healthCheck()
       setHealth(res.data)
-    } catch (err) {
+    } catch {
       setHealth({ status: 'error' })
       message.error('后端服务连接失败')
     } finally {
