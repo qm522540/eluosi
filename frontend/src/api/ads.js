@@ -243,7 +243,7 @@ export function toggleAutoExclude(campaignId, enabled) {
 }
 
 export function runAutoExcludeNow(campaignId) {
-  return request.post(`/ads/campaign-auto-exclude/${campaignId}/run`, {}, { timeout: 120000 })
+  return request.post(`/ads/campaign-auto-exclude/${campaignId}/run`)
 }
 
 export function getAutoExcludeLogs(campaignId, days = 30) {

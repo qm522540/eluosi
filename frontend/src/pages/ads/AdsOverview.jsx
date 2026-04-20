@@ -409,13 +409,7 @@ const AdsOverview = ({ shopId, platform, shops, searched, syncing, lastSyncTime,
     setAutoExcludeBusy(true)
     try {
       const r = await runAutoExcludeNow(detailData.id)
-      const d = r.data || {}
-      message.success(
-        `本次屏蔽 ${d.excluded || 0} 个词，估算月省 ¥${(d.estimated_saved_per_month || 0).toLocaleString()}`,
-        4,
-      )
-      const cfg = await getAutoExcludeConfig(detailData.id)
-      setAutoExcludeCfg(cfg.data)
+      message.success(r.data?.msg || '任务已提交，10-30 秒后请查看日志', 4)
     } catch (err) {
       message.error(err.message || err?.response?.data?.msg || '运行失败')
     } finally {

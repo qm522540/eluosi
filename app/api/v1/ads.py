@@ -1816,13 +1816,11 @@ def run_auto_exclude_now(
         db.commit()
 
     from app.tasks.ad_auto_exclude_task import auto_exclude_for_campaign
-    # 同步执行（task 内部自管 db session），方便前端立刻拿到结果
-    result = auto_exclude_for_campaign.apply(
-        args=[campaign_id, tenant_id]
-    ).get(disable_sync_subtasks=False)
-    if result.get("error"):
-        return error(92011, result["error"])
-    return success(result)
+    task = auto_exclude_for_campaign.delay(campaign_id, tenant_id)
+    return success({
+        "task_id": task.id,
+        "msg": "任务已提交，10-30 秒后请查看日志",
+    })
 
 
 @router.get("/campaign-auto-exclude/{campaign_id}/logs")
