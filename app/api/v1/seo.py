@@ -24,7 +24,7 @@ router = APIRouter()
 
 
 class BatchIgnoreBody(BaseModel):
-    ids: List[int] = Field(..., min_items=1, description="候选词 id 数组")
+    ids: List[int] = Field(..., min_length=1, description="候选词 id 数组")
 
 
 class RefreshBody(BaseModel):
@@ -35,7 +35,7 @@ class RefreshBody(BaseModel):
 
 class GenerateTitleBody(BaseModel):
     product_id: int = Field(..., gt=0, description="products.id")
-    candidate_ids: List[int] = Field(..., min_items=1, max_items=30,
+    candidate_ids: List[int] = Field(..., min_length=1, max_length=30,
                                      description="要融合的候选词 id，最多 30 个")
 
 
