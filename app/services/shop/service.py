@@ -6,9 +6,32 @@ from sqlalchemy.orm import Session
 
 from app.models.shop import Shop
 from app.models.tenant import Tenant
+from app.models.ai_pricing import AiPricingConfig, TimePricingRule
 from app.services.platform.base import PlatformClientFactory
 from app.utils.errors import ErrorCode
 from app.utils.logger import logger
+
+
+# ==================== 新店配套默认配置（bid_management.md §2.1 / §3.1） ====================
+
+_DEFAULT_AI_CONSERVATIVE = {
+    "target_roas": 2.0, "min_roas": 1.5,
+    "max_bid": 100, "daily_budget": 500,
+    "max_adjust_pct": 15, "gross_margin": 0.5,
+}
+_DEFAULT_AI_DEFAULT = {
+    "target_roas": 3.0, "min_roas": 1.8,
+    "max_bid": 180, "daily_budget": 2000,
+    "max_adjust_pct": 30, "gross_margin": 0.5,
+}
+_DEFAULT_AI_AGGRESSIVE = {
+    "target_roas": 4.0, "min_roas": 2.5,
+    "max_bid": 300, "daily_budget": 0,
+    "max_adjust_pct": 25, "gross_margin": 0.5,
+}
+_DEFAULT_TIME_PEAK_HOURS = [10, 11, 12, 13, 19, 20, 21, 22]
+_DEFAULT_TIME_MID_HOURS = [7, 8, 9, 14, 15, 16, 17, 18]
+_DEFAULT_TIME_LOW_HOURS = [0, 1, 2, 3, 4, 5, 6, 23]
 
 
 def list_shops(db: Session, tenant_id: int, platform: str = None, status: str = None,
@@ -62,10 +85,28 @@ def create_shop(db: Session, tenant_id: int, data: dict) -> dict:
 
         shop = Shop(tenant_id=tenant_id, **data)
         db.add(shop)
+        db.flush()  # 拿到 shop.id 但不 commit，确保配套行与店铺同原子
+
+        # 配套默认配置：AI 调价 + 分时调价（避免 ai_pricing_executor 里"配置不存在"报错）
+        db.add(AiPricingConfig(
+            shop_id=shop.id, tenant_id=tenant_id,
+            is_active=0, auto_execute=0, template_name="default",
+            conservative_config=_DEFAULT_AI_CONSERVATIVE,
+            default_config=_DEFAULT_AI_DEFAULT,
+            aggressive_config=_DEFAULT_AI_AGGRESSIVE,
+        ))
+        db.add(TimePricingRule(
+            shop_id=shop.id, tenant_id=tenant_id, is_active=0,
+            peak_hours=_DEFAULT_TIME_PEAK_HOURS,
+            mid_hours=_DEFAULT_TIME_MID_HOURS,
+            low_hours=_DEFAULT_TIME_LOW_HOURS,
+            peak_ratio=120, mid_ratio=100, low_ratio=60,
+        ))
+
         db.commit()
         db.refresh(shop)
 
-        logger.info(f"店铺创建成功: shop_id={shop.id} platform={shop.platform} tenant_id={tenant_id}")
+        logger.info(f"店铺创建成功: shop_id={shop.id} platform={shop.platform} tenant_id={tenant_id}（含配套 AI/分时默认配置）")
         return {"code": ErrorCode.SUCCESS, "data": _shop_to_dict(shop)}
     except Exception as e:
         db.rollback()
