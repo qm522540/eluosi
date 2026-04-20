@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useMemo } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import {
   Typography, Card, Space, Select, Segmented, Input, Button, Table, Tag,
-  message, Modal, Descriptions, Alert,
+  message, Modal, Descriptions, Alert, Row, Col,
 } from 'antd'
 import {
   CopyOutlined, CheckOutlined, RobotOutlined, SyncOutlined,
@@ -278,7 +278,7 @@ const Report = () => {
         open={!!detailRow}
         onCancel={() => setDetailRow(null)}
         title="生成详情"
-        width={720}
+        width={880}
         footer={[
           <Button key="close" onClick={() => setDetailRow(null)}>关闭</Button>,
           detailRow && (
@@ -293,55 +293,91 @@ const Report = () => {
           ),
         ]}
       >
-        {detailRow && (
-          <Descriptions column={1} bordered size="small">
-            <Descriptions.Item label="商品">
-              {detailRow.product_name || `ID ${detailRow.product_id}`}
-            </Descriptions.Item>
-            <Descriptions.Item label="原俄语标题">
-              <Text copyable>{detailRow.original_title || '（空）'}</Text>
-            </Descriptions.Item>
-            <Descriptions.Item label="AI 生成新标题">
-              <Text copyable strong style={{ color: '#3f8600' }}>
-                {detailRow.generated_title}
-              </Text>
-            </Descriptions.Item>
-            <Descriptions.Item label="当前商品实际标题">
-              <Text type="secondary">
-                {detailRow.current_title || '（空）'}
-              </Text>
-              <br/>
-              <Text type="secondary" style={{ fontSize: 11 }}>
-                {detailRow.current_title === detailRow.generated_title
-                  ? '✓ 已和新标题一致（疑似已应用）'
-                  : detailRow.current_title === detailRow.original_title
-                    ? '与生成时原标题一致（尚未应用）'
-                    : '已被手动/其他操作修改'}
-              </Text>
-            </Descriptions.Item>
-            <Descriptions.Item label="AI 决策说明">
-              {detailRow.reasoning || <Text type="secondary">（无）</Text>}
-            </Descriptions.Item>
-            <Descriptions.Item label="用到的关键词">
-              <Space size={4} wrap>
-                {(detailRow.keywords_used || []).map((k, i) => (
-                  <Tag key={i} color="green">{k}</Tag>
-                ))}
-              </Space>
-            </Descriptions.Item>
-            <Descriptions.Item label="模型 / 时间">
-              <Tag color="geekblue">{detailRow.ai_model?.toUpperCase()}</Tag>
-              {' · '}
-              {detailRow.created_at && new Date(detailRow.created_at).toLocaleString('zh-CN')}
-              {detailRow.applied_at && (
-                <>
-                  {' · 应用于 '}
-                  {new Date(detailRow.applied_at).toLocaleString('zh-CN')}
-                </>
-              )}
-            </Descriptions.Item>
-          </Descriptions>
-        )}
+        {detailRow && (() => {
+          const stateText = detailRow.current_title === detailRow.generated_title
+            ? { type: 'success', msg: '✓ 当前商品标题已和 AI 生成一致（疑似已应用）' }
+            : detailRow.current_title === detailRow.original_title
+              ? { type: 'warning', msg: '当前商品标题仍是原标题（尚未应用）' }
+              : { type: 'info', msg: '当前商品标题已被手动或其他操作修改' }
+          const colStyle = {
+            padding: 10,
+            borderRadius: 4,
+            background: '#fafbff',
+            border: '1px solid #e6edff',
+            minHeight: 96,
+            fontSize: 12,
+            lineHeight: 1.6,
+            wordBreak: 'break-word',
+          }
+          return (
+            <>
+              <div style={{ marginBottom: 8 }}>
+                <Text strong>{detailRow.product_name || `ID ${detailRow.product_id}`}</Text>
+                <Text type="secondary" style={{ marginLeft: 8, fontSize: 12 }}>
+                  ID {detailRow.product_id}
+                </Text>
+              </div>
+
+              <Row gutter={8} style={{ marginBottom: 12 }}>
+                <Col span={8}>
+                  <div style={{ fontSize: 11, color: '#999', marginBottom: 4 }}>原俄语标题</div>
+                  <div style={colStyle}>
+                    {detailRow.original_title
+                      ? <Text copyable={{ text: detailRow.original_title }}>{detailRow.original_title}</Text>
+                      : <Text type="secondary">（空）</Text>}
+                  </div>
+                </Col>
+                <Col span={8}>
+                  <div style={{ fontSize: 11, color: '#3f8600', marginBottom: 4 }}>AI 生成新标题</div>
+                  <div style={{ ...colStyle, background: '#f6ffed', border: '1px solid #b7eb8f' }}>
+                    <Text copyable={{ text: detailRow.generated_title }} strong style={{ color: '#3f8600' }}>
+                      {detailRow.generated_title}
+                    </Text>
+                  </div>
+                </Col>
+                <Col span={8}>
+                  <div style={{ fontSize: 11, color: '#999', marginBottom: 4 }}>当前商品实际标题</div>
+                  <div style={colStyle}>
+                    {detailRow.current_title
+                      ? <Text>{detailRow.current_title}</Text>
+                      : <Text type="secondary">（空）</Text>}
+                  </div>
+                </Col>
+              </Row>
+
+              <Alert
+                type={stateText.type}
+                showIcon
+                message={stateText.msg}
+                style={{ marginBottom: 12, padding: '6px 12px' }}
+              />
+
+              <Descriptions column={1} size="small">
+                <Descriptions.Item label="AI 决策说明">
+                  {detailRow.reasoning || <Text type="secondary">（无）</Text>}
+                </Descriptions.Item>
+                <Descriptions.Item label="用到的关键词">
+                  <Space size={4} wrap>
+                    {(detailRow.keywords_used || []).map((k, i) => (
+                      <Tag key={i} color="blue" style={{ margin: 0 }}>{k}</Tag>
+                    ))}
+                  </Space>
+                </Descriptions.Item>
+                <Descriptions.Item label="模型 / 时间">
+                  <Tag color="geekblue">{detailRow.ai_model?.toUpperCase()}</Tag>
+                  {' · '}
+                  {detailRow.created_at && new Date(detailRow.created_at).toLocaleString('zh-CN')}
+                  {detailRow.applied_at && (
+                    <>
+                      {' · 应用于 '}
+                      {new Date(detailRow.applied_at).toLocaleString('zh-CN')}
+                    </>
+                  )}
+                </Descriptions.Item>
+              </Descriptions>
+            </>
+          )
+        })()}
       </Modal>
     </div>
   )
