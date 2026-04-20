@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import {
-  Modal, Button, Typography, Space, Tag, Alert, Descriptions, Divider, Spin, message,
+  Modal, Button, Typography, Space, Tag, Alert, Descriptions, Spin, message,
 } from 'antd'
 import {
   CopyOutlined, ThunderboltOutlined, RobotOutlined,
@@ -121,62 +121,52 @@ const AiTitleModal = ({
 
       {!loading && result && (
         <>
-          <Divider>AI 生成结果</Divider>
-
           <Alert
             type="success"
             showIcon
             style={{ marginBottom: 12 }}
-            message={<Text strong>新俄语标题：</Text>}
-            description={
+            message={(
               <Paragraph
                 copyable={{ text: result.new_title }}
-                style={{ fontSize: 15, marginBottom: 0, lineHeight: 1.6 }}
+                style={{ fontSize: 15, marginBottom: 0, lineHeight: 1.6, fontWeight: 500 }}
               >
                 {result.new_title}
               </Paragraph>
-            }
+            )}
+            description={result.reasoning ? (
+              <Text type="secondary" style={{ fontSize: 12 }}>{result.reasoning}</Text>
+            ) : null}
           />
 
-          {result.reasoning && (
-            <Alert
-              type="info"
-              showIcon={false}
-              style={{ marginBottom: 12 }}
-              message={<Text type="secondary">AI 决策说明</Text>}
-              description={result.reasoning}
-            />
-          )}
+          <div style={{
+            padding: '8px 12px',
+            background: '#fafbff',
+            border: '1px solid #e6edff',
+            borderRadius: 4,
+            marginBottom: 12,
+            fontSize: 12,
+            color: '#666',
+          }}>
+            <Space size={12} wrap>
+              <span><Text type="secondary">模型</Text> {result.ai_model?.toUpperCase()}</span>
+              <span><Text type="secondary">耗时</Text> {result.duration_ms} ms</span>
+              <span><Text type="secondary">Token</Text> {result.tokens?.total}</span>
+              <span><Text type="secondary">用词</Text> {result.included_keywords?.length || 0} 个</span>
+            </Space>
+            {result.included_keywords?.length > 0 && (
+              <div style={{ marginTop: 6 }}>
+                <Space size={4} wrap>
+                  {result.included_keywords.map((kw, i) => (
+                    <Tag key={i} color="blue" style={{ margin: 0 }}>{kw}</Tag>
+                  ))}
+                </Space>
+              </div>
+            )}
+          </div>
 
-          <Descriptions size="small" column={2} style={{ marginTop: 8 }}>
-            <Descriptions.Item label="模型">{result.ai_model?.toUpperCase()}</Descriptions.Item>
-            <Descriptions.Item label="耗时">{result.duration_ms} ms</Descriptions.Item>
-            <Descriptions.Item label="Token">
-              {result.tokens?.prompt} + {result.tokens?.completion} = {result.tokens?.total}
-            </Descriptions.Item>
-            <Descriptions.Item label="实际用词">
-              {result.included_keywords?.length || 0} 个
-            </Descriptions.Item>
-          </Descriptions>
-
-          {result.included_keywords?.length > 0 && (
-            <div style={{ marginTop: 8 }}>
-              <Text type="secondary" style={{ marginRight: 8 }}>用到的词：</Text>
-              <Space size={4} wrap>
-                {result.included_keywords.map((kw, i) => (
-                  <Tag key={i} color="green">{kw}</Tag>
-                ))}
-              </Space>
-            </div>
-          )}
-
-          <Alert
-            type="warning"
-            showIcon
-            style={{ marginTop: 16 }}
-            message="本期仅生成建议，不会直接改商品标题"
-            description="请复制新标题，去「商品管理 → 商品列表 → 编辑」手动粘贴。三期会加「一键写回商品」。"
-          />
+          <Text type="secondary" style={{ fontSize: 12 }}>
+            一期仅生成建议，请复制新标题到「商品管理 → 编辑商品」手动粘贴。
+          </Text>
         </>
       )}
 
