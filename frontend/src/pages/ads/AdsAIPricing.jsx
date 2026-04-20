@@ -1821,6 +1821,7 @@ const AdsAIPricing = ({ shopId, platform, searched }) => {
 
   const [dataStatus, setDataStatus] = useState(null)
   const [checking, setChecking] = useState(true)
+  const [firstSyncing, setFirstSyncing] = useState(false)
   const pollTimer = useRef(null)
 
   useEffect(() => {
@@ -1857,6 +1858,19 @@ const AdsAIPricing = ({ shopId, platform, searched }) => {
     }
   }
 
+  const handleFirstSync = async () => {
+    setFirstSyncing(true)
+    try {
+      await syncData(shopId)
+      message.success('首次同步任务已提交，约 2-5 分钟完成，本页会自动刷新')
+      setTimeout(() => checkDataStatus(), 5000)
+    } catch (e) {
+      message.error(e?.response?.data?.msg || e?.message || '同步触发失败')
+    } finally {
+      setFirstSyncing(false)
+    }
+  }
+
   if (!searched) {
     return <Card><Empty description="请选择平台和店铺后点击确定" /></Card>
   }
@@ -1879,9 +1893,13 @@ const AdsAIPricing = ({ shopId, platform, searched }) => {
           description={
             <div>
               <div>AI 智能调价需要近 30 天历史广告数据作为算法基数。</div>
-              <div style={{ marginTop: 6 }}>
-                请点击页面右上角「更新数据源」按钮触发首次拉取，约需 2-5 分钟。
-                数据到位后本页会自动刷新。
+              <div style={{ marginTop: 12 }}>
+                <Button type="primary" loading={firstSyncing} onClick={handleFirstSync}>
+                  {firstSyncing ? '同步任务提交中...' : '立即拉取近 30 天数据'}
+                </Button>
+                <span style={{ marginLeft: 12, color: '#999', fontSize: 13 }}>
+                  约需 2-5 分钟，数据到位后本页会自动刷新
+                </span>
               </div>
             </div>
           }
