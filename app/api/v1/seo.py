@@ -17,6 +17,7 @@ from app.services.seo.service import (
 )
 from app.services.seo.title_generator import generate_title
 from app.services.seo.health_service import compute_shop_health
+from app.services.seo.generated_history import list_generated_titles, mark_title_applied
 from app.utils.response import success, error
 
 router = APIRouter()
@@ -136,6 +137,45 @@ def shop_health(
         score_range=score_range, sort=sort, keyword=keyword,
         page=page, size=size,
     )
+    if result.get("code") != 0:
+        return error(result["code"], result.get("msg", ""))
+    return success(result["data"])
+
+
+@router.get("/shop/{shop_id}/generated-titles")
+def list_generated(
+    shop_id: int,
+    keyword: str = Query("", description="原标题或新标题模糊搜"),
+    approval_status: str = Query("all", description="all / pending / approved / applied / rejected"),
+    page: int = Query(1, ge=1),
+    size: int = Query(20, ge=1, le=100),
+    db: Session = Depends(get_db),
+    tenant_id: int = Depends(get_tenant_id),
+    shop=Depends(get_owned_shop),
+):
+    """店铺 AI 生成标题历史（分页），只取 content_type='title'。"""
+    result = list_generated_titles(
+        db, tenant_id, shop,
+        keyword=keyword, approval_status=approval_status,
+        page=page, size=size,
+    )
+    if result.get("code") != 0:
+        return error(result["code"], result.get("msg", ""))
+    return success(result["data"])
+
+
+@router.post("/shop/{shop_id}/generated-titles/{generated_id}/apply")
+def apply_generated(
+    shop_id: int,
+    generated_id: int,
+    db: Session = Depends(get_db),
+    tenant_id: int = Depends(get_tenant_id),
+    shop=Depends(get_owned_shop),
+    current_user=Depends(get_current_user),
+):
+    """用户手动确认"已复制并改到商品"，标 applied_at + approved_by。"""
+    user_id = getattr(current_user, "id", None)
+    result = mark_title_applied(db, tenant_id, shop, generated_id, user_id)
     if result.get("code") != 0:
         return error(result["code"], result.get("msg", ""))
     return success(result["data"])

@@ -37,3 +37,13 @@ export function generateSeoTitle(shopId, productId, candidateIds) {
 export function getSeoHealth(shopId, params) {
   return request.get(`${BASE}/shop/${shopId}/health`, { params })
 }
+
+/** AI 生成标题历史（分页） */
+export function getGeneratedTitles(shopId, params) {
+  return request.get(`${BASE}/shop/${shopId}/generated-titles`, { params })
+}
+
+/** 标记"已应用到商品"建立 ROI 对比基线（二期用） */
+export function applyGeneratedTitle(shopId, generatedId) {
+  return request.post(`${BASE}/shop/${shopId}/generated-titles/${generatedId}/apply`)
+}
