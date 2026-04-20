@@ -41,9 +41,10 @@ class GenerateTitleBody(BaseModel):
 @router.get("/shop/{shop_id}/candidates")
 def list_shop_candidates(
     shop_id: int,
-    source: str = Query("all", description="all / paid_self / paid_category"),
+    source: str = Query("all", description="all / paid_self / paid_category / organic_self / organic_category"),
     status: str = Query("pending", description="pending / adopted / ignored / processed / all"),
     keyword: str = Query("", description="模糊关键词"),
+    product_id: Optional[int] = Query(None, description="过滤到单个商品（Health 闭环用）"),
     page: int = Query(1, ge=1),
     size: int = Query(20, ge=1, le=100),
     db: Session = Depends(get_db),
@@ -54,6 +55,7 @@ def list_shop_candidates(
     result = list_candidates(
         db, tenant_id, shop,
         source_filter=source, status=status, keyword=keyword,
+        product_id=product_id,
         page=page, size=size,
     )
     if result.get("code") != 0:

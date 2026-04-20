@@ -1,6 +1,7 @@
-import { useState, useEffect, useCallback, useMemo } from 'react'
-import { Typography, Card, Space, Alert, message, Modal, Button } from 'antd'
-import { ExclamationCircleOutlined, RobotOutlined } from '@ant-design/icons'
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
+import { useSearchParams } from 'react-router-dom'
+import { Typography, Card, Space, Alert, message, Modal, Button, Tag } from 'antd'
+import { ExclamationCircleOutlined, RobotOutlined, CloseOutlined } from '@ant-design/icons'
 import { getShops } from '@/api/shops'
 import {
   getSeoCandidates, refreshSeo, adoptSeoCandidate, batchIgnoreCandidates,
@@ -13,6 +14,9 @@ import AiTitleModal from './components/AiTitleModal'
 const { Title, Text } = Typography
 
 const Optimize = () => {
+  const [searchParams, setSearchParams] = useSearchParams()
+  const autoAiConsumed = useRef(false)
+
   const [shops, setShops] = useState([])
   const [shopId, setShopId] = useState(null)
   const [days, setDays] = useState(30)
@@ -20,6 +24,7 @@ const Optimize = () => {
   const [source, setSource] = useState('all')
   const [status, setStatus] = useState('pending')
   const [keyword, setKeyword] = useState('')
+  const [productFilter, setProductFilter] = useState(null)
 
   const [data, setData] = useState(null)
   const [loading, setLoading] = useState(false)
@@ -36,7 +41,11 @@ const Optimize = () => {
       .then(r => {
         const items = (r.data?.items || []).filter(s => ['wb', 'ozon'].includes(s.platform))
         setShops(items)
-        if (items.length && !shopId) setShopId(items[0].id)
+        const urlShopId = Number(searchParams.get('shopId'))
+        const urlProductId = Number(searchParams.get('productId'))
+        const preferId = urlShopId && items.find(s => s.id === urlShopId) ? urlShopId : (items[0]?.id || null)
+        if (preferId && !shopId) setShopId(preferId)
+        if (urlProductId) setProductFilter(urlProductId)
       })
       .catch(() => setShops([]))
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -47,7 +56,9 @@ const Optimize = () => {
     setLoading(true)
     try {
       const res = await getSeoCandidates(shopId, {
-        source, status, keyword: keyword.trim(), page, size,
+        source, status, keyword: keyword.trim(),
+        product_id: productFilter || undefined,
+        page, size,
       })
       if (res.code === 0) {
         setData(res.data)
@@ -60,9 +71,33 @@ const Optimize = () => {
     } finally {
       setLoading(false)
     }
-  }, [shopId, source, status, keyword, page, size])
+  }, [shopId, source, status, keyword, productFilter, page, size])
 
   useEffect(() => { fetchCandidates() }, [fetchCandidates])
+
+  // URL autoAi=1 → 首次拉到数据后自动选 Top 5 + 打开 AI Modal（Health 闭环）
+  useEffect(() => {
+    if (autoAiConsumed.current) return
+    if (searchParams.get('autoAi') !== '1') return
+    if (!data?.items?.length) return
+    const topRows = data.items.slice(0, 5)
+    if (!topRows.length) return
+    const first = topRows[0]
+    setSelectedKeys(topRows.map(r => r.id))
+    setAiModal({
+      open: true,
+      product: {
+        id: first.product_id,
+        name: first.product_name,
+        currentTitle: first.current_title,
+      },
+      candidates: topRows,
+    })
+    autoAiConsumed.current = true
+    const next = new URLSearchParams(searchParams)
+    next.delete('autoAi')
+    setSearchParams(next, { replace: true })
+  }, [data, searchParams, setSearchParams])
 
   const handleRefresh = async () => {
     if (!shopId) return
@@ -187,6 +222,29 @@ const Optimize = () => {
           </span>
         )}
       />
+
+      {productFilter && (
+        <Alert
+          type="warning"
+          showIcon={false}
+          style={{ marginBottom: 16 }}
+          message={(
+            <Space>
+              <Text>当前过滤商品 ID：</Text>
+              <Tag color="purple">{productFilter}</Tag>
+              <Text type="secondary">（来自 SEO 健康诊断跳转）</Text>
+              <Button
+                size="small"
+                type="link"
+                icon={<CloseOutlined />}
+                onClick={() => { setProductFilter(null); setPage(1) }}
+              >
+                清除过滤
+              </Button>
+            </Space>
+          )}
+        />
+      )}
 
       <Card>
         <SeoFilterBar

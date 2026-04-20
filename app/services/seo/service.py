@@ -452,6 +452,7 @@ def list_candidates(
     db: Session, tenant_id: int, shop,
     source_filter: str = "all", status: str = "pending",
     keyword: str = "", page: int = 1, size: int = 20,
+    product_id: Optional[int] = None,
 ) -> dict:
     """分页拉候选清单 + 4 格汇总。
 
@@ -459,6 +460,8 @@ def list_candidates(
       - all          全部
       - paid_self    只来自商品维付费
       - paid_category 只来自类目维付费
+
+    product_id: 可选，只返回指定商品的候选（Health → Optimize 闭环用）
     """
     page = max(1, int(page))
     size = min(max(1, int(size)), 100)
@@ -466,6 +469,9 @@ def list_candidates(
 
     where_parts = ["c.tenant_id = :tid", "c.shop_id = :sid"]
     params = {"tid": tenant_id, "sid": shop.id}
+    if product_id:
+        where_parts.append("c.product_id = :pid")
+        params["pid"] = int(product_id)
     if status and status != "all":
         where_parts.append("c.status = :st")
         params["st"] = status
