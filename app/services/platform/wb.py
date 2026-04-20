@@ -316,14 +316,14 @@ class WBClient(BasePlatformClient):
             8: "auction",
             9: "auction",
         }
-        # WB的status映射:
-        # -1=删除中, 4=准备就绪, 7=投放中, 8=结算中(已废弃),
-        # 9=投放中(统一广告,新类型), 11=已暂停
+        # WB的status映射（2026-04-20 纠正：7 实际是已完成/归档，不是投放中）:
+        # -1=删除中, 4=准备就绪, 7=已完成/已结束, 8=已暂停(旧),
+        # 9=投放中(统一广告,新类型), 11=已暂停(新)
         status_map = {
             -1: "archived",
             4: "draft",
-            7: "active",
-            8: "active",
+            7: "archived",   # WB status=7 = 已完成/结束，复用 archived 语义（ENUM 无 ended）
+            8: "paused",
             9: "active",
             11: "paused",
         }
