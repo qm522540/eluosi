@@ -453,6 +453,7 @@ def list_candidates(
     source_filter: str = "all", status: str = "pending",
     keyword: str = "", page: int = 1, size: int = 20,
     product_id: Optional[int] = None,
+    hide_covered: bool = False,
 ) -> dict:
     """分页拉候选清单 + 4 格汇总。
 
@@ -462,9 +463,10 @@ def list_candidates(
       - paid_category  只来自类目维付费
       - organic_self   只来自自然搜索（本商品）
       - organic_category 只来自自然搜索（同类目）
-      - with_orders    只看带真实订单的（强证据，paid_orders OR organic_orders > 0）
+      - with_orders    只看带真实订单的（强证据，paid_orders OR organic_orders > 0)
 
     product_id: 可选，只返回指定商品的候选（Health → Optimize 闭环用）
+    hide_covered: True 时隐藏 in_title=1 的行（已在标题，改无意义）
     """
     page = max(1, int(page))
     size = min(max(1, int(size)), 100)
@@ -491,6 +493,8 @@ def list_candidates(
         where_parts.append("JSON_CONTAINS(c.sources, JSON_OBJECT('type','organic','scope','category'))")
     elif source_filter == "with_orders":
         where_parts.append("(COALESCE(c.paid_orders,0) > 0 OR COALESCE(c.organic_orders,0) > 0)")
+    if hide_covered:
+        where_parts.append("c.in_title = 0")
     where_sql = " AND ".join(where_parts)
 
     # P0-3 修 2026-04-19：totals / items 的 LEFT JOIN platform_listings 无

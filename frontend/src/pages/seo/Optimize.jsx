@@ -26,6 +26,7 @@ const Optimize = () => {
   const [status, setStatus] = useState('pending')
   const [keyword, setKeyword] = useState('')
   const [productFilter, setProductFilter] = useState(null)
+  const [hideCovered, setHideCovered] = useState(true)
 
   const [data, setData] = useState(null)
   const [loading, setLoading] = useState(false)
@@ -59,6 +60,7 @@ const Optimize = () => {
       const res = await getSeoCandidates(shopId, {
         source, status, keyword: keyword.trim(),
         product_id: productFilter || undefined,
+        hide_covered: hideCovered,
         page, size,
       })
       if (res.code === 0) {
@@ -72,7 +74,7 @@ const Optimize = () => {
     } finally {
       setLoading(false)
     }
-  }, [shopId, source, status, keyword, productFilter, page, size])
+  }, [shopId, source, status, keyword, productFilter, hideCovered, page, size])
 
   useEffect(() => { fetchCandidates() }, [fetchCandidates])
 
@@ -290,6 +292,8 @@ const Optimize = () => {
           onRefresh={handleRefresh}
           refreshing={refreshing}
           onReload={() => { setPage(1); fetchCandidates() }}
+          hideCovered={hideCovered}
+          onHideCoveredChange={(v) => { setHideCovered(v); setPage(1) }}
         />
 
         <SeoStatsCards

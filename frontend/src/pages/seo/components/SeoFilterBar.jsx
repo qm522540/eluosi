@@ -1,4 +1,4 @@
-import { Space, Select, Button, Segmented, Input, InputNumber, Tooltip } from 'antd'
+import { Space, Select, Button, Segmented, Input, InputNumber, Tooltip, Switch } from 'antd'
 import { SyncOutlined, ThunderboltOutlined } from '@ant-design/icons'
 
 const { Option } = Select
@@ -14,6 +14,7 @@ const SeoFilterBar = ({
   keyword, onKeywordChange,
   onRefresh, refreshing,
   onReload,
+  hideCovered, onHideCoveredChange,
 }) => {
   return (
     <div style={{ marginBottom: 16 }}>
@@ -105,6 +106,16 @@ const SeoFilterBar = ({
               { label: '全部', value: 'all' },
             ]}
           />
+          <Tooltip title="标题里已有这个词 → 再加到标题无意义（重复不加权）。建议保持开启，只看真正能改的。">
+            <Space size={6}>
+              <span style={{ color: '#999' }}>隐藏标题已有</span>
+              <Switch
+                size="small"
+                checked={!!hideCovered}
+                onChange={onHideCoveredChange}
+              />
+            </Space>
+          </Tooltip>
         </Space>
       </div>
     </div>
