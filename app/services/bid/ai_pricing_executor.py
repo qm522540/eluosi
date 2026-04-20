@@ -42,6 +42,7 @@ from typing import Optional
 from sqlalchemy import text
 
 from app.config import get_settings
+from app.services.ai.stage_detector import ProductStage, detect_product_stage
 from app.utils.errors import ErrorCode
 from app.utils.logger import setup_logger
 from app.utils.moscow_time import moscow_hour, moscow_today, now_moscow
@@ -1169,7 +1170,7 @@ async def _analyze_now_inner(db, tenant_id: int, shop_id: int,
                 "campaign_id": camp.id, "sku": sku, "sku_name": sku_name,
                 "current_bid": current_bid, "suggested_bid": optimal_bid,
                 "adjust_pct": adjust_pct,
-                "stage": _get_product_stage(data_days),
+                "stage": _detect_stage(sku_stat, data_days, breakeven_roas),
                 "basis": ("history_data" if data_days >= 21
                           else "shop_benchmark" if data_days < 7
                           else "history_data"),
@@ -1207,7 +1208,7 @@ async def _analyze_now_inner(db, tenant_id: int, shop_id: int,
                 "platform_sku_id": sku, "sku_name": sku_name,
                 "current_bid": current_bid, "suggested_bid": optimal_bid,
                 "adjust_pct": adjust_pct,
-                "product_stage": _get_product_stage(data_days),
+                "product_stage": _detect_stage(sku_stat, data_days, breakeven_roas),
                 "reason": reason,
             })
 
@@ -1740,13 +1741,47 @@ def _merge_metrics(a: dict, b: dict) -> dict:
 
 # ==================== 辅助函数 ====================
 
-def _get_product_stage(data_days: int) -> str:
-    if data_days < 14:
-        return "cold_start"
-    elif data_days < 35:
-        return "testing"
-    else:
-        return "growing"
+def _detect_stage(sku_stat: dict, data_days: int, target_roas: float) -> str:
+    """基于 CTR/CR + ROAS 趋势判断商品阶段（2026-04-20 接回 stage_detector）。
+
+    旧实现 _get_product_stage(data_days) 仅按天数切分，与前端"测试期=CTR ok CR 差"
+    的语义对不上 —— 28 天成熟 SKU 被标 testing，tip 文案误导用户。
+
+    现在：
+    - data_days < 3 → unknown
+    - total_orders < 20 → cold_start
+    - CTR ≥ 2% 且 CR < 2% → testing（真正的"测试期"）
+    - CTR ≥ 2% 且 CR ≥ 2% → growing
+    - sku_stat.trend == "down" 且 ROAS < 保本 → declining（段数据 5 段 < 7 天门槛兜底）
+    """
+    seg_order = ["week4", "week3", "week2", "prev5", "last5"]
+    roas_trend = [
+        float(seg.get("roas") or 0)
+        for name in seg_order
+        for seg in [sku_stat.get(name)]
+        if seg and (seg.get("days") or 0) > 0
+    ]
+
+    result = detect_product_stage(
+        data_days=data_days,
+        total_orders=int(sku_stat.get("orders") or 0),
+        avg_ctr=float(sku_stat.get("ctr") or 0),
+        avg_cr=float(sku_stat.get("cr") or 0),
+        roas_trend=roas_trend,
+        today_roas=float(sku_stat.get("roas") or 0),
+        target_roas=target_roas,
+    )
+
+    # 段数据最多 5 段 < stage_detector 的 declining_days=7 阈值，
+    # 用 _query_sku_history 已算好的 trend 字段做兜底 declining 判断
+    if (result.stage != ProductStage.DECLINING
+            and data_days >= 7
+            and sku_stat.get("trend") == "down"
+            and target_roas > 0
+            and (sku_stat.get("roas") or 0) < target_roas):
+        return ProductStage.DECLINING.value
+
+    return result.stage.value
 
 
 def _build_reason(platform, net_margin, client_price, max_cpa,

@@ -54,12 +54,13 @@ const deriveFromMargin = (margin) => {
   }
 }
 
+// tip 只描述"阶段是什么"，不描述"动作建议"——动作由决策器 reason 说了算
 const STAGE_CONFIG = {
-  cold_start: { color: 'blue', label: '冷启动', tip: '新品期，以曝光为主' },
-  testing:    { color: 'orange', label: '测试期', tip: 'CTR ok但CR偏低' },
-  growing:    { color: 'green', label: '放量期', tip: 'CTR和CR均达标' },
-  declining:  { color: 'red', label: '衰退预警', tip: 'ROAS持续下滑' },
-  unknown:    { color: 'default', label: '数据不足', tip: '历史数据不足' },
+  cold_start: { color: 'blue', label: '冷启动', tip: '累计订单 <20 单，数据仍在积累' },
+  testing:    { color: 'orange', label: '测试期', tip: 'CTR ≥2% 达标，但 CR <2% 转化链待验证' },
+  growing:    { color: 'green', label: '放量期', tip: 'CTR 和 CR 均 ≥2%，商品已通过验证' },
+  declining:  { color: 'red', label: '衰退预警', tip: 'ROAS 近期持续下滑且低于保本线' },
+  unknown:    { color: 'default', label: '数据不足', tip: '有效数据不足 3 天' },
 }
 
 const BASIS_CONFIG = {
