@@ -19,6 +19,7 @@ from app.services.seo.service import (
 from app.services.seo.title_generator import generate_title
 from app.services.seo.health_service import compute_shop_health
 from app.services.seo.generated_history import list_generated_titles, mark_title_applied
+from app.services.seo.keyword_tracking_service import compute_keyword_tracking, list_query_top_skus
 from app.utils.response import success, error
 
 router = APIRouter()
@@ -201,6 +202,56 @@ def apply_generated(
     """用户手动确认"已复制并改到商品"，标 applied_at + approved_by。"""
     user_id = getattr(current_user, "id", None)
     result = mark_title_applied(db, tenant_id, shop, generated_id, user_id)
+    if result.get("code") != 0:
+        return error(result["code"], result.get("msg", ""))
+    return success(result["data"])
+
+
+@router.get("/shop/{shop_id}/keyword-tracking")
+def shop_keyword_tracking(
+    shop_id: int,
+    date_range: int = Query(7, ge=1, le=30, description="本期天数（上期同长度）"),
+    sort: str = Query("impressions_desc", description="impressions_desc / orders_desc / drop_desc / new_desc"),
+    keyword: str = Query("", description="query_text 模糊搜索"),
+    min_impressions: int = Query(0, ge=0, description="过滤低曝光噪声"),
+    alert_only: bool = Query(False, description="仅看下滑预警词"),
+    page: int = Query(1, ge=1),
+    size: int = Query(20, ge=1, le=100),
+    db: Session = Depends(get_db),
+    tenant_id: int = Depends(get_tenant_id),
+    shop=Depends(get_owned_shop),
+):
+    """店铺核心词表现追踪 — 本期 vs 上期 环比 + 下滑预警。
+
+    数据未就绪（WB 未订阅 Jam / Ozon 未订阅 Premium）时返 data_status='not_ready'
+    + 平台专属引导文案，前端据此渲染空态。
+    """
+    result = compute_keyword_tracking(
+        db, tenant_id, shop,
+        date_range=date_range, sort=sort,
+        keyword=keyword, min_impressions=min_impressions,
+        alert_only=alert_only, page=page, size=size,
+    )
+    if result.get("code") != 0:
+        return error(result["code"], result.get("msg", ""))
+    return success(result["data"])
+
+
+@router.get("/shop/{shop_id}/keyword-tracking/skus")
+def shop_keyword_tracking_skus(
+    shop_id: int,
+    query_text: str = Query(..., min_length=1, description="要下钻的核心词"),
+    date_range: int = Query(7, ge=1, le=30),
+    limit: int = Query(10, ge=1, le=50),
+    db: Session = Depends(get_db),
+    tenant_id: int = Depends(get_tenant_id),
+    shop=Depends(get_owned_shop),
+):
+    """单核心词下钻：哪些商品靠这个词带曝光/订单。"""
+    result = list_query_top_skus(
+        db, tenant_id, shop,
+        query_text=query_text, date_range=date_range, limit=limit,
+    )
     if result.get("code") != 0:
         return error(result["code"], result.get("msg", ""))
     return success(result["data"])
