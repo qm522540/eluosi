@@ -58,6 +58,11 @@ export function getKeywordTracking(shopId, params) {
   return request.get(`${BASE}/shop/${shopId}/keyword-tracking`, { params })
 }
 
+/** 改标题 Before/After ROI 对比 — applied_at 切割前后 N 天 */
+export function getRoiReport(shopId, params) {
+  return request.get(`${BASE}/shop/${shopId}/roi-report`, { params })
+}
+
 /** 单核心词下钻：Top N 商品靠这词带流量 */
 export function getKeywordTrackingSkus(shopId, params) {
   return request.get(`${BASE}/shop/${shopId}/keyword-tracking/skus`, { params })

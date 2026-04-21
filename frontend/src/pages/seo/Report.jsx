@@ -2,13 +2,14 @@ import { useState, useEffect, useCallback, useMemo } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import {
   Typography, Card, Space, Select, Segmented, Input, Button, Table, Tag,
-  message, Modal, Descriptions, Alert, Row, Col,
+  message, Modal, Descriptions, Alert, Row, Col, Tabs,
 } from 'antd'
 import {
-  CopyOutlined, CheckOutlined, RobotOutlined, SyncOutlined,
+  CopyOutlined, CheckOutlined, SyncOutlined, LineChartOutlined, HistoryOutlined,
 } from '@ant-design/icons'
 import { getShops } from '@/api/shops'
 import { getGeneratedTitles, applyGeneratedTitle } from '@/api/seo'
+import RoiReportTab from './components/RoiReportTab'
 
 const { Title, Text, Paragraph } = Typography
 const { Option } = Select
@@ -207,30 +208,68 @@ const Report = () => {
     }
   }
 
-  return (
-    <div>
-      <div style={{ marginBottom: 16 }}>
-        <Title level={4} style={{ marginBottom: 4 }}>
-          <RobotOutlined /> AI 生成标题历史
-        </Title>
-        <Text type="secondary">
-          每次在 SEO 优化建议页点「AI 生成标题」的结果都会记录在这里。
-          即使当时没复制，之后也能回溯、重新复制、标记为已应用。
-        </Text>
-      </div>
-
+  const historyTabContent = (
+    <>
       <Alert
         type="info"
         showIcon
         style={{ marginBottom: 16 }}
         message="为什么要「标记已用」？"
-        description="复制新标题 → 改到商品后，点「标记已用」。系统会记录改标题的时间点，为二期「改标题前后 14 天 ROI 对比」功能做基线。"
+        description="复制新标题 → 改到商品后，点「标记已用」。系统会记录改标题的时间点，在「改标题效果对比」Tab 里做前后 14 天 ROI 对比。"
       />
 
+      <Space wrap size={[12, 12]} style={{ marginBottom: 16 }}>
+        <Segmented
+          value={approvalStatus}
+          onChange={(v) => { setApprovalStatus(v); setPage(1) }}
+          options={[
+            { label: '全部', value: 'all' },
+            { label: '待用', value: 'pending' },
+            { label: '已应用', value: 'applied' },
+            { label: '已拒', value: 'rejected' },
+          ]}
+        />
+        <Input.Search
+          placeholder="搜索原/新标题"
+          value={keyword}
+          onChange={e => setKeyword(e.target.value)}
+          onSearch={() => { setPage(1); fetchData() }}
+          allowClear
+          style={{ width: 220 }}
+        />
+        <Button icon={<SyncOutlined />} onClick={fetchData}>重新加载</Button>
+      </Space>
+
+      <Table
+        rowKey="id"
+        size="small"
+        loading={loading}
+        dataSource={data?.items || []}
+        columns={columns}
+        pagination={pagination}
+        onChange={onPaginationChange}
+        scroll={{ x: 1300 }}
+      />
+    </>
+  )
+
+  return (
+    <div>
+      <div style={{ marginBottom: 16 }}>
+        <Title level={4} style={{ marginBottom: 4 }}>
+          <LineChartOutlined /> SEO 效果报表
+        </Title>
+        <Text type="secondary">
+          改标题前后效果对比 + AI 生成历史回溯。
+          先在「AI 生成历史」里标记「已用」，系统会自动在「改标题效果对比」里追踪前后 14 天数据变化。
+        </Text>
+      </div>
+
       <Card>
-        <Space wrap size={[12, 12]} style={{ marginBottom: 16 }}>
+        <Space style={{ marginBottom: 12 }}>
+          <Text>店铺：</Text>
           <Select
-            style={{ width: 220 }}
+            style={{ width: 240 }}
             placeholder="选择店铺"
             value={shopId}
             onChange={setShopId}
@@ -241,36 +280,22 @@ const Report = () => {
               </Option>
             ))}
           </Select>
-          <Segmented
-            value={approvalStatus}
-            onChange={(v) => { setApprovalStatus(v); setPage(1) }}
-            options={[
-              { label: '全部', value: 'all' },
-              { label: '待用', value: 'pending' },
-              { label: '已应用', value: 'applied' },
-              { label: '已拒', value: 'rejected' },
-            ]}
-          />
-          <Input.Search
-            placeholder="搜索原/新标题"
-            value={keyword}
-            onChange={e => setKeyword(e.target.value)}
-            onSearch={() => { setPage(1); fetchData() }}
-            allowClear
-            style={{ width: 220 }}
-          />
-          <Button icon={<SyncOutlined />} onClick={fetchData}>重新加载</Button>
         </Space>
 
-        <Table
-          rowKey="id"
-          size="small"
-          loading={loading}
-          dataSource={data?.items || []}
-          columns={columns}
-          pagination={pagination}
-          onChange={onPaginationChange}
-          scroll={{ x: 1300 }}
+        <Tabs
+          defaultActiveKey="roi"
+          items={[
+            {
+              key: 'roi',
+              label: <span><LineChartOutlined /> 改标题效果对比</span>,
+              children: <RoiReportTab shopId={shopId} />,
+            },
+            {
+              key: 'history',
+              label: <span><HistoryOutlined /> AI 生成历史</span>,
+              children: historyTabContent,
+            },
+          ]}
         />
       </Card>
 
