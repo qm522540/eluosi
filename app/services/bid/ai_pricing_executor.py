@@ -185,6 +185,13 @@ def _profit_max_decision(current_roas: float, breakeven_roas: float,
     if current_roas is None or current_roas < 0:
         return {"action": "skip", "multiplier": 1.0, "reason": "无 ROAS 历史"}
 
+    # Bug 3 修：trend='insufficient' 数据不足判趋势 → skip
+    # Bug 1 修后会出现这个新档（last5<3 天 或 全 5 段都找不到 baseline）
+    # 数据不足时连"亏不亏"都判不准，干脆不动比"小降"更稳妥
+    if trend == "insufficient":
+        return {"action": "skip", "multiplier": 1.0,
+                "reason": "数据不足判趋势（动态扩窗到 28 天仍无足够 baseline），先观察不动"}
+
     # Bug 2 修：ROAS 异常高视为样本不足
     # 真健康商品 ROAS 通常 5-25x，极个别爆款 30-40x
     # 超 50x 几乎肯定是"1 次点击 + 1 单大订单"的偶然 → 不基于偶然加价烧钱
