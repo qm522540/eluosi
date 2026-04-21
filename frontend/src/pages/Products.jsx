@@ -620,6 +620,8 @@ const Products = () => {
   const [importConfirming, setImportConfirming] = useState(false)
   const [importFile, setImportFile] = useState(null)
   const [importShopId, setImportShopId] = useState(null)
+  // ambiguous 行的用户选择：{ [row_no]: chosen_code }；没选 = 跳过
+  const [ambiguousChoices, setAmbiguousChoices] = useState({})
   const handleImportFile = async (file, codeCol = -1, marginCol = -1) => {
     if (!importShopId) {
       message.warning('请先选择店铺')
@@ -638,6 +640,7 @@ const Products = () => {
         params,
       })
       setImportPreview(res.data)
+      setAmbiguousChoices({})
     } catch (e) {
       message.error(e?.message || '解析失败')
     } finally {
@@ -647,9 +650,22 @@ const Products = () => {
   }
   const [manualCodeCol, setManualCodeCol] = useState(-1)
   const [manualMarginCol, setManualMarginCol] = useState(-1)
+  const chosenAmbiguousCount = useMemo(() => {
+    if (!importPreview?.items) return 0
+    return importPreview.items.filter(
+      i => i.status === 'ambiguous' && ambiguousChoices[i.row_no],
+    ).length
+  }, [importPreview, ambiguousChoices])
+  const effectiveUpdateCount = (importPreview?.summary?.matched || 0) + chosenAmbiguousCount
   const handleImportConfirm = async () => {
     if (!importPreview) return
-    const items = importPreview.items.filter(i => i.matched && i.margin_value != null)
+    const base = importPreview.items.filter(i => i.matched && i.margin_value != null)
+    const chosen = importPreview.items
+      .filter(i => i.status === 'ambiguous'
+        && i.margin_value != null
+        && ambiguousChoices[i.row_no])
+      .map(i => ({ ...i, code: ambiguousChoices[i.row_no], matched: true }))
+    const items = [...base, ...chosen]
     if (items.length === 0) {
       message.warning('没有可更新的条目')
       return
@@ -666,6 +682,7 @@ const Products = () => {
       }
       setImportVisible(false)
       setImportPreview(null)
+      setAmbiguousChoices({})
       fetchProducts(page)
     } catch (e) {
       message.error(e?.message || '更新失败')
@@ -2163,17 +2180,17 @@ const Products = () => {
       <Modal
         title="上传数据更新净毛利率"
         open={importVisible}
-        onCancel={() => { setImportVisible(false); setImportPreview(null) }}
+        onCancel={() => { setImportVisible(false); setImportPreview(null); setAmbiguousChoices({}) }}
         width={900}
         footer={
           importPreview
             ? [
-                <Button key="re" onClick={() => setImportPreview(null)}>重新选文件</Button>,
-                <Button key="cancel" onClick={() => { setImportVisible(false); setImportPreview(null) }}>取消</Button>,
+                <Button key="re" onClick={() => { setImportPreview(null); setAmbiguousChoices({}) }}>重新选文件</Button>,
+                <Button key="cancel" onClick={() => { setImportVisible(false); setImportPreview(null); setAmbiguousChoices({}) }}>取消</Button>,
                 <Button key="ok" type="primary" loading={importConfirming}
-                  disabled={!(importPreview.summary?.matched > 0)}
+                  disabled={effectiveUpdateCount <= 0}
                   onClick={handleImportConfirm}>
-                  确认更新 {importPreview.summary?.matched || 0} 条
+                  确认更新 {effectiveUpdateCount} 条
                 </Button>,
               ]
             : [<Button key="cancel" onClick={() => setImportVisible(false)}>取消</Button>]
@@ -2292,13 +2309,19 @@ const Products = () => {
         {importPreview && !importPreview.auto_detect_failed && (
           <div>
             <Alert
-              type={importPreview.summary?.matched > 0 ? 'success' : 'warning'}
+              type={effectiveUpdateCount > 0 ? 'success' : 'warning'}
               showIcon
               style={{ marginBottom: 12 }}
               message={
                 <Space wrap>
                   <span>共 {importPreview.summary?.total || 0} 行</span>
                   <span style={{ color: '#52c41a' }}>可更新 {importPreview.summary?.matched || 0} 条</span>
+                  {importPreview.summary?.ambiguous > 0 && (
+                    <span style={{ color: '#faad14' }}>
+                      需确认 {importPreview.summary.ambiguous} 条
+                      {chosenAmbiguousCount > 0 && `（已选 ${chosenAmbiguousCount}）`}
+                    </span>
+                  )}
                   {importPreview.summary?.code_not_found > 0 && (
                     <span style={{ color: '#faad14' }}>编码不存在 {importPreview.summary.code_not_found}</span>
                   )}
@@ -2311,6 +2334,12 @@ const Products = () => {
                 <div style={{ fontSize: 12 }}>
                   自动识别：编码列 = <Tag>{importPreview.detected_code_header}</Tag>
                   净毛利率列 = <Tag>{importPreview.detected_margin_header}</Tag>
+                  {importPreview.summary?.ambiguous > 0 && (
+                    <div style={{ marginTop: 4, color: '#faad14' }}>
+                      橙色标记"需确认"的行是：Excel 编码包含了我们本地已有的编码（如 "MT-001/TA001" 而本地有 TA001）。
+                      请在"操作"列下拉里选择要更新哪个本地编码；不选则跳过该行。
+                    </div>
+                  )}
                 </div>
               }
             />
@@ -2322,7 +2351,16 @@ const Products = () => {
               scroll={{ y: 360 }}
               columns={[
                 { title: '行', dataIndex: 'row_no', width: 60 },
-                { title: '本地编码', dataIndex: 'code', width: 130 },
+                {
+                  title: '本地编码', dataIndex: 'code', width: 150,
+                  render: (c, r) => r.status === 'ambiguous'
+                    ? (
+                        <Tooltip title={`检测到本地存在：${(r.candidates || []).join(' / ')}`}>
+                          <span style={{ color: '#d48806', fontWeight: 500 }}>{c}</span>
+                        </Tooltip>
+                      )
+                    : c,
+                },
                 {
                   title: '原值', dataIndex: 'old_margin', width: 90,
                   render: v => v != null ? `${(v * 100).toFixed(0)}%` : '-',
@@ -2334,10 +2372,38 @@ const Products = () => {
                     : <Tag color="default">{r.margin_raw || '-'}</Tag>,
                 },
                 {
-                  title: '状态', dataIndex: 'matched', width: 130,
-                  render: (m, r) => m
-                    ? <Tag color="green">可更新</Tag>
-                    : <Tag color="orange">{r.error || '跳过'}</Tag>,
+                  title: '状态', width: 120,
+                  render: (_, r) => {
+                    if (r.matched) return <Tag color="green">可更新</Tag>
+                    if (r.status === 'ambiguous') {
+                      return ambiguousChoices[r.row_no]
+                        ? <Tag color="gold">已选 {ambiguousChoices[r.row_no]}</Tag>
+                        : <Tag color="orange">需确认</Tag>
+                    }
+                    return <Tag color="default">{r.error || '跳过'}</Tag>
+                  },
+                },
+                {
+                  title: '操作', width: 180,
+                  render: (_, r) => {
+                    if (r.status !== 'ambiguous') return null
+                    return (
+                      <Select
+                        size="small"
+                        style={{ width: '100%' }}
+                        placeholder="选择对应本地编码"
+                        allowClear
+                        value={ambiguousChoices[r.row_no] || undefined}
+                        onChange={(v) => setAmbiguousChoices(prev => {
+                          const next = { ...prev }
+                          if (v) next[r.row_no] = v
+                          else delete next[r.row_no]
+                          return next
+                        })}
+                        options={(r.candidates || []).map(c => ({ value: c, label: c }))}
+                      />
+                    )
+                  },
                 },
               ]}
             />
