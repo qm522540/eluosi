@@ -2336,8 +2336,8 @@ const Products = () => {
                   净毛利率列 = <Tag>{importPreview.detected_margin_header}</Tag>
                   {importPreview.summary?.ambiguous > 0 && (
                     <div style={{ marginTop: 4, color: '#faad14' }}>
-                      橙色标记"需确认"的行是：Excel 编码包含了我们本地已有的编码（如 "MT-001/TA001" 而本地有 TA001）。
-                      请在"操作"列下拉里选择要更新哪个本地编码；不选则跳过该行。
+                      橙色标记「需确认」的行是：Excel 编码包含了我们本地已有的编码（如「MT-001/TA001」而本地有 TA001）。
+                      请在「操作」列下拉里选择要更新哪个本地编码；不选则跳过该行。
                     </div>
                   )}
                 </div>
