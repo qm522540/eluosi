@@ -243,6 +243,24 @@ def compute_keyword_tracking(
     offset = (page - 1) * size
     page_items = items[offset:offset + size]
 
+    # ---------- highlights: 今日看点（独立于当前分页/排序）----------
+    # 从全量 items 里选下滑 Top 3 + 新增词 Top 3（按本期曝光），供前端摘要卡用
+    alerted = [x for x in items if x.get("alert")]
+    alert_rank = {"vanish": 0, "drop": 1, "orders_drop": 2}
+    alerted.sort(key=lambda x: (alert_rank.get(x["alert"], 9),
+                                x["impressions_delta_pct"] if x["impressions_delta_pct"] is not None else 0))
+    drop_top3 = alerted[:3]
+
+    new_items = [x for x in items if x["trend"] == "new" and x["impressions_cur"] > 0]
+    new_items.sort(key=lambda x: -x["impressions_cur"])
+    new_top3 = new_items[:3]
+
+    highlights = {
+        "drop_top3": drop_top3,
+        "new_top3": new_top3,
+        "has_any": bool(drop_top3) or bool(new_top3),
+    }
+
     return {"code": 0, "data": {
         "data_status": "ready",
         "platform": platform,
@@ -250,6 +268,7 @@ def compute_keyword_tracking(
         "has_position_data": has_position_any,
         "position_hint": None if has_position_any else "当前平台 API 不返回商品搜索排名字段，position 维度已豁免",
         "totals": totals,
+        "highlights": highlights,
         "items": page_items,
         "page": page, "size": size, "total": total_count,
     }}

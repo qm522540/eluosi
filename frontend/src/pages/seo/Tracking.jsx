@@ -6,6 +6,7 @@ import { getKeywordTracking } from '@/api/seo'
 import TrackingFilterBar from './components/TrackingFilterBar'
 import TrackingStatsCards from './components/TrackingStatsCards'
 import TrackingTable from './components/TrackingTable'
+import TrackingInsightCard from './components/TrackingInsightCard'
 
 const { Title, Text, Paragraph } = Typography
 
@@ -125,6 +126,13 @@ const Tracking = () => {
           />
         ) : (
           <>
+            <TrackingInsightCard
+              highlights={data?.highlights}
+              onFilterByKeyword={(kw) => { setKeyword(kw); setAlertOnly(false); setPage(1) }}
+              onSwitchAlertOnly={() => { setAlertOnly(true); setSort('drop_desc'); setKeyword(''); setPage(1) }}
+              onSwitchNewOnly={() => { setSort('new_desc'); setAlertOnly(false); setKeyword(''); setPage(1) }}
+            />
+
             <TrackingStatsCards totals={data?.totals} period={data?.period} />
 
             {data?.period && (
