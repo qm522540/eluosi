@@ -271,13 +271,16 @@ def _calc_profit_window(db, tenant_id: int, campaign_id: int, sku: str,
 
 def _save_hill_state(db, tenant_id: int, campaign_id: int, sku: str,
                      base_bid: float, direction: int, step_size: float):
-    """写 hill 状态到 ad_groups（INSERT OR UPDATE）。"""
+    """写 hill 状态到 ad_groups（INSERT OR UPDATE）。
+    UNIQUE KEY = (campaign_id, platform_group_id)
+    INSERT 时补 name=sku 字段（NOT NULL 约束），UPDATE 时不动 name。
+    """
     db.execute(text("""
         INSERT INTO ad_groups (
-            tenant_id, campaign_id, platform_group_id,
+            tenant_id, campaign_id, platform_group_id, name,
             hill_base_bid, hill_step_direction, hill_step_size, hill_last_eval_at
         ) VALUES (
-            :tid, :cid, :sku,
+            :tid, :cid, :sku, :sku,
             :base, :dir, :step, NOW()
         )
         ON DUPLICATE KEY UPDATE
