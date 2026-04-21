@@ -131,7 +131,7 @@ const Tracking = () => {
               <Paragraph type="secondary" style={{ fontSize: 12, marginBottom: 8 }}>
                 对比区间：本期 {data.period.cur_start} ~ {data.period.cur_end} · 上期 {data.period.prev_start} ~ {data.period.prev_end}
                 {data.position_hint && (
-                  <>　·　<Text type="warning" style={{ fontSize: 12 }}>{data.position_hint}</Text></>
+                  <> &nbsp;·&nbsp; <Text type="warning" style={{ fontSize: 12 }}>{data.position_hint}</Text></>
                 )}
               </Paragraph>
             )}
@@ -142,7 +142,6 @@ const Tracking = () => {
               loading={loading}
               pagination={pagination}
               onPaginationChange={onPaginationChange}
-              hasPositionData={data?.has_position_data}
               positionHint={data?.position_hint}
             />
           </>

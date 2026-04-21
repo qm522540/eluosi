@@ -32,7 +32,7 @@ const DeltaText = ({ pct, trend }) => {
   return <span style={{ color, fontWeight: pct >= 20 || pct <= -20 ? 600 : 400 }}>{sign}{pct}%</span>
 }
 
-const TrackingTable = ({ shopId, data, loading, pagination, onPaginationChange, hasPositionData, positionHint }) => {
+const TrackingTable = ({ shopId, data, loading, pagination, onPaginationChange, positionHint }) => {
   const navigate = useNavigate()
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [drawerLoading, setDrawerLoading] = useState(false)
