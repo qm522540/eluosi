@@ -1192,9 +1192,9 @@ async def _analyze_now_inner(db, tenant_id: int, shop_id: int,
                         })
                         continue
 
-            # ── Step 1.5: 利润最大化决策（主决策器，2026-04-19 引入） ──
-            # 用 current_roas 与 breakeven_roas 比值决定是否调价 + 方向 + 幅度
-            # 替代旧的"按 CPA 公式倒推 bid"策略（容易把已盈利 SKU 加到亏损）
+            # ── Step 1.5: 决策器 dispatch（2026-04-21 方案 E 引入分流） ──
+            # data_days >= 21: 走爬山法（_hill_climbing_decision，方案 E）
+            # data_days <  21: 走 _profit_max_decision（Step 1 已修 3 bug）
             current_roas = sku_stat.get("roas") or 0
             trend = sku_stat.get("trend", "stable")
             # cfg.default_config 在 DB 是 TEXT 存 JSON，可能是 dict 或 str
@@ -1210,19 +1210,33 @@ async def _analyze_now_inner(db, tenant_id: int, shop_id: int,
                 max_adjust_pct_cfg = float(_dc.get("max_adjust_pct") or 30)
             except (TypeError, ValueError):
                 max_adjust_pct_cfg = 30.0
-            pm_decision = _profit_max_decision(
-                current_roas=current_roas, breakeven_roas=breakeven_roas,
-                data_days=data_days, trend=trend, max_adjust_pct=max_adjust_pct_cfg,
-            )
-            if pm_decision["action"] == "no_change" or pm_decision["action"] == "skip":
-                logger.info(f"sku={sku} 利润决策跳过：{pm_decision['reason']}")
-                continue
-            # 决策直接给出新出价：current_bid × multiplier
-            optimal_bid = int(round(current_bid * pm_decision["multiplier"]))
-            if optimal_bid < MIN_BID:
-                optimal_bid = MIN_BID
-            # 仍走下方的平台最低价校验、ROAS 门控等保护
-            data_note = pm_decision["reason"]
+
+            if data_days >= 21:
+                # 方案 E 爬山法（每天滑动评估，base × 时段系数 × 周末系数）
+                hill_decision = _hill_climbing_decision(
+                    db, tenant_id, camp.id, sku, current_bid, sku_stat,
+                    breakeven_roas, net_margin,
+                    time_multiplier, day_multiplier,
+                )
+                if hill_decision["action"] == "skip":
+                    logger.info(f"sku={sku} 爬山法跳过：{hill_decision['reason']}")
+                    continue
+                optimal_bid = max(hill_decision["optimal_bid"], MIN_BID)
+                data_note = hill_decision["reason"]
+            else:
+                # 老 _profit_max_decision（Step 1 已修 3 bug：trend动态窗口/ROAS>50/insufficient）
+                pm_decision = _profit_max_decision(
+                    current_roas=current_roas, breakeven_roas=breakeven_roas,
+                    data_days=data_days, trend=trend, max_adjust_pct=max_adjust_pct_cfg,
+                )
+                if pm_decision["action"] == "no_change" or pm_decision["action"] == "skip":
+                    logger.info(f"sku={sku} 利润决策跳过：{pm_decision['reason']}")
+                    continue
+                # 决策直接给出新出价：current_bid × multiplier
+                optimal_bid = int(round(current_bid * pm_decision["multiplier"]))
+                if optimal_bid < MIN_BID:
+                    optimal_bid = MIN_BID
+                data_note = pm_decision["reason"]
 
             # 冷启动 / 利润策略不需要 CPA 公式重算，但保留 CTR/CR 计算供后续 expected_roas 等用
             # ── Step 2 (legacy): 选取 CTR/CR 来源（旧 CPA 公式备用，仅供 expected_roas 兜底） ──
