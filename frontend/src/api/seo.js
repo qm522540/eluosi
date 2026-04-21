@@ -52,3 +52,13 @@ export function getGeneratedTitles(shopId, params) {
 export function applyGeneratedTitle(shopId, generatedId) {
   return request.post(`${BASE}/shop/${shopId}/generated-titles/${generatedId}/apply`)
 }
+
+/** 关键词表现追踪 — 本期 vs 上期 环比 + 下滑预警 */
+export function getKeywordTracking(shopId, params) {
+  return request.get(`${BASE}/shop/${shopId}/keyword-tracking`, { params })
+}
+
+/** 单核心词下钻：Top N 商品靠这词带流量 */
+export function getKeywordTrackingSkus(shopId, params) {
+  return request.get(`${BASE}/shop/${shopId}/keyword-tracking/skus`, { params })
+}

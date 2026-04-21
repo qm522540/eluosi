@@ -1005,8 +1005,9 @@ class WBClient(BasePlatformClient):
                 cards = (result or {}).get("cards", [])
                 all_cards.extend(cards)
                 resp_cursor = (result or {}).get("cursor", {})
-                total = resp_cursor.get("total", 0)
-                if len(cards) < limit or total <= len(cards):
+                # WB cursor.total 回显的是「本页返回条数」不是「全店总数」，
+                # 唯一可靠的结束条件是 len(cards) < limit（不满页 = 最后一页）
+                if len(cards) < limit:
                     break
                 cursor = {
                     "limit": limit,
