@@ -1676,16 +1676,29 @@ def _query_sku_history(db, shop_id: int, tenant_id: int, platform: str) -> dict:
         # 冷启动 → 算法忽略 SKU 自身数据强用店铺均值算出极低出价
         total = _merge_metrics(_merge_metrics(_merge_metrics(_merge_metrics(p5, l5), w2), w3), w4)
 
-        if p5["days"] == 0 and l5["days"] == 0:
-            trend = "new"
-        elif p5["days"] < 3:
-            trend = "new"
-        elif l5["roas"] > p5["roas"] * 1.05:
-            trend = "up"
-        elif l5["roas"] < p5["roas"] * 0.95:
-            trend = "down"
+        # Bug 1 修：动态窗口找 baseline，跳过停投期
+        # 之前 p5.days<3 直接判 new，把"成熟 SKU 暂停几天"也误判为新手
+        # shop=6 实测 49/80 SKU 中招（61%）
+        # 新逻辑：prev5 不够 3 天 → 往前找 week2/3/4 当替代 baseline
+        if l5["days"] == 0 and p5["days"] == 0 and w2["days"] == 0 and w3["days"] == 0 and w4["days"] == 0:
+            trend = "new"  # 真无任何数据
+        elif l5["days"] < 3:
+            trend = "insufficient"  # last5 数据不足，无法判趋势
         else:
-            trend = "stable"
+            # 找够 3 天数据的 baseline（优先用近的）
+            baseline = None
+            for candidate in (p5, w2, w3, w4):
+                if candidate["days"] >= 3:
+                    baseline = candidate
+                    break
+            if baseline is None:
+                trend = "insufficient"  # 扩到 28 天还找不到 baseline
+            elif l5["roas"] > baseline["roas"] * 1.05:
+                trend = "up"
+            elif l5["roas"] < baseline["roas"] * 0.95:
+                trend = "down"
+            else:
+                trend = "stable"
 
         result[key] = {
             **total,
