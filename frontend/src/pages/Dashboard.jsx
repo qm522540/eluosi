@@ -15,7 +15,7 @@ import { useNavigate } from 'react-router-dom'
 import { healthCheck } from '@/api/system'
 import { getShops } from '@/api/shops'
 import { getTodaySummaryByShop } from '@/api/ads'
-import { getSeoHealth } from '@/api/seo'
+import { getSeoHealth, getKeywordTracking } from '@/api/seo'
 import { useAuthStore } from '@/stores/authStore'
 
 const { Title, Text } = Typography
@@ -78,10 +78,13 @@ const Dashboard = () => {
       const shops = (r.data?.items || []).filter(s => ['wb', 'ozon'].includes(s.platform))
       const results = await Promise.all(shops.map(async (s) => {
         try {
-          const hr = await getSeoHealth(s.id, { sort: 'score_asc', page: 1, size: 3 })
-          return { ...s, seo: hr.data }
+          const [hr, tr] = await Promise.all([
+            getSeoHealth(s.id, { sort: 'score_asc', page: 1, size: 3 }),
+            getKeywordTracking(s.id, { date_range: 7, size: 1 }).catch(() => ({ data: null })),
+          ])
+          return { ...s, seo: hr.data, tracking: tr.data }
         } catch {
-          return { ...s, seo: null }
+          return { ...s, seo: null, tracking: null }
         }
       }))
       setSeoByShop(results)
@@ -342,6 +345,34 @@ const Dashboard = () => {
                                   </Tag>
                                 </div>
                               ))}
+                            </div>
+                          )}
+                          {s.tracking?.data_status === 'ready' && s.tracking?.totals && (
+                            <div style={{
+                              marginTop: 6, padding: '4px 6px', fontSize: 11,
+                              background: '#fffbe6', border: '1px solid #ffe58f', borderRadius: 3,
+                            }}>
+                              <Space size={8} wrap>
+                                <Text type="secondary" style={{ fontSize: 11 }}>近 7 天关键词：</Text>
+                                <span style={{ color: s.tracking.totals.drop_alert_count > 0 ? '#fa541c' : '#999' }}>
+                                  ⚠️ {s.tracking.totals.drop_alert_count} 下滑
+                                </span>
+                                <span style={{ color: s.tracking.totals.new_count > 0 ? '#52c41a' : '#999' }}>
+                                  🌱 {s.tracking.totals.new_count} 新增
+                                </span>
+                                <Button
+                                  type="link" size="small"
+                                  style={{ padding: 0, height: 16, fontSize: 11 }}
+                                  onClick={(e) => { e.stopPropagation(); navigate(`/seo/tracking?shopId=${s.id}`) }}
+                                >
+                                  追踪页
+                                </Button>
+                              </Space>
+                            </div>
+                          )}
+                          {s.tracking?.data_status === 'not_ready' && (
+                            <div style={{ marginTop: 6, fontSize: 11, color: '#999' }}>
+                              关键词追踪：等平台订阅开通
                             </div>
                           )}
                           <Button
