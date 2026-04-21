@@ -20,6 +20,7 @@ from app.services.seo.title_generator import generate_title
 from app.services.seo.health_service import compute_shop_health
 from app.services.seo.generated_history import list_generated_titles, mark_title_applied
 from app.services.seo.keyword_tracking_service import compute_keyword_tracking, list_query_top_skus
+from app.services.seo.roi_report_service import compute_roi_report
 from app.utils.response import success, error
 
 router = APIRouter()
@@ -202,6 +203,30 @@ def apply_generated(
     """用户手动确认"已复制并改到商品"，标 applied_at + approved_by。"""
     user_id = getattr(current_user, "id", None)
     result = mark_title_applied(db, tenant_id, shop, generated_id, user_id)
+    if result.get("code") != 0:
+        return error(result["code"], result.get("msg", ""))
+    return success(result["data"])
+
+
+@router.get("/shop/{shop_id}/roi-report")
+def shop_roi_report(
+    shop_id: int,
+    window_days: int = Query(14, ge=3, le=60, description="Before/After 窗口天数"),
+    db: Session = Depends(get_db),
+    tenant_id: int = Depends(get_tenant_id),
+    shop=Depends(get_owned_shop),
+):
+    """改标题 Before/After ROI 对比。
+
+    对所有 approval_status='applied' 的记录，以 applied_at 为切割点，
+    从 product_search_queries 聚合前后 window_days 天的曝光/订单/营收。
+
+    status='observing' 表示 applied_at 距今不足 window_days，观察期未满。
+    """
+    result = compute_roi_report(
+        db, tenant_id, shop,
+        window_days=window_days,
+    )
     if result.get("code") != 0:
         return error(result["code"], result.get("msg", ""))
     return success(result["data"])
