@@ -1,5 +1,7 @@
 """商品路由"""
 
+import re
+
 from fastapi import APIRouter, Depends, Query, BackgroundTasks, UploadFile, File, Body
 from sqlalchemy.orm import Session
 
@@ -343,6 +345,31 @@ _MARGIN_HEADER_KEYWORDS = [
 ]
 
 
+# 用户 Excel 里的编码可能写成复合格式（如 "MT-001/TA001"）。
+# 按这些分隔符拆出子 token 去本地库反查，命中即提示用户确认。
+_CODE_SEP_PATTERN = re.compile(r"[\s/,，、|\\;；]+")
+
+
+def _find_local_code_candidates(code: str, local_codes: dict) -> list:
+    """按分隔符拆分 Excel 原始编码值，返回其中能精确命中本地编码的子 token。
+    - 拆分后的 token 去重保序
+    - 若拆出的 token 等于原值（说明没真正拆出东西）则跳过
+    - 若拆分前的原值就在 local_codes 里，调用方应先走精确匹配路径，不进本函数
+    """
+    if not code:
+        return []
+    tokens = [t.strip() for t in _CODE_SEP_PATTERN.split(code) if t and t.strip()]
+    seen = set()
+    matches = []
+    for t in tokens:
+        if t == code:
+            continue
+        if t in local_codes and t not in seen:
+            matches.append(t)
+            seen.add(t)
+    return matches
+
+
 def _detect_column(headers: list, keywords: list) -> int:
     """按关键词优先级找匹配列，返回 index 或 -1"""
     norm_headers = [(str(h).strip().lower() if h is not None else "") for h in headers]
@@ -519,7 +546,7 @@ async def import_margin_preview(
     # 解析每行
     items = []
     summary = {"total": 0, "valid": 0, "matched": 0, "format_err": 0,
-               "code_not_found": 0, "empty_margin": 0}
+               "code_not_found": 0, "empty_margin": 0, "ambiguous": 0}
     for ridx, row in enumerate(rows):
         if not row or all(c is None or str(c).strip() == "" for c in row):
             continue
@@ -535,18 +562,33 @@ async def import_margin_preview(
             "margin_value": margin_val,
             "old_margin": None,
             "matched": False,
+            "status": "pending",
+            "candidates": [],
             "error": None,
         }
         if not code:
             item["error"] = "编码空"
+            item["status"] = "error"
         elif m_err:
             item["error"] = m_err
+            item["status"] = "format_err"
             summary["format_err"] += 1
         elif code not in local_codes:
-            item["error"] = "本地找不到该编码"
-            summary["code_not_found"] += 1
+            candidates = _find_local_code_candidates(code, local_codes)
+            if candidates:
+                # 编码写成复合格式（如 "MT-001/TA001"），拆出子 token 命中本地编码
+                # 返回候选列表让前端让用户选哪个才是想更新的本地商品
+                item["error"] = f"编码含本地值：{' / '.join(candidates)}，请选择"
+                item["status"] = "ambiguous"
+                item["candidates"] = candidates
+                summary["ambiguous"] += 1
+            else:
+                item["error"] = "本地找不到该编码"
+                item["status"] = "not_found"
+                summary["code_not_found"] += 1
         else:
             item["matched"] = True
+            item["status"] = "ok"
             item["old_margin"] = float(local_codes[code]) if local_codes[code] is not None else None
             summary["matched"] += 1
             summary["valid"] += 1
