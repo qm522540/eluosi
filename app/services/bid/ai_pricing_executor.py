@@ -237,6 +237,189 @@ def _profit_max_decision(current_roas: float, breakeven_roas: float,
             "reason": f"ROAS {current_roas:.2f}x 远超保本 {breakeven_roas:.2f}x×1.5，小幅 +5% 试探多赚总额"}
 
 
+# ==================== 方案 E 爬山法决策器（>=21天 SKU） ====================
+# 核心：每天滑动评估"过去3天利润 vs 再前3天利润"，涨保持方向、跌反转+步长减半
+# base 每天最多动 1 次（凌晨评估），白天每小时按 base × 时段系数 × 周末系数 出价
+# 详细设计见 docs/daily/2026-04-21_工作内容_老林.md §13-§14
+
+HILL_STEP_SEQUENCE = [0.20, 0.10, 0.05, 0.02]  # 步长收敛序列
+HILL_PROFIT_TIE_THRESHOLD = 20.0  # 持平阈值 ₽20（用户拍）
+HILL_ROAS_ANOMALY = 50.0          # ROAS > 50x 视为样本不足（与 _profit_max_decision Bug2 一致）
+
+
+def _calc_profit_window(db, tenant_id: int, campaign_id: int, sku: str,
+                        date_from, date_to, margin: float) -> tuple:
+    """算指定日期窗口的利润。
+    返回 (profit_rub, days_with_data)
+    """
+    rr = db.execute(text("""
+        SELECT COUNT(DISTINCT stat_date) AS d,
+               COALESCE(SUM(spend), 0)   AS s,
+               COALESCE(SUM(revenue), 0) AS rv
+        FROM ad_stats
+        WHERE tenant_id=:tid AND campaign_id=:cid
+          AND ad_group_id=:sku
+          AND stat_date BETWEEN :df AND :dt
+    """), {"tid": tenant_id, "cid": campaign_id, "sku": sku,
+           "df": date_from, "dt": date_to}).fetchone()
+    days = int(rr.d or 0)
+    spend = float(rr.s or 0)
+    revenue = float(rr.rv or 0)
+    profit = revenue * margin - spend
+    return profit, days
+
+
+def _save_hill_state(db, tenant_id: int, campaign_id: int, sku: str,
+                     base_bid: float, direction: int, step_size: float):
+    """写 hill 状态到 ad_groups（INSERT OR UPDATE）。"""
+    db.execute(text("""
+        INSERT INTO ad_groups (
+            tenant_id, campaign_id, platform_group_id,
+            hill_base_bid, hill_step_direction, hill_step_size, hill_last_eval_at
+        ) VALUES (
+            :tid, :cid, :sku,
+            :base, :dir, :step, NOW()
+        )
+        ON DUPLICATE KEY UPDATE
+            tenant_id = :tid,
+            hill_base_bid       = :base,
+            hill_step_direction = :dir,
+            hill_step_size      = :step,
+            hill_last_eval_at   = NOW()
+    """), {"tid": tenant_id, "cid": campaign_id, "sku": sku,
+           "base": round(base_bid, 2), "dir": direction, "step": step_size})
+
+
+def _cold_start_direction(sku_stat: dict, breakeven_roas: float) -> tuple:
+    """冷启动决策树（按 §11.5 §14.3）：近期优先，不被整体均值误导。
+    返回 (direction_pct, reason)
+      direction_pct: -0.10 / -0.05 / 0 / +0.10 / +0.15 / +0.20
+    """
+    l5 = sku_stat.get("last5") or _empty_metrics()
+    p5 = sku_stat.get("prev5") or _empty_metrics()
+    overall_roas = sku_stat.get("roas") or 0
+
+    l5_d = int(l5.get("days", 0))
+    p5_d = int(p5.get("days", 0))
+    l5_s = float(l5.get("spend", 0) or 0)
+    l5_roas = float(l5.get("roas", 0) or 0)
+    p5_roas = float(p5.get("roas", 0) or 0)
+
+    # Step 1 数据质量
+    if l5_d < 3 and p5_d < 3:
+        return 0, f"数据不足(l5d={l5_d},p5d={p5_d})持平观察"
+    if l5_d < 3:
+        return -0.05, f"l5不足({l5_d}天)谨慎-5%"
+
+    # Step 2 近期优先（修复核心：忽略 last5 恶化是关键 bug）
+    if l5_s > 10 and breakeven_roas > 0 and l5_roas < breakeven_roas:
+        return -0.10, f"l5亏损(roas={l5_roas:.2f}<be={breakeven_roas:.2f})-10%减耗"
+    if p5_roas > 0:
+        ratio = l5_roas / p5_roas
+        if ratio < 0.5:
+            return -0.05, f"l5/p5={ratio:.2f}跌>50%,-5%"
+        if ratio < 0.8:
+            return 0, f"跌幅20-50%持平观察"
+
+    # Step 3 整体 ROAS 加价
+    if overall_roas >= 5.0:
+        return 0.20, f"ROAS{overall_roas:.2f}≥5x,+20%"
+    if overall_roas >= 3.5:
+        return 0.15, f"ROAS{overall_roas:.2f}≥3.5x,+15%"
+    if overall_roas >= 2.5:
+        return 0.10, f"ROAS{overall_roas:.2f}≥2.5x,+10%"
+    return 0, f"ROAS{overall_roas:.2f}<2.5x持平"
+
+
+def _hill_climbing_decision(db, tenant_id: int, campaign_id: int, sku: str,
+                            current_bid: float, sku_stat: dict,
+                            breakeven_roas: float, margin: float,
+                            time_multiplier: float, day_multiplier: float) -> dict:
+    """方案 E 爬山法主决策。
+
+    Returns: {action, optimal_bid, new_base, reason}
+      action ∈ {"cold_start", "climb", "hold", "skip"}
+      optimal_bid = 应用时段+周末系数后的最终出价（int）
+      new_base = 更新后的 base（已存到 ad_groups）
+    """
+    # ROAS 异常守卫（与 _profit_max_decision Bug2 一致）
+    overall_roas = float(sku_stat.get("roas") or 0)
+    if overall_roas > HILL_ROAS_ANOMALY:
+        return {"action": "skip", "optimal_bid": int(current_bid), "new_base": None,
+                "reason": f"ROAS {overall_roas:.1f}x>{HILL_ROAS_ANOMALY}x 偶然爆单视为样本不足，先观察"}
+
+    # 1. 读 hill 状态
+    row = db.execute(text("""
+        SELECT hill_base_bid, hill_step_direction, hill_step_size
+        FROM ad_groups
+        WHERE tenant_id=:tid AND campaign_id=:cid AND platform_group_id=:sku
+        LIMIT 1
+    """), {"tid": tenant_id, "cid": campaign_id, "sku": sku}).fetchone()
+
+    is_cold_start = (row is None or row.hill_base_bid is None)
+
+    if is_cold_start:
+        direction_pct, reason = _cold_start_direction(sku_stat, breakeven_roas)
+        new_base = max(current_bid * (1 + direction_pct), MIN_BID)
+        new_direction = 1 if direction_pct >= 0 else -1
+        _save_hill_state(db, tenant_id, campaign_id, sku, new_base,
+                         new_direction, 0.20)  # 起步步长固定 20%
+        optimal_bid = int(round(new_base * time_multiplier * day_multiplier))
+        return {"action": "cold_start", "optimal_bid": max(optimal_bid, MIN_BID),
+                "new_base": new_base,
+                "reason": f"冷启动: {reason} → base ₽{current_bid:.0f}→₽{new_base:.0f}（×时段{time_multiplier}×周末{day_multiplier}）"}
+
+    # 2. 滑动评估：过去 3 天 vs 再前 3 天利润
+    today = date.today()
+    p_recent, recent_d = _calc_profit_window(
+        db, tenant_id, campaign_id, sku,
+        today - timedelta(days=3), today - timedelta(days=1), margin)
+    p_prev, prev_d = _calc_profit_window(
+        db, tenant_id, campaign_id, sku,
+        today - timedelta(days=6), today - timedelta(days=4), margin)
+
+    base = float(row.hill_base_bid)
+    direction = int(row.hill_step_direction or 1)
+    step_size = float(row.hill_step_size or 0.20)
+
+    # 数据缺失保护：任一窗口无数据 → hold（base 不动）
+    if recent_d == 0 or prev_d == 0:
+        optimal_bid = int(round(base * time_multiplier * day_multiplier))
+        return {"action": "hold", "optimal_bid": max(optimal_bid, MIN_BID),
+                "new_base": base,
+                "reason": f"数据不足(recent_d={recent_d},prev_d={prev_d})保持base ₽{base:.0f}"}
+
+    profit_diff = p_recent - p_prev
+
+    # 持平阈值（用户拍 ₽20 绝对值）
+    if abs(profit_diff) < HILL_PROFIT_TIE_THRESHOLD:
+        # 全保持上次（方向/步长/base 不动），不更新 last_eval_at
+        optimal_bid = int(round(base * time_multiplier * day_multiplier))
+        return {"action": "hold", "optimal_bid": max(optimal_bid, MIN_BID),
+                "new_base": base,
+                "reason": f"利润持平(差₽{profit_diff:+.0f}<阈值₽{HILL_PROFIT_TIE_THRESHOLD:.0f}) base ₽{base:.0f}不动"}
+
+    # 涨/跌
+    if profit_diff > 0:
+        # 利润涨 → 保持方向，步长不变
+        new_direction = direction
+        new_step_size = step_size
+        change_label = "涨"
+    else:
+        # 利润跌 → 反转方向，步长减半（最低 0.02）
+        new_direction = -direction
+        new_step_size = max(step_size / 2, 0.02)
+        change_label = "跌"
+
+    new_base = max(base * (1 + new_direction * new_step_size), MIN_BID)
+    _save_hill_state(db, tenant_id, campaign_id, sku, new_base,
+                     new_direction, new_step_size)
+    optimal_bid = int(round(new_base * time_multiplier * day_multiplier))
+    return {"action": "climb", "optimal_bid": max(optimal_bid, MIN_BID),
+            "new_base": new_base,
+            "reason": f"利润{change_label}(差₽{profit_diff:+.0f}) 方向{'+1' if new_direction>0 else '-1'} 步长{new_step_size*100:.0f}% base ₽{base:.0f}→₽{new_base:.0f}"}
+
+
 # ==================== A' 偏离保护（14-20天） ====================
 
 def _check_a_prime_protection(sku_stat: dict, shop_avg: dict,
