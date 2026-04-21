@@ -185,6 +185,14 @@ def _profit_max_decision(current_roas: float, breakeven_roas: float,
     if current_roas is None or current_roas < 0:
         return {"action": "skip", "multiplier": 1.0, "reason": "无 ROAS 历史"}
 
+    # Bug 2 修：ROAS 异常高视为样本不足
+    # 真健康商品 ROAS 通常 5-25x，极个别爆款 30-40x
+    # 超 50x 几乎肯定是"1 次点击 + 1 单大订单"的偶然 → 不基于偶然加价烧钱
+    # 正常的健康加价场景（ROAS 5-50x）不受影响
+    if current_roas > 50:
+        return {"action": "skip", "multiplier": 1.0,
+                "reason": f"ROAS {current_roas:.1f}x>50x 视为样本不足（偶然爆单），先观察不动"}
+
     # 数据不足兜底：偏保守
     if data_days < 7:
         if current_roas == 0:
