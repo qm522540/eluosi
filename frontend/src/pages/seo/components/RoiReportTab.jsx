@@ -255,7 +255,7 @@ const RoiReportTab = ({ shopId }) => {
           </Row>
 
           <Paragraph type="secondary" style={{ fontSize: 12 }}>
-            每行一个"标记已用"记录。标题不一致 = 当前平台标题与 AI 生成的不符，可能用户没真改或被后续编辑覆盖。
+            每行一个「标记已用」记录。标题不一致 = 当前平台标题与 AI 生成的不符，可能用户没真改或被后续编辑覆盖。
           </Paragraph>
 
           <Table
