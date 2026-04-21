@@ -657,6 +657,15 @@ const Products = () => {
     ).length
   }, [importPreview, ambiguousChoices])
   const effectiveUpdateCount = (importPreview?.summary?.matched || 0) + chosenAmbiguousCount
+  const sortedImportItems = useMemo(() => {
+    if (!importPreview?.items) return []
+    return [...importPreview.items].sort((a, b) => {
+      const ra = a.status === 'ambiguous' ? 0 : 1
+      const rb = b.status === 'ambiguous' ? 0 : 1
+      if (ra !== rb) return ra - rb
+      return (a.row_no || 0) - (b.row_no || 0)
+    })
+  }, [importPreview?.items])
   const handleImportConfirm = async () => {
     if (!importPreview) return
     const base = importPreview.items.filter(i => i.matched && i.margin_value != null)
@@ -2346,7 +2355,7 @@ const Products = () => {
             <Table
               size="small"
               rowKey="row_no"
-              dataSource={importPreview.items}
+              dataSource={sortedImportItems}
               pagination={{ pageSize: 10, size: 'small' }}
               scroll={{ y: 360 }}
               columns={[
