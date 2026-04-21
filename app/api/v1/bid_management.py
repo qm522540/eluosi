@@ -586,6 +586,11 @@ def get_suggestions(
         ORDER BY c.name, s.platform_sku_id
     """), params).fetchall()
 
+    # WB: platform_sku_id == nm_id == platform_product_id，
+    # 当 listings 表缺该 SKU 时用 platform_sku_id 兜底显示 ID。
+    # Ozon: platform_sku_id 是广告 SKU 非商家货品 ID，不兜底。
+    is_wb = shop.platform == "wb"
+
     groups = {}
     for r in rows:
         cid = r.campaign_id
@@ -599,7 +604,7 @@ def get_suggestions(
         groups[cid]["suggestions"].append({
             "id": r.id,
             "platform_sku_id": r.platform_sku_id,
-            "platform_product_id": r.platform_product_id,
+            "platform_product_id": r.platform_product_id or (r.platform_sku_id if is_wb else None),
             "product_code": r.product_code,
             "sku_name": r.sku_name,
             "current_bid": float(r.current_bid),
@@ -897,12 +902,15 @@ def get_bid_logs(
         LIMIT :limit OFFSET :offset
     """), page_params).fetchall()
 
+    # WB: platform_sku_id == nm_id == platform_product_id 兜底（见 suggestions 同注释）
+    is_wb = shop.platform == "wb"
+
     items = [{
         "id": r.id,
         "campaign_id": r.campaign_id,
         "campaign_name": r.campaign_name,
         "platform_sku_id": r.platform_sku_id,
-        "platform_product_id": r.platform_product_id,
+        "platform_product_id": r.platform_product_id or (r.platform_sku_id if is_wb else None),
         "product_code": r.product_code,
         "sku_name": r.sku_name,
         "old_bid": float(r.old_bid),
