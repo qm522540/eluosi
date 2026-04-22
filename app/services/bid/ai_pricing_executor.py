@@ -45,7 +45,7 @@ from app.config import get_settings
 from app.services.ai.stage_detector import ProductStage, detect_product_stage
 from app.utils.errors import ErrorCode
 from app.utils.logger import setup_logger
-from app.utils.moscow_time import moscow_hour, moscow_today, now_moscow
+from app.utils.moscow_time import moscow_hour, moscow_today, now_moscow, MOSCOW_TZ
 
 logger = setup_logger("bid.ai_pricing_executor")
 settings = get_settings()
@@ -488,18 +488,20 @@ def _hill_climbing_decision(db, tenant_id: int, campaign_id: int, sku: str,
     direction = int(row.hill_step_direction or 1)
     step_size = float(row.hill_step_size or 0.20)
 
-    # 一天 1 次评估护栏（2026-04-22 修：防 Celery 每小时跑 + 用户多点 analyze_now 触发 N 次评估）
-    # 设计假设：base 一天最多动 1 次（凌晨爬山），白天每小时只做时段叠加
+    # 一天 1 次评估护栏（2026-04-22 第 2 版：按莫斯科自然日切换，不按 23h 漂移）
+    # 设计假设：base 一天最多动 1 次，白天每小时只做时段叠加
     # 实证 sku 498605688 在 21h 内被评估 5 次，base 从 ₽33→₽22 + step 从 0.20→0.05
+    # 改用"自然日比较"：莫斯科 0 点过了就触发新评估，时间点固定可预测
     if row.hill_last_eval_at is not None:
-        # _save_hill_state 用 UTC_TIMESTAMP() 写入，这里用 utc naive 比较（MySQL 返回 naive datetime）
-        now_utc_naive = datetime.now(timezone.utc).replace(tzinfo=None)
-        hours_since = (now_utc_naive - row.hill_last_eval_at).total_seconds() / 3600
-        if 0 <= hours_since < HILL_SKIP_REEVAL_HOURS:
+        # hill_last_eval_at 是 UTC naive datetime（由 UTC_TIMESTAMP() 写入）
+        last_eval_utc = row.hill_last_eval_at.replace(tzinfo=timezone.utc)
+        last_eval_moscow_date = last_eval_utc.astimezone(MOSCOW_TZ).date()
+        today_moscow_date = now_moscow().date()
+        if last_eval_moscow_date >= today_moscow_date:
             optimal_bid = int(round(base * time_multiplier * day_multiplier))
             return {"action": "hold_today", "optimal_bid": max(optimal_bid, MIN_BID),
                     "new_base": base,
-                    "reason": (f"今日已评估({hours_since:.1f}h前) base ₽{base:.0f}不动 "
+                    "reason": (f"今日已评估(莫斯科 {last_eval_moscow_date}) base ₽{base:.0f}不动 "
                                f"方向{'+1' if direction>0 else '-1'} 步长{step_size*100:.0f}% "
                                f"→ ×时段{time_multiplier}×周末{day_multiplier} = ₽{optimal_bid}") + recent_seg}
 
