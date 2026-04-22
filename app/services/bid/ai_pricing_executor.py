@@ -275,10 +275,12 @@ def _calc_profit_window(db, tenant_id: int, campaign_id: int, sku: str,
     return profit, days
 
 
-# 噪声日清洗阈值（用户拍 2026-04-22 第 2 版）
-# 只剔大单噪声（ROAS>50），不剔小投入天 —— 长尾 SKU 每天就是 ₽5-10 投入，
-# 一刀切会让所有天都被剔成 0 健康天，反而误判"无数据"
-HEALTHY_DAY_ROAS_MAX = 50.0   # 当天 ROAS>50 视为大单噪声，剔除
+# 噪声日清洗阈值（用户拍 2026-04-22 第 3 版）
+# 只剔"高 ROAS + 极小投入" 双条件天（如花 ₽3 偶然中 1 单 ROAS 397x）
+# 单纯 ROAS 高不算噪声 —— 长尾 SKU 投 ₽7 偶然出 1 单 ROAS 67x 是真转化信号
+# 单纯小投入也不算噪声 —— 长尾 SKU 每天就是 ₽5-10 投入的常态
+HEALTHY_DAY_ROAS_MAX    = 50.0  # ROAS 异常高阈值
+HEALTHY_DAY_SPEND_NOISE = 5.0   # 投入极小阈值；ROAS>50 且 spend<5 才视为噪声
 
 
 def _calc_healthy_window_metrics(db, tenant_id: int, campaign_id: int, sku: str,
@@ -305,8 +307,9 @@ def _calc_healthy_window_metrics(db, tenant_id: int, campaign_id: int, sku: str,
         spend = float(r.spend or 0)
         rev   = float(r.rev or 0)
         roas  = rev / spend if spend > 0 else 0
-        # 只剔 ROAS>50 大单噪声；spend 量级不限（兼容长尾 SKU 每天 ₽5-10 的常态）
-        if roas <= HEALTHY_DAY_ROAS_MAX and spend > 0:
+        # 噪声 = ROAS>50 AND spend<5（极小投入偶然爆单）；其他都保留
+        is_noise = (roas > HEALTHY_DAY_ROAS_MAX and spend < HEALTHY_DAY_SPEND_NOISE)
+        if spend > 0 and not is_noise:
             healthy.append({"spend": spend, "rev": rev})
 
     target = healthy[skip_n : skip_n + recent_n]
@@ -341,8 +344,9 @@ def _calc_healthy_window_full(db, tenant_id: int, campaign_id: int, sku: str,
         spend = float(r.spend or 0)
         rev   = float(r.rev or 0)
         roas  = rev / spend if spend > 0 else 0
-        # 只剔 ROAS>50 大单噪声；spend 量级不限（兼容长尾 SKU 每天 ₽5-10 的常态）
-        if roas <= HEALTHY_DAY_ROAS_MAX and spend > 0:
+        # 噪声 = ROAS>50 AND spend<5（极小投入偶然爆单）；其他都保留
+        is_noise = (roas > HEALTHY_DAY_ROAS_MAX and spend < HEALTHY_DAY_SPEND_NOISE)
+        if spend > 0 and not is_noise:
             healthy.append({
                 "spend": spend, "rev": rev,
                 "imp": int(r.imp or 0), "clk": int(r.clk or 0), "ord": int(r.ord or 0),
@@ -1778,8 +1782,9 @@ def _get_roas_21_30(db, campaign_id: int, sku: str,
         spend = float(r.spend or 0)
         rev   = float(r.rev or 0)
         roas  = rev / spend if spend > 0 else 0
-        # 只剔 ROAS>50 大单噪声；spend 量级不限（兼容长尾 SKU 每天 ₽5-10 的常态）
-        if roas <= HEALTHY_DAY_ROAS_MAX and spend > 0:
+        # 噪声 = ROAS>50 AND spend<5（极小投入偶然爆单）；其他都保留
+        is_noise = (roas > HEALTHY_DAY_ROAS_MAX and spend < HEALTHY_DAY_SPEND_NOISE)
+        if spend > 0 and not is_noise:
             healthy.append({"spend": spend, "rev": rev})
             if len(healthy) >= 9:
                 break
