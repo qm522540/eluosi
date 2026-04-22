@@ -1297,8 +1297,9 @@ async def _analyze_now_inner(db, tenant_id: int, shop_id: int,
                     else:
                         # 写建议列表（无论 auto_remove/auto_execute/is_ignored 设置）
                         # 补 CTR/CR (28天) + [recent5d:...] 段，让前端 buildStageTip 能 parse 出多行 Tooltip
-                        ctr_28 = float(sku_stat.get("ctr", 0) or 0) * 100
-                        cr_28  = float(sku_stat.get("cr", 0)  or 0) * 100
+                        # 注意：sku_stat['ctr']/['cr'] 已是百分比值（_calc_metrics line 813 已 ×100），不要再 ×100
+                        ctr_28 = float(sku_stat.get("ctr", 0) or 0)
+                        cr_28  = float(sku_stat.get("cr", 0)  or 0)
                         rw = _calc_healthy_window_full(
                             db, tenant_id, camp.id, sku, 5, 0)
                         if rw["impressions"] > 0:

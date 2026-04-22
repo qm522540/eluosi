@@ -104,7 +104,7 @@ function buildStageTip(stage, record, baseCfg) {
       const be = parseFloat(mD[2])
       lines.push(<div key="dh" style={{ marginTop: 6, color: '#bfbfbf', fontSize: 11 }}>━ 触发删除条件 ━</div>)
       lines.push(<div key="dr" style={{ paddingLeft: 4 }}>21-30 天前 ROAS <span style={{ color: '#ff4d4f', fontWeight: 600 }}>{roas2130.toFixed(2)}x</span> &lt; 保本 {be.toFixed(2)}x</div>)
-      lines.push(<div key="dl" style={{ paddingLeft: 4, color: '#999', fontSize: 11 }}>（连续亏损 ≥ 9 个健康天）</div>)
+      lines.push(<div key="dl" style={{ paddingLeft: 4, color: '#999', fontSize: 11 }}>（取 21-30 天前 9 个健康天的合并 ROAS）</div>)
       lines.push(<div key="da" style={{ marginTop: 6, color: '#cf1322', fontWeight: 600 }}>建议：从活动中移除该 SKU</div>)
     }
   }
