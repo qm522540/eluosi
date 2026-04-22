@@ -1,9 +1,9 @@
 import { useState, useEffect, useCallback } from 'react'
 import {
   Card, Table, Space, Segmented, Input, InputNumber, Button, Tag,
-  Drawer, Empty, Alert, Typography, Image, message, Select,
+  Empty, Alert, Typography, Image, message, Select, Rate, Tooltip,
 } from 'antd'
-import { ReloadOutlined, SearchOutlined } from '@ant-design/icons'
+import { ReloadOutlined, SearchOutlined, DownOutlined, RightOutlined } from '@ant-design/icons'
 import { getKeywordRollup, getKeywordRollupProducts } from '@/api/seo'
 
 const { Text } = Typography
@@ -13,9 +13,13 @@ const KeywordRollupTab = ({ shops = [], shopId, onShopChange, onJumpToProduct })
   const [sort, setSort] = useState('revenue_desc')
   const [keyword, setKeyword] = useState('')
   const [minOrders, setMinOrders] = useState(0)
+  const [onlyWithOrders, setOnlyWithOrders] = useState(false)
   const [data, setData] = useState(null)
   const [loading, setLoading] = useState(false)
-  const [drawer, setDrawer] = useState({ open: false, keyword: '', items: [], loading: false })
+
+  // 展开行 state: { [keyword]: { loading, items } }
+  const [expanded, setExpanded] = useState({})
+  const [expandedKeys, setExpandedKeys] = useState([])
 
   const fetchData = useCallback(async () => {
     if (!shopId) return
@@ -23,60 +27,72 @@ const KeywordRollupTab = ({ shops = [], shopId, onShopChange, onJumpToProduct })
     try {
       const res = await getKeywordRollup(shopId, {
         days, sort, keyword: keyword.trim(),
-        min_orders: minOrders, limit: 200,
+        min_orders: onlyWithOrders ? Math.max(1, minOrders) : minOrders,
+        limit: 200,
       })
-      if (res.code === 0) setData(res.data)
-      else message.error(res.msg || '拉取失败')
+      if (res.code === 0) {
+        setData(res.data)
+        // 拉新数据时清空已展开 cache，避免看到陈旧数据
+        setExpanded({})
+        setExpandedKeys([])
+      } else {
+        message.error(res.msg || '拉取失败')
+      }
     } catch (e) {
       message.error(e?.response?.data?.msg || '网络错误')
     } finally {
       setLoading(false)
     }
-  }, [shopId, days, sort, keyword, minOrders])
+  }, [shopId, days, sort, keyword, minOrders, onlyWithOrders])
 
   useEffect(() => { fetchData() }, [fetchData])
 
-  const handleDrillDown = async (row) => {
-    setDrawer({ open: true, keyword: row.keyword, items: [], loading: true })
+  const loadProducts = async (kw) => {
+    setExpanded(prev => ({ ...prev, [kw]: { loading: true, items: [] } }))
     try {
-      const res = await getKeywordRollupProducts(shopId, {
-        keyword: row.keyword, days, limit: 50,
-      })
+      const res = await getKeywordRollupProducts(shopId, { keyword: kw, days, limit: 50 })
       if (res.code === 0) {
-        setDrawer({ open: true, keyword: row.keyword, items: res.data?.items || [], loading: false })
+        setExpanded(prev => ({ ...prev, [kw]: { loading: false, items: res.data?.items || [] } }))
       } else {
         message.error(res.msg || '下钻失败')
-        setDrawer(prev => ({ ...prev, loading: false }))
+        setExpanded(prev => ({ ...prev, [kw]: { loading: false, items: [] } }))
       }
     } catch (e) {
       message.error(e?.response?.data?.msg || '网络错误')
-      setDrawer(prev => ({ ...prev, loading: false }))
+      setExpanded(prev => ({ ...prev, [kw]: { loading: false, items: [] } }))
+    }
+  }
+
+  const handleExpand = (expandedRow, record) => {
+    const kw = record.keyword
+    if (expandedRow) {
+      setExpandedKeys(prev => [...prev, kw])
+      if (!expanded[kw]) loadProducts(kw)
+    } else {
+      setExpandedKeys(prev => prev.filter(k => k !== kw))
     }
   }
 
   const summary = data?.summary
 
-  const columns = [
+  const mainColumns = [
     {
       title: '关键词', dataIndex: 'keyword', key: 'keyword',
-      render: (v) => <Text strong>{v}</Text>,
+      render: (v) => <Text strong style={{ fontSize: 13 }}>{v}</Text>,
     },
     {
       title: (
-        <span>
-          真实贡献
-          <Text type="secondary" style={{ fontSize: 11, marginLeft: 4 }}>
-            / 推荐覆盖
-          </Text>
-        </span>
+        <Tooltip title="蓝=真给这么多商品带过搜索流量/订单；橙=「按商品看」把这词推荐加进的商品数（含类目扩散推断，未必真带过流量）">
+          真实贡献 <Text type="secondary" style={{ fontSize: 11 }}>/ 推荐覆盖</Text>
+        </Tooltip>
       ),
-      key: 'coverage', align: 'center', width: 130,
+      key: 'coverage', align: 'center', width: 140,
       render: (_, r) => (
         <Space size={2}>
           <Tag color="blue" style={{ margin: 0, fontSize: 12 }}>
             {r.product_count} 商品
           </Tag>
-          <Text type="secondary">/</Text>
+          <Text type="secondary" style={{ fontSize: 11 }}>/</Text>
           <Tag
             color={r.candidate_row_count > r.product_count ? 'orange' : 'default'}
             style={{ margin: 0, fontSize: 12 }}
@@ -87,13 +103,10 @@ const KeywordRollupTab = ({ shops = [], shopId, onShopChange, onJumpToProduct })
       ),
     },
     {
-      title: '曝光', dataIndex: 'impressions', align: 'right', width: 100,
+      title: '曝光', dataIndex: 'impressions', align: 'right', width: 90,
       render: v => (v || 0).toLocaleString(),
     },
-    {
-      title: '加购', dataIndex: 'add_to_cart', align: 'right', width: 80,
-      render: v => (v || 0).toLocaleString(),
-    },
+    { title: '加购', dataIndex: 'add_to_cart', align: 'right', width: 70 },
     {
       title: '订单', dataIndex: 'orders', align: 'right', width: 80,
       render: v => v > 0 ? <Text strong style={{ color: '#52c41a' }}>{v}</Text> : (v || 0),
@@ -102,75 +115,107 @@ const KeywordRollupTab = ({ shops = [], shopId, onShopChange, onJumpToProduct })
       title: '收入', dataIndex: 'revenue', align: 'right', width: 110,
       render: v => `¥${Number(v || 0).toFixed(2)}`,
     },
-    {
-      title: '操作', key: 'action', align: 'center', fixed: 'right', width: 130,
-      render: (_, r) => (
-        <Button size="small" type="link" onClick={() => handleDrillDown(r)}>
-          看落到哪些商品
-        </Button>
-      ),
-    },
   ]
 
-  const drillColumns = [
-    {
-      title: '商品', key: 'product',
-      render: (_, r) => (
-        <Space>
-          {r.image_url && (
-            <Image
-              src={r.image_url}
-              width={44} height={44}
-              style={{ borderRadius: 4, objectFit: 'cover' }}
-              preview={false}
-              fallback="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='44' height='44'%3E%3Crect fill='%23eee' width='44' height='44'/%3E%3C/svg%3E"
-            />
-          )}
-          <Space direction="vertical" size={0}>
-            <Text style={{ fontSize: 13, maxWidth: 320 }} ellipsis={{ tooltip: r.title }}>
-              {r.title || '(无标题)'}
-            </Text>
-            <Text type="secondary" style={{ fontSize: 11 }}>
-              SKU {r.platform_sku_id || r.product_id}
-            </Text>
+  const renderExpanded = (record) => {
+    const kw = record.keyword
+    const state = expanded[kw]
+    if (!state) return null
+
+    const subColumns = [
+      {
+        title: '商品', key: 'product',
+        render: (_, r) => (
+          <Space>
+            {r.image_url && (
+              <Image
+                src={r.image_url}
+                width={40} height={40}
+                style={{ borderRadius: 4, objectFit: 'cover' }}
+                preview={false}
+                fallback="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='40' height='40'%3E%3Crect fill='%23eee' width='40' height='40'/%3E%3C/svg%3E"
+              />
+            )}
+            <Space direction="vertical" size={0}>
+              <Text style={{ fontSize: 12, maxWidth: 360 }} ellipsis={{ tooltip: r.title }}>
+                {r.title || '(无标题)'}
+              </Text>
+              <Text type="secondary" style={{ fontSize: 11 }}>
+                SKU {r.platform_sku_id || r.product_id}
+              </Text>
+            </Space>
           </Space>
-        </Space>
-      ),
-    },
-    {
-      title: '曝光', dataIndex: 'impressions', align: 'right', width: 90,
-      render: v => (v || 0).toLocaleString(),
-    },
-    { title: '加购', dataIndex: 'add_to_cart', align: 'right', width: 70 },
-    {
-      title: '订单', dataIndex: 'orders', align: 'right', width: 70,
-      render: v => v > 0 ? <Text strong style={{ color: '#52c41a' }}>{v}</Text> : (v || 0),
-    },
-    {
-      title: '收入', dataIndex: 'revenue', align: 'right', width: 100,
-      render: v => `¥${Number(v || 0).toFixed(2)}`,
-    },
-    {
-      title: '操作', key: 'action', width: 110, align: 'center',
-      render: (_, r) => (
-        <Button
-          size="small" type="link"
-          onClick={() => onJumpToProduct && onJumpToProduct({
-            productId: r.product_id, keyword: drawer.keyword,
-          })}
-        >
-          去加进标题
-        </Button>
-      ),
-    },
-  ]
+        ),
+      },
+      {
+        title: '评分', key: 'rating', width: 130, align: 'center',
+        render: (_, r) => {
+          if (r.rating == null) return <Text type="secondary" style={{ fontSize: 11 }}>-</Text>
+          return (
+            <Space direction="vertical" size={0} style={{ lineHeight: 1.2 }}>
+              <Space size={4}>
+                <Rate disabled value={r.rating} allowHalf style={{ fontSize: 11 }} />
+                <Text strong style={{ fontSize: 11 }}>{Number(r.rating).toFixed(1)}</Text>
+              </Space>
+              <Text type="secondary" style={{ fontSize: 10 }}>
+                {r.review_count || 0} 条评价
+              </Text>
+            </Space>
+          )
+        },
+      },
+      {
+        title: '曝光', dataIndex: 'impressions', align: 'right', width: 80,
+        render: v => (v || 0).toLocaleString(),
+      },
+      { title: '加购', dataIndex: 'add_to_cart', align: 'right', width: 60 },
+      {
+        title: '订单', dataIndex: 'orders', align: 'right', width: 70,
+        render: v => v > 0 ? <Text strong style={{ color: '#52c41a' }}>{v}</Text> : (v || 0),
+      },
+      {
+        title: '收入', dataIndex: 'revenue', align: 'right', width: 100,
+        render: v => `¥${Number(v || 0).toFixed(2)}`,
+      },
+      {
+        title: '操作', key: 'action', width: 110, align: 'center',
+        render: (_, r) => (
+          <Button
+            size="small" type="link"
+            onClick={() => onJumpToProduct && onJumpToProduct({
+              productId: r.product_id, keyword: kw,
+            })}
+          >
+            加进标题
+          </Button>
+        ),
+      },
+    ]
+
+    return (
+      <div style={{ padding: '8px 16px', background: '#fafafa' }}>
+        <Text type="secondary" style={{ fontSize: 12, marginBottom: 8, display: 'block' }}>
+          「<Text code>{kw}</Text>」真实落在以下商品（按收入降序）：
+        </Text>
+        <Table
+          rowKey="product_id"
+          columns={subColumns}
+          dataSource={state.items}
+          loading={state.loading}
+          size="small"
+          pagination={false}
+          locale={{ emptyText: <Empty description="该词暂无商品分项" image={Empty.PRESENTED_IMAGE_SIMPLE} /> }}
+        />
+      </div>
+    )
+  }
 
   return (
     <Card>
       <Alert
         type="info" showIcon
         style={{ marginBottom: 12 }}
-        message="店级关键词 TOP —— 每行 = 一个关键词的真实店级贡献"
+        message="店级关键词 TOP —— 每行 = 一个关键词，点 ▶ 层叠展开看落到哪些商品"
         description={(
           <div>
             <div style={{ marginTop: 4 }}>
@@ -183,13 +228,9 @@ const KeywordRollupTab = ({ shops = [], shopId, onShopChange, onJumpToProduct })
               </li>
               <li>
                 <Tag color="orange" style={{ marginRight: 4 }}>橙</Tag>
-                <strong>推荐覆盖商品数</strong>：「按商品看」Tab 把这词推荐加进多少个商品的标题（含「类目扩散」机制，给没带过流量的同类目商品也推荐这词）
+                <strong>推荐覆盖商品数</strong>：「按商品看」Tab 把这词推荐加进多少个商品的标题（含「类目扩散」机制，给没带过流量的同类目商品也推荐）
               </li>
             </ul>
-            <div style={{ marginTop: 6, color: '#c41d7f', fontSize: 12, fontWeight: 600 }}>
-              举例：серьги треугольные 真实贡献 2 商品 / 推荐覆盖 40 商品 ——
-              真给 2 单的订单来自这 2 个商品；另外 38 个商品是系统建议加这词进去「试水」，还没真产生过流量。
-            </div>
             <div style={{ marginTop: 4, color: '#888', fontSize: 12 }}>
               数据来自平台自然搜索（organic 源）。WB 需 Jam 订阅 / Ozon 需 Premium 订阅。
             </div>
@@ -236,13 +277,24 @@ const KeywordRollupTab = ({ shops = [], shopId, onShopChange, onJumpToProduct })
           onPressEnter={fetchData}
           style={{ width: 180 }}
         />
-        <Text type="secondary">订单 ≥</Text>
-        <InputNumber
-          min={0} max={1000}
-          value={minOrders}
-          onChange={v => setMinOrders(v || 0)}
-          style={{ width: 76 }}
-        />
+        <Button
+          size="small"
+          type={onlyWithOrders ? 'primary' : 'default'}
+          onClick={() => setOnlyWithOrders(v => !v)}
+        >
+          仅带订单 {onlyWithOrders ? '✓' : ''}
+        </Button>
+        {!onlyWithOrders && (
+          <>
+            <Text type="secondary">订单 ≥</Text>
+            <InputNumber
+              min={0} max={1000}
+              value={minOrders}
+              onChange={v => setMinOrders(v || 0)}
+              style={{ width: 76 }}
+            />
+          </>
+        )}
         <Button icon={<ReloadOutlined />} onClick={fetchData}>刷新</Button>
       </Space>
 
@@ -274,11 +326,20 @@ const KeywordRollupTab = ({ shops = [], shopId, onShopChange, onJumpToProduct })
 
           <Table
             rowKey="keyword"
-            columns={columns}
+            columns={mainColumns}
             dataSource={data?.items || []}
             loading={loading}
             size="small"
-            scroll={{ x: 'max-content' }}
+            expandable={{
+              expandedRowKeys: expandedKeys,
+              onExpand: handleExpand,
+              expandedRowRender: renderExpanded,
+              expandIcon: ({ expanded: isExpanded, onExpand, record }) => (
+                isExpanded
+                  ? <DownOutlined onClick={e => onExpand(record, e)} style={{ cursor: 'pointer' }} />
+                  : <RightOutlined onClick={e => onExpand(record, e)} style={{ cursor: 'pointer' }} />
+              ),
+            }}
             pagination={{
               pageSize: 20, showSizeChanger: true,
               pageSizeOptions: [20, 50, 100],
@@ -288,39 +349,6 @@ const KeywordRollupTab = ({ shops = [], shopId, onShopChange, onJumpToProduct })
           />
         </>
       )}
-
-      <Drawer
-        open={drawer.open}
-        onClose={() => setDrawer({ open: false, keyword: '', items: [], loading: false })}
-        title={(
-          <span>
-            关键词「<Text code>{drawer.keyword}</Text>」落到哪些商品
-          </span>
-        )}
-        width={820}
-      >
-        <Alert
-          type="info" showIcon
-          style={{ marginBottom: 12 }}
-          message={(
-            <span>
-              近 {days} 天该词<strong>真实落在 {drawer.items.length} 个商品</strong>上（按收入降序）。
-              <Text type="secondary" style={{ marginLeft: 6, fontSize: 12 }}>
-                其他商品若在「按商品看」出现但这里不在，说明是类目推断推荐、还没真产生过搜索流量。
-              </Text>
-            </span>
-          )}
-        />
-        <Table
-          rowKey="product_id"
-          columns={drillColumns}
-          dataSource={drawer.items}
-          loading={drawer.loading}
-          size="small"
-          pagination={false}
-          locale={{ emptyText: <Empty description="该词暂无分商品数据" /> }}
-        />
-      </Drawer>
     </Card>
   )
 }

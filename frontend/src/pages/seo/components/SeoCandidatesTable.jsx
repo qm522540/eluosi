@@ -133,19 +133,21 @@ const SeoCandidatesTable = ({
         if (!hasSelf && hasCategory) {
           return (
             <Tooltip
-              overlayStyle={{ maxWidth: 320 }}
+              overlayStyle={{ maxWidth: 340 }}
               title={(
                 <div style={{ lineHeight: 1.6 }}>
-                  <div><strong>类目推断推荐：</strong></div>
-                  <div>同类目别的商品用这词成交过，所以推荐给本商品也加进标题试试。</div>
-                  <div style={{ color: '#ffd591', marginTop: 4 }}>
-                    <strong>本商品尚未真实触发该词</strong>——订单/曝光是 0，不继承源词数字。
+                  <div><strong>暂无搜索实证</strong></div>
+                  <div style={{ marginTop: 4 }}>
+                    本商品还没被任何用户用这个词搜到过（曝光 / 订单 = 0）。
+                  </div>
+                  <div style={{ marginTop: 4, color: '#ffd591' }}>
+                    但同类目别的商品用这词带过成交，系统推荐：把这词加进本商品标题试试水。
                   </div>
                 </div>
               )}
             >
               <Tag color="default" style={{ fontSize: 11, cursor: 'help' }}>
-                类目推断 · 待试水
+                暂无实证 · 系统推荐
               </Tag>
             </Tooltip>
           )
