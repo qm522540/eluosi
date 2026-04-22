@@ -183,12 +183,12 @@ const KeywordRollupTab = ({ shops = [], shopId, onShopChange, onJumpToProduct })
               </li>
               <li>
                 <Tag color="orange" style={{ marginRight: 4 }}>橙</Tag>
-                <strong>推荐覆盖商品数</strong>：「按商品看」Tab 把这词推荐加进多少个商品的标题（含"类目扩散"机制，给没带过流量的同类目商品也推荐这词）
+                <strong>推荐覆盖商品数</strong>：「按商品看」Tab 把这词推荐加进多少个商品的标题（含「类目扩散」机制，给没带过流量的同类目商品也推荐这词）
               </li>
             </ul>
             <div style={{ marginTop: 6, color: '#c41d7f', fontSize: 12, fontWeight: 600 }}>
               举例：серьги треугольные 真实贡献 2 商品 / 推荐覆盖 40 商品 ——
-              真给 2 单的订单来自这 2 个商品；另外 38 个商品是系统建议加这词进去"试水"，还没真产生过流量。
+              真给 2 单的订单来自这 2 个商品；另外 38 个商品是系统建议加这词进去「试水」，还没真产生过流量。
             </div>
             <div style={{ marginTop: 4, color: '#888', fontSize: 12 }}>
               数据来自平台自然搜索（organic 源）。WB 需 Jam 订阅 / Ozon 需 Premium 订阅。
