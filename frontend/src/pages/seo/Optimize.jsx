@@ -12,6 +12,7 @@ import SeoCandidatesTable from './components/SeoCandidatesTable'
 import AiTitleModal from './components/AiTitleModal'
 import ChampionKeywordsCard from './components/ChampionKeywordsCard'
 import KeywordRollupTab from './components/KeywordRollupTab'
+import CandidatesRollupTable from './components/CandidatesRollupTable'
 
 const { Title, Text } = Typography
 
@@ -270,84 +271,102 @@ const Optimize = () => {
       />
 
       <Card>
-        <SeoFilterBar
-          shops={shops}
-          shopId={shopId}
-          onShopChange={(v) => { setShopId(v); setPage(1); setSelectedKeys([]) }}
-          days={days}
-          onDaysChange={setDays}
-          roasThreshold={roasThreshold}
-          onRoasChange={(v) => setRoasThreshold(v || 2.0)}
-          source={source}
-          onSourceChange={(v) => { setSource(v); setPage(1) }}
-          status={status}
-          onStatusChange={(v) => { setStatus(v); setPage(1) }}
-          keyword={keyword}
-          onKeywordChange={setKeyword}
-          onRefresh={handleRefresh}
-          refreshing={refreshing}
-          onReload={() => { setPage(1); fetchCandidates() }}
-          hideCovered={hideCovered}
-          onHideCoveredChange={(v) => { setHideCovered(v); setPage(1) }}
-        />
+        {productFilter ? (
+          // 单商品候选模式：扁平 (商品 × 关键词)，保留多选 AI 标题闭环
+          <>
+            <SeoFilterBar
+              shops={shops}
+              shopId={shopId}
+              onShopChange={(v) => { setShopId(v); setPage(1); setSelectedKeys([]) }}
+              days={days}
+              onDaysChange={setDays}
+              roasThreshold={roasThreshold}
+              onRoasChange={(v) => setRoasThreshold(v || 2.0)}
+              source={source}
+              onSourceChange={(v) => { setSource(v); setPage(1) }}
+              status={status}
+              onStatusChange={(v) => { setStatus(v); setPage(1) }}
+              keyword={keyword}
+              onKeywordChange={setKeyword}
+              onRefresh={handleRefresh}
+              refreshing={refreshing}
+              onReload={() => { setPage(1); fetchCandidates() }}
+              hideCovered={hideCovered}
+              onHideCoveredChange={(v) => { setHideCovered(v); setPage(1) }}
+            />
 
-        <SeoStatsCards
-          totals={data?.totals}
-          currentSource={source}
-          onSelectWithOrders={(v) => { setSource(v); setPage(1); setSelectedKeys([]) }}
-        />
+            <SeoStatsCards
+              totals={data?.totals}
+              currentSource={source}
+              onSelectWithOrders={(v) => { setSource(v); setPage(1); setSelectedKeys([]) }}
+            />
 
-        {selectedKeys.length > 0 && (
-          <div style={{
-            padding: '8px 12px',
-            marginBottom: 12,
-            background: '#fffbe6',
-            border: '1px solid #ffe58f',
-            borderRadius: 4,
-          }}>
-            <Space>
-              <Text>已选 <strong>{selectedKeys.length}</strong> 个候选词</Text>
-              <Button
-                size="small"
-                type="primary"
-                icon={<RobotOutlined />}
-                onClick={handleOpenAiTitle}
-              >
-                AI 生成标题
-              </Button>
-              <Button size="small" danger onClick={() => handleIgnore(selectedKeys)}>批量忽略</Button>
-              <Button size="small" onClick={() => setSelectedKeys([])}>清空</Button>
-            </Space>
-          </div>
-        )}
-
-        {noEmpty && !loading && (
-          <Alert
-            type="warning"
-            showIcon
-            style={{ marginBottom: 12 }}
-            message="当前店铺暂无候选词。可能原因："
-            description={(
-              <ul style={{ paddingLeft: 20, marginBottom: 0 }}>
-                <li>引擎还未跑过 —— 点右上「刷新引擎」扫描近 {days} 天付费数据</li>
-                <li>没有达到 ROAS ≥ {roasThreshold} 且订单 ≥ 1 的付费词 —— 可调低 ROAS 阈值</li>
-                <li>所有高 ROAS 词标题/属性均已覆盖 —— 这也是好事</li>
-              </ul>
+            {selectedKeys.length > 0 && (
+              <div style={{
+                padding: '8px 12px',
+                marginBottom: 12,
+                background: '#fffbe6',
+                border: '1px solid #ffe58f',
+                borderRadius: 4,
+              }}>
+                <Space>
+                  <Text>已选 <strong>{selectedKeys.length}</strong> 个候选词</Text>
+                  <Button
+                    size="small"
+                    type="primary"
+                    icon={<RobotOutlined />}
+                    onClick={handleOpenAiTitle}
+                  >
+                    AI 生成标题
+                  </Button>
+                  <Button size="small" danger onClick={() => handleIgnore(selectedKeys)}>批量忽略</Button>
+                  <Button size="small" onClick={() => setSelectedKeys([])}>清空</Button>
+                </Space>
+              </div>
             )}
+
+            {noEmpty && !loading && (
+              <Alert
+                type="warning"
+                showIcon
+                style={{ marginBottom: 12 }}
+                message="当前商品暂无候选词。可能原因："
+                description={(
+                  <ul style={{ paddingLeft: 20, marginBottom: 0 }}>
+                    <li>引擎还未跑过 —— 点右上「刷新引擎」扫描近 {days} 天数据</li>
+                    <li>所有高 ROAS 词该商品标题/属性均已覆盖 —— 这也是好事</li>
+                  </ul>
+                )}
+              />
+            )}
+
+            <SeoCandidatesTable
+              data={data?.items}
+              loading={loading}
+              selectedKeys={selectedKeys}
+              onSelectChange={setSelectedKeys}
+              onAdopt={handleAdopt}
+              onIgnore={handleIgnore}
+              pagination={pagination}
+              onPaginationChange={onPaginationChange}
+              platform={shops.find(s => s.id === shopId)?.platform}
+            />
+          </>
+        ) : (
+          // 关键词聚合模式：每行一个词 + 点 ▶ 展开看推荐商品
+          <CandidatesRollupTable
+            shopId={shopId}
+            onAdoptProduct={(productId, kw) => {
+              setProductFilter(productId)
+              setKeyword(kw)
+              setSource('all')
+              setStatus('pending')
+              setPage(1)
+              setSelectedKeys([])
+              message.info('已锁定此商品，可勾选多个词 → AI 生成标题')
+            }}
           />
         )}
-
-        <SeoCandidatesTable
-          data={data?.items}
-          loading={loading}
-          selectedKeys={selectedKeys}
-          onSelectChange={setSelectedKeys}
-          onAdopt={handleAdopt}
-          onIgnore={handleIgnore}
-          pagination={pagination}
-          onPaginationChange={onPaginationChange}
-          platform={shops.find(s => s.id === shopId)?.platform}
-        />
       </Card>
 
       <AiTitleModal

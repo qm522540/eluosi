@@ -8,6 +8,7 @@
 合规：规则 1 tenant_id / 规则 4 shop_id 全带；规则 2 用 timezone-aware datetime
 """
 
+import json
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import bindparam, text
@@ -19,6 +20,12 @@ _NOT_READY_HINT = {
     "ozon":   "Ozon 数据来源 POST /v1/analytics/product-queries/details，需 Premium 订阅；凌晨 02:30 自动同步。",
     "yandex": "Yandex Market 暂不支持商品级搜索词洞察。",
 }
+
+# 判断候选行是否来自 self scope 的 SQL 片段（self 才有真数据，category 继承的数字是假的）
+_HAS_SELF_CLAUSE = """(
+    JSON_CONTAINS(c.sources, JSON_OBJECT('type','organic','scope','self'))
+ OR JSON_CONTAINS(c.sources, JSON_OBJECT('type','paid','scope','self'))
+)"""
 
 
 def _since_date(days: int) -> str:
@@ -233,4 +240,197 @@ def list_rollup_products(
             "total":   len(items),
             "days":    days,
         },
+    }
+
+
+# =============================================================================
+# 按商品看 Tab 的关键词聚合视图（走 seo_keyword_candidates 候选池表）
+# 与 compute_keyword_rollup (走 product_search_queries) 的区别：
+# - rollup：真实自然搜索原始数据（最直接）
+# - candidates_rollup：引擎加工后的候选池（含付费+自然+类目扩散推断+反哺评分）
+# 口径：两者都只对 sources 含 self 的行 SUM，避免继承数字被重复求和
+# =============================================================================
+
+
+def compute_candidates_rollup(
+    db: Session,
+    tenant_id: int,
+    shop,
+    *,
+    source: str = "all",
+    status: str = "pending",
+    keyword: str = "",
+    hide_covered: bool = True,
+    sort: str = "score_desc",
+    limit: int = 200,
+) -> dict:
+    """按商品看 Tab 的关键词聚合主视图
+
+    聚合维度：LOWER(keyword)；对 self scope 的行 SUM 真数据，非 self 只算推荐覆盖。
+    """
+    filters = [
+        "c.tenant_id = :tid", "c.shop_id = :sid",
+        "c.status = :status",
+    ]
+    params = {"tid": tenant_id, "sid": shop.id, "status": status, "lim": limit}
+
+    if keyword and keyword.strip():
+        filters.append("LOWER(c.keyword) LIKE :kw")
+        params["kw"] = f"%{keyword.strip().lower()}%"
+
+    # hide_covered: 过滤掉"已在标题或属性里"的候选（无改进空间）
+    if hide_covered:
+        filters.append("(c.in_title = 0 AND c.in_attrs = 0)")
+
+    # source filter: all / paid_self / paid_category / organic_self / organic_category / with_orders
+    if source == "paid_self":
+        filters.append("JSON_CONTAINS(c.sources, JSON_OBJECT('type','paid','scope','self'))")
+    elif source == "paid_category":
+        filters.append("JSON_CONTAINS(c.sources, JSON_OBJECT('type','paid','scope','category'))")
+    elif source == "organic_self":
+        filters.append("JSON_CONTAINS(c.sources, JSON_OBJECT('type','organic','scope','self'))")
+    elif source == "organic_category":
+        filters.append("JSON_CONTAINS(c.sources, JSON_OBJECT('type','organic','scope','category'))")
+    elif source == "with_orders":
+        filters.append(f"({_HAS_SELF_CLAUSE} AND (COALESCE(c.paid_orders,0) + COALESCE(c.organic_orders,0)) > 0)")
+
+    where_clause = " AND ".join(filters)
+
+    sort_map = {
+        "score_desc":   "max_score DESC, total_orders DESC",
+        "orders_desc":  "total_orders DESC, max_score DESC",
+        "impr_desc":    "total_impr DESC",
+        "products_desc":"product_count DESC, total_orders DESC",
+    }
+    order_by = sort_map.get(sort, sort_map["score_desc"])
+
+    sql = text(f"""
+        SELECT c.keyword,
+               COUNT(DISTINCT c.product_id) AS product_count,
+               COUNT(DISTINCT CASE WHEN {_HAS_SELF_CLAUSE} THEN c.product_id END) AS self_product_count,
+               SUM(CASE WHEN {_HAS_SELF_CLAUSE}
+                        THEN COALESCE(c.paid_orders,0) + COALESCE(c.organic_orders,0) ELSE 0 END) AS total_orders,
+               SUM(CASE WHEN {_HAS_SELF_CLAUSE}
+                        THEN COALESCE(c.organic_impressions,0) ELSE 0 END) AS total_impr,
+               SUM(CASE WHEN {_HAS_SELF_CLAUSE}
+                        THEN COALESCE(c.organic_add_to_cart,0) ELSE 0 END) AS total_cart,
+               ROUND(MAX(c.score), 1) AS max_score,
+               MAX(CASE WHEN JSON_CONTAINS(c.sources, JSON_OBJECT('type','paid','scope','self'))
+                         OR JSON_CONTAINS(c.sources, JSON_OBJECT('type','paid','scope','category'))
+                        THEN 1 ELSE 0 END) AS has_paid,
+               MAX(CASE WHEN JSON_CONTAINS(c.sources, JSON_OBJECT('type','organic','scope','self'))
+                         OR JSON_CONTAINS(c.sources, JSON_OBJECT('type','organic','scope','category'))
+                        THEN 1 ELSE 0 END) AS has_organic
+        FROM seo_keyword_candidates c
+        WHERE {where_clause}
+        GROUP BY c.keyword
+        ORDER BY {order_by}
+        LIMIT :lim
+    """)
+
+    rows = db.execute(sql, params).fetchall()
+
+    items = [{
+        "keyword":            r.keyword,
+        "product_count":      int(r.product_count or 0),
+        "self_product_count": int(r.self_product_count or 0),
+        "total_orders":       int(r.total_orders or 0),
+        "total_impressions":  int(r.total_impr or 0),
+        "total_add_to_cart":  int(r.total_cart or 0),
+        "max_score":          float(r.max_score or 0),
+        "has_paid":           bool(r.has_paid),
+        "has_organic":        bool(r.has_organic),
+    } for r in rows]
+
+    summary = {
+        "kw_count":          len(items),
+        "total_impressions": sum(it["total_impressions"] for it in items),
+        "total_orders":      sum(it["total_orders"] for it in items),
+        "with_self_kw":      sum(1 for it in items if it["self_product_count"] > 0),
+    }
+
+    return {
+        "code": 0,
+        "data": {"items": items, "total": len(items), "summary": summary},
+    }
+
+
+def list_candidates_rollup_products(
+    db: Session,
+    tenant_id: int,
+    shop,
+    *,
+    keyword: str,
+    status: str = "pending",
+    limit: int = 100,
+) -> dict:
+    """单关键词下钻到候选商品明细（含 self + category 全量，自带 self 标记）"""
+    if not keyword or not keyword.strip():
+        return {"code": 10002, "msg": "keyword 不能为空"}
+
+    sql = text(f"""
+        SELECT c.id AS candidate_id,
+               c.product_id,
+               c.keyword,
+               c.status,
+               c.score,
+               c.in_title,
+               c.in_attrs,
+               c.sources,
+               c.paid_orders, c.paid_revenue, c.paid_roas,
+               c.organic_orders, c.organic_impressions, c.organic_add_to_cart,
+               {_HAS_SELF_CLAUSE} AS has_self,
+               COALESCE(pl.title_ru, p.name_ru, p.name_zh, '') AS title,
+               p.image_url,
+               pl.platform_sku_id,
+               pl.rating,
+               pl.review_count
+        FROM seo_keyword_candidates c
+        JOIN products p ON p.id = c.product_id AND p.tenant_id = c.tenant_id
+        LEFT JOIN platform_listings pl ON pl.product_id = p.id
+                                       AND pl.tenant_id = p.tenant_id
+                                       AND pl.shop_id = c.shop_id
+                                       AND pl.status NOT IN ('deleted', 'archived')
+        WHERE c.tenant_id = :tid
+          AND c.shop_id = :sid
+          AND LOWER(c.keyword) = LOWER(:kw)
+          AND c.status = :status
+        ORDER BY has_self DESC, c.score DESC, (COALESCE(c.paid_orders,0) + COALESCE(c.organic_orders,0)) DESC
+        LIMIT :lim
+    """)
+
+    rows = db.execute(sql, {
+        "tid": tenant_id, "sid": shop.id,
+        "kw": keyword.strip(), "status": status, "lim": limit,
+    }).fetchall()
+
+    items = []
+    for r in rows:
+        has_self = bool(r.has_self)
+        items.append({
+            "candidate_id":    int(r.candidate_id),
+            "product_id":      int(r.product_id),
+            "title":           r.title or "",
+            "image_url":       r.image_url or "",
+            "platform_sku_id": r.platform_sku_id or "",
+            "rating":          float(r.rating) if r.rating is not None else None,
+            "review_count":    int(r.review_count or 0),
+            "status":          r.status,
+            "score":           float(r.score or 0),
+            "in_title":        bool(r.in_title),
+            "in_attrs":        bool(r.in_attrs),
+            "sources":         r.sources if isinstance(r.sources, list) else (json.loads(r.sources) if r.sources else []),
+            "has_self":        has_self,
+            # 仅 self 行显示真实数字, category-only 行字段置 null 让前端知道"无实证"
+            "paid_orders":     (int(r.paid_orders or 0) if has_self else None),
+            "paid_revenue":    (round(float(r.paid_revenue or 0), 2) if has_self else None),
+            "paid_roas":       (round(float(r.paid_roas or 0), 2) if has_self else None),
+            "organic_orders":  (int(r.organic_orders or 0) if has_self else None),
+            "organic_impressions": (int(r.organic_impressions or 0) if has_self else None),
+            "organic_add_to_cart": (int(r.organic_add_to_cart or 0) if has_self else None),
+        })
+
+    return {
+        "code": 0,
+        "data": {"keyword": keyword.strip(), "items": items, "total": len(items)},
     }

@@ -77,3 +77,13 @@ export function getKeywordRollup(shopId, params) {
 export function getKeywordRollupProducts(shopId, params) {
   return request.get(`${BASE}/shop/${shopId}/keyword-rollup/products`, { params })
 }
+
+/** 按商品看 Tab 的关键词聚合主视图（走候选池，含付费/自然/类目扩散） */
+export function getCandidatesRollup(shopId, params) {
+  return request.get(`${BASE}/shop/${shopId}/candidates-rollup`, { params })
+}
+
+/** 候选池单关键词下钻到商品明细 */
+export function getCandidatesRollupProducts(shopId, params) {
+  return request.get(`${BASE}/shop/${shopId}/candidates-rollup/products`, { params })
+}

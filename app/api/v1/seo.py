@@ -21,7 +21,10 @@ from app.services.seo.health_service import compute_shop_health
 from app.services.seo.generated_history import list_generated_titles, mark_title_applied
 from app.services.seo.keyword_tracking_service import compute_keyword_tracking, list_query_top_skus
 from app.services.seo.roi_report_service import compute_roi_report
-from app.services.seo.keyword_rollup_service import compute_keyword_rollup, list_rollup_products
+from app.services.seo.keyword_rollup_service import (
+    compute_keyword_rollup, list_rollup_products,
+    compute_candidates_rollup, list_candidates_rollup_products,
+)
 from app.utils.response import success, error
 
 router = APIRouter()
@@ -324,6 +327,54 @@ def shop_keyword_rollup_products(
     result = list_rollup_products(
         db, tenant_id, shop,
         keyword=keyword, days=days, limit=limit,
+    )
+    if result.get("code") != 0:
+        return error(result["code"], result.get("msg", ""))
+    return success(result["data"])
+
+
+@router.get("/shop/{shop_id}/candidates-rollup")
+def shop_candidates_rollup(
+    shop_id: int,
+    source: str = Query("all", description="all / paid_self / paid_category / organic_self / organic_category / with_orders"),
+    status: str = Query("pending", description="pending / adopted / ignored"),
+    keyword: str = Query("", description="关键词模糊筛"),
+    hide_covered: bool = Query(True, description="隐藏已在标题/属性的候选"),
+    sort: str = Query("score_desc", description="score_desc / orders_desc / impr_desc / products_desc"),
+    limit: int = Query(200, ge=10, le=500),
+    db: Session = Depends(get_db),
+    tenant_id: int = Depends(get_tenant_id),
+    shop=Depends(get_owned_shop),
+):
+    """按商品看 Tab 的关键词聚合主视图（走 seo_keyword_candidates，含 paid/organic/类目扩散）
+
+    与 /keyword-rollup（走 product_search_queries）口径不同：
+    candidates-rollup 含引擎加工后的候选池+反哺评分，是"决策视图"。
+    """
+    result = compute_candidates_rollup(
+        db, tenant_id, shop,
+        source=source, status=status, keyword=keyword,
+        hide_covered=hide_covered, sort=sort, limit=limit,
+    )
+    if result.get("code") != 0:
+        return error(result["code"], result.get("msg", ""))
+    return success(result["data"])
+
+
+@router.get("/shop/{shop_id}/candidates-rollup/products")
+def shop_candidates_rollup_products(
+    shop_id: int,
+    keyword: str = Query(..., min_length=1),
+    status: str = Query("pending"),
+    limit: int = Query(100, ge=1, le=500),
+    db: Session = Depends(get_db),
+    tenant_id: int = Depends(get_tenant_id),
+    shop=Depends(get_owned_shop),
+):
+    """单关键词下钻：展开该词下所有候选商品（含 self 真实数据 + category 推断，自带 has_self 标记）"""
+    result = list_candidates_rollup_products(
+        db, tenant_id, shop,
+        keyword=keyword, status=status, limit=limit,
     )
     if result.get("code") != 0:
         return error(result["code"], result.get("msg", ""))
