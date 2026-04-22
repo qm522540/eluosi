@@ -258,6 +258,14 @@ export function getCampaignProducts(campaignId) {
   return request.get(`/ads/campaign-products/${campaignId}`)
 }
 
+/** AI 语义聚类（DeepSeek）：对齐 WB 后台「顶级搜索集群」粒度 */
+export function getCampaignKeywordClusters(campaignId, nmId, days = 7) {
+  return request.get(`/ads/campaign-keywords/${campaignId}/clusters`, {
+    params: { nm_id: nmId, days },
+    timeout: 60000,  // AI 推理慢，给 60s
+  })
+}
+
 /** 修改商品出价 */
 export function updateCampaignBid(campaignId, data) {
   return request.post(`/ads/campaign-products/${campaignId}/update-bid`, data)

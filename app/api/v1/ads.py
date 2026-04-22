@@ -906,6 +906,131 @@ async def campaign_keywords(
     })
 
 
+@router.get("/campaign-keywords/{campaign_id}/clusters")
+async def campaign_keyword_clusters(
+    campaign_id: int,
+    nm_id: int = Query(..., description="SKU 的 WB nm_id"),
+    days: int = Query(7, ge=1, le=30),
+    db: Session = Depends(get_db),
+    tenant_id: int = Depends(get_tenant_id),
+):
+    """AI 语义聚类：把 WB 活跃触发词聚成集群（对齐 WB 后台「顶级搜索集群」粒度）
+
+    调 DeepSeek 对俄语关键词做语义分组；结果缓存 30 min。
+    失败时返回 {clusters: []} 让前端降级到本地启发式聚类。
+    """
+    from app.models.ad import AdCampaign
+    from app.models.shop import Shop
+    from app.services.ad.keyword_clustering import cluster_keywords_ai
+    from datetime import date as _date, timedelta as _td
+
+    camp = db.query(AdCampaign).filter(
+        AdCampaign.id == campaign_id, AdCampaign.tenant_id == tenant_id,
+    ).first()
+    if not camp:
+        return error(50001, "广告活动不存在")
+    if camp.platform != "wb":
+        return success({"clusters": [], "msg": "当前仅支持 WB"})
+
+    shop = db.query(Shop).filter(Shop.id == camp.shop_id).first()
+    if not shop:
+        return error(30001, "店铺不存在")
+
+    # 拉活跃触发词（campaign-keywords 的简化版，只取有点击 + 未被屏蔽）
+    span = min(days, 7) - 1
+    date_to = _date.today() - _td(days=1)
+    date_from = date_to - _td(days=span)
+    df = date_from.strftime("%Y-%m-%d")
+    dt = date_to.strftime("%Y-%m-%d")
+
+    from app.services.platform.wb import WBClient
+    client = WBClient(shop_id=shop.id, api_key=shop.api_key)
+    try:
+        keywords_raw = await client.fetch_campaign_keywords(
+            advert_id=camp.platform_campaign_id, date_from=df, date_to=dt,
+        )
+        # 屏蔽词
+        cached_excl = _get_cached_excluded(camp.platform_campaign_id, nm_id)
+        if cached_excl is not None:
+            excluded_list = cached_excl
+        else:
+            excl_map = await client.fetch_excluded_keywords(
+                advert_id=camp.platform_campaign_id, nm_ids=[nm_id],
+            )
+            excluded_list = excl_map.get(int(nm_id), [])
+            _set_cached_excluded(camp.platform_campaign_id, nm_id, excluded_list)
+    finally:
+        await client.close()
+
+    excluded_set = {w.lower().strip() for w in excluded_list}
+    # 只拿活跃词（有点击、未屏蔽）做聚类
+    active_words = [
+        kw["keyword"] for kw in keywords_raw
+        if int(kw.get("clicks", 0)) > 0
+        and kw.get("keyword", "").lower().strip() not in excluded_set
+    ]
+    # 按曝光排序，截断到 60 个（AI 上下文控制）
+    active_words_sorted = sorted(
+        [kw for kw in keywords_raw
+         if kw["keyword"] in set(active_words)],
+        key=lambda k: k.get("views", 0), reverse=True,
+    )
+    active_top = [kw["keyword"] for kw in active_words_sorted[:60]]
+
+    if not active_top:
+        return success({"clusters": [], "msg": "无活跃关键词可聚类"})
+
+    clusters = await cluster_keywords_ai(
+        db=db, tenant_id=tenant_id,
+        advert_id=camp.platform_campaign_id, nm_id=nm_id,
+        keywords=active_top,
+    )
+
+    # 构造每簇的统计（曝光 / 点击 / 花费 / CTR）
+    kw_stat_map = {
+        kw["keyword"]: {
+            "views": int(kw.get("views", 0)),
+            "clicks": int(kw.get("clicks", 0)),
+            "sum": float(kw.get("sum", 0)),
+        } for kw in keywords_raw
+    }
+    enriched = []
+    for c in clusters:
+        members = c.get("members", [])
+        agg = {"views": 0, "clicks": 0, "sum": 0}
+        member_details = []
+        for m in members:
+            s = kw_stat_map.get(m)
+            if s:
+                agg["views"] += s["views"]
+                agg["clicks"] += s["clicks"]
+                agg["sum"] += s["sum"]
+                member_details.append({"keyword": m, **s})
+            else:
+                member_details.append({"keyword": m, "views": 0, "clicks": 0, "sum": 0})
+        ctr = round(agg["clicks"] / agg["views"] * 100, 2) if agg["views"] > 0 else 0
+        enriched.append({
+            "name": c.get("name", ""),
+            "members": member_details,
+            "variant_count": len(member_details),
+            "views": agg["views"],
+            "clicks": agg["clicks"],
+            "sum": round(agg["sum"], 2),
+            "ctr": ctr,
+        })
+    # 按曝光排序
+    enriched.sort(key=lambda x: x["views"], reverse=True)
+
+    return success({
+        "campaign_id": campaign_id,
+        "nm_id": nm_id,
+        "date_from": df,
+        "date_to": dt,
+        "total_active": len(active_top),
+        "clusters": enriched,
+    })
+
+
 class ExcludeKeywordsRequest(BaseModel):
     nm_id: int = Field(..., description="WB 商品 nm_id")
     keywords: list = Field(..., description="要屏蔽的关键词列表")

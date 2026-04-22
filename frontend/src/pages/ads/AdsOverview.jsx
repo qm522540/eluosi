@@ -20,7 +20,8 @@ import {
   getKeywords, createKeyword, batchCreateKeywords, updateKeyword, deleteKeyword,
   getAdStats, getAdSummary,
   exportAdStats, getAlerts, getAlertConfig, updateAlertConfig,
-  getCampaignProducts, getCampaignKeywords, excludeKeywords, updateCampaignBid, getCampaignBudget,
+  getCampaignProducts, getCampaignKeywords, getCampaignKeywordClusters,
+  excludeKeywords, updateCampaignBid, getCampaignBudget,
   addProtectedKeyword, removeProtectedKeyword,
   getAutoExcludeConfig, toggleAutoExclude, runAutoExcludeNow, getAutoExcludeLogs,
   getCampaignSummary, getOzonSkuQueries, syncOzonSkuQueries,
@@ -333,6 +334,8 @@ const AdsOverview = ({ shopId, platform, shops, searched, syncing, lastSyncTime,
   const [suggestedExcludeWords, setSuggestedExcludeWords] = useState([])  // 质检标出的词
   const [kwTablePageMap, setKwTablePageMap] = useState({})  // 每个 SKU 关键词表的当前页
   const [kwViewMode, setKwViewMode] = useState({})  // 每个 SKU: 'active'|'excluded'|'all'，默认 'active'
+  const [aiClustersBySku, setAiClustersBySku] = useState({})  // AI 聚类结果 per SKU
+  const [aiClustersLoadingSku, setAiClustersLoadingSku] = useState({})  // AI 聚类 loading per SKU
 
   // 当日实时汇总（活动级，商品出价 Tab 顶部条）
   const [todaySummary, setTodaySummary] = useState(null)
@@ -538,6 +541,8 @@ const AdsOverview = ({ shopId, platform, shops, searched, syncing, lastSyncTime,
               const kws2 = r.data?.keywords || []
               const excl2 = r.data?.excluded_keywords || []
               setKeywordsBySku(m => ({ ...m, [sku]: kws2, [`${sku}_excluded`]: excl2 }))
+              // 清掉 AI 聚类缓存 → 下次切到集群 Tab 会重新调 AI（关键词集合变了）
+              setAiClustersBySku(m => ({ ...m, [sku]: undefined }))
             } catch { /* refetch 失败不致命 */ }
           }
         } catch (err) {
@@ -790,6 +795,18 @@ const AdsOverview = ({ shopId, platform, shops, searched, syncing, lastSyncTime,
           [sku]: kws,
           [`${sku}_excluded`]: excluded,
         }))
+        // 并发：AI 聚类（后台跑，用户若切到集群 Tab 就能看到结果）
+        // 不 block 主流程，失败降级本地启发式聚类（已经在 render 里处理了）
+        if (aiClustersBySku[sku] === undefined && !aiClustersLoadingSku[sku]) {
+          setAiClustersLoadingSku(m => ({ ...m, [sku]: true }))
+          getCampaignKeywordClusters(detailData.id, parseInt(sku), 7)
+            .then(resp => {
+              const clusters = resp.data?.clusters || []
+              setAiClustersBySku(m => ({ ...m, [sku]: clusters }))
+            })
+            .catch(() => setAiClustersBySku(m => ({ ...m, [sku]: [] })))
+            .finally(() => setAiClustersLoadingSku(m => ({ ...m, [sku]: false })))
+        }
       } catch {
         setKeywordsBySku(m => ({ ...m, [sku]: [] }))
       } finally {
@@ -1395,6 +1412,8 @@ const AdsOverview = ({ shopId, platform, shops, searched, syncing, lastSyncTime,
       }
       // 视图模式：active=集群视图(对齐 WB 后台粒度) / excluded=已屏蔽 / all=全量个体变体
       const kwMode = kwViewMode[sku] || 'active'
+      const aiClusters = aiClustersBySku[sku]
+      const aiLoading = !!aiClustersLoadingSku[sku]
       const RU_STOPWORDS = new Set(['для', 'из', 'с', 'со', 'на', 'в', 'во',
         'и', 'по', 'под', 'над', 'от', 'до', 'или', 'не', 'но', 'а',
         'что', 'как', 'это', 'за', 'при', 'без', 'у', 'об', 'о'])
@@ -1418,41 +1437,77 @@ const AdsOverview = ({ shopId, platform, shops, searched, syncing, lastSyncTime,
         if (uniq.length <= 1) return normalized.trim()
         return uniq.join('+')
       }
-      // 构造 clusters：按 clusterKey 聚合个体词（只看有点击的活跃词，和 WB 对齐）
+      // 构造 clusters：优先 AI 聚类（DeepSeek），失败降级本地启发式
       const activeKws = kws.filter(k => (k.clicks || 0) > 0 && !k.is_excluded)
-      const clusterMap = new Map()
-      for (const kw of activeKws) {
-        const ck = clusterKeyOf(kw.keyword)
-        if (!clusterMap.has(ck)) {
-          clusterMap.set(ck, { key: ck, variants: [], keyword: '', views: 0, clicks: 0, sum: 0,
-            est_orders: 0, est_atbs: 0, est_revenue: 0, is_protected: false })
+      const kwByText = new Map(kws.map(k => [k.keyword, k]))
+      let clusters = []
+      if (Array.isArray(aiClusters) && aiClusters.length > 0) {
+        // AI 返回的 clusters: [{name, members: [{keyword, views, clicks, sum}], variant_count, views, clicks, sum, ctr}]
+        // 把 members 映射回完整 kw 对象（带 est_orders / is_protected 等）
+        clusters = aiClusters.map(c => {
+          const variants = (c.members || [])
+            .map(m => kwByText.get(m.keyword || m))  // member 可能是对象或字符串
+            .filter(Boolean)
+          if (variants.length === 0) return null
+          const est_orders = variants.reduce((s, v) => s + (v.est_orders || 0), 0)
+          const est_atbs = variants.reduce((s, v) => s + (v.est_atbs || 0), 0)
+          const est_revenue = variants.reduce((s, v) => s + (v.est_revenue || 0), 0)
+          return {
+            key: `ai:${c.name}`,
+            variants,
+            keyword: c.name,
+            representative: c.name,
+            variant_count: variants.length,
+            views: c.views || variants.reduce((s, v) => s + (v.views || 0), 0),
+            clicks: c.clicks || variants.reduce((s, v) => s + (v.clicks || 0), 0),
+            sum: c.sum || variants.reduce((s, v) => s + (v.sum || 0), 0),
+            ctr: c.ctr || 0,
+            est_orders, est_atbs, est_revenue,
+            est_roas: (c.sum || 0) > 0 ? +(est_revenue / c.sum).toFixed(2) : 0,
+            is_protected: variants.some(v => v.is_protected),
+            active_days: Math.max(...variants.map(v => v.active_days || 0)),
+            total_days: Math.max(...variants.map(v => v.total_days || 7)),
+            first_seen: variants.map(v => v.first_seen).filter(Boolean).sort()[0] || '',
+            last_seen: variants.map(v => v.last_seen).filter(Boolean).sort().slice(-1)[0] || '',
+            _source: 'ai',
+          }
+        }).filter(Boolean)
+      } else {
+        // 本地启发式聚类兜底
+        const clusterMap = new Map()
+        for (const kw of activeKws) {
+          const ck = clusterKeyOf(kw.keyword)
+          if (!clusterMap.has(ck)) {
+            clusterMap.set(ck, { key: ck, variants: [], keyword: '', views: 0, clicks: 0, sum: 0,
+              est_orders: 0, est_atbs: 0, est_revenue: 0, is_protected: false })
+          }
+          const c = clusterMap.get(ck)
+          c.variants.push(kw)
+          c.views += (kw.views || 0)
+          c.clicks += (kw.clicks || 0)
+          c.sum += (kw.sum || 0)
+          c.est_orders += (kw.est_orders || 0)
+          c.est_atbs += (kw.est_atbs || 0)
+          c.est_revenue += (kw.est_revenue || 0)
+          if (kw.is_protected) c.is_protected = true
         }
-        const c = clusterMap.get(ck)
-        c.variants.push(kw)
-        c.views += (kw.views || 0)
-        c.clicks += (kw.clicks || 0)
-        c.sum += (kw.sum || 0)
-        c.est_orders += (kw.est_orders || 0)
-        c.est_atbs += (kw.est_atbs || 0)
-        c.est_revenue += (kw.est_revenue || 0)
-        if (kw.is_protected) c.is_protected = true
+        clusters = Array.from(clusterMap.values()).map(c => {
+          const rep = c.variants.slice().sort((a, b) => (b.views||0) - (a.views||0))[0]
+          return {
+            ...c,
+            keyword: rep.keyword,
+            representative: rep.keyword,
+            variant_count: c.variants.length,
+            ctr: c.views > 0 ? +(c.clicks / c.views * 100).toFixed(2) : 0,
+            est_roas: c.sum > 0 ? +(c.est_revenue / c.sum).toFixed(2) : 0,
+            active_days: Math.max(...c.variants.map(v => v.active_days || 0)),
+            total_days: Math.max(...c.variants.map(v => v.total_days || 7)),
+            first_seen: c.variants.map(v => v.first_seen).filter(Boolean).sort()[0] || '',
+            last_seen: c.variants.map(v => v.last_seen).filter(Boolean).sort().slice(-1)[0] || '',
+            _source: 'local',
+          }
+        })
       }
-      // 代表词 = 簇内 views 最高的
-      const clusters = Array.from(clusterMap.values()).map(c => {
-        const rep = c.variants.slice().sort((a, b) => (b.views||0) - (a.views||0))[0]
-        return {
-          ...c,
-          keyword: rep.keyword,
-          representative: rep.keyword,
-          variant_count: c.variants.length,
-          ctr: c.views > 0 ? +(c.clicks / c.views * 100).toFixed(2) : 0,
-          est_roas: c.sum > 0 ? +(c.est_revenue / c.sum).toFixed(2) : 0,
-          active_days: Math.max(...c.variants.map(v => v.active_days || 0)),
-          total_days: Math.max(...c.variants.map(v => v.total_days || 7)),
-          first_seen: c.variants.map(v => v.first_seen).filter(Boolean).sort()[0] || '',
-          last_seen: c.variants.map(v => v.last_seen).filter(Boolean).sort().slice(-1)[0] || '',
-        }
-      })
       const tableDataSource = kwMode === 'all' ? kws : clusters
       return (
         <div style={{ padding: 8, background: '#fafbff', borderRadius: 4, border: '1px solid #e6edff' }}>
@@ -1465,7 +1520,10 @@ const AdsOverview = ({ shopId, platform, shops, searched, syncing, lastSyncTime,
                   value={kwMode}
                   onChange={(v) => setKwViewMode(m => ({ ...m, [sku]: v }))}
                   options={[
-                    { label: `集群 (${clusters.length})`, value: 'active' },
+                    { label: aiLoading && kwMode === 'active'
+                        ? <span><Spin size="small" style={{ marginRight: 4 }} />AI 聚类中</span>
+                        : `${aiClusters && aiClusters.length > 0 ? 'AI ' : ''}集群 (${clusters.length})`,
+                      value: 'active' },
                     { label: `已屏蔽 (${excluded.length})`, value: 'excluded' },
                     { label: `全部变体 (${kws.length})`, value: 'all' },
                   ]}
