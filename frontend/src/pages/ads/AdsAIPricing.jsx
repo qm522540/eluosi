@@ -1256,18 +1256,22 @@ const OzonAIPricing = ({ shopId, platform = 'ozon' }) => {
       render: v => v ? formatMoscowShort(v) : '-',
     },
     {
-      title: '商品', dataIndex: 'sku_name', ellipsis: true,
+      title: '活动 - 商品', dataIndex: 'sku_name', ellipsis: true,
       render: (v, r) => {
         const name = v || r.platform_sku_id || '-'
+        const camp = r.campaign_name || (r.campaign_id ? `#${r.campaign_id}` : '')
         const img = platform === 'wb'
           ? <WbProductImg nmId={r.platform_sku_id} size={28} />
           : null
         const idSuffix = [r.platform_product_id, r.product_code].filter(Boolean).join(' · ')
+        const fullText = camp ? `${camp} - ${name}` : name
         return (
           <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
             {img}
             <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>
-              <span style={{ fontSize: 13 }}>{name}</span>
+              <Tooltip title={fullText} placement="topLeft">
+                <span style={{ fontSize: 13 }}>{fullText}</span>
+              </Tooltip>
               {idSuffix && <span style={{ fontSize: 11, color: '#999', marginLeft: 6 }}>{idSuffix}</span>}
             </div>
           </div>
