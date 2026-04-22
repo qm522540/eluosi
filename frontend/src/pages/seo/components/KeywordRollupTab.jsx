@@ -62,9 +62,16 @@ const KeywordRollupTab = ({ shops = [], shopId, onShopChange, onJumpToProduct })
       render: (v, r) => (
         <Space direction="vertical" size={0}>
           <Text strong>{v}</Text>
-          {r.product_count > 1 && (
-            <Tag color="blue" style={{ fontSize: 11 }}>覆盖 {r.product_count} 个商品</Tag>
-          )}
+          <Space size={4} wrap>
+            {r.product_count > 1 && (
+              <Tag color="blue" style={{ fontSize: 11 }}>真实覆盖 {r.product_count} 商品</Tag>
+            )}
+            {r.candidate_row_count > r.product_count && (
+              <Tag color="orange" style={{ fontSize: 11 }}>
+                按商品看展示 {r.candidate_row_count} 次
+              </Tag>
+            )}
+          </Space>
         </Space>
       ),
     },
@@ -152,10 +159,16 @@ const KeywordRollupTab = ({ shops = [], shopId, onShopChange, onJumpToProduct })
       <Alert
         type="info" showIcon
         style={{ marginBottom: 12 }}
-        message="店级关键词 TOP —— 每一行 = 一个关键词，跨商品汇总贡献"
+        message="店级关键词 TOP —— 每一行 = 一个关键词，跨商品汇总真实贡献"
         description={(
           <div>
-            <div>同一个词在多个商品下的曝光 / 订单 / 收入会合并成一行；点「看落到哪些商品」看这词具体靠哪几个商品撑起来。</div>
+            <div>同一个词在多个商品下的<strong>真实搜索流量</strong>（曝光 / 订单 / 收入）合并成一行；点「看落到哪些商品」看这词具体靠哪几个商品撑起来。</div>
+            <div style={{ marginTop: 6, color: '#555', fontSize: 12 }}>
+              <strong>⚠️ 与「按商品看」Tab 的数字差异说明：</strong>
+              按商品看里同一词可能展示 <Text code>N 次</Text>（含"同类目推断"扩散，即把该词推荐给类目下所有商品，<strong>每个推荐商品都会显示相同订单数</strong>）；
+              本 Tab 走<strong>原始搜索记录</strong>，是该词给整店带来的真订单总数，不做 ×N 放大。
+              如果你在按商品看看到很多商品都显示"订单 2"，实际上这 2 单是同一批真订单，<strong>被重复展示以提示"这词可以加进这些商品的标题"</strong>。
+            </div>
             <div style={{ marginTop: 4, color: '#888', fontSize: 12 }}>
               数据来自平台自然搜索（organic 源）。WB 需 Jam 订阅 / Ozon 需 Premium 订阅。
             </div>

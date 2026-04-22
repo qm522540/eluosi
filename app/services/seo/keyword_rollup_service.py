@@ -10,7 +10,7 @@
 
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import text
+from sqlalchemy import bindparam, text
 from sqlalchemy.orm import Session
 
 
@@ -117,7 +117,27 @@ def compute_keyword_rollup(
         "orders":        int(r.orders or 0),
         "revenue":       round(float(r.revenue or 0), 2),
         "product_count": int(r.product_count or 0),
+        "candidate_row_count": 0,
     } for r in rows]
+
+    # 旁路查询：每个 keyword 在 seo_keyword_candidates 表出现多少行
+    # 用于前端"口径差异说明"：按商品看里同一词可能展示 N 次（含类目推断），
+    # 帮用户理解为什么按商品看"看起来订单多"而 rollup"看起来订单少"
+    if items:
+        kw_list = [it["keyword"] for it in items]
+        cand_rows = db.execute(text("""
+            SELECT LOWER(keyword) AS kw_lower, COUNT(*) AS cnt
+            FROM seo_keyword_candidates
+            WHERE tenant_id = :tid AND shop_id = :sid
+              AND LOWER(keyword) IN :kws
+            GROUP BY LOWER(keyword)
+        """).bindparams(bindparam("kws", expanding=True)), {
+            "tid": tenant_id, "sid": shop.id,
+            "kws": [kw.lower() for kw in kw_list],
+        }).fetchall()
+        cand_map = {r.kw_lower: int(r.cnt) for r in cand_rows}
+        for it in items:
+            it["candidate_row_count"] = cand_map.get(it["keyword"].lower(), 0)
 
     summary = {
         "kw_count":         len(items),
