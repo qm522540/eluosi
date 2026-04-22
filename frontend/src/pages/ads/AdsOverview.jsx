@@ -1601,6 +1601,7 @@ const AdsOverview = ({ shopId, platform, shops, searched, syncing, lastSyncTime,
             size="small"
             rowKey={(r) => r.key || r.keyword}
             dataSource={tableDataSource}
+            scroll={{ x: 1400 }}
             pagination={{
               pageSize: 20, size: 'small', showSizeChanger: false,
               current: kwTablePageMap[sku] || 1,
@@ -1633,8 +1634,10 @@ const AdsOverview = ({ shopId, platform, shops, searched, syncing, lastSyncTime,
                 ? 'row-suggested-exclude' : ''
             }
             columns={[
-              { title: kwMode === 'active' ? '集群（代表词）' : '关键词',
-                dataIndex: 'keyword', key: 'keyword', ellipsis: true,
+              { title: kwMode === 'active' ? '集群代表词' : '关键词',
+                dataIndex: 'keyword', key: 'keyword',
+                width: 340, fixed: 'left',
+                ellipsis: { showTitle: false },
                 render: (v, r) => {
                   const statusMap = {
                     active:     { label: '活跃', color: 'green' },
