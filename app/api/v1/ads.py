@@ -986,6 +986,18 @@ async def campaign_keyword_clusters(
         keywords=active_top,
     )
 
+    # 用 WB set-minus 作 oracle 验证代表词
+    from app.services.ad.keyword_clustering import validate_cluster_reps_with_wb
+    client2 = WBClient(shop_id=shop.id, api_key=shop.api_key)
+    try:
+        cluster_names = [c.get("name", "") for c in clusters if c.get("name")]
+        valid_map = await validate_cluster_reps_with_wb(
+            client=client2, advert_id=camp.platform_campaign_id,
+            nm_id=nm_id, cluster_names=cluster_names,
+        )
+    finally:
+        await client2.close()
+
     # 构造每簇的统计（曝光 / 点击 / 花费 / CTR）
     kw_stat_map = {
         kw["keyword"]: {
@@ -1009,17 +1021,19 @@ async def campaign_keyword_clusters(
             else:
                 member_details.append({"keyword": m, "views": 0, "clicks": 0, "sum": 0})
         ctr = round(agg["clicks"] / agg["views"] * 100, 2) if agg["views"] > 0 else 0
+        name = c.get("name", "")
         enriched.append({
-            "name": c.get("name", ""),
+            "name": name,
             "members": member_details,
             "variant_count": len(member_details),
             "views": agg["views"],
             "clicks": agg["clicks"],
             "sum": round(agg["sum"], 2),
             "ctr": ctr,
+            "wb_valid": bool(valid_map.get(name, False)),  # WB 是否认可此词为集群代表
         })
-    # 按曝光排序
-    enriched.sort(key=lambda x: x["views"], reverse=True)
+    # 先按 WB 有效性（有效在前），再按曝光排序
+    enriched.sort(key=lambda x: (not x["wb_valid"], -x["views"]))
 
     return success({
         "campaign_id": campaign_id,

@@ -170,3 +170,114 @@ async def cluster_keywords_ai(
         f"input={len(keywords)} → {len(clusters)} 簇"
     )
     return clusters
+
+
+_VALID_CACHE_TTL = 86400  # WB 集群定义变化慢，缓存 24h
+
+
+def _valid_cache_key(advert_id, nm_id, cluster_names: List[str]) -> str:
+    name_str = "|".join(sorted(cluster_names))
+    h = hashlib.md5(name_str.encode("utf-8")).hexdigest()[:12]
+    return f"wb:cluster_valid:{advert_id}:{nm_id}:{h}"
+
+
+def _get_valid_cached(key: str) -> Optional[dict]:
+    try:
+        import redis as redis_lib
+        r = redis_lib.Redis.from_url(settings.REDIS_URL, decode_responses=True)
+        raw = r.get(key)
+        return json.loads(raw) if raw else None
+    except Exception:
+        return None
+
+
+def _set_valid_cached(key: str, valid_map: dict):
+    try:
+        import redis as redis_lib
+        r = redis_lib.Redis.from_url(settings.REDIS_URL, decode_responses=True)
+        r.setex(key, _VALID_CACHE_TTL, json.dumps(valid_map, ensure_ascii=False))
+    except Exception:
+        pass
+
+
+async def validate_cluster_reps_with_wb(
+    client, advert_id, nm_id, cluster_names: List[str],
+) -> dict:
+    """用 WB set-minus 作为 oracle 判断哪些词是 WB 认定的"顶级搜索集群代表词"
+
+    原理：
+      - 拉 existing minus list（会被保留）
+      - 一次 set-minus(existing + candidates)
+      - WB 返回 dropped_invalid 里的就不是 WB 集群代表词
+      - 立刻 set-minus(existing) 回滚到原始状态
+
+    Returns:
+        {cluster_name: True/False} WB 是否认可该词为集群代表
+    """
+    if not cluster_names:
+        return {}
+
+    key = _valid_cache_key(advert_id, nm_id, cluster_names)
+    cached = _get_valid_cached(key)
+    if cached is not None:
+        logger.info(f"cluster_valid 缓存命中 advert={advert_id} nm={nm_id}")
+        return cached
+
+    # 拉 existing
+    try:
+        excl_map = await client.fetch_excluded_keywords(
+            advert_id=advert_id, nm_ids=[int(nm_id)],
+        )
+        existing = excl_map.get(int(nm_id), [])
+    except Exception as e:
+        logger.warning(f"cluster_valid 拉 existing 失败 advert={advert_id} nm={nm_id}: {e}")
+        return {}
+
+    existing_set = {w.lower().strip() for w in existing}
+    # 只测试不在 existing 里的候选（已在里面的肯定是有效的）
+    new_candidates = [c for c in cluster_names if c.lower().strip() not in existing_set]
+
+    result_map = {}
+    # existing 里的 = 必然有效
+    for c in cluster_names:
+        if c.lower().strip() in existing_set:
+            result_map[c] = True
+
+    if not new_candidates:
+        _set_valid_cached(key, result_map)
+        return result_map
+
+    # 一次性发 existing + 所有新候选
+    merged = list(existing) + new_candidates
+    try:
+        r = await client.set_excluded_keywords(
+            advert_id=advert_id, nm_id=int(nm_id), words=merged,
+        )
+        dropped = {w.lower().strip() for w in (r.get("dropped_invalid") or [])}
+    except Exception as e:
+        logger.warning(f"cluster_valid set-minus 测试失败: {e}")
+        return result_map
+
+    # 标记：被 WB 拒绝 = 不是集群代表词
+    for c in new_candidates:
+        result_map[c] = c.lower().strip() not in dropped
+
+    # 立即回滚 —— 把新增的词从 minus 列表移除（只保留 existing）
+    # 注意：WB 可能在测试时把 new_candidates 中被接受的那些加进了 minus，必须回滚
+    try:
+        await client.set_excluded_keywords(
+            advert_id=advert_id, nm_id=int(nm_id), words=list(existing),
+        )
+        logger.info(
+            f"cluster_valid advert={advert_id} nm={nm_id} "
+            f"input={len(cluster_names)} valid={sum(1 for v in result_map.values() if v)}"
+        )
+    except Exception as e:
+        # 回滚失败是严重问题，打 error log 但不抛（避免影响用户主流程）
+        logger.error(
+            f"cluster_valid 回滚失败 advert={advert_id} nm={nm_id}: {e} "
+            f"WB minus list 可能多了 {len([c for c in new_candidates if result_map.get(c)])} 个未预期的屏蔽词，请人工检查"
+        )
+
+    _set_valid_cached(key, result_map)
+    return result_map

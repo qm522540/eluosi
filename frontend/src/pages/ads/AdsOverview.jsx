@@ -1470,6 +1470,7 @@ const AdsOverview = ({ shopId, platform, shops, searched, syncing, lastSyncTime,
             total_days: Math.max(...variants.map(v => v.total_days || 7)),
             first_seen: variants.map(v => v.first_seen).filter(Boolean).sort()[0] || '',
             last_seen: variants.map(v => v.last_seen).filter(Boolean).sort().slice(-1)[0] || '',
+            wb_valid: !!c.wb_valid,  // WB 认可此代表词为集群 key
             _source: 'ai',
           }
         }).filter(Boolean)
@@ -1806,6 +1807,16 @@ const AdsOverview = ({ shopId, platform, shops, searched, syncing, lastSyncTime,
                   const isSuggested = qualityCheckedSku === sku && suggestedExcludeWords.includes(v)
                   return (
                     <Space size={4}>
+                      {kwMode === 'active' && r.wb_valid === true && (
+                        <Tooltip title="WB 认定的顶级搜索集群代表词，可屏蔽">
+                          <Tag color="green" style={{ margin: 0, fontSize: 11 }}>✓ WB</Tag>
+                        </Tooltip>
+                      )}
+                      {kwMode === 'active' && r.wb_valid === false && (
+                        <Tooltip title="WB 不认此为集群代表词，屏蔽会被拒绝。仅做显示聚类用">
+                          <Tag style={{ margin: 0, fontSize: 11, color: '#999', background: '#f5f5f5', borderColor: '#d9d9d9' }}>⚠ 不可屏</Tag>
+                        </Tooltip>
+                      )}
                       {r.variant_count > 1 && (
                         <Tooltip title={`${r.variant_count} 个相似变体（展开查看）`}>
                           <Tag color="purple" style={{ margin: 0, fontSize: 11 }}>×{r.variant_count}</Tag>
@@ -1879,13 +1890,15 @@ const AdsOverview = ({ shopId, platform, shops, searched, syncing, lastSyncTime,
                     return <Tag color="red" style={{ margin: 0, fontSize: 11 }}>已屏蔽</Tag>
                   }
                   const isCluster = r.variant_count > 1
-                  // WB 规则：只接受"顶级搜索集群代表词"入 minus list，簇内变体和非代表词 100% 拒绝
-                  // 集群模式：只发代表词（WB 会自动把整簇所有变体一起下线）
-                  // 全部变体模式：只对能对应上代表词的词允许屏蔽；其他标灰不可操作
+                  // WB 规则：只有"顶级搜索集群代表词"能屏蔽。集群模式下 wb_valid=false 的簇和
+                  // 全部变体模式下的非代表词都不可屏
+                  const canBlock = kwMode === 'active' ? r.wb_valid !== false : true
                   const blockWord = r.keyword
-                  const tipText = isCluster
-                    ? `屏蔽此集群代表词，WB 自动连带 ${r.variant_count} 个变体一起下线`
-                    : `只有 WB 认定的"顶级搜索集群代表词"能屏蔽成功。普通变体会被 WB 拒绝。`
+                  const tipText = !canBlock
+                    ? 'WB 不认此为集群代表词，屏蔽会被拒绝'
+                    : isCluster
+                      ? `屏蔽此集群代表词，WB 自动连带 ${r.variant_count} 个变体一起下线`
+                      : `只有 WB 认定的"顶级搜索集群代表词"能屏蔽成功。普通变体会被 WB 拒绝。`
                   return (
                     <Space size={4}>
                       <Tooltip title="勾选后此词不会被「一键屏蔽」和「自动屏蔽托管」误屏">
@@ -1895,8 +1908,15 @@ const AdsOverview = ({ shopId, platform, shops, searched, syncing, lastSyncTime,
                         />
                       </Tooltip>
                       <Tooltip title={tipText}>
-                        <a style={{ color: '#ff4d4f', fontSize: 12 }}
-                          onClick={() => handleSingleExclude(sku, [blockWord], blockWord)}>
+                        <a style={{
+                          color: canBlock ? '#ff4d4f' : '#d9d9d9',
+                          fontSize: 12,
+                          cursor: canBlock ? 'pointer' : 'not-allowed',
+                        }}
+                          onClick={() => {
+                            if (!canBlock) return
+                            handleSingleExclude(sku, [blockWord], blockWord)
+                          }}>
                           屏蔽
                         </a>
                       </Tooltip>
