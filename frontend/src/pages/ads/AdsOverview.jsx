@@ -336,6 +336,7 @@ const AdsOverview = ({ shopId, platform, shops, searched, syncing, lastSyncTime,
   const [kwViewMode, setKwViewMode] = useState({})  // 每个 SKU: 'active'|'excluded'|'all'，默认 'active'
   const [aiClustersBySku, setAiClustersBySku] = useState({})  // AI 聚类结果 per SKU
   const [aiClustersLoadingSku, setAiClustersLoadingSku] = useState({})  // AI 聚类 loading per SKU
+  const [kwSelectedBySku, setKwSelectedBySku] = useState({})  // {sku: [keyword,...]} 手动多选
 
   // 当日实时汇总（活动级，商品出价 Tab 顶部条）
   const [todaySummary, setTodaySummary] = useState(null)
@@ -1548,6 +1549,18 @@ const AdsOverview = ({ shopId, platform, shops, searched, syncing, lastSyncTime,
                 </Tooltip>
               </Space>
               <Space size={8}>
+                {(kwSelectedBySku[sku] || []).length > 0 && (
+                  <Button size="small" type="primary" danger
+                    icon={<DeleteOutlined />}
+                    onClick={() => {
+                      const selected = kwSelectedBySku[sku] || []
+                      handleSingleExclude(sku, selected, `手动选中 ${selected.length} 个词`)
+                      // 屏蔽后清空选中
+                      setKwSelectedBySku(m => ({ ...m, [sku]: [] }))
+                    }}>
+                    屏蔽选中 {(kwSelectedBySku[sku] || []).length} 个
+                  </Button>
+                )}
                 <Button size="small" icon={<SettingOutlined />}
                   onClick={() => setRulesDrawerOpen(true)}>
                   屏蔽规则
@@ -1725,6 +1738,34 @@ const AdsOverview = ({ shopId, platform, shops, searched, syncing, lastSyncTime,
               pageSize: 20, size: 'small', showSizeChanger: false,
               current: kwTablePageMap[sku] || 1,
               onChange: (p) => setKwTablePageMap(m => ({ ...m, [sku]: p })),
+            }}
+            rowSelection={{
+              selectedRowKeys: (() => {
+                const sel = new Set(kwSelectedBySku[sku] || [])
+                if (kwMode === 'all') {
+                  return (kwSelectedBySku[sku] || [])
+                }
+                // 集群模式：簇内全部变体都被选中才算该行"选中"
+                return clusters.filter(c =>
+                  (c.variants || []).length > 0 &&
+                  (c.variants || []).every(v => sel.has(v.keyword))
+                ).map(c => c.key)
+              })(),
+              onChange: (_, newRows) => {
+                const kwSet = new Set()
+                for (const r of newRows) {
+                  if (r && r.variants && r.variants.length > 0) {
+                    for (const v of r.variants) kwSet.add(v.keyword)
+                  } else if (r && r.keyword) {
+                    kwSet.add(r.keyword)
+                  }
+                }
+                setKwSelectedBySku(m => ({ ...m, [sku]: Array.from(kwSet) }))
+              },
+              getCheckboxProps: (r) => ({
+                disabled: !!r.is_excluded,
+                name: r.keyword,
+              }),
             }}
             expandable={kwMode === 'active' ? {
               expandedRowRender: (r) => (
