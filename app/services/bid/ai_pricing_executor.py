@@ -1716,19 +1716,29 @@ async def _check_and_remove_losing_sku(
 
 def _get_roas_21_30(db, campaign_id: int, sku: str,
                     tenant_id: int, platform: str) -> Optional[float]:
+    """计算"过去 21-30 天那 9 天" 单个 SKU 的 ROAS（不是整个 campaign）。
+    Bug 修 2026-04-22：原 SQL 漏 sku 过滤，导致整个 campaign 的 ROAS
+    被用来判每个 SKU 是否亏损 → 一个亏损就全砍。
+    """
     today     = date.today()
     date_from = today - timedelta(days=30)
     date_to   = today - timedelta(days=21)
 
-    row = db.execute(text("""
+    # 与 _query_sku_history 一致：WB / Ozon 都用 ad_group_id 作为 SKU 标识
+    sku_col = "s.ad_group_id" if platform == "wb" else "COALESCE(s.ad_group_id, 0)"
+
+    row = db.execute(text(f"""
         SELECT SUM(spend) AS spend, SUM(revenue) AS revenue
         FROM ad_stats s
         WHERE s.campaign_id = :campaign_id
           AND s.tenant_id   = :tenant_id
+          AND s.platform    = :platform
+          AND {sku_col}     = :sku
           AND s.stat_date  >= :date_from
           AND s.stat_date   < :date_to
     """), {
         "campaign_id": campaign_id, "tenant_id": tenant_id,
+        "platform": platform, "sku": sku,
         "date_from": date_from, "date_to": date_to,
     }).fetchone()
 
