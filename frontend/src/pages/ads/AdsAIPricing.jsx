@@ -91,8 +91,21 @@ function buildStageTip(stage, record, baseCfg) {
     lines.push(<div key="rc" style={{ paddingLeft: 4 }}>CTR {ctr5.toFixed(2)}% {ctr5 >= 2 ? <span style={{ color: '#52c41a' }}>仍达标</span> : <span style={{ color: '#ff4d4f' }}>恶化</span>}</div>)
     lines.push(<div key="rr" style={{ paddingLeft: 4 }}>CR {cr5.toFixed(2)}% {cr5 >= 2 ? <span style={{ color: '#52c41a' }}>仍达标</span> : <span style={{ color: '#ff4d4f' }}>偏低</span>}</div>)
     lines.push(<div key="rp" style={{ paddingLeft: 4, color: pft >= 0 ? '#52c41a' : '#ff4d4f', fontWeight: 600 }}>利润 {pft >= 0 ? '+' : ''}₽{pft} {pft < 0 ? '亏损' : ''}</div>)
-    if (pft < 0) {
+    if (pft < 0 && stage !== 'declining') {
       lines.push(<div key="ad" style={{ marginTop: 6, color: '#fa8c16', fontSize: 11 }}>建议：检查商品详情页 / 价格 / 库存</div>)
+    }
+  }
+
+  // declining 阶段额外显示"21-30 天前 ROAS vs 保本" 触发条件 + 移除建议
+  if (stage === 'declining') {
+    const mD = reason.match(/21-30天ROAS=([\d.]+)x[\s\S]*?低于保本线([\d.]+)x/)
+    if (mD) {
+      const roas2130 = parseFloat(mD[1])
+      const be = parseFloat(mD[2])
+      lines.push(<div key="dh" style={{ marginTop: 6, color: '#bfbfbf', fontSize: 11 }}>━ 触发删除条件 ━</div>)
+      lines.push(<div key="dr" style={{ paddingLeft: 4 }}>21-30 天前 ROAS <span style={{ color: '#ff4d4f', fontWeight: 600 }}>{roas2130.toFixed(2)}x</span> &lt; 保本 {be.toFixed(2)}x</div>)
+      lines.push(<div key="dl" style={{ paddingLeft: 4, color: '#999', fontSize: 11 }}>（连续亏损 ≥ 9 个健康天）</div>)
+      lines.push(<div key="da" style={{ marginTop: 6, color: '#cf1322', fontWeight: 600 }}>建议：从活动中移除该 SKU</div>)
     }
   }
 

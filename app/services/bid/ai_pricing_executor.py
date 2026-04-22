@@ -1296,10 +1296,28 @@ async def _analyze_now_inner(db, tenant_id: int, shop_id: int,
                             continue
                     else:
                         # 写建议列表（无论 auto_remove/auto_execute/is_ignored 设置）
+                        # 补 CTR/CR (28天) + [recent5d:...] 段，让前端 buildStageTip 能 parse 出多行 Tooltip
+                        ctr_28 = float(sku_stat.get("ctr", 0) or 0) * 100
+                        cr_28  = float(sku_stat.get("cr", 0)  or 0) * 100
+                        rw = _calc_healthy_window_full(
+                            db, tenant_id, camp.id, sku, 5, 0)
+                        if rw["impressions"] > 0:
+                            r_ctr = rw["clicks"]  / rw["impressions"]
+                            r_cr  = rw["orders"]  / rw["clicks"] if rw["clicks"] > 0 else 0
+                            r_pft = rw["revenue"] * (net_margin_l or 0.5) - rw["spend"]
+                            recent_seg = (
+                                f" | [recent5d: ctr={r_ctr*100:.2f}% cr={r_cr*100:.2f}% "
+                                f"profit={r_pft:+.0f} days={rw['days']}]"
+                            )
+                        else:
+                            recent_seg = " | [recent5d: 无健康天数据]"
+
                         reason_txt = (
                             f"[亏损删除建议] 21-30天ROAS={roas_21_30:.2f}x "
                             f"低于保本线{be_roas_l:.2f}x (净毛利率={net_margin_l})，"
-                            f"数据天数{data_days}天，建议从活动中移除该 SKU"
+                            f"数据天数{data_days}天，建议从活动中移除该 SKU "
+                            f"| CTR {ctr_28:.2f}%·CR {cr_28:.2f}%"
+                            + recent_seg
                         )
                         ins = db.execute(text("""
                             INSERT INTO ai_pricing_suggestions (
