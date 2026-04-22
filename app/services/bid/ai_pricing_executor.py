@@ -400,7 +400,20 @@ def _hill_climbing_decision(db, tenant_id: int, campaign_id: int, sku: str,
     is_cold_start = (row is None or row.hill_base_bid is None)
 
     if is_cold_start:
-        direction_pct, reason = _cold_start_direction(sku_stat, breakeven_roas)
+        # 用"剔除噪声后凑齐健康 5 天 vs 再前 5 天"的 ROAS 对比替代固定窗口
+        # 修复：原 last5/prev5 用固定日期段，会被"几乎没投放但偶然中单"的噪声日骗（如 prev5 spend=6.77 ROAS=397x）
+        sp_l5, rv_l5, d_l5    = _calc_healthy_window_metrics(db, tenant_id, campaign_id, sku, 5, 0)
+        sp_p5, rv_p5, d_p5    = _calc_healthy_window_metrics(db, tenant_id, campaign_id, sku, 5, 5)
+        sp_all, rv_all, d_all = _calc_healthy_window_metrics(db, tenant_id, campaign_id, sku, 28, 0)
+        sku_stat_clean = {
+            **sku_stat,
+            "last5": {"days": d_l5, "spend": sp_l5,
+                      "roas": rv_l5 / sp_l5 if sp_l5 > 0 else 0},
+            "prev5": {"days": d_p5, "spend": sp_p5,
+                      "roas": rv_p5 / sp_p5 if sp_p5 > 0 else 0},
+            "roas":  rv_all / sp_all if sp_all > 0 else 0,
+        }
+        direction_pct, reason = _cold_start_direction(sku_stat_clean, breakeven_roas)
         new_base = max(current_bid * (1 + direction_pct), MIN_BID)
         new_direction = 1 if direction_pct >= 0 else -1
         _save_hill_state(db, tenant_id, campaign_id, sku, new_base,
@@ -410,14 +423,14 @@ def _hill_climbing_decision(db, tenant_id: int, campaign_id: int, sku: str,
                 "new_base": new_base,
                 "reason": f"冷启动: {reason} → base ₽{current_bid:.0f}→₽{new_base:.0f}（×时段{time_multiplier}×周末{day_multiplier}）"}
 
-    # 2. 滑动评估：过去 3 天 vs 再前 3 天利润
-    today = date.today()
-    p_recent, recent_d = _calc_profit_window(
-        db, tenant_id, campaign_id, sku,
-        today - timedelta(days=3), today - timedelta(days=1), margin)
-    p_prev, prev_d = _calc_profit_window(
-        db, tenant_id, campaign_id, sku,
-        today - timedelta(days=6), today - timedelta(days=4), margin)
+    # 2. 滑动评估："剔除噪声后凑齐健康 3 天 vs 再前 3 天"的利润对比
+    # 修复：原固定"过去3天 vs 再前3天"在投放断续场景下两边都接近 0，会被微小绝对差骗判涨
+    sp_recent, rv_recent, recent_d = _calc_healthy_window_metrics(
+        db, tenant_id, campaign_id, sku, 3, 0)
+    sp_prev,   rv_prev,   prev_d   = _calc_healthy_window_metrics(
+        db, tenant_id, campaign_id, sku, 3, 3)
+    p_recent = rv_recent * margin - sp_recent
+    p_prev   = rv_prev   * margin - sp_prev
 
     base = float(row.hill_base_bid)
     direction = int(row.hill_step_direction or 1)
