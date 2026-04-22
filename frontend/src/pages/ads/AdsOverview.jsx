@@ -1343,19 +1343,27 @@ const AdsOverview = ({ shopId, platform, shops, searched, syncing, lastSyncTime,
       }
       // 视图模式：active=集群视图(对齐 WB 后台粒度) / excluded=已屏蔽 / all=全量个体变体
       const kwMode = kwViewMode[sku] || 'active'
-      // 俄语停用词（介词/连词不参与聚类）
+      // 俄语停用词（介词/连词不参与聚类） + 形态变化自然消解
       const RU_STOPWORDS = new Set(['для', 'из', 'с', 'со', 'на', 'в', 'во',
         'и', 'по', 'под', 'над', 'от', 'до', 'или', 'не', 'но', 'а',
-        'что', 'как', 'это', 'за', 'при', 'без', 'у'])
-      // 聚类 key：去停用词 + 3 字前缀 + 前 2 实词，逼近 WB "顶级搜索集群" 粒度
+        'что', 'как', 'это', 'за', 'при', 'без', 'у', 'об', 'о'])
+      // 聚类 key：bag-of-words 排序 + 3 字根 + ё 归一 (серьги↔серёжки → сер)
+      // 核心思路：语义接近的变体共享核心 stems 集合，和 WB "顶级搜索集群" 对齐
+      //   "серьги детские медицинский сплав"      → дет+мед+сер+спл
+      //   "серёжки детские из медицинского сплава" → дет+мед+сер+спл  (ё 归一 + 同根)
+      //   "серьги медицинский сплав, детские"     → дет+мед+сер+спл  (顺序无关)
+      //   "серьги для детей"                      → дет+сер  (更少 token 自成簇)
+      //   "серьги сердечки"                       → sер(去重后单 stem) → 回退全词
       const clusterKeyOf = (keyword) => {
-        const raw = String(keyword || '').toLowerCase()
-          .replace(/[^\wа-яё\s-]/gu, ' ')
-        const tokens = raw.split(/[\s\-_]+/)
+        const normalized = String(keyword || '').toLowerCase().replace(/ё/g, 'е')
+        const raw = normalized.replace(/[^\wа-я\s-]/gu, ' ')
+        const stems = raw.split(/[\s\-_]+/)
           .filter(t => t.length >= 3 && !RU_STOPWORDS.has(t))
-          .map(t => t.slice(0, 4))
-        if (tokens.length === 0) return raw.trim()
-        return tokens.slice(0, 2).join('+')
+          .map(t => t.slice(0, 3))
+        const uniq = Array.from(new Set(stems)).sort()
+        // 单 stem 太粗（只有"сер"这种），回退全词避免黑洞合并
+        if (uniq.length <= 1) return normalized.trim()
+        return uniq.join('+')
       }
       // 构造 clusters：按 clusterKey 聚合个体词（只看有点击的活跃词，和 WB 对齐）
       const activeKws = kws.filter(k => (k.clicks || 0) > 0 && !k.is_excluded)
@@ -2058,7 +2066,7 @@ const AdsOverview = ({ shopId, platform, shops, searched, syncing, lastSyncTime,
         title={`广告活动详情 — ${detailData?.name || ''}`}
         open={detailVisible}
         onClose={() => { setDetailVisible(false); setSelectedGroupId(null); setKeywords([]) }}
-        width="85%"
+        width="95%"
         loading={detailLoading}
       >
         {detailData && (
