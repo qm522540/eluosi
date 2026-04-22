@@ -514,7 +514,7 @@ const AdsOverview = ({ shopId, platform, shops, searched, syncing, lastSyncTime,
         </div>
       ) : (
         <div style={{ marginTop: 10, padding: 8, background: '#fff2f0', borderRadius: 4, fontSize: 12, color: '#cf1322' }}>
-          屏蔽后"{list[0]}"将不再触发此商品广告展示。
+          屏蔽后「{list[0]}」将不再触发此商品广告展示。
         </div>
       ),
       okText: '确认屏蔽',
