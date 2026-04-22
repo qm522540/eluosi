@@ -678,10 +678,25 @@ const AdsOverview = ({ shopId, platform, shops, searched, syncing, lastSyncTime,
         getAutoExcludeConfig(id).then(r => setAutoExcludeCfg(r.data)).catch(() => setAutoExcludeCfg(null))
       }
       // 拉店铺全量 listings 以便把 sku 映射到 listing_id → ad_group_id
+      // 后端 page_size 上限 100，店铺 listings 可能数百条，循环分页到拉完
       if (res.data?.shop_id) {
-        getListings({ shop_id: res.data.shop_id, page: 1, page_size: 200 })
-          .then(r => setShopListings(r.data?.items || []))
-          .catch(() => setShopListings([]))
+        const shopIdForListings = res.data.shop_id
+        ;(async () => {
+          const all = []
+          let page = 1
+          while (page <= 20) {
+            try {
+              const r = await getListings({ shop_id: shopIdForListings, page, page_size: 100 })
+              const items = r.data?.items || []
+              all.push(...items)
+              if (items.length < 100) break
+              page += 1
+            } catch {
+              break
+            }
+          }
+          setShopListings(all)
+        })()
       }
     } catch {
       message.error('获取广告详情失败')
