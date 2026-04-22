@@ -1564,7 +1564,16 @@ const AdsOverview = ({ shopId, platform, shops, searched, syncing, lastSyncTime,
           .filter(c => c.wb_valid === true)
           .map(c => String(c.keyword || '').toLowerCase().trim())
       )
-      const tableDataSource = kwMode === 'all' ? kws : clusters
+      // 全部变体模式：可屏词排最前
+      const kwsSorted = kwMode === 'all'
+        ? [...kws].sort((a, b) => {
+            const aValid = wbValidRepsLc.has(String(a.keyword || '').toLowerCase().trim()) ? 0 : 1
+            const bValid = wbValidRepsLc.has(String(b.keyword || '').toLowerCase().trim()) ? 0 : 1
+            if (aValid !== bValid) return aValid - bValid
+            return (b.views || 0) - (a.views || 0)
+          })
+        : kws
+      const tableDataSource = kwMode === 'all' ? kwsSorted : clusters
       return (
         <div style={{ padding: 8, background: '#fafbff', borderRadius: 4, border: '1px solid #e6edff' }}>
           {/* 顶部信息 + 操作按钮栏 */}
@@ -1899,6 +1908,11 @@ const AdsOverview = ({ shopId, platform, shops, searched, syncing, lastSyncTime,
                       {isValidRepInAll && (
                         <Tooltip title="WB 代表词，可直接屏蔽（会连带此簇全部变体一起下线）">
                           <Tag color="green" style={{ margin: 0, fontSize: 11 }}>✓ 可屏</Tag>
+                        </Tooltip>
+                      )}
+                      {kwMode === 'all' && !isValidRepInAll && !r.is_excluded && wbValidRepsLc.size > 0 && (
+                        <Tooltip title="此词不是 WB 集群代表词，屏蔽会被拒绝。想屏蔽同类词 → 切到「集群」Tab 屏整簇">
+                          <Tag style={{ margin: 0, fontSize: 11, color: '#999', background: '#f5f5f5', borderColor: '#d9d9d9' }}>不可屏</Tag>
                         </Tooltip>
                       )}
                       {r.variant_count > 1 && (
