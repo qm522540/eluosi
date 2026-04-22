@@ -1532,14 +1532,18 @@ const AdsOverview = ({ shopId, platform, shops, searched, syncing, lastSyncTime,
                 <Tooltip title={
                   <div style={{ fontSize: 12 }}>
                     <div style={{ marginBottom: 4 }}>📊 数据来自 WB 活动级接口 <code>/adv/v0/stats/keywords</code>（近7天）</div>
-                    <div style={{ marginBottom: 6 }}>⚠️ 与 WB 后台「顶级搜索集群」对齐方式：</div>
-                    <div style={{ paddingLeft: 8, marginBottom: 4 }}>
-                      • <strong>集群</strong>：客户端做俄语词根聚类（前 2 实词 4 字前缀合并）<br/>
+                    <div style={{ marginBottom: 6 }}>⚠️ 三视图含义：</div>
+                    <div style={{ paddingLeft: 8, marginBottom: 6 }}>
+                      • <strong>集群</strong>：DeepSeek AI 语义聚类（对齐 WB「顶级搜索集群」）<br/>
                       • <strong>已屏蔽</strong>：WB 该 SKU 的 minus-list<br/>
-                      • <strong>全部变体</strong>：原始个体词，供质检/一键屏蔽
+                      • <strong>全部变体</strong>：原始个体词
+                    </div>
+                    <div style={{ color: '#cf1322', background: '#fff1f0', padding: 6, borderRadius: 3, marginBottom: 4 }}>
+                      🔒 <strong>WB 屏蔽规则</strong>：WB 只接受"顶级搜索集群代表词"进屏蔽单，
+                      簇内变体和非代表词 100% 被拒绝。屏蔽代表词后 WB 自动把该簇所有变体一起下线。
                     </div>
                     <div style={{ color: '#faad14' }}>
-                      💡 集群数量应和 WB 后台接近，但不保证完全一致（WB 的语义聚类更精细）
+                      💡 想屏蔽某一类搜索 → 用「集群」Tab 勾选代表词屏蔽；「全部变体」Tab 的单词屏蔽多半 WB 会拒绝
                     </div>
                   </div>
                 }>
@@ -1742,23 +1746,16 @@ const AdsOverview = ({ shopId, platform, shops, searched, syncing, lastSyncTime,
             rowSelection={{
               selectedRowKeys: (() => {
                 const sel = new Set(kwSelectedBySku[sku] || [])
-                if (kwMode === 'all') {
-                  return (kwSelectedBySku[sku] || [])
-                }
-                // 集群模式：簇内全部变体都被选中才算该行"选中"
-                return clusters.filter(c =>
-                  (c.variants || []).length > 0 &&
-                  (c.variants || []).every(v => sel.has(v.keyword))
-                ).map(c => c.key)
+                if (kwMode === 'all') return (kwSelectedBySku[sku] || [])
+                // 集群模式：代表词在选中集合里 = 该簇行选中
+                return clusters.filter(c => sel.has(c.keyword)).map(c => c.key)
               })(),
               onChange: (_, newRows) => {
                 const kwSet = new Set()
+                // WB 规则：只记"代表词"（簇级）或"单词"（个体级），不记变体
+                // 屏蔽时只发代表词，WB 会自动连带整簇下线
                 for (const r of newRows) {
-                  if (r && r.variants && r.variants.length > 0) {
-                    for (const v of r.variants) kwSet.add(v.keyword)
-                  } else if (r && r.keyword) {
-                    kwSet.add(r.keyword)
-                  }
+                  if (r && r.keyword) kwSet.add(r.keyword)
                 }
                 setKwSelectedBySku(m => ({ ...m, [sku]: Array.from(kwSet) }))
               },
@@ -1876,14 +1873,19 @@ const AdsOverview = ({ shopId, platform, shops, searched, syncing, lastSyncTime,
                   const color = v >= 5 ? '#52c41a' : v >= 3 ? '#faad14' : '#ff4d4f'
                   return <span style={{ color, fontWeight: 500 }}>{v.toFixed(1)}x</span>
                 }},
-              { title: '操作', key: 'actions', width: 120, align: 'center', fixed: 'right',
+              { title: '操作', key: 'actions', width: 140, align: 'center', fixed: 'right',
                 render: (_, r) => {
                   if (r.is_excluded) {
                     return <Tag color="red" style={{ margin: 0, fontSize: 11 }}>已屏蔽</Tag>
                   }
                   const isCluster = r.variant_count > 1
-                  const blockWords = isCluster ? (r.variants || []).map(v => v.keyword) : [r.keyword]
-                  const label = isCluster ? `整簇 ${r.variant_count} 个变体` : r.keyword
+                  // WB 规则：只接受"顶级搜索集群代表词"入 minus list，簇内变体和非代表词 100% 拒绝
+                  // 集群模式：只发代表词（WB 会自动把整簇所有变体一起下线）
+                  // 全部变体模式：只对能对应上代表词的词允许屏蔽；其他标灰不可操作
+                  const blockWord = r.keyword
+                  const tipText = isCluster
+                    ? `屏蔽此集群代表词，WB 自动连带 ${r.variant_count} 个变体一起下线`
+                    : `只有 WB 认定的"顶级搜索集群代表词"能屏蔽成功。普通变体会被 WB 拒绝。`
                   return (
                     <Space size={4}>
                       <Tooltip title="勾选后此词不会被「一键屏蔽」和「自动屏蔽托管」误屏">
@@ -1892,10 +1894,12 @@ const AdsOverview = ({ shopId, platform, shops, searched, syncing, lastSyncTime,
                           onChange={() => toggleProtected(sku, r.keyword, !!r.is_protected)}
                         />
                       </Tooltip>
-                      <a style={{ color: '#ff4d4f', fontSize: 12 }}
-                        onClick={() => handleSingleExclude(sku, blockWords, label)}>
-                        屏蔽
-                      </a>
+                      <Tooltip title={tipText}>
+                        <a style={{ color: '#ff4d4f', fontSize: 12 }}
+                          onClick={() => handleSingleExclude(sku, [blockWord], blockWord)}>
+                          屏蔽
+                        </a>
+                      </Tooltip>
                     </Space>
                   )
                 } },
