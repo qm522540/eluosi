@@ -1045,7 +1045,7 @@ const OzonAIPricing = ({ shopId, platform = 'ozon' }) => {
       render: (v, r) => r.isGroup ? groupHiddenCell() : `₽${Math.round(v)}`,
     },
     {
-      title: `建议${bidLabel}`, dataIndex: 'suggested_bid', width: 90, align: 'right',
+      title: `建议${bidLabel}`, dataIndex: 'suggested_bid', width: 87, align: 'right',
       render: (v, r) => {
         if (r.isGroup) return groupHiddenCell()
         if (Number(v) === 0 && Number(r.adjust_pct) === -100) {
@@ -1059,7 +1059,7 @@ const OzonAIPricing = ({ shopId, platform = 'ozon' }) => {
       },
     },
     {
-      title: '调幅', dataIndex: 'adjust_pct', width: 80, align: 'center',
+      title: '调幅', dataIndex: 'adjust_pct', width: 83, align: 'center',
       render: (v, r) => {
         if (r.isGroup) return groupHiddenCell()
         if (Number(v) === -100 && Number(r.suggested_bid) === 0) {
