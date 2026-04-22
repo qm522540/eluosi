@@ -269,6 +269,44 @@ def _calc_profit_window(db, tenant_id: int, campaign_id: int, sku: str,
     return profit, days
 
 
+# 噪声日清洗阈值（用户拍 2026-04-22）
+HEALTHY_DAY_ROAS_MAX = 50.0   # 当天 ROAS>50 视为大单噪声，剔除
+HEALTHY_DAY_SPEND_MIN = 10.0  # 当天 spend<₽10 视为投入太少，剔除
+
+
+def _calc_healthy_window_metrics(db, tenant_id: int, campaign_id: int, sku: str,
+                                  recent_n: int, skip_n: int = 0) -> tuple:
+    """剔除噪声日后，取从近到远第 skip_n+1 ~ skip_n+recent_n 个健康天的聚合数据。
+    噪声定义：当天 ROAS > 50（大单）或 spend < ₽10（投入太少）。
+    用于 cold-start"凑齐健康 5 天"和日评估"凑齐健康 3 天"。
+    返回 (spend_sum, revenue_sum, days_count)
+    """
+    today = date.today()
+    rows = db.execute(text("""
+        SELECT stat_date,
+               COALESCE(SUM(spend), 0)   AS spend,
+               COALESCE(SUM(revenue), 0) AS rev
+        FROM ad_stats
+        WHERE tenant_id=:tid AND campaign_id=:cid AND ad_group_id=:sku
+          AND stat_date >= :since
+        GROUP BY stat_date ORDER BY stat_date DESC
+    """), {"tid": tenant_id, "cid": campaign_id, "sku": sku,
+           "since": today - timedelta(days=28)}).fetchall()
+
+    healthy = []
+    for r in rows:
+        spend = float(r.spend or 0)
+        rev   = float(r.rev or 0)
+        roas  = rev / spend if spend > 0 else 0
+        if roas <= HEALTHY_DAY_ROAS_MAX and spend >= HEALTHY_DAY_SPEND_MIN:
+            healthy.append({"spend": spend, "rev": rev})
+
+    target = healthy[skip_n : skip_n + recent_n]
+    sp = sum(d["spend"] for d in target)
+    rv = sum(d["rev"]   for d in target)
+    return sp, rv, len(target)
+
+
 def _save_hill_state(db, tenant_id: int, campaign_id: int, sku: str,
                      base_bid: float, direction: int, step_size: float):
     """写 hill 状态到 ad_groups（INSERT OR UPDATE）。
