@@ -628,11 +628,28 @@ def list_champion_keywords(
     limit = min(max(1, int(limit)), 30)
     min_products = max(2, int(min_products))
 
+    # 注意：seo_keyword_candidates 表里"类目扩散"推断商品会继承源词 orders/impressions 数字,
+    # 直接 SUM 会把同一份真数据重复求和 (如 38 商品 × 2 单 → 76 单的假象).
+    # 修法：只对 sources 含 {scope:'self'} 的行求真数据；推荐覆盖数另记.
     rows = db.execute(text("""
         SELECT c.keyword,
                COUNT(DISTINCT c.product_id) AS product_count,
-               SUM(COALESCE(c.paid_orders,0) + COALESCE(c.organic_orders,0)) AS total_orders,
-               SUM(COALESCE(c.organic_impressions,0)) AS total_impr,
+               COUNT(DISTINCT CASE
+                   WHEN JSON_CONTAINS(c.sources, JSON_OBJECT('type','organic','scope','self'))
+                     OR JSON_CONTAINS(c.sources, JSON_OBJECT('type','paid','scope','self'))
+                   THEN c.product_id
+               END) AS self_product_count,
+               SUM(CASE
+                   WHEN JSON_CONTAINS(c.sources, JSON_OBJECT('type','organic','scope','self'))
+                     OR JSON_CONTAINS(c.sources, JSON_OBJECT('type','paid','scope','self'))
+                   THEN COALESCE(c.paid_orders,0) + COALESCE(c.organic_orders,0)
+                   ELSE 0
+               END) AS total_orders,
+               SUM(CASE
+                   WHEN JSON_CONTAINS(c.sources, JSON_OBJECT('type','organic','scope','self'))
+                   THEN COALESCE(c.organic_impressions,0)
+                   ELSE 0
+               END) AS total_impr,
                ROUND(MAX(c.score), 1) AS max_score,
                SUBSTRING_INDEX(
                    GROUP_CONCAT(DISTINCT p.name_zh ORDER BY p.id SEPARATOR '|'),
@@ -646,8 +663,8 @@ def list_champion_keywords(
           AND c.in_title = 0 AND c.in_attrs = 0
           AND c.status = 'pending'
         GROUP BY c.keyword
-        HAVING product_count >= :minp
-        ORDER BY product_count DESC, total_orders DESC
+        HAVING product_count >= :minp AND self_product_count >= 1
+        ORDER BY total_orders DESC, product_count DESC
         LIMIT :lim
     """), {
         "tid": tenant_id, "sid": shop.id,
@@ -658,6 +675,7 @@ def list_champion_keywords(
         {
             "keyword": r.keyword,
             "product_count": int(r.product_count or 0),
+            "self_product_count": int(r.self_product_count or 0),
             "total_orders": int(r.total_orders or 0),
             "total_impressions": int(r.total_impr or 0),
             "max_score": float(r.max_score or 0),

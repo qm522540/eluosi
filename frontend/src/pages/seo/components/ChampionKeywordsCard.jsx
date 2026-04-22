@@ -74,9 +74,14 @@ const ChampionKeywordsCard = ({ shopId, onPickKeyword }) => {
                   </Text>
                 </div>
                 <Space size={4} wrap style={{ marginBottom: 6 }}>
-                  <Tag color="orange" style={{ margin: 0 }}>
-                    {it.product_count} 个商品
-                  </Tag>
+                  <Tooltip title={`真实贡献商品数（真给订单过的） / 推荐覆盖商品数（含类目扩散推荐）`}>
+                    <Tag color="blue" style={{ margin: 0, cursor: 'help' }}>
+                      真 {it.self_product_count ?? it.product_count}
+                      <Text type="secondary" style={{ fontSize: 10, margin: '0 2px' }}>/</Text>
+                      推 {it.product_count}
+                      <Text type="secondary" style={{ fontSize: 10, marginLeft: 2 }}>商品</Text>
+                    </Tag>
+                  </Tooltip>
                   <Tag color="red" style={{ margin: 0 }}>
                     {it.total_orders} 单
                   </Tag>
