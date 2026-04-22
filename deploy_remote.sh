@@ -55,7 +55,7 @@ pycompile() {
     echo "语法预检通过"
 }
 restart()   { step "重启后端";       run "sudo supervisorctl restart all"; sleep 2; run "sudo supervisorctl status"; }
-build()     { step "构建前端";       run "cd ${DIR}/frontend && npm run build"; }
+build()     { step "构建前端";       run "cd ${DIR}/frontend && rm -rf node_modules/.vite dist && npm run build"; }
 health()    {
     step "健康检查（最多等 30 秒）"
     local attempt=0
