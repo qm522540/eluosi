@@ -59,19 +59,30 @@ const KeywordRollupTab = ({ shops = [], shopId, onShopChange, onJumpToProduct })
   const columns = [
     {
       title: '关键词', dataIndex: 'keyword', key: 'keyword',
-      render: (v, r) => (
-        <Space direction="vertical" size={0}>
-          <Text strong>{v}</Text>
-          <Space size={4} wrap>
-            {r.product_count > 1 && (
-              <Tag color="blue" style={{ fontSize: 11 }}>真实覆盖 {r.product_count} 商品</Tag>
-            )}
-            {r.candidate_row_count > r.product_count && (
-              <Tag color="orange" style={{ fontSize: 11 }}>
-                按商品看展示 {r.candidate_row_count} 次
-              </Tag>
-            )}
-          </Space>
+      render: (v) => <Text strong>{v}</Text>,
+    },
+    {
+      title: (
+        <span>
+          真实贡献
+          <Text type="secondary" style={{ fontSize: 11, marginLeft: 4 }}>
+            / 推荐覆盖
+          </Text>
+        </span>
+      ),
+      key: 'coverage', align: 'center', width: 130,
+      render: (_, r) => (
+        <Space size={2}>
+          <Tag color="blue" style={{ margin: 0, fontSize: 12 }}>
+            {r.product_count} 商品
+          </Tag>
+          <Text type="secondary">/</Text>
+          <Tag
+            color={r.candidate_row_count > r.product_count ? 'orange' : 'default'}
+            style={{ margin: 0, fontSize: 12 }}
+          >
+            {r.candidate_row_count || r.product_count} 商品
+          </Tag>
         </Space>
       ),
     },
@@ -159,15 +170,25 @@ const KeywordRollupTab = ({ shops = [], shopId, onShopChange, onJumpToProduct })
       <Alert
         type="info" showIcon
         style={{ marginBottom: 12 }}
-        message="店级关键词 TOP —— 每一行 = 一个关键词，跨商品汇总真实贡献"
+        message="店级关键词 TOP —— 每行 = 一个关键词的真实店级贡献"
         description={(
           <div>
-            <div>同一个词在多个商品下的<strong>真实搜索流量</strong>（曝光 / 订单 / 收入）合并成一行；点「看落到哪些商品」看这词具体靠哪几个商品撑起来。</div>
-            <div style={{ marginTop: 6, color: '#555', fontSize: 12 }}>
-              <strong>⚠️ 与「按商品看」Tab 的数字差异说明：</strong>
-              按商品看里同一词可能展示 <Text code>N 次</Text>（含"同类目推断"扩散，即把该词推荐给类目下所有商品，<strong>每个推荐商品都会显示相同订单数</strong>）；
-              本 Tab 走<strong>原始搜索记录</strong>，是该词给整店带来的真订单总数，不做 ×N 放大。
-              如果你在按商品看看到很多商品都显示"订单 2"，实际上这 2 单是同一批真订单，<strong>被重复展示以提示"这词可以加进这些商品的标题"</strong>。
+            <div style={{ marginTop: 4 }}>
+              <strong>「真实贡献 / 推荐覆盖」两个数字的含义：</strong>
+            </div>
+            <ul style={{ paddingLeft: 20, marginTop: 4, marginBottom: 4, lineHeight: 1.7 }}>
+              <li>
+                <Tag color="blue" style={{ marginRight: 4 }}>蓝</Tag>
+                <strong>真实贡献商品数</strong>：这个词真给多少个商品带过搜索流量/订单（来自 product_search_queries 原始数据）
+              </li>
+              <li>
+                <Tag color="orange" style={{ marginRight: 4 }}>橙</Tag>
+                <strong>推荐覆盖商品数</strong>：「按商品看」Tab 把这词推荐加进多少个商品的标题（含"类目扩散"机制，给没带过流量的同类目商品也推荐这词）
+              </li>
+            </ul>
+            <div style={{ marginTop: 6, color: '#c41d7f', fontSize: 12, fontWeight: 600 }}>
+              举例：серьги треугольные 真实贡献 2 商品 / 推荐覆盖 40 商品 ——
+              真给 2 单的订单来自这 2 个商品；另外 38 个商品是系统建议加这词进去"试水"，还没真产生过流量。
             </div>
             <div style={{ marginTop: 4, color: '#888', fontSize: 12 }}>
               数据来自平台自然搜索（organic 源）。WB 需 Jam 订阅 / Ozon 需 Premium 订阅。
@@ -281,7 +302,14 @@ const KeywordRollupTab = ({ shops = [], shopId, onShopChange, onJumpToProduct })
         <Alert
           type="info" showIcon
           style={{ marginBottom: 12 }}
-          message={`近 ${days} 天该词共落在 ${drawer.items.length} 个商品上（按收入降序）。`}
+          message={(
+            <span>
+              近 {days} 天该词<strong>真实落在 {drawer.items.length} 个商品</strong>上（按收入降序）。
+              <Text type="secondary" style={{ marginLeft: 6, fontSize: 12 }}>
+                其他商品若在「按商品看」出现但这里不在，说明是类目推断推荐、还没真产生过搜索流量。
+              </Text>
+            </span>
+          )}
         />
         <Table
           rowKey="product_id"

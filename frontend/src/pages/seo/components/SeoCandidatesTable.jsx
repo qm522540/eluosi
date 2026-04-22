@@ -110,14 +110,48 @@ const SeoCandidatesTable = ({
         </Tooltip>
       ),
       key: 'evidence',
-      width: 160,
+      width: 180,
       sorter: (a, b) => {
-        const aOrd = (a.paid_orders || 0) + (a.organic_orders || 0)
-        const bOrd = (b.paid_orders || 0) + (b.organic_orders || 0)
+        // 类目推断推荐 (无 self scope) 的数字都是继承的，排最后
+        const aSelf = (a.sources || []).some(s => s.scope === 'self')
+        const bSelf = (b.sources || []).some(s => s.scope === 'self')
+        if (aSelf !== bSelf) return aSelf ? 1 : -1
+        const aOrd = aSelf ? (a.paid_orders || 0) + (a.organic_orders || 0) : 0
+        const bOrd = bSelf ? (b.paid_orders || 0) + (b.organic_orders || 0) : 0
         if (aOrd !== bOrd) return aOrd - bOrd
-        return (a.organic_impressions || 0) - (b.organic_impressions || 0)
+        const aImp = aSelf ? (a.organic_impressions || 0) : 0
+        const bImp = bSelf ? (b.organic_impressions || 0) : 0
+        return aImp - bImp
       },
       render: (_, r) => {
+        const sources = r.sources || []
+        const hasSelf = sources.some(s => s.scope === 'self')
+        const hasCategory = sources.some(s => s.scope === 'category')
+
+        // 仅类目推断（没 self scope）：该商品没真带过这词的流量，
+        // seo_keyword_candidates 里的订单/曝光数字是继承自源词商品，非真实
+        if (!hasSelf && hasCategory) {
+          return (
+            <Tooltip
+              overlayStyle={{ maxWidth: 320 }}
+              title={(
+                <div style={{ lineHeight: 1.6 }}>
+                  <div><strong>类目推断推荐：</strong></div>
+                  <div>同类目别的商品用这词成交过，所以推荐给本商品也加进标题试试。</div>
+                  <div style={{ color: '#ffd591', marginTop: 4 }}>
+                    <strong>本商品尚未真实触发该词</strong>——订单/曝光是 0，不继承源词数字。
+                  </div>
+                </div>
+              )}
+            >
+              <Tag color="default" style={{ fontSize: 11, cursor: 'help' }}>
+                类目推断 · 待试水
+              </Tag>
+            </Tooltip>
+          )
+        }
+
+        // 含 self scope：显示真实订单/曝光
         const orders = (r.paid_orders || 0) + (r.organic_orders || 0)
         const impr = r.organic_impressions || 0
         const tier = evidenceTier(orders, impr)
