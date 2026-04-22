@@ -1007,15 +1007,16 @@ async def campaign_keyword_clusters(
         await client2.close()
     valid_reps = [name for name, v in valid_map.items() if v]
 
-    # Step 3: AI 二次分配所有词到有效簇
-    # 把 active_top + existing excluded (也算入分配源，屏蔽的词归入自己所在的 WB 簇)
-    all_kw_to_assign = list(dict.fromkeys(active_top + seed_reps + [
+    # Step 3: AI 二次分配 —— 全部触发词都进分配（包含 0 点击长尾）
+    # WB 后台一个簇下可能有 80+ 关键词，必须把全量词都给 AI 分配
+    all_kw_to_assign = list(dict.fromkeys([
         kw["keyword"] for kw in keywords_raw if kw.get("keyword")
-        and kw["keyword"].lower().strip() in {w.lower().strip() for w in excluded_list}
     ]))
-    # 截断到 177 以内
+    # 单次 AI 调用 token 上限：200 个关键词内都 OK (≈3000 input token)
     if len(all_kw_to_assign) > 200:
-        all_kw_to_assign = all_kw_to_assign[:200]
+        # 取 Top 200 按曝光，通常已经覆盖全部有意义词
+        by_views = sorted(keywords_raw, key=lambda x: x.get("views", 0), reverse=True)
+        all_kw_to_assign = list(dict.fromkeys([k["keyword"] for k in by_views[:200] if k.get("keyword")]))
 
     assignments = {}
     if valid_reps and all_kw_to_assign:
