@@ -1716,36 +1716,57 @@ async def _check_and_remove_losing_sku(
 
 def _get_roas_21_30(db, campaign_id: int, sku: str,
                     tenant_id: int, platform: str) -> Optional[float]:
-    """计算"过去 21-30 天那 9 天" 单个 SKU 的 ROAS（不是整个 campaign）。
-    Bug 修 2026-04-22：原 SQL 漏 sku 过滤，导致整个 campaign 的 ROAS
-    被用来判每个 SKU 是否亏损 → 一个亏损就全砍。
+    """计算"亏损判定" 的历史 ROAS：剔除噪声日后取 today-21 往前 9 个健康天。
+
+    Bug 修 2026-04-22 第二轮：与 cold-start / 日评估的清洗规则统一。
+    原固定窗口 today-30~today-21 在投放断续场景下会被噪声日扭曲：
+    - 停投天 spend=0 不贡献，但减少有效样本
+    - 偶然 1 单爆款（spend<10 或 ROAS>50）让窗口 ROAS 假高，漏判亏损
+
+    新规则：从 today-21 往前数，跳过噪声日（ROAS>50 或 spend<₽10），
+    凑齐 9 个真实投放天，算合并 ROAS。无论投放断续与否，看到的都是
+    真实投放期的 9 天数据。
     """
     today     = date.today()
-    date_from = today - timedelta(days=30)
-    date_to   = today - timedelta(days=21)
+    cutoff    = today - timedelta(days=21)
+    sku_col   = "s.ad_group_id" if platform == "wb" else "COALESCE(s.ad_group_id, 0)"
 
-    # 与 _query_sku_history 一致：WB / Ozon 都用 ad_group_id 作为 SKU 标识
-    sku_col = "s.ad_group_id" if platform == "wb" else "COALESCE(s.ad_group_id, 0)"
-
-    row = db.execute(text(f"""
-        SELECT SUM(spend) AS spend, SUM(revenue) AS revenue
+    # 拉 cutoff 之前所有数据（往前不限），按日期倒序找前 9 个健康天
+    rows = db.execute(text(f"""
+        SELECT s.stat_date,
+               COALESCE(SUM(s.spend), 0)   AS spend,
+               COALESCE(SUM(s.revenue), 0) AS rev
         FROM ad_stats s
         WHERE s.campaign_id = :campaign_id
           AND s.tenant_id   = :tenant_id
           AND s.platform    = :platform
           AND {sku_col}     = :sku
-          AND s.stat_date  >= :date_from
-          AND s.stat_date   < :date_to
+          AND s.stat_date  <= :cutoff
+        GROUP BY s.stat_date ORDER BY s.stat_date DESC
+        LIMIT 60
     """), {
         "campaign_id": campaign_id, "tenant_id": tenant_id,
-        "platform": platform, "sku": sku,
-        "date_from": date_from, "date_to": date_to,
-    }).fetchone()
+        "platform": platform, "sku": sku, "cutoff": cutoff,
+    }).fetchall()
 
-    if not row or not row.spend or float(row.spend) <= 0:
+    healthy = []
+    for r in rows:
+        spend = float(r.spend or 0)
+        rev   = float(r.rev or 0)
+        roas  = rev / spend if spend > 0 else 0
+        if roas <= HEALTHY_DAY_ROAS_MAX and spend >= HEALTHY_DAY_SPEND_MIN:
+            healthy.append({"spend": spend, "rev": rev})
+            if len(healthy) >= 9:
+                break
+
+    if not healthy:
         return None
 
-    return round(float(row.revenue) / float(row.spend), 2)
+    sp = sum(d["spend"] for d in healthy)
+    rv = sum(d["rev"]   for d in healthy)
+    if sp <= 0:
+        return None
+    return round(rv / sp, 2)
 
 
 # ==================== 自动执行 ====================
