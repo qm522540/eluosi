@@ -1242,6 +1242,16 @@ async def _analyze_now_inner(db, tenant_id: int, shop_id: int,
     saved        = []
     auto_removed = 0
 
+    # 预加载 SKU → title_ru 映射：WB API 的 subject_name 实际是商品分类（"耳环"），
+    # 不是商品名。优先用 platform_listings.title_ru 拿真实商品名。
+    pl_rows = db.execute(text("""
+        SELECT platform_sku_id, title_ru
+        FROM platform_listings
+        WHERE shop_id = :sid AND tenant_id = :tid
+          AND title_ru IS NOT NULL AND title_ru != ''
+    """), {"sid": shop_id, "tid": tenant_id}).fetchall()
+    sku_name_map = {r.platform_sku_id: r.title_ru for r in pl_rows}
+
     for camp in campaigns:
         products = products_by_campaign.get(camp.id) or []
 
@@ -1256,10 +1266,12 @@ async def _analyze_now_inner(db, tenant_id: int, shop_id: int,
                     current_bid = float(int(bid_raw)) / 1_000_000
                 except (ValueError, TypeError):
                     current_bid = 0
-                sku_name = (p.get("title") or "")[:300]
+                api_name = (p.get("title") or "")
             else:
                 current_bid = float(p.get("bid_search") or 0)
-                sku_name    = (p.get("subject_name") or "")[:300]
+                api_name = (p.get("subject_name") or "")  # WB 的 subject_name 是品类
+            # 优先用 platform_listings.title_ru（真实商品名），缺才 fallback 到 API 字段
+            sku_name = (sku_name_map.get(sku) or api_name)[:300]
 
             if current_bid <= 0:
                 continue
