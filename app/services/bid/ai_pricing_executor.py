@@ -250,6 +250,7 @@ def _profit_max_decision(current_roas: float, breakeven_roas: float,
 HILL_STEP_SEQUENCE = [0.20, 0.10, 0.05, 0.02]  # 步长收敛序列
 HILL_PROFIT_TIE_THRESHOLD = 20.0  # 持平阈值 ₽20（用户拍）
 HILL_ROAS_ANOMALY = 50.0          # ROAS > 50x 视为样本不足（与 _profit_max_decision Bug2 一致）
+HILL_SKIP_REEVAL_HOURS = 23       # 一天 1 次评估护栏：距上次评估 < 23h 跳过 base 重算（防 Celery 24次/天 + 用户多点 analyze_now 击穿设计假设）
 
 
 def _calc_profit_window(db, tenant_id: int, campaign_id: int, sku: str,
@@ -324,14 +325,14 @@ def _save_hill_state(db, tenant_id: int, campaign_id: int, sku: str,
             hill_base_bid, hill_step_direction, hill_step_size, hill_last_eval_at
         ) VALUES (
             :tid, :cid, :sku, :sku,
-            :base, :dir, :step, NOW()
+            :base, :dir, :step, UTC_TIMESTAMP()
         )
         ON DUPLICATE KEY UPDATE
             tenant_id = :tid,
             hill_base_bid       = :base,
             hill_step_direction = :dir,
             hill_step_size      = :step,
-            hill_last_eval_at   = NOW()
+            hill_last_eval_at   = UTC_TIMESTAMP()
     """), {"tid": tenant_id, "cid": campaign_id, "sku": sku,
            "base": round(base_bid, 2), "dir": direction, "step": step_size})
 
@@ -428,6 +429,25 @@ def _hill_climbing_decision(db, tenant_id: int, campaign_id: int, sku: str,
                 "new_base": new_base,
                 "reason": f"冷启动: {reason} → base ₽{current_bid:.0f}→₽{new_base:.0f}（×时段{time_multiplier}×周末{day_multiplier}）"}
 
+    base = float(row.hill_base_bid)
+    direction = int(row.hill_step_direction or 1)
+    step_size = float(row.hill_step_size or 0.20)
+
+    # 一天 1 次评估护栏（2026-04-22 修：防 Celery 每小时跑 + 用户多点 analyze_now 触发 N 次评估）
+    # 设计假设：base 一天最多动 1 次（凌晨爬山），白天每小时只做时段叠加
+    # 实证 sku 498605688 在 21h 内被评估 5 次，base 从 ₽33→₽22 + step 从 0.20→0.05
+    if row.hill_last_eval_at is not None:
+        # _save_hill_state 用 UTC_TIMESTAMP() 写入，这里用 utc naive 比较（MySQL 返回 naive datetime）
+        now_utc_naive = datetime.now(timezone.utc).replace(tzinfo=None)
+        hours_since = (now_utc_naive - row.hill_last_eval_at).total_seconds() / 3600
+        if 0 <= hours_since < HILL_SKIP_REEVAL_HOURS:
+            optimal_bid = int(round(base * time_multiplier * day_multiplier))
+            return {"action": "hold_today", "optimal_bid": max(optimal_bid, MIN_BID),
+                    "new_base": base,
+                    "reason": (f"今日已评估({hours_since:.1f}h前) base ₽{base:.0f}不动 "
+                               f"方向{'+1' if direction>0 else '-1'} 步长{step_size*100:.0f}% "
+                               f"→ ×时段{time_multiplier}×周末{day_multiplier} = ₽{optimal_bid}")}
+
     # 2. 滑动评估："剔除噪声后凑齐健康 3 天 vs 再前 3 天"的利润对比
     # 修复：原固定"过去3天 vs 再前3天"在投放断续场景下两边都接近 0，会被微小绝对差骗判涨
     sp_recent, rv_recent, recent_d = _calc_healthy_window_metrics(
@@ -436,10 +456,6 @@ def _hill_climbing_decision(db, tenant_id: int, campaign_id: int, sku: str,
         db, tenant_id, campaign_id, sku, 3, 3)
     p_recent = rv_recent * margin - sp_recent
     p_prev   = rv_prev   * margin - sp_prev
-
-    base = float(row.hill_base_bid)
-    direction = int(row.hill_step_direction or 1)
-    step_size = float(row.hill_step_size or 0.20)
 
     # 数据缺失保护：任一窗口无数据 → hold（base 不动）
     if recent_d == 0 or prev_d == 0:
