@@ -59,12 +59,44 @@ const templateTypeConfig = {
 // ==================== 商品阶段配置 ====================
 
 // tip 只描述"阶段是什么"，不描述"动作建议"——动作由决策器 reason 说了算
+// 静态 tip 作 fallback；有 reason 时 buildStageTip 用真实数字渲染多行 Tooltip
 const STAGE_CONFIG = {
   cold_start: { color: 'blue', label: '冷启动', tip: '累计订单 <20 单，数据仍在积累' },
   testing: { color: 'orange', label: '测试期', tip: 'CTR ≥2% 达标，但 CR <2% 转化链待验证' },
   growing: { color: 'green', label: '放量期', tip: 'CTR 和 CR 均 ≥2%，商品已通过验证' },
   declining: { color: 'red', label: '衰退预警', tip: 'ROAS 近期持续下滑且低于保本线' },
   unknown: { color: 'default', label: '数据不足', tip: '有效数据不足 3 天' },
+}
+
+// 从 reason 字符串解析 28 天 CTR/CR + 近 5 健康天 ctr/cr/profit/days，渲染动态 Tooltip
+function buildStageTip(stage, record, baseCfg) {
+  const reason = record?.reason || ''
+  const m28 = reason.match(/CTR\s+([\d.]+)%[·\s]+CR\s+([\d.]+)%/)
+  const m5  = reason.match(/\[recent5d:\s*ctr=([\d.-]+)%\s+cr=([\d.-]+)%\s+profit=([+-]?\d+)\s+days=(\d+)\]/)
+  if (!m28 && !m5) return baseCfg.tip
+
+  const lines = [<div key="t" style={{ fontWeight: 600, marginBottom: 4 }}>{baseCfg.label}</div>]
+
+  if (m28) {
+    const ctr = parseFloat(m28[1]); const cr = parseFloat(m28[2])
+    lines.push(<div key="h" style={{ marginTop: 6, color: '#bfbfbf', fontSize: 11 }}>━ 历史 28 天 ━</div>)
+    lines.push(<div key="hc" style={{ paddingLeft: 4 }}>CTR {ctr.toFixed(2)}% {ctr >= 2 ? <span style={{ color: '#52c41a' }}>≥2% 达标</span> : <span style={{ color: '#ff4d4f' }}>&lt;2% 待提升</span>}</div>)
+    lines.push(<div key="hr" style={{ paddingLeft: 4 }}>CR {cr.toFixed(2)}% {cr >= 2 ? <span style={{ color: '#52c41a' }}>≥2% 达标</span> : <span style={{ color: '#ff4d4f' }}>&lt;2% 转化链待验证</span>}</div>)
+  }
+
+  if (m5) {
+    const ctr5 = parseFloat(m5[1]); const cr5 = parseFloat(m5[2])
+    const pft = parseInt(m5[3], 10); const days = parseInt(m5[4], 10)
+    lines.push(<div key="r" style={{ marginTop: 6, color: '#bfbfbf', fontSize: 11 }}>━ 近 5 健康天（{days} 天）━</div>)
+    lines.push(<div key="rc" style={{ paddingLeft: 4 }}>CTR {ctr5.toFixed(2)}% {ctr5 >= 2 ? <span style={{ color: '#52c41a' }}>仍达标</span> : <span style={{ color: '#ff4d4f' }}>恶化</span>}</div>)
+    lines.push(<div key="rr" style={{ paddingLeft: 4 }}>CR {cr5.toFixed(2)}% {cr5 >= 2 ? <span style={{ color: '#52c41a' }}>仍达标</span> : <span style={{ color: '#ff4d4f' }}>偏低</span>}</div>)
+    lines.push(<div key="rp" style={{ paddingLeft: 4, color: pft >= 0 ? '#52c41a' : '#ff4d4f', fontWeight: 600 }}>利润 {pft >= 0 ? '+' : ''}₽{pft} {pft < 0 ? '亏损' : ''}</div>)
+    if (pft < 0) {
+      lines.push(<div key="ad" style={{ marginTop: 6, color: '#fa8c16', fontSize: 11 }}>建议：检查商品详情页 / 价格 / 库存</div>)
+    }
+  }
+
+  return <div style={{ maxWidth: 280 }}>{lines}</div>
 }
 
 const OPTIMIZE_LABEL = {
@@ -80,9 +112,9 @@ const PROMO_PHASE_MAP = {
 // 商品阶段列（共享）
 const stageColumn = {
   title: '商品阶段', dataIndex: 'product_stage', width: 110,
-  render: (stage) => {
+  render: (stage, record) => {
     const cfg = STAGE_CONFIG[stage] || STAGE_CONFIG.unknown
-    return <Tooltip title={cfg.tip}><Tag color={cfg.color} style={{ cursor: 'help' }}>{cfg.label}</Tag></Tooltip>
+    return <Tooltip title={buildStageTip(stage, record, cfg)}><Tag color={cfg.color} style={{ cursor: 'help' }}>{cfg.label}</Tag></Tooltip>
   },
 }
 
