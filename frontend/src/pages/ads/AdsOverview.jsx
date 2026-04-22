@@ -21,7 +21,7 @@ import {
   getAdStats, getAdSummary,
   exportAdStats, getAlerts, getAlertConfig, updateAlertConfig,
   getCampaignProducts, getCampaignKeywords, getCampaignKeywordClusters,
-  excludeKeywords, unexcludeKeywords, updateCampaignBid, getCampaignBudget,
+  excludeKeywords, unexcludeKeywords, probeClusterRep, updateCampaignBid, getCampaignBudget,
   addProtectedKeyword, removeProtectedKeyword,
   getAutoExcludeConfig, toggleAutoExclude, runAutoExcludeNow, getAutoExcludeLogs,
   getCampaignSummary, getOzonSkuQueries, syncOzonSkuQueries,
@@ -337,6 +337,9 @@ const AdsOverview = ({ shopId, platform, shops, searched, syncing, lastSyncTime,
   const [aiClustersBySku, setAiClustersBySku] = useState({})  // AI 聚类结果 per SKU
   const [aiClustersLoadingSku, setAiClustersLoadingSku] = useState({})  // AI 聚类 loading per SKU
   const [kwSelectedBySku, setKwSelectedBySku] = useState({})  // {sku: [keyword,...]} 手动多选
+  const [probeInputVisible, setProbeInputVisible] = useState({})  // {sku: bool}
+  const [probeInput, setProbeInput] = useState({})  // {sku: str}
+  const [probingSku, setProbingSku] = useState(null)
 
   // 当日实时汇总（活动级，商品出价 Tab 顶部条）
   const [todaySummary, setTodaySummary] = useState(null)
@@ -496,6 +499,40 @@ const AdsOverview = ({ shopId, platform, shops, searched, syncing, lastSyncTime,
       }
     } catch (err) {
       message.error(err.message || err?.response?.data?.msg || '操作失败')
+    }
+  }
+
+  // 手动探测：用户粘贴 WB 后台的簇名，后端 oracle 验证
+  const handleProbeClusterRep = async (sku) => {
+    const kw = String(probeInput[sku] || '').trim()
+    if (!kw) { message.warning('请输入集群代表词'); return }
+    if (!detailData?.id) return
+    setProbingSku(sku)
+    try {
+      const r = await probeClusterRep(detailData.id, parseInt(sku), kw)
+      const ok = r.data?.wb_valid
+      const msg = r.data?.msg || (ok ? '已存入' : 'WB 拒绝')
+      if (ok) {
+        message.success(msg, 3)
+        // 清集群缓存 + 重拉
+        setAiClustersBySku(m => ({ ...m, [sku]: undefined }))
+        setProbeInput(m => ({ ...m, [sku]: '' }))
+        setProbeInputVisible(m => ({ ...m, [sku]: false }))
+        // 重新触发 AI 聚类
+        setAiClustersLoadingSku(m => ({ ...m, [sku]: true }))
+        try {
+          const resp = await getCampaignKeywordClusters(detailData.id, parseInt(sku), 7)
+          setAiClustersBySku(m => ({ ...m, [sku]: resp.data?.clusters || [] }))
+        } finally {
+          setAiClustersLoadingSku(m => ({ ...m, [sku]: false }))
+        }
+      } else {
+        message.error(msg, 3)
+      }
+    } catch (err) {
+      message.error(err.message || '探测失败')
+    } finally {
+      setProbingSku(null)
     }
   }
 
@@ -1624,6 +1661,30 @@ const AdsOverview = ({ shopId, platform, shops, searched, syncing, lastSyncTime,
                 </Tooltip>
               </Space>
               <Space size={8}>
+                {kwMode === 'active' && !probeInputVisible[sku] && (
+                  <Button size="small" icon={<PlusOutlined />}
+                    onClick={() => setProbeInputVisible(m => ({ ...m, [sku]: true }))}>
+                    添加 WB 簇名
+                  </Button>
+                )}
+                {kwMode === 'active' && probeInputVisible[sku] && (
+                  <Space size={4}>
+                    <Input
+                      size="small"
+                      placeholder="粘贴 WB 后台的簇代表词..."
+                      value={probeInput[sku] || ''}
+                      onChange={e => setProbeInput(m => ({ ...m, [sku]: e.target.value }))}
+                      onPressEnter={() => handleProbeClusterRep(sku)}
+                      style={{ width: 240 }}
+                    />
+                    <Button size="small" type="primary" loading={probingSku === sku}
+                      onClick={() => handleProbeClusterRep(sku)}>验证</Button>
+                    <Button size="small" onClick={() => {
+                      setProbeInputVisible(m => ({ ...m, [sku]: false }))
+                      setProbeInput(m => ({ ...m, [sku]: '' }))
+                    }}>取消</Button>
+                  </Space>
+                )}
                 {(kwSelectedBySku[sku] || []).length > 0 && (
                   <Button size="small" type="primary" danger
                     icon={<DeleteOutlined />}

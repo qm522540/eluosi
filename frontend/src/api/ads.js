@@ -274,6 +274,14 @@ export function unexcludeKeywords(campaignId, nmId, keywords) {
   })
 }
 
+/** 手动探测候选集群代表词：调 WB oracle 验证是否为 WB 认可的集群代表词 */
+export function probeClusterRep(campaignId, nmId, keyword) {
+  return request.post(`/ads/campaign-keywords/${campaignId}/probe-cluster-rep`, {
+    nm_id: nmId,
+    keyword,
+  }, { timeout: 30000 })
+}
+
 /** 修改商品出价 */
 export function updateCampaignBid(campaignId, data) {
   return request.post(`/ads/campaign-products/${campaignId}/update-bid`, data)
