@@ -67,3 +67,13 @@ export function getRoiReport(shopId, params) {
 export function getKeywordTrackingSkus(shopId, params) {
   return request.get(`${BASE}/shop/${shopId}/keyword-tracking/skus`, { params })
 }
+
+/** 店级关键词聚合：每行=关键词跨商品汇总 */
+export function getKeywordRollup(shopId, params) {
+  return request.get(`${BASE}/shop/${shopId}/keyword-rollup`, { params })
+}
+
+/** 单关键词下钻：该词在各商品的贡献分项 */
+export function getKeywordRollupProducts(shopId, params) {
+  return request.get(`${BASE}/shop/${shopId}/keyword-rollup/products`, { params })
+}

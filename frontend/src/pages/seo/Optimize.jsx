@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { useSearchParams } from 'react-router-dom'
-import { Typography, Card, Space, Alert, message, Modal, Button, Tag } from 'antd'
+import { Typography, Card, Space, Alert, message, Modal, Button, Tag, Tabs } from 'antd'
 import { ExclamationCircleOutlined, RobotOutlined, CloseOutlined } from '@ant-design/icons'
 import { getShops } from '@/api/shops'
 import {
@@ -11,6 +11,7 @@ import SeoStatsCards from './components/SeoStatsCards'
 import SeoCandidatesTable from './components/SeoCandidatesTable'
 import AiTitleModal from './components/AiTitleModal'
 import ChampionKeywordsCard from './components/ChampionKeywordsCard'
+import KeywordRollupTab from './components/KeywordRollupTab'
 
 const { Title, Text } = Typography
 
@@ -37,6 +38,7 @@ const Optimize = () => {
 
   const [selectedKeys, setSelectedKeys] = useState([])
   const [aiModal, setAiModal] = useState({ open: false, product: null, candidates: [] })
+  const [activeTab, setActiveTab] = useState('by-product')
 
   useEffect(() => {
     getShops({ page: 1, page_size: 100 })
@@ -204,15 +206,8 @@ const Optimize = () => {
 
   const noEmpty = data?.totals?.total === 0 && status === 'pending'
 
-  return (
-    <div>
-      <div style={{ marginBottom: 16 }}>
-        <Title level={4} style={{ marginBottom: 4 }}>SEO 优化建议 · 反哺候选词库</Title>
-        <Text type="secondary">
-          基于买家真实搜索数据，告诉你「哪个商品的俄语标题里应该加哪些关键词」才能多吃免费曝光。
-        </Text>
-      </div>
-
+  const byProductTab = (
+    <>
       <Alert
         type="info"
         showIcon
@@ -363,6 +358,50 @@ const Optimize = () => {
         productName={aiModal.product?.name}
         currentTitle={aiModal.product?.currentTitle}
         selectedCandidates={aiModal.candidates}
+      />
+    </>
+  )
+
+  return (
+    <div>
+      <div style={{ marginBottom: 16 }}>
+        <Title level={4} style={{ marginBottom: 4 }}>SEO 优化建议 · 反哺候选词库</Title>
+        <Text type="secondary">
+          基于买家真实搜索数据，告诉你「哪个商品的俄语标题里应该加哪些关键词」才能多吃免费曝光。
+        </Text>
+      </div>
+
+      <Tabs
+        activeKey={activeTab}
+        onChange={setActiveTab}
+        items={[
+          {
+            key: 'by-product',
+            label: '按商品看（反哺候选）',
+            children: byProductTab,
+          },
+          {
+            key: 'by-keyword',
+            label: '店级关键词 TOP',
+            children: (
+              <KeywordRollupTab
+                shops={shops}
+                shopId={shopId}
+                onShopChange={(v) => { setShopId(v); setPage(1); setSelectedKeys([]) }}
+                onJumpToProduct={({ productId, keyword: kw }) => {
+                  setProductFilter(productId)
+                  setKeyword(kw)
+                  setSource('all')
+                  setStatus('pending')
+                  setPage(1)
+                  setSelectedKeys([])
+                  setActiveTab('by-product')
+                  message.info('已跳到「按商品看」Tab，已按该商品 + 关键词筛选')
+                }}
+              />
+            ),
+          },
+        ]}
       />
     </div>
   )
