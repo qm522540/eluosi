@@ -21,6 +21,7 @@ from app.services.seo.health_service import compute_shop_health
 from app.services.seo.generated_history import list_generated_titles, mark_title_applied
 from app.services.seo.keyword_tracking_service import compute_keyword_tracking, list_query_top_skus
 from app.services.seo.roi_report_service import compute_roi_report
+from app.services.seo.keyword_rollup_service import compute_keyword_rollup, list_rollup_products
 from app.utils.response import success, error
 
 router = APIRouter()
@@ -276,6 +277,53 @@ def shop_keyword_tracking_skus(
     result = list_query_top_skus(
         db, tenant_id, shop,
         query_text=query_text, date_range=date_range, limit=limit,
+    )
+    if result.get("code") != 0:
+        return error(result["code"], result.get("msg", ""))
+    return success(result["data"])
+
+
+@router.get("/shop/{shop_id}/keyword-rollup")
+def shop_keyword_rollup(
+    shop_id: int,
+    days: int = Query(30, ge=7, le=90, description="回溯窗口天数"),
+    sort: str = Query("revenue_desc", description="revenue_desc / orders_desc / impressions_desc / cart_desc"),
+    keyword: str = Query("", description="关键词模糊筛选"),
+    min_orders: int = Query(0, ge=0, description="订单数下限（过滤零单噪声）"),
+    limit: int = Query(100, ge=10, le=500, description="最多返回 N 条"),
+    db: Session = Depends(get_db),
+    tenant_id: int = Depends(get_tenant_id),
+    shop=Depends(get_owned_shop),
+):
+    """店级关键词聚合：每行 = 关键词，跨商品汇总（自然搜索 organic scope）
+
+    与 /candidates 不同，此视图按 query_text 一维聚合；
+    同一个词跨多商品的总贡献一目了然，排名靠前的是店铺摇钱树。
+    """
+    result = compute_keyword_rollup(
+        db, tenant_id, shop,
+        days=days, sort=sort, keyword=keyword,
+        min_orders=min_orders, limit=limit,
+    )
+    if result.get("code") != 0:
+        return error(result["code"], result.get("msg", ""))
+    return success(result["data"])
+
+
+@router.get("/shop/{shop_id}/keyword-rollup/products")
+def shop_keyword_rollup_products(
+    shop_id: int,
+    keyword: str = Query(..., min_length=1, description="要下钻的关键词"),
+    days: int = Query(30, ge=7, le=90),
+    limit: int = Query(20, ge=1, le=100),
+    db: Session = Depends(get_db),
+    tenant_id: int = Depends(get_tenant_id),
+    shop=Depends(get_owned_shop),
+):
+    """单关键词下钻：看该词在各商品的贡献（缩略图 + 标题 + 曝光/加购/订单/收入）"""
+    result = list_rollup_products(
+        db, tenant_id, shop,
+        keyword=keyword, days=days, limit=limit,
     )
     if result.get("code") != 0:
         return error(result["code"], result.get("msg", ""))
