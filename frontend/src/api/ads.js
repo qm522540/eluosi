@@ -266,6 +266,14 @@ export function getCampaignKeywordClusters(campaignId, nmId, days = 7) {
   })
 }
 
+/** 解除屏蔽：从 WB 活动 minus-list 里移除指定关键词 */
+export function unexcludeKeywords(campaignId, nmId, keywords) {
+  return request.post(`/ads/campaign-keywords/${campaignId}/unexclude`, {
+    nm_id: nmId,
+    keywords,
+  })
+}
+
 /** 修改商品出价 */
 export function updateCampaignBid(campaignId, data) {
   return request.post(`/ads/campaign-products/${campaignId}/update-bid`, data)

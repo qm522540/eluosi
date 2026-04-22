@@ -1238,6 +1238,101 @@ async def exclude_keywords(
     })
 
 
+class UnexcludeKeywordsRequest(BaseModel):
+    nm_id: int = Field(..., description="WB 商品 nm_id")
+    keywords: list = Field(..., description="要解除屏蔽的关键词列表")
+
+
+@router.post("/campaign-keywords/{campaign_id}/unexclude")
+async def unexclude_keywords(
+    campaign_id: int,
+    req: UnexcludeKeywordsRequest,
+    db: Session = Depends(get_db),
+    tenant_id: int = Depends(get_tenant_id),
+):
+    """解除屏蔽：把指定词从 WB 活动的 minus-phrases 里移除
+
+    原理：拉当前 minus list → 减去要解除的词 → 全量写回 WB（set-minus 是覆盖语义）
+    """
+    from app.models.ad import AdCampaign
+    from app.models.shop import Shop
+
+    camp = db.query(AdCampaign).filter(
+        AdCampaign.id == campaign_id, AdCampaign.tenant_id == tenant_id
+    ).first()
+    if not camp:
+        return error(50001, "广告活动不存在")
+    if camp.platform != "wb":
+        return error(10002, "仅支持 WB 平台")
+
+    shop = db.query(Shop).filter(Shop.id == camp.shop_id).first()
+    if not shop:
+        return error(30001, "店铺不存在")
+
+    to_remove = [w.strip() for w in req.keywords if w.strip()]
+    to_remove_lower = {w.lower() for w in to_remove}
+    if not to_remove:
+        return success({
+            "campaign_id": campaign_id, "nm_id": req.nm_id,
+            "removed": [], "total_excluded": 0,
+        })
+
+    from app.services.platform.wb import WBClient
+    client = WBClient(shop_id=shop.id, api_key=shop.api_key)
+    try:
+        existing_map = await client.fetch_excluded_keywords(
+            advert_id=camp.platform_campaign_id, nm_ids=[req.nm_id])
+        existing = existing_map.get(int(req.nm_id), [])
+        # 过滤掉要移除的词
+        remaining = [w for w in existing if w.lower().strip() not in to_remove_lower]
+        # 实际移除的词 = existing 里真的有的
+        actually_removed = [w for w in existing if w.lower().strip() in to_remove_lower]
+
+        if len(remaining) == len(existing):
+            return success({
+                "campaign_id": campaign_id, "nm_id": req.nm_id,
+                "removed": [], "total_excluded": len(existing),
+                "msg": "要解除的词都不在当前屏蔽列表里，未变更",
+            })
+
+        result = await client.set_excluded_keywords(
+            advert_id=camp.platform_campaign_id,
+            nm_id=int(req.nm_id), words=remaining,
+        )
+        if not result.get("ok"):
+            return error(92011, result.get("error", "WB 接口调用失败"))
+
+        # 失效缓存
+        _invalidate_excluded(camp.platform_campaign_id, int(req.nm_id))
+
+        # 并失效 WB 集群相关缓存（屏蔽列表变了，集群归属和 valid map 都要重算）
+        try:
+            import redis as redis_lib
+            r = redis_lib.Redis.from_url(settings.REDIS_URL, decode_responses=True)
+            for pat in [f'wb:kw_clusters:{camp.platform_campaign_id}:*',
+                        f'wb:kw_cand:{camp.platform_campaign_id}:*',
+                        f'wb:kw_assign:{camp.platform_campaign_id}:*',
+                        f'wb:cluster_valid:{camp.platform_campaign_id}:*']:
+                for k in r.scan_iter(pat):
+                    r.delete(k)
+        except Exception:
+            pass
+
+        logger.info(
+            f"WB 解除屏蔽成功 advert={camp.platform_campaign_id} "
+            f"nm={req.nm_id}: 移除 {len(actually_removed)} 个 / 剩余 {len(remaining)} 个"
+        )
+    finally:
+        await client.close()
+
+    return success({
+        "campaign_id": campaign_id,
+        "nm_id": req.nm_id,
+        "removed": actually_removed,
+        "total_excluded": len(remaining),
+    })
+
+
 # ==================== 关键词智能屏蔽白名单（A 粒度） ====================
 
 class KeywordProtectedRequest(BaseModel):

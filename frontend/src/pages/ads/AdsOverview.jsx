@@ -21,7 +21,7 @@ import {
   getAdStats, getAdSummary,
   exportAdStats, getAlerts, getAlertConfig, updateAlertConfig,
   getCampaignProducts, getCampaignKeywords, getCampaignKeywordClusters,
-  excludeKeywords, updateCampaignBid, getCampaignBudget,
+  excludeKeywords, unexcludeKeywords, updateCampaignBid, getCampaignBudget,
   addProtectedKeyword, removeProtectedKeyword,
   getAutoExcludeConfig, toggleAutoExclude, runAutoExcludeNow, getAutoExcludeLogs,
   getCampaignSummary, getOzonSkuQueries, syncOzonSkuQueries,
@@ -497,6 +497,54 @@ const AdsOverview = ({ shopId, platform, shops, searched, syncing, lastSyncTime,
     } catch (err) {
       message.error(err.message || err?.response?.data?.msg || '操作失败')
     }
+  }
+
+  // 解除屏蔽：从 WB minus list 移除指定词
+  const handleUnexclude = (sku, keywords) => {
+    if (!detailData?.id) return
+    const nmId = parseInt(sku)
+    const list = Array.isArray(keywords) ? keywords : [keywords]
+    const displayLabel = list.length === 1 ? list[0] : `${list.length} 个词`
+    Modal.confirm({
+      title: `确认解除屏蔽「${displayLabel}」？`,
+      icon: <ExclamationCircleOutlined style={{ color: '#1677ff' }} />,
+      width: 480,
+      content: list.length > 1 ? (
+        <div style={{ marginTop: 8 }}>
+          <div style={{ maxHeight: 200, overflow: 'auto' }}>
+            {list.map(w => <Tag key={w} color="blue" style={{ margin: 2, fontSize: 11 }}>{w}</Tag>)}
+          </div>
+          <div style={{ marginTop: 10, padding: 8, background: '#e6f4ff', borderRadius: 4, fontSize: 12, color: '#0958d9' }}>
+            解除后这 {list.length} 个词将重新被允许触发该商品广告展示。
+          </div>
+        </div>
+      ) : (
+        <div style={{ marginTop: 10, padding: 8, background: '#e6f4ff', borderRadius: 4, fontSize: 12, color: '#0958d9' }}>
+          解除后「{list[0]}」将重新被允许触发此商品广告展示。
+        </div>
+      ),
+      okText: '确认解除',
+      onOk: async () => {
+        try {
+          const res = await unexcludeKeywords(detailData.id, nmId, list)
+          const removed = res.data?.removed || []
+          message.success(`成功解除 ${removed.length} 个关键词`, 3)
+          // refetch 刷新关键词列表
+          if (platform === 'wb' && detailData?.id) {
+            try {
+              const r = await getCampaignKeywords(detailData.id, 7, sku)
+              const kws2 = r.data?.keywords || []
+              const excl2 = r.data?.excluded_keywords || []
+              setKeywordsBySku(m => ({ ...m, [sku]: kws2, [`${sku}_excluded`]: excl2 }))
+              // 清 AI 聚类缓存 → 下次重聚类
+              setAiClustersBySku(m => ({ ...m, [sku]: undefined }))
+            } catch { /* refetch 失败不致命 */ }
+          }
+        } catch (err) {
+          message.error(err.message || err?.response?.data?.msg || '解除失败')
+        }
+      },
+    })
   }
 
   // 单个关键词（或整簇）一键屏蔽
@@ -1715,21 +1763,37 @@ const AdsOverview = ({ shopId, platform, shops, searched, syncing, lastSyncTime,
               </div>
             ) : (
               <div style={{ padding: 12, background: '#fff1f0', borderRadius: 4, border: '1px solid #ffccc7' }}>
-                <div style={{ marginBottom: 8 }}>
+                <div style={{ marginBottom: 10, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                   <Text style={{ fontSize: 12, color: '#cf1322', fontWeight: 500 }}>
-                    🚫 此 SKU 已屏蔽 {excluded.length} 个关键词 — 以下词不会触发该商品广告展示
+                    🚫 此 SKU 已屏蔽 {excluded.length} 个关键词 — 不会触发该商品广告展示
                   </Text>
+                  {excluded.length > 1 && (
+                    <Button size="small" type="link"
+                      onClick={() => handleUnexclude(sku, excluded)}>
+                      全部解除
+                    </Button>
+                  )}
                 </div>
-                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-                  {excluded.map(w => (
-                    <Tag key={w} style={{ fontSize: 12, padding: '4px 10px',
-                      color: '#cf1322', background: '#fff', border: '1px solid #ffa39e' }}>
-                      {w}
-                    </Tag>
-                  ))}
-                </div>
+                <Table
+                  size="small"
+                  rowKey="keyword"
+                  pagination={false}
+                  dataSource={excluded.map(w => ({ keyword: w }))}
+                  columns={[
+                    { title: '已屏蔽关键词', dataIndex: 'keyword', key: 'keyword',
+                      render: v => <Tag style={{ fontSize: 12, padding: '2px 10px',
+                        color: '#cf1322', background: '#fff', border: '1px solid #ffa39e' }}>{v}</Tag> },
+                    { title: '操作', key: 'action', width: 120, align: 'center',
+                      render: (_, r) => (
+                        <Button size="small" type="link"
+                          onClick={() => handleUnexclude(sku, r.keyword)}>
+                          解除屏蔽
+                        </Button>
+                      ) },
+                  ]}
+                />
                 <div style={{ marginTop: 10, fontSize: 11, color: '#999' }}>
-                  数据来自 WB 接口 <code>/adv/v0/normquery/get-minus</code>，缓存 5 分钟。手动取消屏蔽请到 WB 后台。
+                  数据来自 WB 接口 <code>/adv/v0/normquery/get-minus</code>，缓存 5 分钟。解除后该词会重新参与广告匹配。
                 </div>
               </div>
             )
