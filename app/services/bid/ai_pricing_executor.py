@@ -313,6 +313,49 @@ def _calc_healthy_window_metrics(db, tenant_id: int, campaign_id: int, sku: str,
     return sp, rv, len(target)
 
 
+def _calc_healthy_window_full(db, tenant_id: int, campaign_id: int, sku: str,
+                               recent_n: int, skip_n: int = 0) -> dict:
+    """同 _calc_healthy_window_metrics 但返回完整指标 (含 impressions/clicks/orders)
+    用于商品阶段 Tooltip 展示近 5 健康天的 CTR / CR / 利润。
+    返回 dict: {spend, revenue, impressions, clicks, orders, days}
+    """
+    today = date.today()
+    rows = db.execute(text("""
+        SELECT stat_date,
+               COALESCE(SUM(impressions), 0) AS imp,
+               COALESCE(SUM(clicks), 0)      AS clk,
+               COALESCE(SUM(spend), 0)       AS spend,
+               COALESCE(SUM(orders), 0)      AS ord,
+               COALESCE(SUM(revenue), 0)     AS rev
+        FROM ad_stats
+        WHERE tenant_id=:tid AND campaign_id=:cid AND ad_group_id=:sku
+          AND stat_date >= :since
+        GROUP BY stat_date ORDER BY stat_date DESC
+    """), {"tid": tenant_id, "cid": campaign_id, "sku": sku,
+           "since": today - timedelta(days=28)}).fetchall()
+
+    healthy = []
+    for r in rows:
+        spend = float(r.spend or 0)
+        rev   = float(r.rev or 0)
+        roas  = rev / spend if spend > 0 else 0
+        if roas <= HEALTHY_DAY_ROAS_MAX and spend >= HEALTHY_DAY_SPEND_MIN:
+            healthy.append({
+                "spend": spend, "rev": rev,
+                "imp": int(r.imp or 0), "clk": int(r.clk or 0), "ord": int(r.ord or 0),
+            })
+
+    target = healthy[skip_n : skip_n + recent_n]
+    return {
+        "spend":       sum(d["spend"] for d in target),
+        "revenue":     sum(d["rev"]   for d in target),
+        "impressions": sum(d["imp"]   for d in target),
+        "clicks":      sum(d["clk"]   for d in target),
+        "orders":      sum(d["ord"]   for d in target),
+        "days":        len(target),
+    }
+
+
 def _save_hill_state(db, tenant_id: int, campaign_id: int, sku: str,
                      base_bid: float, direction: int, step_size: float):
     """写 hill 状态到 ad_groups（INSERT OR UPDATE）。
@@ -395,6 +438,18 @@ def _hill_climbing_decision(db, tenant_id: int, campaign_id: int, sku: str,
         return {"action": "skip", "optimal_bid": int(current_bid), "new_base": None,
                 "reason": f"ROAS {overall_roas:.1f}x>{HILL_ROAS_ANOMALY}x 偶然爆单视为样本不足，先观察"}
 
+    # 算近 5 健康天指标（用于 reason 末尾展示，前端 Tooltip parse）
+    # 0 schema 改动方案：把数据塞进 reason 字符串末尾
+    rw = _calc_healthy_window_full(db, tenant_id, campaign_id, sku, 5, 0)
+    if rw["impressions"] > 0:
+        r_ctr = rw["clicks"]  / rw["impressions"]
+        r_cr  = rw["orders"]  / rw["clicks"] if rw["clicks"] > 0 else 0
+        r_pft = rw["revenue"] * margin - rw["spend"]
+        recent_seg = (f" | [recent5d: ctr={r_ctr*100:.2f}% cr={r_cr*100:.2f}% "
+                      f"profit={r_pft:+.0f} days={rw['days']}]")
+    else:
+        recent_seg = " | [recent5d: 无健康天数据]"
+
     # 1. 读 hill 状态
     row = db.execute(text("""
         SELECT hill_base_bid, hill_step_direction, hill_step_size
@@ -427,7 +482,7 @@ def _hill_climbing_decision(db, tenant_id: int, campaign_id: int, sku: str,
         optimal_bid = int(round(new_base * time_multiplier * day_multiplier))
         return {"action": "cold_start", "optimal_bid": max(optimal_bid, MIN_BID),
                 "new_base": new_base,
-                "reason": f"冷启动: {reason} → base ₽{current_bid:.0f}→₽{new_base:.0f}（×时段{time_multiplier}×周末{day_multiplier}）"}
+                "reason": f"冷启动: {reason} → base ₽{current_bid:.0f}→₽{new_base:.0f}（×时段{time_multiplier}×周末{day_multiplier}）" + recent_seg}
 
     base = float(row.hill_base_bid)
     direction = int(row.hill_step_direction or 1)
@@ -446,7 +501,7 @@ def _hill_climbing_decision(db, tenant_id: int, campaign_id: int, sku: str,
                     "new_base": base,
                     "reason": (f"今日已评估({hours_since:.1f}h前) base ₽{base:.0f}不动 "
                                f"方向{'+1' if direction>0 else '-1'} 步长{step_size*100:.0f}% "
-                               f"→ ×时段{time_multiplier}×周末{day_multiplier} = ₽{optimal_bid}")}
+                               f"→ ×时段{time_multiplier}×周末{day_multiplier} = ₽{optimal_bid}") + recent_seg}
 
     # 2. 滑动评估："剔除噪声后凑齐健康 3 天 vs 再前 3 天"的利润对比
     # 修复：原固定"过去3天 vs 再前3天"在投放断续场景下两边都接近 0，会被微小绝对差骗判涨
@@ -462,7 +517,7 @@ def _hill_climbing_decision(db, tenant_id: int, campaign_id: int, sku: str,
         optimal_bid = int(round(base * time_multiplier * day_multiplier))
         return {"action": "hold", "optimal_bid": max(optimal_bid, MIN_BID),
                 "new_base": base,
-                "reason": f"数据不足(recent_d={recent_d},prev_d={prev_d})保持base ₽{base:.0f}"}
+                "reason": f"数据不足(recent_d={recent_d},prev_d={prev_d})保持base ₽{base:.0f}" + recent_seg}
 
     profit_diff = p_recent - p_prev
 
@@ -472,7 +527,7 @@ def _hill_climbing_decision(db, tenant_id: int, campaign_id: int, sku: str,
         optimal_bid = int(round(base * time_multiplier * day_multiplier))
         return {"action": "hold", "optimal_bid": max(optimal_bid, MIN_BID),
                 "new_base": base,
-                "reason": f"利润持平(差₽{profit_diff:+.0f}<阈值₽{HILL_PROFIT_TIE_THRESHOLD:.0f}) base ₽{base:.0f}不动"}
+                "reason": f"利润持平(差₽{profit_diff:+.0f}<阈值₽{HILL_PROFIT_TIE_THRESHOLD:.0f}) base ₽{base:.0f}不动" + recent_seg}
 
     # 涨/跌
     if profit_diff > 0:
@@ -492,7 +547,7 @@ def _hill_climbing_decision(db, tenant_id: int, campaign_id: int, sku: str,
     optimal_bid = int(round(new_base * time_multiplier * day_multiplier))
     return {"action": "climb", "optimal_bid": max(optimal_bid, MIN_BID),
             "new_base": new_base,
-            "reason": f"利润{change_label}(差₽{profit_diff:+.0f}) 方向{'+1' if new_direction>0 else '-1'} 步长{new_step_size*100:.0f}% base ₽{base:.0f}→₽{new_base:.0f}"}
+            "reason": f"利润{change_label}(差₽{profit_diff:+.0f}) 方向{'+1' if new_direction>0 else '-1'} 步长{new_step_size*100:.0f}% base ₽{base:.0f}→₽{new_base:.0f}" + recent_seg}
 
 
 # ==================== A' 偏离保护（14-20天） ====================
