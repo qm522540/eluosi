@@ -1558,6 +1558,12 @@ const AdsOverview = ({ shopId, platform, shops, searched, syncing, lastSyncTime,
           }
         })
       }
+      // 提取 WB 认可的代表词集合（lowercase）— 用于标识"全部变体"里哪些词可屏蔽
+      const wbValidRepsLc = new Set(
+        clusters
+          .filter(c => c.wb_valid === true)
+          .map(c => String(c.keyword || '').toLowerCase().trim())
+      )
       const tableDataSource = kwMode === 'all' ? kws : clusters
       return (
         <div style={{ padding: 8, background: '#fafbff', borderRadius: 4, border: '1px solid #e6edff' }}>
@@ -1578,6 +1584,13 @@ const AdsOverview = ({ shopId, platform, shops, searched, syncing, lastSyncTime,
                     { label: `全部变体 (${kws.length})`, value: 'all' },
                   ]}
                 />
+                {wbValidRepsLc.size > 0 && (
+                  <Tooltip title={`WB 认可的代表词共 ${wbValidRepsLc.size} 个。只有这些可以屏蔽，其他词点击屏蔽都会被 WB 拒绝。`}>
+                    <Tag color="green" style={{ margin: 0, fontSize: 11 }}>
+                      ✓ {wbValidRepsLc.size} 可屏
+                    </Tag>
+                  </Tooltip>
+                )}
                 <Tooltip title={
                   <div style={{ fontSize: 12 }}>
                     <div style={{ marginBottom: 4 }}>📊 数据来自 WB 活动级接口 <code>/adv/v0/stats/keywords</code>（近7天）</div>
@@ -1869,6 +1882,8 @@ const AdsOverview = ({ shopId, platform, shops, searched, syncing, lastSyncTime,
                   }
                   const s = statusMap[r.status] || {}
                   const isSuggested = qualityCheckedSku === sku && suggestedExcludeWords.includes(v)
+                  const isValidRepInAll = kwMode === 'all' &&
+                    wbValidRepsLc.has(String(v || '').toLowerCase().trim())
                   return (
                     <Space size={4}>
                       {kwMode === 'active' && r.wb_valid === true && (
@@ -1879,6 +1894,11 @@ const AdsOverview = ({ shopId, platform, shops, searched, syncing, lastSyncTime,
                       {kwMode === 'active' && r.wb_valid === false && (
                         <Tooltip title="WB 不认此为集群代表词，屏蔽会被拒绝。仅做显示聚类用">
                           <Tag style={{ margin: 0, fontSize: 11, color: '#999', background: '#f5f5f5', borderColor: '#d9d9d9' }}>⚠ 不可屏</Tag>
+                        </Tooltip>
+                      )}
+                      {isValidRepInAll && (
+                        <Tooltip title="WB 代表词，可直接屏蔽（会连带此簇全部变体一起下线）">
+                          <Tag color="green" style={{ margin: 0, fontSize: 11 }}>✓ 可屏</Tag>
                         </Tooltip>
                       )}
                       {r.variant_count > 1 && (
@@ -1954,15 +1974,20 @@ const AdsOverview = ({ shopId, platform, shops, searched, syncing, lastSyncTime,
                     return <Tag color="red" style={{ margin: 0, fontSize: 11 }}>已屏蔽</Tag>
                   }
                   const isCluster = r.variant_count > 1
-                  // WB 规则：只有"顶级搜索集群代表词"能屏蔽。集群模式下 wb_valid=false 的簇和
-                  // 全部变体模式下的非代表词都不可屏
-                  const canBlock = kwMode === 'active' ? r.wb_valid !== false : true
+                  // WB 规则：只有"顶级搜索集群代表词"能屏蔽
+                  // 集群模式：wb_valid=true 可屏
+                  // 全部变体模式：检查词本身是否在 wb_valid 代表词集合里
+                  const canBlock = kwMode === 'active'
+                    ? r.wb_valid === true
+                    : wbValidRepsLc.has(String(r.keyword || '').toLowerCase().trim())
                   const blockWord = r.keyword
                   const tipText = !canBlock
-                    ? 'WB 不认此为集群代表词，屏蔽会被拒绝'
+                    ? (kwMode === 'all'
+                      ? '此词不是 WB 集群代表词。去「集群」Tab 屏蔽对应集群，WB 会自动把这个变体一起下线'
+                      : 'WB 不认此为集群代表词，屏蔽会被拒绝')
                     : isCluster
                       ? `屏蔽此集群代表词，WB 自动连带 ${r.variant_count} 个变体一起下线`
-                      : `只有 WB 认定的"顶级搜索集群代表词"能屏蔽成功。普通变体会被 WB 拒绝。`
+                      : 'WB 认可此词为集群代表，可屏蔽'
                   return (
                     <Space size={4}>
                       <Tooltip title="勾选后此词不会被「一键屏蔽」和「自动屏蔽托管」误屏">
