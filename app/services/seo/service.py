@@ -663,8 +663,8 @@ def list_champion_keywords(
           AND c.in_title = 0 AND c.in_attrs = 0
           AND c.status = 'pending'
         GROUP BY c.keyword
-        HAVING product_count >= :minp AND self_product_count >= 1
-        ORDER BY total_orders DESC, product_count DESC
+        HAVING self_product_count >= 1 AND product_count >= :minp
+        ORDER BY total_orders DESC, self_product_count DESC, product_count DESC
         LIMIT :lim
     """), {
         "tid": tenant_id, "sid": shop.id,
