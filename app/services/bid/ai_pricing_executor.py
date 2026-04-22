@@ -1033,8 +1033,19 @@ async def analyze_stream(db, tenant_id: int, shop_id: int,
 
         try:
             yield _sse("phase", "DeepSeek 正在生成建议...")
-            result = await _analyze_now_inner(db, tenant_id, shop_id,
-                                              force=True, campaign_ids=campaign_ids)
+            # 把 _analyze_now_inner 包成 task，期间每 10s 发 SSE comment 行心跳
+            # 防止 nginx upstream 60s 闲置 timeout 切断流（27 SKU + WB API 易跑 60-90s）
+            # 实证 nginx error.log 13:09/13:25 两次 "upstream timed out (110)"
+            inner_task = _asyncio.create_task(
+                _analyze_now_inner(db, tenant_id, shop_id,
+                                   force=True, campaign_ids=campaign_ids)
+            )
+            while not inner_task.done():
+                try:
+                    await _asyncio.wait_for(_asyncio.shield(inner_task), timeout=10.0)
+                except _asyncio.TimeoutError:
+                    yield ": keepalive\n\n"  # SSE comment 行，前端忽略，仅维持连接
+            result = inner_task.result()
         finally:
             _release_analyze_lock(shop_id)
 
