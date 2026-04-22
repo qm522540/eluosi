@@ -452,7 +452,7 @@ def _hill_climbing_decision(db, tenant_id: int, campaign_id: int, sku: str,
 
     # 1. 读 hill 状态
     row = db.execute(text("""
-        SELECT hill_base_bid, hill_step_direction, hill_step_size
+        SELECT hill_base_bid, hill_step_direction, hill_step_size, hill_last_eval_at
         FROM ad_groups
         WHERE tenant_id=:tid AND campaign_id=:cid AND platform_group_id=:sku
         LIMIT 1
