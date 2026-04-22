@@ -980,23 +980,50 @@ async def campaign_keyword_clusters(
     if not active_top:
         return success({"clusters": [], "msg": "无活跃关键词可聚类"})
 
-    clusters = await cluster_keywords_ai(
+    # 三步流程：propose 候选 → WB validate → AI 二次分配到有效簇
+    from app.services.ad.keyword_clustering import (
+        propose_cluster_reps_ai, validate_cluster_reps_with_wb,
+        assign_keywords_to_clusters_ai,
+    )
+
+    # Step 1: AI 提出候选代表词（8-15 个）
+    candidates = await propose_cluster_reps_ai(
         db=db, tenant_id=tenant_id,
         advert_id=camp.platform_campaign_id, nm_id=nm_id,
         keywords=active_top,
     )
+    # 加入 existing minus list 里的词作为已知 WB 有效代表（种子）
+    seed_reps = list({w for w in excluded_list if w})
+    all_candidates = list(dict.fromkeys(seed_reps + candidates))  # 保序去重
 
-    # 用 WB set-minus 作 oracle 验证代表词
-    from app.services.ad.keyword_clustering import validate_cluster_reps_with_wb
+    # Step 2: WB 验证哪些是真代表词
     client2 = WBClient(shop_id=shop.id, api_key=shop.api_key)
     try:
-        cluster_names = [c.get("name", "") for c in clusters if c.get("name")]
         valid_map = await validate_cluster_reps_with_wb(
             client=client2, advert_id=camp.platform_campaign_id,
-            nm_id=nm_id, cluster_names=cluster_names,
+            nm_id=nm_id, cluster_names=all_candidates,
         )
     finally:
         await client2.close()
+    valid_reps = [name for name, v in valid_map.items() if v]
+
+    # Step 3: AI 二次分配所有词到有效簇
+    # 把 active_top + existing excluded (也算入分配源，屏蔽的词归入自己所在的 WB 簇)
+    all_kw_to_assign = list(dict.fromkeys(active_top + seed_reps + [
+        kw["keyword"] for kw in keywords_raw if kw.get("keyword")
+        and kw["keyword"].lower().strip() in {w.lower().strip() for w in excluded_list}
+    ]))
+    # 截断到 177 以内
+    if len(all_kw_to_assign) > 200:
+        all_kw_to_assign = all_kw_to_assign[:200]
+
+    assignments = {}
+    if valid_reps and all_kw_to_assign:
+        assignments = await assign_keywords_to_clusters_ai(
+            db=db, tenant_id=tenant_id,
+            advert_id=camp.platform_campaign_id, nm_id=nm_id,
+            keywords=all_kw_to_assign, cluster_names=valid_reps,
+        )
 
     # 构造每簇的统计（曝光 / 点击 / 花费 / CTR）
     kw_stat_map = {
@@ -1007,11 +1034,12 @@ async def campaign_keyword_clusters(
         } for kw in keywords_raw
     }
     enriched = []
-    for c in clusters:
-        members = c.get("members", [])
+    excluded_set_lc = {w.lower().strip() for w in excluded_list}
+    for cluster_name in valid_reps:
+        member_words = assignments.get(cluster_name, []) or []
         agg = {"views": 0, "clicks": 0, "sum": 0}
         member_details = []
-        for m in members:
+        for m in member_words:
             s = kw_stat_map.get(m)
             if s:
                 agg["views"] += s["views"]
@@ -1021,19 +1049,50 @@ async def campaign_keyword_clusters(
             else:
                 member_details.append({"keyword": m, "views": 0, "clicks": 0, "sum": 0})
         ctr = round(agg["clicks"] / agg["views"] * 100, 2) if agg["views"] > 0 else 0
-        name = c.get("name", "")
         enriched.append({
-            "name": name,
+            "name": cluster_name,
             "members": member_details,
             "variant_count": len(member_details),
             "views": agg["views"],
             "clicks": agg["clicks"],
             "sum": round(agg["sum"], 2),
             "ctr": ctr,
-            "wb_valid": bool(valid_map.get(name, False)),  # WB 是否认可此词为集群代表
+            "wb_valid": True,
+            "is_cluster_excluded": cluster_name.lower().strip() in excluded_set_lc,
         })
-    # 先按 WB 有效性（有效在前），再按曝光排序
-    enriched.sort(key=lambda x: (not x["wb_valid"], -x["views"]))
+
+    # _other 桶（不属于任何 WB 有效簇的词）
+    other_words = assignments.get("_other", []) or []
+    if other_words:
+        agg = {"views": 0, "clicks": 0, "sum": 0}
+        details = []
+        for m in other_words:
+            s = kw_stat_map.get(m)
+            if s:
+                agg["views"] += s["views"]
+                agg["clicks"] += s["clicks"]
+                agg["sum"] += s["sum"]
+                details.append({"keyword": m, **s})
+            else:
+                details.append({"keyword": m, "views": 0, "clicks": 0, "sum": 0})
+        enriched.append({
+            "name": "_其他（未分到 WB 集群）",
+            "members": details,
+            "variant_count": len(details),
+            "views": agg["views"],
+            "clicks": agg["clicks"],
+            "sum": round(agg["sum"], 2),
+            "ctr": round(agg["clicks"] / agg["views"] * 100, 2) if agg["views"] > 0 else 0,
+            "wb_valid": False,
+            "is_cluster_excluded": False,
+        })
+
+    # 排序：WB 有效 + 非屏蔽 > WB 有效 + 已屏蔽 > 其他
+    enriched.sort(key=lambda x: (
+        not x["wb_valid"],              # WB 有效排前
+        x.get("is_cluster_excluded", False),  # 未屏蔽排前
+        -x["views"],                    # 曝光高排前
+    ))
 
     return success({
         "campaign_id": campaign_id,
