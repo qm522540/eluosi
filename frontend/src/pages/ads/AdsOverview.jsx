@@ -1341,10 +1341,58 @@ const AdsOverview = ({ shopId, platform, shops, searched, syncing, lastSyncTime,
           </div>
         )
       }
-      // 视图模式：active=有点击的有效词 / excluded=已屏蔽 / all=全量（含长尾 0 点击词）
+      // 视图模式：active=集群视图(对齐 WB 后台粒度) / excluded=已屏蔽 / all=全量个体变体
       const kwMode = kwViewMode[sku] || 'active'
+      // 俄语停用词（介词/连词不参与聚类）
+      const RU_STOPWORDS = new Set(['для', 'из', 'с', 'со', 'на', 'в', 'во',
+        'и', 'по', 'под', 'над', 'от', 'до', 'или', 'не', 'но', 'а',
+        'что', 'как', 'это', 'за', 'при', 'без', 'у'])
+      // 聚类 key：去停用词 + 3 字前缀 + 前 2 实词，逼近 WB "顶级搜索集群" 粒度
+      const clusterKeyOf = (keyword) => {
+        const raw = String(keyword || '').toLowerCase()
+          .replace(/[^\wа-яё\s-]/gu, ' ')
+        const tokens = raw.split(/[\s\-_]+/)
+          .filter(t => t.length >= 3 && !RU_STOPWORDS.has(t))
+          .map(t => t.slice(0, 4))
+        if (tokens.length === 0) return raw.trim()
+        return tokens.slice(0, 2).join('+')
+      }
+      // 构造 clusters：按 clusterKey 聚合个体词（只看有点击的活跃词，和 WB 对齐）
       const activeKws = kws.filter(k => (k.clicks || 0) > 0 && !k.is_excluded)
-      const tableDataSource = kwMode === 'all' ? kws : activeKws
+      const clusterMap = new Map()
+      for (const kw of activeKws) {
+        const ck = clusterKeyOf(kw.keyword)
+        if (!clusterMap.has(ck)) {
+          clusterMap.set(ck, { key: ck, variants: [], keyword: '', views: 0, clicks: 0, sum: 0,
+            est_orders: 0, est_atbs: 0, est_revenue: 0, is_protected: false })
+        }
+        const c = clusterMap.get(ck)
+        c.variants.push(kw)
+        c.views += (kw.views || 0)
+        c.clicks += (kw.clicks || 0)
+        c.sum += (kw.sum || 0)
+        c.est_orders += (kw.est_orders || 0)
+        c.est_atbs += (kw.est_atbs || 0)
+        c.est_revenue += (kw.est_revenue || 0)
+        if (kw.is_protected) c.is_protected = true
+      }
+      // 代表词 = 簇内 views 最高的
+      const clusters = Array.from(clusterMap.values()).map(c => {
+        const rep = c.variants.slice().sort((a, b) => (b.views||0) - (a.views||0))[0]
+        return {
+          ...c,
+          keyword: rep.keyword,
+          representative: rep.keyword,
+          variant_count: c.variants.length,
+          ctr: c.views > 0 ? +(c.clicks / c.views * 100).toFixed(2) : 0,
+          est_roas: c.sum > 0 ? +(c.est_revenue / c.sum).toFixed(2) : 0,
+          active_days: Math.max(...c.variants.map(v => v.active_days || 0)),
+          total_days: Math.max(...c.variants.map(v => v.total_days || 7)),
+          first_seen: c.variants.map(v => v.first_seen).filter(Boolean).sort()[0] || '',
+          last_seen: c.variants.map(v => v.last_seen).filter(Boolean).sort().slice(-1)[0] || '',
+        }
+      })
+      const tableDataSource = kwMode === 'all' ? kws : clusters
       return (
         <div style={{ padding: 8, background: '#fafbff', borderRadius: 4, border: '1px solid #e6edff' }}>
           {/* 顶部信息 + 操作按钮栏 */}
@@ -1356,22 +1404,22 @@ const AdsOverview = ({ shopId, platform, shops, searched, syncing, lastSyncTime,
                   value={kwMode}
                   onChange={(v) => setKwViewMode(m => ({ ...m, [sku]: v }))}
                   options={[
-                    { label: `活跃 (${activeKws.length})`, value: 'active' },
+                    { label: `集群 (${clusters.length})`, value: 'active' },
                     { label: `已屏蔽 (${excluded.length})`, value: 'excluded' },
-                    { label: `全部 (${kws.length})`, value: 'all' },
+                    { label: `全部变体 (${kws.length})`, value: 'all' },
                   ]}
                 />
                 <Tooltip title={
                   <div style={{ fontSize: 12 }}>
                     <div style={{ marginBottom: 4 }}>📊 数据来自 WB 活动级接口 <code>/adv/v0/stats/keywords</code>（近7天）</div>
-                    <div style={{ marginBottom: 4 }}>⚠️ 与 WB 后台"顶级搜索集群"口径不同：</div>
-                    <div style={{ paddingLeft: 8 }}>
-                      • WB 后台展示 SKU 级集群（Top N 归类）<br/>
-                      • 此处展示活动级个体触发词（含所有 SKU）<br/>
-                      • 屏蔽操作按 SKU 级生效，不受展示口径影响
+                    <div style={{ marginBottom: 6 }}>⚠️ 与 WB 后台「顶级搜索集群」对齐方式：</div>
+                    <div style={{ paddingLeft: 8, marginBottom: 4 }}>
+                      • <strong>集群</strong>：客户端做俄语词根聚类（前 2 实词 4 字前缀合并）<br/>
+                      • <strong>已屏蔽</strong>：WB 该 SKU 的 minus-list<br/>
+                      • <strong>全部变体</strong>：原始个体词，供质检/一键屏蔽
                     </div>
-                    <div style={{ marginTop: 4, color: '#faad14' }}>
-                      💡 「活跃」过滤掉 0 点击长尾词，质检/屏蔽决策更聚焦
+                    <div style={{ color: '#faad14' }}>
+                      💡 集群数量应和 WB 后台接近，但不保证完全一致（WB 的语义聚类更精细）
                     </div>
                   </div>
                 }>
@@ -1551,19 +1599,42 @@ const AdsOverview = ({ shopId, platform, shops, searched, syncing, lastSyncTime,
           ) : (
           <Table
             size="small"
-            rowKey="keyword"
+            rowKey={(r) => r.key || r.keyword}
             dataSource={tableDataSource}
             pagination={{
               pageSize: 20, size: 'small', showSizeChanger: false,
               current: kwTablePageMap[sku] || 1,
               onChange: (p) => setKwTablePageMap(m => ({ ...m, [sku]: p })),
             }}
+            expandable={kwMode === 'active' ? {
+              expandedRowRender: (r) => (
+                <div style={{ padding: '4px 8px', background: '#fafafa', borderRadius: 3, marginLeft: 24 }}>
+                  <Text type="secondary" style={{ fontSize: 11 }}>
+                    簇内 {r.variant_count} 个变体：
+                  </Text>
+                  <div style={{ marginTop: 4, display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+                    {(r.variants || []).sort((a, b) => (b.views||0) - (a.views||0)).map(v => (
+                      <Tooltip key={v.keyword}
+                        title={`曝光 ${(v.views||0).toLocaleString()} · 点击 ${v.clicks||0} · CTR ${v.ctr||0}%`}>
+                        <Tag style={{ fontSize: 11, cursor: 'default',
+                          background: v.clicks >= 1 ? '#e6f7ff' : '#fafafa',
+                          borderColor: v.clicks >= 1 ? '#91d5ff' : '#d9d9d9' }}>
+                          {v.keyword} <span style={{ color: '#999' }}>({v.views||0})</span>
+                        </Tag>
+                      </Tooltip>
+                    ))}
+                  </div>
+                </div>
+              ),
+              rowExpandable: (r) => (r.variant_count || 0) > 1,
+            } : undefined}
             rowClassName={(r) =>
               qualityCheckedSku === sku && suggestedExcludeWords.includes(r.keyword)
                 ? 'row-suggested-exclude' : ''
             }
             columns={[
-              { title: '关键词', dataIndex: 'keyword', key: 'keyword', ellipsis: true,
+              { title: kwMode === 'active' ? '集群（代表词）' : '关键词',
+                dataIndex: 'keyword', key: 'keyword', ellipsis: true,
                 render: (v, r) => {
                   const statusMap = {
                     active:     { label: '活跃', color: 'green' },
@@ -1575,9 +1646,14 @@ const AdsOverview = ({ shopId, platform, shops, searched, syncing, lastSyncTime,
                   const isSuggested = qualityCheckedSku === sku && suggestedExcludeWords.includes(v)
                   return (
                     <Space size={4}>
+                      {r.variant_count > 1 && (
+                        <Tooltip title={`${r.variant_count} 个相似变体（展开查看）`}>
+                          <Tag color="purple" style={{ margin: 0, fontSize: 11 }}>×{r.variant_count}</Tag>
+                        </Tooltip>
+                      )}
                       {r.is_excluded && <Tag color="red" style={{ margin: 0, fontSize: 11 }}>已屏蔽</Tag>}
                       {isSuggested && !r.is_excluded && <Tag color="volcano" style={{ margin: 0, fontSize: 11 }}>建议屏蔽</Tag>}
-                      {!r.is_excluded && !isSuggested && s.label && <Tag color={s.color} style={{ margin: 0, fontSize: 11 }}>{s.label}</Tag>}
+                      {!r.is_excluded && !isSuggested && s.label && !r.variant_count && <Tag color={s.color} style={{ margin: 0, fontSize: 11 }}>{s.label}</Tag>}
                       <Tooltip title={`${v}（${r.active_days || 0}/${r.total_days || 7}天出现${r.first_seen ? `，首次 ${r.first_seen}` : ''}${r.last_seen && r.last_seen !== r.first_seen ? `，末次 ${r.last_seen}` : ''}）`} placement="topLeft">
                         <span style={
                           r.is_excluded ? { textDecoration: 'line-through', color: '#999' }
