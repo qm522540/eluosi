@@ -34,6 +34,76 @@ def _run_async(coro):
         loop.close()
 
 
+def _tokenize(s: str) -> set:
+    """极简 tokenizer：小写 + 按空格/-/标点切 + 去短词"""
+    import re
+    tokens = re.split(r"[\s\-_,.;:/\\()\[\]]+", (s or "").lower())
+    return {t for t in tokens if len(t) >= 3}
+
+
+def _kw_sku_affinity(keyword: str, title: str) -> float:
+    """关键词与 SKU 标题的亲和度 0~1
+
+    用"关键词 token 在 SKU 标题里能前缀匹配到的比例"做代理。
+    俄语形态丰富（серьги/сережки/сердечки），前缀匹配比精确 token 相等更稳。
+    """
+    kw_tokens = _tokenize(keyword)
+    if not kw_tokens:
+        return 0.0
+    title_lower = (title or "").lower()
+    hit = 0
+    for t in kw_tokens:
+        # 前 4 字符作为词根（俄语词尾变化多，前 4 字基本稳定）
+        stem = t[:4] if len(t) > 4 else t
+        if stem in title_lower:
+            hit += 1
+    return hit / len(kw_tokens)
+
+
+async def _fetch_per_sku_snapshot(client, advert_id: str, date_from: str, date_to: str):
+    """从 WB fullstats 拿每个 SKU 的 views / title（按活动内聚合）
+
+    Returns:
+        {
+            nm_id: {"views": int, "clicks": int, "title": str, "share": float}
+        }
+    """
+    from app.services.platform.wb import WB_ADVERT_API
+    url = f"{WB_ADVERT_API}/adv/v3/fullstats"
+    try:
+        # 用 WBClient._request 走统一限速
+        data = await client._request(
+            "GET", url,
+            params={"ids": str(advert_id), "beginDate": date_from, "endDate": date_to},
+        )
+    except Exception:
+        return {}
+    if not data:
+        return {}
+    camp = data[0] if isinstance(data, list) and data else data
+    if not isinstance(camp, dict):
+        return {}
+    # 遍历 days[].apps[].nms[] 累加
+    per_sku = {}
+    for day in camp.get("days") or []:
+        for app in day.get("apps") or []:
+            for nm in app.get("nms") or []:
+                nm_id = int(nm.get("nmId") or 0)
+                if not nm_id:
+                    continue
+                if nm_id not in per_sku:
+                    per_sku[nm_id] = {
+                        "views": 0, "clicks": 0,
+                        "title": nm.get("name") or "",
+                    }
+                per_sku[nm_id]["views"] += int(nm.get("views") or 0)
+                per_sku[nm_id]["clicks"] += int(nm.get("clicks") or 0)
+    total_views = sum(v["views"] for v in per_sku.values()) or 1
+    for nm_id, v in per_sku.items():
+        v["share"] = v["views"] / total_views
+    return per_sku
+
+
 async def _exclude_one_campaign(db, shop, camp, run_id):
     """对单个活动跑自动屏蔽
 
@@ -44,6 +114,10 @@ async def _exclude_one_campaign(db, shop, camp, run_id):
 
     rules = get_rules(db, shop.tenant_id)
     waste_min_days = rules.get("waste_min_days", 5)
+    # per-SKU 亲和度门控（0.5 = 关键词至少一半 token 能在 SKU 标题里前缀命中）
+    min_affinity = float(rules.get("per_sku_min_affinity", 0.5))
+    # SKU 在活动里展示占比最低阈值（低于此不进屏蔽列表，避免低流量 SKU 被瞎堆）
+    min_share = float(rules.get("per_sku_min_share", 0.03))
 
     client = WBClient(shop_id=shop.id, api_key=shop.api_key)
     excluded_count = 0
@@ -54,7 +128,7 @@ async def _exclude_one_campaign(db, shop, camp, run_id):
         date_to = today.strftime("%Y-%m-%d")
         date_from = (today - timedelta(days=6)).strftime("%Y-%m-%d")
 
-        # 1. 拉关键词 + 活动商品（nm_id 列表）
+        # 1. 拉关键词 + 活动商品（nm_id 列表） + per-SKU 快照
         kws = await client.fetch_campaign_keywords(
             advert_id=camp.platform_campaign_id,
             date_from=date_from, date_to=date_to,
@@ -67,6 +141,11 @@ async def _exclude_one_campaign(db, shop, camp, run_id):
 
         if not nm_ids or not kws:
             return 0, 0.0, "无关键词或活动商品"
+
+        # per-SKU 曝光占比 + 标题（用于亲和度判定）
+        per_sku = await _fetch_per_sku_snapshot(
+            client, camp.platform_campaign_id, date_from, date_to,
+        )
 
         # 2. 全局平均（参与 classify）
         total_clicks = sum(int(k.get("clicks", 0)) for k in kws)
@@ -117,11 +196,22 @@ async def _exclude_one_campaign(db, shop, camp, run_id):
         for r in protected_rows:
             protected_by_nm.setdefault(r.nm_id, set()).add(r.keyword.lower().strip())
 
-        # 5. 按 nm_id 应用屏蔽
+        # 5. 按 nm_id 应用屏蔽（加 per-SKU 门控：亲和度 + 占比）
         for nm_id in nm_ids:
             existing = set(excluded_map.get(int(nm_id), []))
             existing_lower = {w.lower().strip() for w in existing}
             protected_lower = protected_by_nm.get(int(nm_id), set())
+
+            # 低占比 SKU 跳过 —— 活动里几乎不展示它，没必要给它加屏蔽词
+            sku_info = per_sku.get(int(nm_id), {})
+            sku_share = sku_info.get("share", 0)
+            sku_title = sku_info.get("title", "")
+            if per_sku and sku_share < min_share:
+                logger.info(
+                    f"auto-exclude 跳过低占比 SKU: camp={camp.id} nm={nm_id} "
+                    f"share={sku_share:.1%} < {min_share:.1%}"
+                )
+                continue
 
             new_kws_meta = []
             for wk in waste_kws:
@@ -130,6 +220,13 @@ async def _exclude_one_campaign(db, shop, camp, run_id):
                     continue
                 if kw_lower in protected_lower:
                     continue
+                # 亲和度门控：关键词与 SKU 标题文本无明显重叠则跳过
+                # （WB 拍卖引擎基于商品属性/标题匹配搜索词，无重叠的词几乎不会触发该 SKU）
+                if sku_title:
+                    affinity = _kw_sku_affinity(wk["keyword"], sku_title)
+                    if affinity < min_affinity:
+                        continue
+                    wk = {**wk, "_affinity": affinity, "_sku_share": sku_share}
                 new_kws_meta.append(wk)
 
             if not new_kws_meta:
@@ -179,15 +276,22 @@ async def _exclude_one_campaign(db, shop, camp, run_id):
                 if not avg_daily and wk["active_days"] > 0:
                     avg_daily = wk["spend"] / wk["active_days"]
 
+                reason_parts = [
+                    f"CTR {wk['ctr']:.2f}≤{rules.get('waste_ctr_max', 1.0):.1f}",
+                    f"花费 ¥{wk['spend']:.0f}",
+                ]
+                aff = wk.get("_affinity")
+                if aff is not None:
+                    reason_parts.append(f"亲和度 {aff:.0%}")
+                share = wk.get("_sku_share")
+                if share is not None:
+                    reason_parts.append(f"SKU占比 {share:.0%}")
                 db.add(AdAutoExcludeLog(
                     tenant_id=shop.tenant_id, shop_id=shop.id,
                     campaign_id=camp.id, nm_id=int(nm_id),
                     keyword=kw_text, run_id=run_id,
                     saved_per_day=float(avg_daily),
-                    reason=(
-                        f"CTR {wk['ctr']:.2f}≤{rules.get('waste_ctr_max', 1.0):.1f}"
-                        f" 且 花费 ¥{wk['spend']:.0f}"
-                    ),
+                    reason=" · ".join(reason_parts),
                 ))
                 excluded_count += 1
                 total_saved += float(avg_daily)

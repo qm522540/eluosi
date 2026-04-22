@@ -8,6 +8,7 @@ import {
 import {
   SearchOutlined, EditOutlined, EyeOutlined, SyncOutlined, PlusOutlined,
   DeleteOutlined, SettingOutlined, ExclamationCircleOutlined,
+  QuestionCircleOutlined,
 } from '@ant-design/icons'
 import ReactECharts from 'echarts-for-react'
 import dayjs from 'dayjs'
@@ -331,6 +332,7 @@ const AdsOverview = ({ shopId, platform, shops, searched, syncing, lastSyncTime,
   const [qualityCheckedSku, setQualityCheckedSku] = useState(null)  // 当前质检的 SKU
   const [suggestedExcludeWords, setSuggestedExcludeWords] = useState([])  // 质检标出的词
   const [kwTablePageMap, setKwTablePageMap] = useState({})  // 每个 SKU 关键词表的当前页
+  const [kwViewMode, setKwViewMode] = useState({})  // 每个 SKU: 'active'|'excluded'|'all'，默认 'active'
 
   // 当日实时汇总（活动级，商品出价 Tab 顶部条）
   const [todaySummary, setTodaySummary] = useState(null)
@@ -1339,18 +1341,44 @@ const AdsOverview = ({ shopId, platform, shops, searched, syncing, lastSyncTime,
           </div>
         )
       }
+      // 视图模式：active=有点击的有效词 / excluded=已屏蔽 / all=全量（含长尾 0 点击词）
+      const kwMode = kwViewMode[sku] || 'active'
+      const activeKws = kws.filter(k => (k.clicks || 0) > 0 && !k.is_excluded)
+      const tableDataSource = kwMode === 'all' ? kws : activeKws
       return (
         <div style={{ padding: 8, background: '#fafbff', borderRadius: 4, border: '1px solid #e6edff' }}>
           {/* 顶部信息 + 操作按钮栏 */}
           <div style={{ marginBottom: 8 }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <Space size={4}>
-                <Text type="secondary" style={{ fontSize: 12 }}>活动级关键词（所有 SKU 共享）·</Text>
-                <Text strong style={{ fontSize: 13 }}>{kws.length} 个</Text>
-                <Text type="secondary" style={{ fontSize: 12 }}>· 近7天实际触发</Text>
-                {excluded.length > 0 && (
-                  <Tag color="default" style={{ marginLeft: 8, fontSize: 11 }}>已屏蔽 {excluded.length} 个</Tag>
-                )}
+              <Space size={8}>
+                <Segmented
+                  size="small"
+                  value={kwMode}
+                  onChange={(v) => setKwViewMode(m => ({ ...m, [sku]: v }))}
+                  options={[
+                    { label: `活跃 (${activeKws.length})`, value: 'active' },
+                    { label: `已屏蔽 (${excluded.length})`, value: 'excluded' },
+                    { label: `全部 (${kws.length})`, value: 'all' },
+                  ]}
+                />
+                <Tooltip title={
+                  <div style={{ fontSize: 12 }}>
+                    <div style={{ marginBottom: 4 }}>📊 数据来自 WB 活动级接口 <code>/adv/v0/stats/keywords</code>（近7天）</div>
+                    <div style={{ marginBottom: 4 }}>⚠️ 与 WB 后台"顶级搜索集群"口径不同：</div>
+                    <div style={{ paddingLeft: 8 }}>
+                      • WB 后台展示 SKU 级集群（Top N 归类）<br/>
+                      • 此处展示活动级个体触发词（含所有 SKU）<br/>
+                      • 屏蔽操作按 SKU 级生效，不受展示口径影响
+                    </div>
+                    <div style={{ marginTop: 4, color: '#faad14' }}>
+                      💡 「活跃」过滤掉 0 点击长尾词，质检/屏蔽决策更聚焦
+                    </div>
+                  </div>
+                }>
+                  <Text type="secondary" style={{ fontSize: 11, cursor: 'help' }}>
+                    <QuestionCircleOutlined /> 口径说明
+                  </Text>
+                </Tooltip>
               </Space>
               <Space size={8}>
                 <Button size="small" icon={<SettingOutlined />}
@@ -1494,10 +1522,37 @@ const AdsOverview = ({ shopId, platform, shops, searched, syncing, lastSyncTime,
               </div>
             </div>
           )}
+          {kwMode === 'excluded' ? (
+            excluded.length === 0 ? (
+              <div style={{ padding: 24, textAlign: 'center' }}>
+                <Empty image={Empty.PRESENTED_IMAGE_SIMPLE}
+                  description={<span style={{ fontSize: 13, color: '#999' }}>此 SKU 暂无已屏蔽词</span>} />
+              </div>
+            ) : (
+              <div style={{ padding: 12, background: '#fff1f0', borderRadius: 4, border: '1px solid #ffccc7' }}>
+                <div style={{ marginBottom: 8 }}>
+                  <Text style={{ fontSize: 12, color: '#cf1322', fontWeight: 500 }}>
+                    🚫 此 SKU 已屏蔽 {excluded.length} 个关键词 — 以下词不会触发该商品广告展示
+                  </Text>
+                </div>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                  {excluded.map(w => (
+                    <Tag key={w} style={{ fontSize: 12, padding: '4px 10px',
+                      color: '#cf1322', background: '#fff', border: '1px solid #ffa39e' }}>
+                      {w}
+                    </Tag>
+                  ))}
+                </div>
+                <div style={{ marginTop: 10, fontSize: 11, color: '#999' }}>
+                  数据来自 WB 接口 <code>/adv/v0/normquery/get-minus</code>，缓存 5 分钟。手动取消屏蔽请到 WB 后台。
+                </div>
+              </div>
+            )
+          ) : (
           <Table
             size="small"
             rowKey="keyword"
-            dataSource={kws}
+            dataSource={tableDataSource}
             pagination={{
               pageSize: 20, size: 'small', showSizeChanger: false,
               current: kwTablePageMap[sku] || 1,
@@ -1593,19 +1648,6 @@ const AdsOverview = ({ shopId, platform, shops, searched, syncing, lastSyncTime,
                 ) },
             ]}
           />
-          {excluded.length > 0 && (
-            <div style={{ marginTop: 12, padding: 10, background: '#fff1f0', borderRadius: 4 }}>
-              <Text type="secondary" style={{ fontSize: 12, fontWeight: 500 }}>
-                🚫 已屏蔽关键词（{excluded.length} 个）— 以下词不会触发此商品广告展示
-              </Text>
-              <div style={{ marginTop: 6, display: 'flex', flexWrap: 'wrap', gap: 4 }}>
-                {excluded.map(w => (
-                  <Tag key={w} style={{ fontSize: 11, color: '#cf1322', background: '#fff1f0', border: '1px solid #ffa39e' }}>
-                    {w}
-                  </Tag>
-                ))}
-              </div>
-            </div>
           )}
         </div>
       )
