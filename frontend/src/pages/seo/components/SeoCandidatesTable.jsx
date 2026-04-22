@@ -136,18 +136,19 @@ const SeoCandidatesTable = ({
               overlayStyle={{ maxWidth: 340 }}
               title={(
                 <div style={{ lineHeight: 1.6 }}>
-                  <div><strong>暂无搜索实证</strong></div>
+                  <div><strong>本商品在此词上：0 曝光 · 0 订单</strong></div>
                   <div style={{ marginTop: 4 }}>
-                    本商品还没被任何用户用这个词搜到过（曝光 / 订单 = 0）。
+                    用户搜这词时本商品没被展示过，所以没流量。
                   </div>
                   <div style={{ marginTop: 4, color: '#ffd591' }}>
-                    但同类目别的商品用这词带过成交，系统推荐：把这词加进本商品标题试试水。
+                    系统推荐：把这词加进本商品标题/属性 → 下次有人搜这词
+                    就可能触发展示 → 产生首个曝光。
                   </div>
                 </div>
               )}
             >
               <Tag color="default" style={{ fontSize: 11, cursor: 'help' }}>
-                暂无实证 · 系统推荐
+                0 曝光 · 系统推荐加词
               </Tag>
             </Tooltip>
           )

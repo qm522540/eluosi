@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useMemo } from 'react'
 import {
   Card, Table, Space, Segmented, Input, Button, Tag, Badge,
   Empty, Alert, Typography, Image, message, Select, Rate, Tooltip, Switch,
@@ -14,7 +14,6 @@ import {
 const { Text } = Typography
 
 const SOURCE_OPTIONS = [
-  { label: '全部', value: 'all' },
   { label: '带订单', value: 'with_orders' },
   { label: '付费·本商品', value: 'paid_self' },
   { label: '付费·类目', value: 'paid_category' },
@@ -22,11 +21,66 @@ const SOURCE_OPTIONS = [
   { label: '自然·类目', value: 'organic_category' },
 ]
 
+// 合并多店铺响应：按 keyword SUM 所有字段
+const mergeRollup = (responses) => {
+  const map = new Map()
+  let totalImpressions = 0, totalOrders = 0
+  responses.forEach(data => {
+    if (!data) return
+    const items = data?.items || []
+    items.forEach(it => {
+      const key = it.keyword.toLowerCase()
+      const cur = map.get(key) || {
+        keyword: it.keyword,
+        product_count: 0, self_product_count: 0,
+        total_orders: 0, total_impressions: 0, total_add_to_cart: 0,
+        max_score: 0, has_paid: false, has_organic: false,
+      }
+      cur.product_count += it.product_count
+      cur.self_product_count += it.self_product_count
+      cur.total_orders += it.total_orders
+      cur.total_impressions += it.total_impressions
+      cur.total_add_to_cart += it.total_add_to_cart
+      cur.max_score = Math.max(cur.max_score, it.max_score || 0)
+      cur.has_paid = cur.has_paid || it.has_paid
+      cur.has_organic = cur.has_organic || it.has_organic
+      map.set(key, cur)
+    })
+    if (data?.summary) {
+      totalImpressions += data.summary.total_impressions || 0
+      totalOrders += data.summary.total_orders || 0
+    }
+  })
+  return {
+    items: Array.from(map.values()),
+    summary: {
+      kw_count: map.size,
+      with_self_kw: Array.from(map.values()).filter(x => x.self_product_count > 0).length,
+      total_orders: totalOrders,
+      total_impressions: totalImpressions,
+    },
+  }
+}
+
+const sortItems = (items, sort) => {
+  const arr = [...items]
+  const cmp = {
+    score_desc:    (a, b) => (b.max_score || 0) - (a.max_score || 0) || (b.total_orders - a.total_orders),
+    orders_desc:   (a, b) => (b.total_orders - a.total_orders) || (b.max_score || 0) - (a.max_score || 0),
+    impr_desc:     (a, b) => b.total_impressions - a.total_impressions,
+    products_desc: (a, b) => b.product_count - a.product_count || b.total_orders - a.total_orders,
+  }[sort] || (() => 0)
+  return arr.sort(cmp)
+}
+
 const CandidatesRollupTable = ({
-  shopId,
-  onAdoptProduct,   // (productId, keyword) => 父层处理"加进标题"（切模式到按商品看 + 填 productFilter + 拉 AI Modal 候选）
+  shops = [],
+  defaultShopId,
+  onAdoptProduct,   // (shopId, productId, keyword) => 父层切单商品模式
 }) => {
-  const [source, setSource] = useState('all')
+  // 多选店铺；默认取传入的主 shop
+  const [shopIds, setShopIds] = useState(defaultShopId ? [defaultShopId] : [])
+  const [sources, setSources] = useState([])  // 多选数据源，空=全部
   const [status, setStatus] = useState('pending')
   const [keyword, setKeyword] = useState('')
   const [hideCovered, setHideCovered] = useState(true)
@@ -37,42 +91,59 @@ const CandidatesRollupTable = ({
   const [expanded, setExpanded] = useState({})
   const [expandedKeys, setExpandedKeys] = useState([])
 
+  // defaultShopId 变化时（父层切了主店铺）同步多选默认
+  useEffect(() => {
+    if (defaultShopId && shopIds.length === 0) {
+      setShopIds([defaultShopId])
+    }
+  }, [defaultShopId])  // eslint-disable-line react-hooks/exhaustive-deps
+
+  const sourceParam = useMemo(() => sources.join(',') || 'all', [sources])
+
   const fetchData = useCallback(async () => {
-    if (!shopId) return
+    if (!shopIds.length) { setData(null); return }
     setLoading(true)
     try {
-      const res = await getCandidatesRollup(shopId, {
-        source, status, keyword: keyword.trim(),
-        hide_covered: hideCovered, sort, limit: 200,
-      })
-      if (res.code === 0) {
-        setData(res.data)
-        setExpanded({})
-        setExpandedKeys([])
-      } else {
-        message.error(res.msg || '拉取失败')
-      }
+      const results = await Promise.all(
+        shopIds.map(sid => getCandidatesRollup(sid, {
+          source: sourceParam, status, keyword: keyword.trim(),
+          hide_covered: hideCovered, sort, limit: 500,
+        }).catch(() => null))
+      )
+      const valid = results.filter(r => r && r.code === 0).map(r => r.data)
+      const merged = mergeRollup(valid)
+      merged.items = sortItems(merged.items, sort)
+      setData(merged)
+      setExpanded({})
+      setExpandedKeys([])
     } catch (e) {
-      message.error(e?.response?.data?.msg || '网络错误')
+      message.error('网络错误')
     } finally {
       setLoading(false)
     }
-  }, [shopId, source, status, keyword, hideCovered, sort])
+  }, [shopIds, sourceParam, status, keyword, hideCovered, sort])
 
   useEffect(() => { fetchData() }, [fetchData])
 
   const loadProducts = async (kw) => {
     setExpanded(prev => ({ ...prev, [kw]: { loading: true, items: [] } }))
     try {
-      const res = await getCandidatesRollupProducts(shopId, { keyword: kw, status, limit: 100 })
-      if (res.code === 0) {
-        setExpanded(prev => ({ ...prev, [kw]: { loading: false, items: res.data?.items || [] } }))
-      } else {
-        message.error(res.msg || '下钻失败')
-        setExpanded(prev => ({ ...prev, [kw]: { loading: false, items: [] } }))
-      }
+      const results = await Promise.all(
+        shopIds.map(sid => getCandidatesRollupProducts(sid, {
+          keyword: kw, status, limit: 100,
+        }).catch(() => null))
+      )
+      const allItems = []
+      results.forEach(r => {
+        if (r && r.code === 0) allItems.push(...(r.data?.items || []))
+      })
+      // 按 has_self 优先 + score 降序
+      allItems.sort((a, b) => {
+        if (a.has_self !== b.has_self) return a.has_self ? -1 : 1
+        return (b.score || 0) - (a.score || 0)
+      })
+      setExpanded(prev => ({ ...prev, [kw]: { loading: false, items: allItems } }))
     } catch (e) {
-      message.error(e?.response?.data?.msg || '网络错误')
       setExpanded(prev => ({ ...prev, [kw]: { loading: false, items: [] } }))
     }
   }
@@ -104,7 +175,7 @@ const CandidatesRollupTable = ({
     },
     {
       title: (
-        <Tooltip title="蓝=真给这么多商品带过订单；橙=这词被推荐加进多少商品的标题（含类目扩散推断）">
+        <Tooltip title="蓝=真给这么多商品带过订单/曝光；橙=这词被推荐加进多少商品的标题（含类目扩散推断）">
           真实贡献 <Text type="secondary" style={{ fontSize: 11 }}>/ 推荐覆盖</Text>
         </Tooltip>
       ),
@@ -125,11 +196,7 @@ const CandidatesRollupTable = ({
       ),
     },
     {
-      title: (
-        <Tooltip title="只对真带过订单的商品求和（self scope 真数据），不算类目扩散继承的虚数">
-          订单
-        </Tooltip>
-      ),
+      title: <Tooltip title="只对真带过订单的 self scope 行求和">订单</Tooltip>,
       dataIndex: 'total_orders', align: 'right', width: 80,
       render: v => v > 0 ? <Text strong style={{ color: '#52c41a' }}>{v}</Text> : (v || 0),
     },
@@ -137,11 +204,7 @@ const CandidatesRollupTable = ({
       render: v => (v || 0).toLocaleString() },
     { title: '加购', dataIndex: 'total_add_to_cart', align: 'right', width: 70 },
     {
-      title: (
-        <Tooltip title="系统打分：来源数×2 + ROAS + log(订单+1)×2 + log(曝光+1) + log(自然订单+1)×2">
-          优先级
-        </Tooltip>
-      ),
+      title: <Tooltip title="系统打分：来源数×2 + ROAS + log(订单+1)×2 + log(曝光+1) + log(自然订单+1)×2">优先级</Tooltip>,
       dataIndex: 'max_score', align: 'center', width: 80,
       render: v => (
         <Tag color={v >= 8 ? 'red' : v >= 5 ? 'orange' : v >= 3 ? 'gold' : 'default'}
@@ -152,12 +215,22 @@ const CandidatesRollupTable = ({
     },
   ]
 
+  const shopNameMap = useMemo(() => {
+    const m = {}
+    shops.forEach(s => { m[s.id] = s.name })
+    return m
+  }, [shops])
+
   const renderExpanded = (record) => {
     const kw = record.keyword
     const state = expanded[kw]
     if (!state) return null
 
     const subColumns = [
+      {
+        title: '店铺', key: 'shop', width: 100,
+        render: (_, r) => <Tag color="geekblue" style={{ fontSize: 11 }}>{shopNameMap[r.shop_id] || `shop#${r.shop_id}`}</Tag>,
+      },
       {
         title: '商品', key: 'product',
         render: (_, r) => (
@@ -172,7 +245,7 @@ const CandidatesRollupTable = ({
               />
             )}
             <Space direction="vertical" size={0}>
-              <Text style={{ fontSize: 12, maxWidth: 280 }} ellipsis={{ tooltip: r.title }}>
+              <Text style={{ fontSize: 12, maxWidth: 260 }} ellipsis={{ tooltip: r.title }}>
                 {r.title || '(无标题)'}
               </Text>
               <Text type="secondary" style={{ fontSize: 11 }}>
@@ -198,13 +271,24 @@ const CandidatesRollupTable = ({
         },
       },
       {
-        title: '实证表现', key: 'evidence', width: 170,
+        title: '实证表现', key: 'evidence', width: 180,
         render: (_, r) => {
           if (!r.has_self) {
             return (
-              <Tooltip title="本商品尚未被用户用这词搜到过；系统基于同类目其他商品的成交数据推荐加进标题试水">
+              <Tooltip
+                overlayStyle={{ maxWidth: 340 }}
+                title={(
+                  <div style={{ lineHeight: 1.6 }}>
+                    <div><strong>本商品在此词上：0 曝光 · 0 订单</strong></div>
+                    <div style={{ marginTop: 4 }}>用户搜这词时本商品没被展示过，所以没流量。</div>
+                    <div style={{ marginTop: 4, color: '#ffd591' }}>
+                      系统推荐：把这词加进本商品标题/属性 → 下次有人搜这词就可能触发展示 → 产生首个曝光。
+                    </div>
+                  </div>
+                )}
+              >
                 <Tag color="default" style={{ fontSize: 11, cursor: 'help' }}>
-                  暂无实证 · 系统推荐
+                  0 曝光 · 系统推荐加词
                 </Tag>
               </Tooltip>
             )
@@ -268,7 +352,7 @@ const CandidatesRollupTable = ({
           r.status === 'pending' ? (
             <Button
               size="small" type="link" icon={<TagOutlined />}
-              onClick={() => onAdoptProduct && onAdoptProduct(r.product_id, kw)}
+              onClick={() => onAdoptProduct && onAdoptProduct(r.shop_id, r.product_id, kw)}
             >
               给此商品改标题
             </Button>
@@ -284,10 +368,10 @@ const CandidatesRollupTable = ({
     return (
       <div style={{ padding: '8px 16px', background: '#fafafa' }}>
         <Text type="secondary" style={{ fontSize: 12, marginBottom: 8, display: 'block' }}>
-          「<Text code>{kw}</Text>」候选商品（<Text strong>真实贡献商品排前</Text>，下方是类目推断推荐）：
+          「<Text code>{kw}</Text>」候选商品（<Text strong>真实贡献排前</Text>，类目推断排后）：
         </Text>
         <Table
-          rowKey="candidate_id"
+          rowKey={(r) => `${r.shop_id}-${r.candidate_id}`}
           columns={subColumns}
           dataSource={state.items}
           loading={state.loading}
@@ -299,6 +383,11 @@ const CandidatesRollupTable = ({
     )
   }
 
+  const shopOptions = shops.map(s => ({
+    label: `${s.name} (${s.platform})`,
+    value: s.id,
+  }))
+
   return (
     <div>
       <Alert
@@ -309,20 +398,38 @@ const CandidatesRollupTable = ({
           <div style={{ fontSize: 12 }}>
             <div>订单/曝光/加购只对<strong>真给该商品带过流量</strong>的 self scope 求和，不再重复计继承的类目扩散数字。</div>
             <div style={{ color: '#888', marginTop: 4 }}>
-              展开行里点「给此商品改标题」会跳到单商品候选视图，能勾选多个词调 AI 生成新标题。
+              多选店铺时跨店合并（同一关键词的真数据求和）；多选数据源时取并集。
             </div>
           </div>
         )}
       />
 
-      <Space wrap style={{ marginBottom: 12 }}>
+      <Space wrap style={{ marginBottom: 8 }}>
+        <Text type="secondary">店铺：</Text>
+        <Select
+          mode="multiple"
+          style={{ minWidth: 280 }}
+          value={shopIds}
+          onChange={setShopIds}
+          options={shopOptions}
+          placeholder="至少选 1 个店铺"
+          maxTagCount="responsive"
+          allowClear={false}
+        />
         <Text type="secondary">数据源：</Text>
         <Select
-          style={{ width: 160 }}
-          value={source}
-          onChange={setSource}
+          mode="multiple"
+          style={{ minWidth: 260 }}
+          value={sources}
+          onChange={setSources}
           options={SOURCE_OPTIONS}
+          placeholder="全部（不过滤）"
+          maxTagCount="responsive"
+          allowClear
         />
+      </Space>
+      <br />
+      <Space wrap style={{ marginBottom: 12 }}>
         <Text type="secondary">状态：</Text>
         <Segmented
           value={status}
@@ -364,6 +471,11 @@ const CandidatesRollupTable = ({
           background: '#fff7e6', border: '1px solid #ffd591',
           borderRadius: 4, fontSize: 13,
         }}>
+          {shopIds.length > 1 && (
+            <Tag color="gold" style={{ marginRight: 8 }}>
+              跨 {shopIds.length} 店铺合并
+            </Tag>
+          )}
           <Text strong>{summary.kw_count}</Text> <Text type="secondary"> 个候选词 · </Text>
           <Text strong style={{ color: '#1677ff' }}>{summary.with_self_kw}</Text>
           <Text type="secondary"> 个有真实订单 · </Text>

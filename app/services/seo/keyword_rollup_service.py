@@ -282,17 +282,19 @@ def compute_candidates_rollup(
     if hide_covered:
         filters.append("(c.in_title = 0 AND c.in_attrs = 0)")
 
-    # source filter: all / paid_self / paid_category / organic_self / organic_category / with_orders
-    if source == "paid_self":
-        filters.append("JSON_CONTAINS(c.sources, JSON_OBJECT('type','paid','scope','self'))")
-    elif source == "paid_category":
-        filters.append("JSON_CONTAINS(c.sources, JSON_OBJECT('type','paid','scope','category'))")
-    elif source == "organic_self":
-        filters.append("JSON_CONTAINS(c.sources, JSON_OBJECT('type','organic','scope','self'))")
-    elif source == "organic_category":
-        filters.append("JSON_CONTAINS(c.sources, JSON_OBJECT('type','organic','scope','category'))")
-    elif source == "with_orders":
-        filters.append(f"({_HAS_SELF_CLAUSE} AND (COALESCE(c.paid_orders,0) + COALESCE(c.organic_orders,0)) > 0)")
+    # source filter: 支持逗号分隔多选,如 "paid_self,organic_self"; "all" 或空表示不过滤
+    source_clauses = {
+        "paid_self":        "JSON_CONTAINS(c.sources, JSON_OBJECT('type','paid','scope','self'))",
+        "paid_category":    "JSON_CONTAINS(c.sources, JSON_OBJECT('type','paid','scope','category'))",
+        "organic_self":     "JSON_CONTAINS(c.sources, JSON_OBJECT('type','organic','scope','self'))",
+        "organic_category": "JSON_CONTAINS(c.sources, JSON_OBJECT('type','organic','scope','category'))",
+        "with_orders":      f"({_HAS_SELF_CLAUSE} AND (COALESCE(c.paid_orders,0) + COALESCE(c.organic_orders,0)) > 0)",
+    }
+    source_list = [s.strip() for s in (source or "").split(",") if s.strip()]
+    source_list = [s for s in source_list if s in source_clauses]
+    if source_list:
+        or_clause = " OR ".join(source_clauses[s] for s in source_list)
+        filters.append(f"({or_clause})")
 
     where_clause = " AND ".join(filters)
 
@@ -370,6 +372,7 @@ def list_candidates_rollup_products(
 
     sql = text(f"""
         SELECT c.id AS candidate_id,
+               c.shop_id,
                c.product_id,
                c.keyword,
                c.status,
@@ -409,6 +412,7 @@ def list_candidates_rollup_products(
         has_self = bool(r.has_self)
         items.append({
             "candidate_id":    int(r.candidate_id),
+            "shop_id":         int(r.shop_id),
             "product_id":      int(r.product_id),
             "title":           r.title or "",
             "image_url":       r.image_url or "",

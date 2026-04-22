@@ -353,10 +353,12 @@ const Optimize = () => {
             />
           </>
         ) : (
-          // 关键词聚合模式：每行一个词 + 点 ▶ 展开看推荐商品
+          // 关键词聚合模式：每行一个词 + 点 ▶ 展开看推荐商品 + 多选店铺/数据源
           <CandidatesRollupTable
-            shopId={shopId}
-            onAdoptProduct={(productId, kw) => {
+            shops={shops}
+            defaultShopId={shopId}
+            onAdoptProduct={(targetShopId, productId, kw) => {
+              if (targetShopId && targetShopId !== shopId) setShopId(targetShopId)
               setProductFilter(productId)
               setKeyword(kw)
               setSource('all')
