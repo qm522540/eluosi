@@ -495,6 +495,58 @@ const AdsOverview = ({ shopId, platform, shops, searched, syncing, lastSyncTime,
     }
   }
 
+  // 单个关键词（或整簇）一键屏蔽
+  const handleSingleExclude = (sku, keywords, label) => {
+    if (!detailData?.id) return
+    const nmId = parseInt(sku)
+    const list = Array.isArray(keywords) ? keywords : [keywords]
+    const displayLabel = label || (list.length === 1 ? list[0] : `${list.length} 个词`)
+    Modal.confirm({
+      title: `确认屏蔽「${displayLabel}」？`,
+      icon: <ExclamationCircleOutlined style={{ color: '#ff4d4f' }} />,
+      width: 480,
+      content: list.length > 1 ? (
+        <div style={{ marginTop: 8, maxHeight: 200, overflow: 'auto' }}>
+          {list.map(w => <Tag key={w} color="volcano" style={{ margin: 2, fontSize: 11 }}>{w}</Tag>)}
+          <div style={{ marginTop: 10, padding: 8, background: '#fff2f0', borderRadius: 4, fontSize: 12, color: '#cf1322' }}>
+            这 {list.length} 个词将被写入该 SKU 的 WB 屏蔽词列表，不再触发广告展示。
+          </div>
+        </div>
+      ) : (
+        <div style={{ marginTop: 10, padding: 8, background: '#fff2f0', borderRadius: 4, fontSize: 12, color: '#cf1322' }}>
+          屏蔽后"{list[0]}"将不再触发此商品广告展示。
+        </div>
+      ),
+      okText: '确认屏蔽',
+      okType: 'danger',
+      onOk: async () => {
+        try {
+          const res = await excludeKeywords(detailData.id, nmId, list)
+          const added = res.data?.added || []
+          const skipped = res.data?.skipped_protected || []
+          const dropped = res.data?.dropped_invalid || []
+          const parts = []
+          if (added.length > 0) parts.push(`屏蔽 ${added.length} 个`)
+          if (skipped.length > 0) parts.push(`白名单跳过 ${skipped.length} 个`)
+          if (dropped.length > 0) parts.push(`WB 拒绝 ${dropped.length} 个`)
+          const msg = parts.join('；') || '未屏蔽任何词'
+          if (added.length > 0) message.success(msg, 4); else message.info(msg, 4)
+          // refetch 刷新关键词列表（屏蔽词会自动归入 excluded）
+          if (platform === 'wb' && detailData?.id) {
+            try {
+              const r = await getCampaignKeywords(detailData.id, 7, sku)
+              const kws2 = r.data?.keywords || []
+              const excl2 = r.data?.excluded_keywords || []
+              setKeywordsBySku(m => ({ ...m, [sku]: kws2, [`${sku}_excluded`]: excl2 }))
+            } catch { /* refetch 失败不致命 */ }
+          }
+        } catch (err) {
+          message.error(err.message || err?.response?.data?.msg || '屏蔽失败')
+        }
+      },
+    })
+  }
+
   // ==================== 数据加载 ====================
 
   const fetchSummary = useCallback(async () => {
@@ -1343,25 +1395,26 @@ const AdsOverview = ({ shopId, platform, shops, searched, syncing, lastSyncTime,
       }
       // 视图模式：active=集群视图(对齐 WB 后台粒度) / excluded=已屏蔽 / all=全量个体变体
       const kwMode = kwViewMode[sku] || 'active'
-      // 俄语停用词（介词/连词不参与聚类） + 形态变化自然消解
       const RU_STOPWORDS = new Set(['для', 'из', 'с', 'со', 'на', 'в', 'во',
         'и', 'по', 'под', 'над', 'от', 'до', 'или', 'не', 'но', 'а',
         'что', 'как', 'это', 'за', 'при', 'без', 'у', 'об', 'о'])
-      // 聚类 key：bag-of-words 排序 + 3 字根 + ё 归一 (серьги↔серёжки → сер)
-      // 核心思路：语义接近的变体共享核心 stems 集合，和 WB "顶级搜索集群" 对齐
-      //   "серьги детские медицинский сплав"      → дет+мед+сер+спл
-      //   "серёжки детские из медицинского сплава" → дет+мед+сер+спл  (ё 归一 + 同根)
-      //   "серьги медицинский сплав, детские"     → дет+мед+сер+спл  (顺序无关)
-      //   "серьги для детей"                      → дет+сер  (更少 token 自成簇)
-      //   "серьги сердечки"                       → sер(去重后单 stem) → 回退全词
+      // 聚类 key：ё→е 归一 + 只取前 2 个非停用词的 3 字根，排序作 key
+      // 取前 2 个而非全部 token：多余修饰词(большие/маленькие 等)不应让变体分家
+      //   "серьги детские медицинский сплав"       → дет+сер  (前 2: серьги, детские)
+      //   "серьги детские маленькие"              → дет+сер  ✓ 同簇
+      //   "серёжки детские медицинские сплав"      → дет+сер  ✓ 同簇 (ё 归一)
+      //   "серьги для девочек"                    → дев+сер  (为第 2 个实词是 девочек)
+      //   "серьги сердечки"                       → сер+сер → "сер" → 回退原词
       const clusterKeyOf = (keyword) => {
         const normalized = String(keyword || '').toLowerCase().replace(/ё/g, 'е')
         const raw = normalized.replace(/[^\wа-я\s-]/gu, ' ')
-        const stems = raw.split(/[\s\-_]+/)
+        const tokens = raw.split(/[\s\-_]+/)
           .filter(t => t.length >= 3 && !RU_STOPWORDS.has(t))
           .map(t => t.slice(0, 3))
-        const uniq = Array.from(new Set(stems)).sort()
-        // 单 stem 太粗（只有"сер"这种），回退全词避免黑洞合并
+        if (tokens.length === 0) return normalized.trim()
+        // 只用前 2 个 token 的 stem，排序后组合（顺序无关）
+        const head = tokens.slice(0, 2)
+        const uniq = Array.from(new Set(head)).sort()
         if (uniq.length <= 1) return normalized.trim()
         return uniq.join('+')
       }
@@ -1724,15 +1777,29 @@ const AdsOverview = ({ shopId, platform, shops, searched, syncing, lastSyncTime,
                   const color = v >= 5 ? '#52c41a' : v >= 3 ? '#faad14' : '#ff4d4f'
                   return <span style={{ color, fontWeight: 500 }}>{v.toFixed(1)}x</span>
                 }},
-              { title: <Tooltip title="勾选后此词不会进入「建议屏蔽」，「一键屏蔽」也会跳过。可随时取消。">🛡 不屏蔽</Tooltip>,
-                key: 'is_protected', width: 90, align: 'center',
-                render: (_, r) => (
-                  <Checkbox
-                    checked={!!r.is_protected}
-                    disabled={r.is_excluded}
-                    onChange={() => toggleProtected(sku, r.keyword, !!r.is_protected)}
-                  />
-                ) },
+              { title: '操作', key: 'actions', width: 120, align: 'center', fixed: 'right',
+                render: (_, r) => {
+                  if (r.is_excluded) {
+                    return <Tag color="red" style={{ margin: 0, fontSize: 11 }}>已屏蔽</Tag>
+                  }
+                  const isCluster = r.variant_count > 1
+                  const blockWords = isCluster ? (r.variants || []).map(v => v.keyword) : [r.keyword]
+                  const label = isCluster ? `整簇 ${r.variant_count} 个变体` : r.keyword
+                  return (
+                    <Space size={4}>
+                      <Tooltip title="勾选后此词不会被「一键屏蔽」和「自动屏蔽托管」误屏">
+                        <Checkbox
+                          checked={!!r.is_protected}
+                          onChange={() => toggleProtected(sku, r.keyword, !!r.is_protected)}
+                        />
+                      </Tooltip>
+                      <a style={{ color: '#ff4d4f', fontSize: 12 }}
+                        onClick={() => handleSingleExclude(sku, blockWords, label)}>
+                        屏蔽
+                      </a>
+                    </Space>
+                  )
+                } },
             ]}
           />
           )}
