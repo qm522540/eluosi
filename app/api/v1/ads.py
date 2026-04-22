@@ -1027,6 +1027,66 @@ async def campaign_keyword_clusters(
             keywords=all_kw_to_assign, cluster_names=valid_reps,
         )
 
+        # 确定性后处理：AI 爱把"含 сплав"词塞给短名簇，强制按 token 规则重分
+        # 为每个 valid_rep 预计算 token 集合（3 字前缀 + ё 归一）
+        def _tokens_of(s):
+            import re
+            norm = str(s or "").lower().replace("ё", "е")
+            out = re.findall(r"[a-zа-я]+", norm)
+            return {t[:4] for t in out if len(t) >= 4}  # 4 字词根更严
+
+        rep_tokens = {rep: _tokens_of(rep) for rep in valid_reps}
+
+        # 挑特征 token（出现在某簇名但不在其他簇名里的 token）
+        rep_special = {}
+        for rep, ts in rep_tokens.items():
+            others = set()
+            for r2, ts2 in rep_tokens.items():
+                if r2 != rep: others |= ts2
+            rep_special[rep] = ts - others
+
+        # 反向查找：keyword 含哪些簇的特征 token → 应该归那个簇
+        # 如果含多个簇的特征 token，选最具体（rep 自身 token 最多的）
+        valid_reps_sorted = sorted(valid_reps, key=lambda r: -len(rep_tokens[r]))
+
+        def _best_cluster_for(kw):
+            kw_ts = _tokens_of(kw)
+            # 匹配度 = 关键词含的簇特征 token 数
+            scores = []
+            for rep in valid_reps_sorted:
+                # 规则：该簇所有 token 里有多少个出现在 kw_ts 里
+                hit = len(rep_tokens[rep] & kw_ts)
+                if hit > 0:
+                    # 优先完全匹配（hit == rep_tokens 大小）
+                    full_match = (hit == len(rep_tokens[rep]))
+                    scores.append((full_match, hit, -len(rep_tokens[rep]), rep))
+            if not scores:
+                return None
+            # 完全匹配 > 部分匹配越多越好 > 簇 token 越多（更具体）优先
+            scores.sort(key=lambda x: (not x[0], -x[1], x[2]))
+            return scores[0][3]
+
+        # 重分配：对每个词按 token 规则找目标簇；若规则有明确答案就覆盖 AI
+        fixed_assignments = {rep: [] for rep in valid_reps}
+        fixed_assignments["_other"] = []
+        all_kws_flat = []
+        for bucket_words in assignments.values():
+            if isinstance(bucket_words, list):
+                all_kws_flat.extend(bucket_words)
+        # 去重（AI 可能把词分到多个桶，取第一个）
+        seen_kw = set()
+        for kw in all_kws_flat:
+            kw_lc = str(kw).strip().lower()
+            if kw_lc in seen_kw: continue
+            seen_kw.add(kw_lc)
+            best = _best_cluster_for(kw)
+            if best:
+                fixed_assignments[best].append(kw)
+            else:
+                fixed_assignments["_other"].append(kw)
+
+        assignments = fixed_assignments
+
     # 构造每簇的统计（曝光 / 点击 / 花费 / CTR）
     kw_stat_map = {
         kw["keyword"]: {
