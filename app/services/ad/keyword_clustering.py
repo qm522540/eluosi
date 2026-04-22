@@ -334,13 +334,22 @@ async def assign_keywords_to_clusters_ai(
     except Exception:
         assignments = {}
 
+    # 去重：AI 可能把同一个词分到多个簇，只保留首次出现
+    seen = set()
+    cleaned = {}
+    for bucket_name, bucket_words in assignments.items():
+        if not isinstance(bucket_words, list):
+            continue
+        cleaned[bucket_name] = []
+        for w in bucket_words:
+            key_lc = str(w).strip().lower()
+            if key_lc and key_lc not in seen:
+                seen.add(key_lc)
+                cleaned[bucket_name].append(str(w).strip())
+    assignments = cleaned
+
     # 保证所有输入词都分到了桶里
-    all_assigned = set()
-    for bucket_words in assignments.values():
-        if isinstance(bucket_words, list):
-            for w in bucket_words:
-                all_assigned.add(str(w).strip().lower())
-    missing = [kw for kw in keywords if kw.strip().lower() not in all_assigned]
+    missing = [kw for kw in keywords if kw.strip().lower() not in seen]
     if missing:
         if "_other" not in assignments:
             assignments["_other"] = []
