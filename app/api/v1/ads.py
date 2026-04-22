@@ -983,7 +983,7 @@ async def campaign_keyword_clusters(
     # 三步流程：propose 候选 → WB validate → AI 二次分配到有效簇
     from app.services.ad.keyword_clustering import (
         propose_cluster_reps_ai, validate_cluster_reps_with_wb,
-        assign_keywords_to_clusters_ai,
+        assign_keywords_to_clusters_ai, get_known_reps,
     )
 
     # Step 1: AI 提出候选代表词（8-15 个）
@@ -992,9 +992,10 @@ async def campaign_keyword_clusters(
         advert_id=camp.platform_campaign_id, nm_id=nm_id,
         keywords=active_top,
     )
-    # 加入 existing minus list 里的词作为已知 WB 有效代表（种子）
+    # 种子（历史已知有效代表词 + 当前 minus list） → 不会遗漏历史发现过的
     seed_reps = list({w for w in excluded_list if w})
-    all_candidates = list(dict.fromkeys(seed_reps + candidates))  # 保序去重
+    known_reps = get_known_reps(camp.platform_campaign_id, nm_id)  # Redis 持久化 30d
+    all_candidates = list(dict.fromkeys(seed_reps + known_reps + candidates))  # 保序去重
 
     # Step 2: WB 验证哪些是真代表词
     client2 = WBClient(shop_id=shop.id, api_key=shop.api_key)
@@ -1235,6 +1236,73 @@ async def exclude_keywords(
         "total_excluded": len(merged) - len(dropped_invalid),
         "skipped_protected": skipped_protected,
         "dropped_invalid": dropped_invalid,
+    })
+
+
+class ProbeClusterRepRequest(BaseModel):
+    nm_id: int = Field(..., description="WB 商品 nm_id")
+    keyword: str = Field(..., min_length=1, max_length=500, description="用户从 WB 后台复制的集群代表词")
+
+
+@router.post("/campaign-keywords/{campaign_id}/probe-cluster-rep")
+async def probe_cluster_rep(
+    campaign_id: int,
+    req: ProbeClusterRepRequest,
+    db: Session = Depends(get_db),
+    tenant_id: int = Depends(get_tenant_id),
+):
+    """用户手动提交一个候选簇代表词，让 WB oracle 验证是否认可
+
+    通过 set-minus dry-run 测试：加入 minus list → 观察是否被 WB 拒绝 → 立即回滚。
+    验证通过后存入 Redis known_reps，下次查集群自动作为种子。
+    """
+    from app.models.ad import AdCampaign
+    from app.models.shop import Shop
+    from app.services.ad.keyword_clustering import (
+        validate_cluster_reps_with_wb, add_known_rep,
+    )
+
+    camp = db.query(AdCampaign).filter(
+        AdCampaign.id == campaign_id, AdCampaign.tenant_id == tenant_id,
+    ).first()
+    if not camp:
+        return error(50001, "广告活动不存在")
+    if camp.platform != "wb":
+        return error(10002, "仅支持 WB 平台")
+
+    shop = db.query(Shop).filter(Shop.id == camp.shop_id).first()
+    if not shop:
+        return error(30001, "店铺不存在")
+
+    keyword = req.keyword.strip()
+    from app.services.platform.wb import WBClient
+    client = WBClient(shop_id=shop.id, api_key=shop.api_key)
+    try:
+        result_map = await validate_cluster_reps_with_wb(
+            client=client, advert_id=camp.platform_campaign_id,
+            nm_id=req.nm_id, cluster_names=[keyword],
+        )
+    finally:
+        await client.close()
+
+    is_valid = bool(result_map.get(keyword, False))
+
+    # 不论是否有效，都清 clusters 缓存强制下次重聚类
+    try:
+        import redis as redis_lib
+        r = redis_lib.Redis.from_url(settings.REDIS_URL, decode_responses=True)
+        for pat in [f'wb:kw_clusters:{camp.platform_campaign_id}:*',
+                    f'wb:kw_cand:{camp.platform_campaign_id}:*',
+                    f'wb:kw_assign:{camp.platform_campaign_id}:*']:
+            for k in r.scan_iter(pat):
+                r.delete(k)
+    except Exception:
+        pass
+
+    return success({
+        "keyword": keyword,
+        "wb_valid": is_valid,
+        "msg": "WB 认可，已存入已知代表词" if is_valid else "WB 拒绝，此词不是集群代表",
     })
 
 

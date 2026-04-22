@@ -204,6 +204,33 @@ async def cluster_keywords_ai(
 
 
 _VALID_CACHE_TTL = 86400  # WB 集群定义变化慢，缓存 24h
+_KNOWN_REPS_TTL = 86400 * 30  # 已知 WB 代表词持久化 30 天
+
+
+def _known_reps_key(advert_id, nm_id) -> str:
+    return f"wb:known_reps:{advert_id}:{nm_id}"
+
+
+def add_known_rep(advert_id, nm_id, rep: str):
+    """把经 WB 确认的集群代表词加入 known set，30 天 TTL"""
+    try:
+        import redis as redis_lib
+        r = redis_lib.Redis.from_url(settings.REDIS_URL, decode_responses=True)
+        key = _known_reps_key(advert_id, nm_id)
+        r.sadd(key, rep)
+        r.expire(key, _KNOWN_REPS_TTL)
+    except Exception:
+        pass
+
+
+def get_known_reps(advert_id, nm_id) -> List[str]:
+    """拿该 SKU 历史已知的所有 WB 代表词（用户解除屏蔽后也保留）"""
+    try:
+        import redis as redis_lib
+        r = redis_lib.Redis.from_url(settings.REDIS_URL, decode_responses=True)
+        return list(r.smembers(_known_reps_key(advert_id, nm_id)) or [])
+    except Exception:
+        return []
 
 
 def _valid_cache_key(advert_id, nm_id, cluster_names: List[str]) -> str:
@@ -423,7 +450,11 @@ async def validate_cluster_reps_with_wb(
 
     # 标记：被 WB 拒绝 = 不是集群代表词
     for c in new_candidates:
-        result_map[c] = c.lower().strip() not in dropped
+        is_valid = c.lower().strip() not in dropped
+        result_map[c] = is_valid
+        if is_valid:
+            # 持久化到 Redis known-reps set（30 天），下次自动作种子
+            add_known_rep(advert_id, nm_id, c)
 
     # 立即回滚 —— 把新增的词从 minus 列表移除（只保留 existing）
     # 注意：WB 可能在测试时把 new_candidates 中被接受的那些加进了 minus，必须回滚
