@@ -344,8 +344,9 @@ async def refresh_shop(
     if shop.platform == "wb":
         import asyncio
         # WB search-texts 端点实测限流严格（估 3-5 rpm），批量 nmIds 降低调用次数
-        WB_BATCH_SIZE = 50          # 单次调用 nmIds 个数上限
-        WB_BATCH_PAUSE_S = 15       # 批间 sleep 秒，抵御 429
+        # 2026-04-23：WB 对单次 nmIds 数量上限未文档化，保守取 20
+        WB_BATCH_SIZE = 20          # 单次调用 nmIds 个数上限
+        WB_BATCH_PAUSE_S = 20       # 批间 sleep 秒，抵御 429
 
         nm_to_pid = {}
         for l in listings:
