@@ -1,7 +1,7 @@
 """广告路由"""
 
 from datetime import date, datetime, timedelta, timezone
-from fastapi import APIRouter, Depends, Query, HTTPException
+from fastapi import APIRouter, Depends, Query, HTTPException, UploadFile, File, Form
 from fastapi.responses import StreamingResponse
 from sqlalchemy import bindparam, text
 from sqlalchemy.orm import Session
@@ -936,6 +936,56 @@ async def campaign_keyword_clusters(
     if not shop:
         return error(30001, "店铺不存在")
 
+    # Oracle 优先：若用户上传过 preset-stat xlsx，直接用 WB 官方数据（100% 准确）
+    # 2026-04-23 增加：xlsx 覆盖 AI 三步聚类，因 /adv/v0/stats/keywords 和 WB 后台顶级集群
+    # 是两个数据源，交集仅 ~2%；xlsx 含完整 WB 权威 keyword→cluster 映射
+    from app.services.ad.cluster_oracle_service import (
+        get_oracle_summary, get_oracle_kw_to_cluster,
+    )
+    oracle_summary = get_oracle_summary(db, tenant_id, camp.platform_campaign_id, nm_id)
+    if oracle_summary:
+        oracle_mapping = get_oracle_kw_to_cluster(
+            db, tenant_id, camp.platform_campaign_id, nm_id,
+        )
+        # 反向构造 cluster → [keywords]
+        cluster_members = {s["cluster_name"]: [] for s in oracle_summary}
+        for kw, cluster in oracle_mapping.items():
+            cluster_members.setdefault(cluster, []).append(kw)
+        enriched = []
+        for s in oracle_summary:
+            cn = s["cluster_name"]
+            members = sorted(cluster_members.get(cn, []))
+            enriched.append({
+                "name": cn,
+                "members": [{"keyword": k, "views": 0, "clicks": 0, "sum": 0} for k in members],
+                "variant_count": len(members),
+                "views":  int(s.get("views") or 0),
+                "clicks": int(s.get("clicks") or 0),
+                "sum":    float(s.get("spend") or 0),
+                "ctr":    float(s.get("ctr") or 0),
+                "wb_valid": True,
+                "is_cluster_excluded": bool(s.get("is_excluded")),
+                "oracle_bid_cpm": float(s["bid_cpm"]) if s.get("bid_cpm") is not None else None,
+                "oracle_avg_pos": float(s["avg_pos"]) if s.get("avg_pos") is not None else None,
+                "oracle_orders": int(s.get("orders") or 0),
+                "oracle_baskets": int(s.get("baskets") or 0),
+            })
+        # 排序：WB 有效 + 非屏蔽 > 有效 + 屏蔽；曝光高排前
+        enriched.sort(key=lambda x: (x["is_cluster_excluded"], -x["views"]))
+        latest_imp = oracle_summary[0].get("imported_at")
+        latest_df = oracle_summary[0].get("date_from")
+        latest_dt = oracle_summary[0].get("date_to")
+        return success({
+            "campaign_id": campaign_id,
+            "nm_id": nm_id,
+            "date_from": latest_df.strftime("%Y-%m-%d") if latest_df else None,
+            "date_to":   latest_dt.strftime("%Y-%m-%d") if latest_dt else None,
+            "total_active": len(oracle_mapping),
+            "clusters": enriched,
+            "source": "oracle",
+            "imported_at": latest_imp.isoformat() if hasattr(latest_imp, "isoformat") else str(latest_imp),
+        })
+
     # 拉活跃触发词（campaign-keywords 的简化版，只取有点击 + 未被屏蔽）
     span = min(days, 7) - 1
     date_to = _date.today() - _td(days=1)
@@ -1163,6 +1213,134 @@ async def campaign_keyword_clusters(
         "date_to": dt,
         "total_active": len(active_top),
         "clusters": enriched,
+        "source": "ai_cluster",
+    })
+
+
+@router.get("/campaign-keywords/{campaign_id}/cluster-oracle-status")
+async def cluster_oracle_status(
+    campaign_id: int,
+    nm_id: int = Query(..., description="SKU 的 WB nm_id"),
+    db: Session = Depends(get_db),
+    tenant_id: int = Depends(get_tenant_id),
+):
+    """查询该 (camp, nm) 是否已上传过 WB 集群 xlsx"""
+    from app.models.ad import AdCampaign
+    from app.services.ad.cluster_oracle_service import (
+        oracle_last_imported, get_oracle_summary,
+    )
+    camp = db.query(AdCampaign).filter(
+        AdCampaign.id == campaign_id, AdCampaign.tenant_id == tenant_id,
+    ).first()
+    if not camp:
+        return error(50001, "广告活动不存在")
+    if camp.platform != "wb":
+        return success({"has_oracle": False, "reason": "仅 WB 支持"})
+
+    last_imp = oracle_last_imported(db, tenant_id, camp.platform_campaign_id, nm_id)
+    if not last_imp:
+        return success({"has_oracle": False})
+    summary = get_oracle_summary(db, tenant_id, camp.platform_campaign_id, nm_id)
+    # 总词数
+    kw_cnt = db.execute(text("""
+        SELECT COUNT(*) FROM wb_cluster_oracle
+        WHERE tenant_id=:tid AND advert_id=:adv AND nm_id=:nm
+    """), {"tid": tenant_id, "adv": camp.platform_campaign_id, "nm": nm_id}).scalar() or 0
+    latest_df = summary[0].get("date_from") if summary else None
+    latest_dt = summary[0].get("date_to")   if summary else None
+    return success({
+        "has_oracle": True,
+        "imported_at": last_imp.isoformat() if hasattr(last_imp, "isoformat") else str(last_imp),
+        "cluster_count":  len(summary),
+        "keyword_count":  int(kw_cnt),
+        "date_from": latest_df.strftime("%Y-%m-%d") if latest_df else None,
+        "date_to":   latest_dt.strftime("%Y-%m-%d") if latest_dt else None,
+    })
+
+
+@router.post("/campaign-keywords/{campaign_id}/upload-cluster-oracle")
+async def upload_cluster_oracle(
+    campaign_id: int,
+    nm_id: int = Form(..., description="SKU 的 WB nm_id"),
+    file: UploadFile = File(..., description="WB 后台导出的 preset-stat xlsx"),
+    db: Session = Depends(get_db),
+    tenant_id: int = Depends(get_tenant_id),
+):
+    """上传 WB 后台"顶级搜索集群"页导出的 preset-stat xlsx
+
+    文件命名示例：preset-stat-{advert_id}-{nm_id}_{from}-{to}.xlsx
+    系统会从文件名解析日期范围；若解析不到则用当前日期。
+    """
+    from app.models.ad import AdCampaign
+    from app.services.ad.cluster_oracle_service import (
+        parse_preset_stat_xlsx, upsert_oracle, parse_filename_meta,
+    )
+
+    camp = db.query(AdCampaign).filter(
+        AdCampaign.id == campaign_id, AdCampaign.tenant_id == tenant_id,
+    ).first()
+    if not camp:
+        return error(50001, "广告活动不存在")
+    if camp.platform != "wb":
+        return error(10002, "仅支持 WB 平台")
+
+    fname = file.filename or ""
+    if not fname.lower().endswith((".xlsx", ".xlsm")):
+        return error(10002, f"仅支持 .xlsx/.xlsm 文件，收到: {fname!r}")
+
+    content = await file.read()
+    if len(content) > 20 * 1024 * 1024:
+        return error(10002, "文件超过 20MB 上限")
+
+    meta_adv, meta_nm, meta_df, meta_dt = parse_filename_meta(fname)
+    # 如果文件名带 advert_id/nm_id，校验跟参数一致（防止错传）
+    if meta_adv and int(meta_adv) != int(camp.platform_campaign_id):
+        return error(
+            10002,
+            f"文件名 advert_id={meta_adv} 与当前活动 advert={camp.platform_campaign_id} 不匹配",
+        )
+    if meta_nm and int(meta_nm) != int(nm_id):
+        return error(10002, f"文件名 nm_id={meta_nm} 与参数 nm_id={nm_id} 不匹配")
+
+    try:
+        summary_rows, mapping_rows = parse_preset_stat_xlsx(content)
+    except ValueError as e:
+        return error(10002, f"xlsx 解析失败: {e}")
+    except Exception as e:
+        logger.error(f"upload_cluster_oracle parse error: {e}", exc_info=True)
+        return error(10002, f"xlsx 解析异常: {e}")
+
+    if not summary_rows:
+        return error(10002, "xlsx 未解析出任何簇（Sheet 1 为空）")
+
+    stats = upsert_oracle(
+        db=db, tenant_id=tenant_id, shop_id=int(camp.shop_id),
+        advert_id=int(camp.platform_campaign_id), nm_id=int(nm_id),
+        summary_rows=summary_rows, mapping_rows=mapping_rows,
+        date_from=meta_df, date_to=meta_dt, source_file=fname,
+    )
+
+    # 清旧聚类缓存让前端立即看到 oracle 数据
+    try:
+        import redis as redis_lib
+        r = redis_lib.Redis.from_url(settings.REDIS_URL, decode_responses=True)
+        for pat in [f'wb:kw_clusters:{camp.platform_campaign_id}:*',
+                    f'wb:kw_cand:{camp.platform_campaign_id}:*',
+                    f'wb:kw_assign:{camp.platform_campaign_id}:*']:
+            for k in r.scan_iter(pat):
+                r.delete(k)
+    except Exception:
+        pass
+
+    return success({
+        "advert_id":    int(camp.platform_campaign_id),
+        "nm_id":        int(nm_id),
+        "cluster_count": stats["summary"],
+        "keyword_count": stats["mapping"],
+        "date_from":    meta_df.strftime("%Y-%m-%d") if meta_df else None,
+        "date_to":      meta_dt.strftime("%Y-%m-%d") if meta_dt else None,
+        "source_file":  fname,
+        "msg":          f"成功解析 {stats['summary']} 簇 / {stats['mapping']} 词",
     })
 
 

@@ -3,12 +3,12 @@ import {
   Typography, Card, Table, Button, Tag, Space, Select, Row, Col,
   Statistic, Modal, Form, Input, InputNumber, message, DatePicker, Tooltip, Badge, Empty,
   Popconfirm, Tabs, Alert, Drawer, Descriptions, List, Divider, Progress, Checkbox, Popover,
-  Switch, Segmented, Spin, notification,
+  Switch, Segmented, Spin, notification, Upload,
 } from 'antd'
 import {
   SearchOutlined, EditOutlined, EyeOutlined, SyncOutlined, PlusOutlined,
   DeleteOutlined, SettingOutlined, ExclamationCircleOutlined,
-  QuestionCircleOutlined,
+  QuestionCircleOutlined, UploadOutlined,
 } from '@ant-design/icons'
 import ReactECharts from 'echarts-for-react'
 import dayjs from 'dayjs'
@@ -22,6 +22,7 @@ import {
   exportAdStats, getAlerts, getAlertConfig, updateAlertConfig,
   getCampaignProducts, getCampaignKeywords, getCampaignKeywordClusters,
   excludeKeywords, unexcludeKeywords, probeClusterRep, updateCampaignBid, getCampaignBudget,
+  uploadClusterOracle, getClusterOracleStatus,
   addProtectedKeyword, removeProtectedKeyword,
   getAutoExcludeConfig, toggleAutoExclude, runAutoExcludeNow, getAutoExcludeLogs,
   getCampaignSummary, getOzonSkuQueries, syncOzonSkuQueries,
@@ -534,6 +535,36 @@ const AdsOverview = ({ shopId, platform, shops, searched, syncing, lastSyncTime,
     } finally {
       setProbingSku(null)
     }
+  }
+
+  // 上传 WB 后台导出的 preset-stat xlsx → 建 oracle → 重刷集群
+  const [uploadingSku, setUploadingSku] = useState(null)
+  const handleUploadClusterOracle = async (sku, file) => {
+    if (!detailData?.id) return false
+    const nmId = parseInt(sku)
+    setUploadingSku(sku)
+    try {
+      const r = await uploadClusterOracle(detailData.id, nmId, file)
+      if (r.code === 0) {
+        const d = r.data || {}
+        message.success(`${d.msg || '上传成功'}（${d.cluster_count} 簇 / ${d.keyword_count} 词）`, 4)
+        setAiClustersBySku(m => ({ ...m, [sku]: undefined }))
+        setAiClustersLoadingSku(m => ({ ...m, [sku]: true }))
+        try {
+          const resp = await getCampaignKeywordClusters(detailData.id, nmId, 7)
+          setAiClustersBySku(m => ({ ...m, [sku]: resp.data?.clusters || [] }))
+        } finally {
+          setAiClustersLoadingSku(m => ({ ...m, [sku]: false }))
+        }
+      } else {
+        message.error(r.msg || '上传失败', 6)
+      }
+    } catch (err) {
+      message.error(err.response?.data?.msg || err.message || '上传失败', 6)
+    } finally {
+      setUploadingSku(null)
+    }
+    return false  // 阻止 antd 自动上传
   }
 
   // 解除屏蔽：从 WB minus list 移除指定词
@@ -1661,6 +1692,20 @@ const AdsOverview = ({ shopId, platform, shops, searched, syncing, lastSyncTime,
                 </Tooltip>
               </Space>
               <Space size={8}>
+                {kwMode === 'active' && (
+                  <Upload
+                    accept=".xlsx,.xlsm"
+                    showUploadList={false}
+                    beforeUpload={(file) => handleUploadClusterOracle(sku, file)}
+                    disabled={uploadingSku === sku}
+                  >
+                    <Tooltip title="WB 后台「顶级搜索集群」页面右上角的「下载」按钮 — 导出 xlsx 后上传到这里，系统用 WB 官方数据（100% 对齐）直接替代 AI 聚类">
+                      <Button size="small" icon={<UploadOutlined />} loading={uploadingSku === sku}>
+                        上传 WB 集群表
+                      </Button>
+                    </Tooltip>
+                  </Upload>
+                )}
                 {kwMode === 'active' && !probeInputVisible[sku] && (
                   <Button size="small" icon={<PlusOutlined />}
                     onClick={() => setProbeInputVisible(m => ({ ...m, [sku]: true }))}>
