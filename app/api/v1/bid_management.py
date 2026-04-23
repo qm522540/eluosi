@@ -902,7 +902,7 @@ def get_bid_logs(
          AND pl.platform_sku_id = l.platform_sku_id
         LEFT JOIN products p ON p.id = pl.product_id
         WHERE {where_sql_join}
-        ORDER BY l.created_at DESC
+        ORDER BY l.id DESC
         LIMIT :limit OFFSET :offset
     """), page_params).fetchall()
 
