@@ -62,6 +62,18 @@ def sync_wb_search_texts(self):
                     logger.warning(f"shop_id={shop.id} refresh 失败 code={code} msg={r.get('msg')}")
                     results.append({"shop_id": shop.id, "error_code": code})
                     continue
+                # quota 冷却 skip（refresh_shop 顶层 pre-check 命中）
+                if data.get("skipped"):
+                    logger.info(
+                        f"shop_id={shop.id} {shop.name} skipped reason={data.get('reason')} "
+                        f"cooldown={data.get('cooldown_seconds')}s"
+                    )
+                    results.append({
+                        "shop_id": shop.id,
+                        "skipped": data.get("reason"),
+                        "cooldown_seconds": data.get("cooldown_seconds"),
+                    })
+                    continue
                 logger.info(
                     f"shop_id={shop.id} {shop.name} synced_queries={data.get('synced_queries')} "
                     f"range={data.get('date_range')}"

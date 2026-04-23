@@ -17,7 +17,10 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.services.platform.base import SubscriptionRequiredError
-from app.services.platform.wb import WBClient
+from app.services.platform.wb import (
+    WBClient, WBSellerQuotaExhausted,
+    _get_redis_client, quota_circuit_key_for_shop,
+)
 from app.services.platform.ozon import OzonClient
 from app.utils.errors import ErrorCode
 from app.utils.logger import logger
@@ -343,6 +346,30 @@ async def refresh_shop(
 
     if shop.platform == "wb":
         import asyncio
+        # WB seller quota 熔断 pre-check（2026-04-23 晚老林 review 驱动）：
+        # quota 是 per-seller-per-endpoint-group 共享池，写端点烧光读端点也 429。
+        # 老林 ca5a96b 把熔断挪到通用 _request，但这里 for 循环里 except Exception
+        # 会吞掉 WBSellerQuotaExhausted 然后 continue → 下一批再 sleep 20s 再 fail，
+        # 30 批 × 20s = 10min 白烧。顶层 pre-check 让 beat 直接跳过不进循环。
+        try:
+            cooldown = _get_redis_client().ttl(quota_circuit_key_for_shop(shop.id))
+        except Exception as e:
+            logger.warning(f"WB quota circuit pre-check Redis err: {e}")
+            cooldown = 0
+        if cooldown and cooldown > 0:
+            logger.info(
+                f"WB seller quota cooldown shop={shop.id} ttl={cooldown}s, skip refresh"
+            )
+            return {
+                "code": 0,
+                "data": {
+                    "shop_id": shop.id, "synced_queries": 0,
+                    "skipped": True, "reason": "wb_seller_quota_cooldown",
+                    "cooldown_seconds": int(cooldown),
+                    "msg": f"WB seller quota 冷却中，约 {cooldown}s 后自动恢复",
+                },
+            }
+
         # WB search-texts 端点实测限流严格（估 3-5 rpm），批量 nmIds 降低调用次数
         # 2026-04-23：WB 对单次 nmIds 数量上限未文档化，保守取 20
         WB_BATCH_SIZE = 20          # 单次调用 nmIds 个数上限
@@ -374,6 +401,15 @@ async def refresh_shop(
                         "code": ErrorCode.SEARCH_INSIGHTS_SUBSCRIPTION_REQUIRED,
                         "msg": f"WB 店铺未开通 Jam 订阅：{e.detail[:80]}",
                     }
+                except WBSellerQuotaExhausted as e:
+                    # 跑到一半被上游端点（AI 调价/PATCH bids）触发熔断 → 立即 break，
+                    # 不要 continue 再 sleep 20s 重试 N 批白烧。
+                    logger.info(
+                        f"WB quota tripped mid-refresh shop={shop.id} batch={bi+1}/{batches_total}: {e}"
+                    )
+                    errors.append({"quota_exhausted": True, "at_batch": bi + 1,
+                                   "reason": str(e)[:200]})
+                    break
                 except Exception as e:
                     errors.append({"batch": batch[:3], "error": str(e)[:200]})
                     logger.warning(f"WB fetch_product_search_texts batch={len(batch)} 失败: {e}")
