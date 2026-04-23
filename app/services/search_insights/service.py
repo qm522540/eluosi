@@ -407,11 +407,12 @@ async def refresh_shop(
                     logger.info(
                         f"WB quota tripped mid-refresh shop={shop.id} batch={bi+1}/{batches_total}: {e}"
                     )
-                    errors.append({"quota_exhausted": True, "at_batch": bi + 1,
-                                   "reason": str(e)[:200]})
+                    errors.append({"type": "quota", "quota_exhausted": True,
+                                   "at_batch": bi + 1, "reason": str(e)[:200]})
                     break
                 except Exception as e:
-                    errors.append({"batch": batch[:3], "error": str(e)[:200]})
+                    errors.append({"type": "batch_error",
+                                   "batch": batch[:3], "error": str(e)[:200]})
                     logger.warning(f"WB fetch_product_search_texts batch={len(batch)} 失败: {e}")
                     continue
                 if not items:
@@ -421,7 +422,7 @@ async def refresh_shop(
                             f"WB 连续 {EMPTY_BATCH_ABORT} 批返回空（疑似 global limiter 触发 quota 耗尽），"
                             f"已完成 {bi + 1}/{batches_total} 批，early exit 节省时间"
                         )
-                        errors.append({"early_exit": True,
+                        errors.append({"type": "early_exit", "early_exit": True,
                                        "reason": f"{EMPTY_BATCH_ABORT} 批连续空（WB 限流/quota）"})
                         break
                 else:
@@ -481,7 +482,8 @@ async def refresh_shop(
                         "msg": f"Ozon 店铺未开通 Premium 订阅：{e.detail[:80]}",
                     }
                 except Exception as e:
-                    errors.append({"skus": batch[:5], "error": str(e)[:200]})
+                    errors.append({"type": "batch_error",
+                                   "skus": batch[:5], "error": str(e)[:200]})
                     logger.warning(f"Ozon fetch_product_queries_details batch={len(batch)} 失败: {e}")
                     continue
                 # 按 sku 分组写入；product_id 反查不到就留 NULL（不阻塞写入）
