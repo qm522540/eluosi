@@ -1256,6 +1256,57 @@ async def cluster_oracle_status(
     })
 
 
+@router.post("/campaign-keywords/{campaign_id}/sync-cluster-oracle-now")
+async def sync_cluster_oracle_now(
+    campaign_id: int,
+    nm_id: int = Query(..., description="SKU 的 WB nm_id"),
+    db: Session = Depends(get_db),
+    tenant_id: int = Depends(get_tenant_id),
+):
+    """立即同步该 (campaign, nm) 的 WB 集群 oracle（用 cmp.wildberries.ru 内部 API）
+
+    需要店铺先在设置页配好 wb_cmp_authorizev3 + wb_cmp_supplierid（从 F12 拷贝）。
+    JWT 过期会返 expired=True 让前端提示用户刷新。
+    """
+    from app.models.ad import AdCampaign
+    from app.tasks.cluster_oracle_sync import sync_one_nm_async
+
+    camp = db.query(AdCampaign).filter(
+        AdCampaign.id == campaign_id, AdCampaign.tenant_id == tenant_id,
+    ).first()
+    if not camp:
+        return error(50001, "广告活动不存在")
+    if camp.platform != "wb":
+        return error(10002, "仅支持 WB 平台")
+
+    result = await sync_one_nm_async(
+        tenant_id=tenant_id, shop_id=int(camp.shop_id),
+        advert_id=int(camp.platform_campaign_id), nm_id=int(nm_id),
+    )
+    if not result.get("ok"):
+        return error(
+            10002 if not result.get("expired") else 40101,
+            result.get("msg", "同步失败"),
+        )
+
+    # 清聚类缓存强制前端下次走 oracle
+    try:
+        import redis as redis_lib
+        r = redis_lib.Redis.from_url(settings.REDIS_URL, decode_responses=True)
+        for pat in [f'wb:kw_clusters:{camp.platform_campaign_id}:*',
+                    f'wb:kw_cand:{camp.platform_campaign_id}:*',
+                    f'wb:kw_assign:{camp.platform_campaign_id}:*']:
+            for k in r.scan_iter(pat):
+                r.delete(k)
+    except Exception:
+        pass
+
+    return success({
+        **result,
+        "msg": f"同步成功：{result['cluster_count']} 簇 / {result['keyword_count']} 词",
+    })
+
+
 @router.post("/campaign-keywords/{campaign_id}/upload-cluster-oracle")
 async def upload_cluster_oracle(
     campaign_id: int,

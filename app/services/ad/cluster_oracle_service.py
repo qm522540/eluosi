@@ -293,3 +293,60 @@ def oracle_last_imported(
         WHERE tenant_id=:tid AND advert_id=:adv AND nm_id=:nm
     """), {"tid": tenant_id, "adv": advert_id, "nm": nm_id}).fetchone()
     return r.t if r and r.t else None
+
+
+def _cmp_items_to_summary_rows(items: List[Dict]) -> List[Dict]:
+    """cmp preset-info 的 items → upsert_oracle 需要的 summary_rows 格式"""
+    out = []
+    for it in items:
+        excluded = bool(it.get("is_excluded"))
+        out.append({
+            "cluster_name":  str(it.get("name") or "").strip(),
+            "status_type":   "Исключение" if excluded else 'Активная "Единая"',
+            "is_excluded":   1 if excluded else 0,
+            "bid_cpm":       None,  # cmp API 不返，xlsx 才有（Ставка CPM 列）
+            "avg_pos":       _to_float(it.get("avg_pos")),
+            "views":         _to_int(it.get("views")),
+            "clicks":        _to_int(it.get("clicks")),
+            "ctr":           _to_float(it.get("ctr")),
+            "baskets":       _to_int(it.get("baskets")),
+            "orders":        _to_int(it.get("orders")),
+            "ordered_items": _to_int(it.get("shks")),
+            "spend":         _to_float(it.get("spend")) or 0,
+            "cpm":           _to_float(it.get("cpm")),
+            "cpc":           _to_float(it.get("cpc")),
+            "currency":      str(it.get("currency") or "RUB"),
+        })
+    return [r for r in out if r["cluster_name"]]
+
+
+def upsert_from_cmp(
+    db: Session,
+    tenant_id: int, shop_id: int, advert_id: int, nm_id: int,
+    cmp_result: Dict,
+) -> Dict[str, int]:
+    """cmp API 拉到的 {summary, mapping, date_from, date_to} 直接落 oracle"""
+    summary_rows = _cmp_items_to_summary_rows(cmp_result.get("summary") or [])
+    raw_mapping  = cmp_result.get("mapping") or []
+    # 去重（ё/大小写归一），与 xlsx parse 保持一致
+    seen = set()
+    mapping_rows: List[Dict] = []
+    for r in raw_mapping:
+        cn = str(r.get("cluster_name") or "").strip()
+        kw = str(r.get("keyword") or "").strip()
+        if not cn or not kw:
+            continue
+        norm = kw.lower().replace("ё", "е")
+        if norm in seen:
+            continue
+        seen.add(norm)
+        mapping_rows.append({"cluster_name": cn, "keyword": kw})
+
+    return upsert_oracle(
+        db=db, tenant_id=tenant_id, shop_id=shop_id,
+        advert_id=advert_id, nm_id=nm_id,
+        summary_rows=summary_rows, mapping_rows=mapping_rows,
+        date_from=cmp_result.get("date_from"),
+        date_to=cmp_result.get("date_to"),
+        source_file="[cmp-api auto-sync]",
+    )

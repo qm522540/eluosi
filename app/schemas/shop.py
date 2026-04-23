@@ -37,6 +37,9 @@ class ShopUpdate(BaseModel):
     currency: Optional[str] = None
     timezone: Optional[str] = None
     status: Optional[str] = Field(None, pattern="^(active|inactive)$")
+    # WB cmp.wildberries.ru seller-panel 内部 API 凭证（用于「顶级搜索集群」自动同步）
+    wb_cmp_authorizev3: Optional[str] = Field(None, description="WB cmp JWT token（F12 authorizev3 头）")
+    wb_cmp_supplierid:  Optional[str] = Field(None, description="WB supplier UUID（F12 x-supplierid 头）")
 
 
 class ShopInfo(BaseModel):

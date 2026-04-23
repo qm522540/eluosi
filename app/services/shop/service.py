@@ -150,9 +150,19 @@ def update_shop(db: Session, shop_id: int, tenant_id: int, data: dict) -> dict:
         if not shop:
             return {"code": ErrorCode.SHOP_NOT_FOUND, "msg": "店铺不存在"}
 
+        jwt_updated = False
         for key, value in data.items():
             if value is not None:
                 setattr(shop, key, value)
+                if key == "wb_cmp_authorizev3":
+                    jwt_updated = True
+
+        # JWT 更新时同步写 updated_at 和解析 exp_at（CLAUDE.md 规则 6：UTC naive）
+        if jwt_updated and shop.wb_cmp_authorizev3:
+            from app.utils.moscow_time import utc_now_naive
+            from app.services.platform.wb_cmp import WBCmpClient
+            shop.wb_cmp_token_updated_at = utc_now_naive()
+            shop.wb_cmp_token_exp_at = WBCmpClient.parse_jwt_exp(shop.wb_cmp_authorizev3)
 
         db.commit()
         db.refresh(shop)
@@ -265,4 +275,9 @@ def _shop_to_dict(shop: Shop) -> dict:
         "last_sync_at": _iso_utc(shop.last_sync_at),
         "created_at": _iso_utc(shop.created_at),
         "updated_at": _iso_utc(shop.updated_at),
+        # WB cmp seller-panel 凭证状态（不暴露 token 明文）
+        "has_wb_cmp_authorizev3":  bool(shop.wb_cmp_authorizev3),
+        "has_wb_cmp_supplierid":   bool(shop.wb_cmp_supplierid),
+        "wb_cmp_token_updated_at": _iso_utc(shop.wb_cmp_token_updated_at),
+        "wb_cmp_token_exp_at":     _iso_utc(shop.wb_cmp_token_exp_at),
     }

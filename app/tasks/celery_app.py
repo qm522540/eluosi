@@ -31,6 +31,7 @@ celery_app.conf.update(
         "app.tasks.region_stats_task",
         "app.tasks.ad_auto_exclude_task",
         "app.tasks.ozon_product_queries_task",
+        "app.tasks.cluster_oracle_sync",
     ],
 )
 
@@ -80,5 +81,10 @@ celery_app.conf.beat_schedule = {
     "ozon-product-queries-daily": {
         "task": "app.tasks.ozon_product_queries_task.sync_ozon_product_queries",
         "schedule": crontab(hour=2, minute=30),
+    },
+    # WB 顶级搜索集群 oracle 同步（莫斯科每日 03:30，遍历所有配了 JWT 的 WB 店铺）
+    "cluster-oracle-sync-daily": {
+        "task": "app.tasks.cluster_oracle_sync.sync_wb_cluster_oracle",
+        "schedule": crontab(hour=3, minute=30),
     },
 }
