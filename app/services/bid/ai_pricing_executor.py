@@ -875,11 +875,8 @@ def _calc_optimal_bid(platform: str, target_cpa: float, ctr: float,
 def update_config(db, tenant_id: int, shop_id: int, data: dict) -> dict:
     existing = db.execute(text("""
         SELECT id, tenant_id FROM ai_pricing_configs
-        WHERE shop_id = :shop_id LIMIT 1
-    """), {"shop_id": shop_id}).fetchone()
-
-    if existing and existing.tenant_id != tenant_id:
-        return {"code": ErrorCode.SHOP_NOT_FOUND, "msg": "店铺不存在或无权限"}
+        WHERE shop_id = :shop_id AND tenant_id = :tenant_id LIMIT 1
+    """), {"shop_id": shop_id, "tenant_id": tenant_id}).fetchone()
 
     template_name = data.get("template_name", "default")
     if template_name not in ("conservative", "default", "aggressive"):
@@ -1001,9 +998,14 @@ def disable(db, tenant_id: int, shop_id: int) -> dict:
 
 async def execute(db, shop_id: int, tenant_id: int = None) -> dict:
     if tenant_id is None:
+        # Celery beat 调用路径（不传 tenant_id）：通过 shops 表 JOIN 强约束 shop_id 必须真实存在，
+        # 再从 ai_pricing_configs 反查 tenant_id。比单表 WHERE shop_id 多一道存在性校验。
         cfg_row = db.execute(text("""
-            SELECT tenant_id FROM ai_pricing_configs
-            WHERE shop_id = :shop_id AND is_active = 1 LIMIT 1
+            SELECT c.tenant_id
+            FROM ai_pricing_configs c
+            JOIN shops s ON s.id = :shop_id AND s.tenant_id = c.tenant_id
+            WHERE c.shop_id = :shop_id AND c.is_active = 1
+            LIMIT 1
         """), {"shop_id": shop_id}).fetchone()
         if not cfg_row:
             return {"status": "skipped", "message": "AI调价未启用"}
@@ -2383,6 +2385,7 @@ def _upsert_group_last_auto(db, campaign, sku: str, sku_name: str, last_auto: fl
             :tenant_id, :campaign_id, :sku, :name, :last_auto, 'active'
         )
         ON DUPLICATE KEY UPDATE
+            tenant_id     = VALUES(tenant_id),
             name          = VALUES(name),
             last_auto_bid = :last_auto,
             updated_at    = NOW()
