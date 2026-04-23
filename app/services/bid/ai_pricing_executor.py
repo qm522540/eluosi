@@ -1465,19 +1465,56 @@ async def _analyze_now_inner(db, tenant_id: int, shop_id: int,
 
     # ── 拉取平台商品出价（client 保持开启用于后续 min bid 查询） ──
     client = _create_platform_client(shop)
+
+    # WB seller 级 quota 熔断激活时 fail-fast，避免 N 个 SKU 各卡 30s 退避
+    if platform == "wb":
+        try:
+            cooldown = client._check_quota_circuit()
+        except Exception:
+            cooldown = None
+        if cooldown:
+            await client.close()
+            msg = f"WB seller quota 冷却中，{cooldown}s 后重试"
+            _update_status(db, tenant_id, shop_id, "failed", msg)
+            return {"status": "failed", "message": msg,
+                    "analyzed_count": 0, "suggestion_count": 0, "auto_executed_count": 0}
+
+    # 延迟 import 保持本模块对平台中立
+    if platform == "wb":
+        from app.services.platform.wb import WBSellerQuotaExhausted
+    else:
+        WBSellerQuotaExhausted = None
+
     products_by_campaign = {}
+    quota_tripped_mid_loop = False
     try:
         for camp in campaigns:
             try:
                 products = await client.fetch_campaign_products(
                     camp.platform_campaign_id)
             except Exception as e:
+                # 第一次命中 seller quota 熔断就整体退出，不再对剩余 campaign 重复发请求
+                if WBSellerQuotaExhausted and isinstance(e, WBSellerQuotaExhausted):
+                    logger.warning(f"WB quota 熔断触发，跳过剩余 {len(campaigns)} 活动拉取: {e}")
+                    quota_tripped_mid_loop = True
+                    break
                 logger.warning(f"campaign={camp.id} 拉商品失败: {e}")
                 products = []
             products_by_campaign[camp.id] = products
     except Exception:
         await client.close()
         raise
+
+    if quota_tripped_mid_loop:
+        try:
+            cooldown_now = client._check_quota_circuit() or 0
+        except Exception:
+            cooldown_now = 0
+        await client.close()
+        msg = f"WB seller quota 冷却中，{cooldown_now}s 后重试"
+        _update_status(db, tenant_id, shop_id, "failed", msg)
+        return {"status": "failed", "message": msg,
+                "analyzed_count": 0, "suggestion_count": 0, "auto_executed_count": 0}
 
     if not any(products_by_campaign.values()):
         await client.close()

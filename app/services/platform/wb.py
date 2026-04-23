@@ -37,11 +37,17 @@ WB_PRICES_API = "https://discounts-prices-api.wildberries.ru"
 MIN_REQUEST_INTERVAL = 60.0 / settings.WB_RATE_LIMIT_PER_MINUTE
 
 # WB seller 级 quota 熔断（2026-04-23 事故驱动）：
-# 一旦 PATCH /api/advert/v1/bids 返回 "Limited by global limiter, per seller ...",
-# 说明该 seller UUID 在 WB 侧的 daily quota 已耗尽，后续 API 调用会全部失败。
-# 熔断 1h，期间所有 PATCH bids 直接短路返回，避免继续打 API 延长冷却 + 浪费 Celery tick。
+# 一旦任意 WB 端点返回 "Limited by global limiter, per seller ..." 即说明该 seller UUID
+# 在 WB 侧的 daily quota 已耗尽。WB 是 per-seller-per-endpoint-group 共享池，写端点烧光
+# 后读端点也会被殃及（实证：04-23 PATCH bids + 立即分析读 API 全 429）。
+# 熔断 1h，期间所有 WB API 调用前置短路 raise，避免每个调用卡 5/10/15s 退避 × N SKU。
 WB_QUOTA_CIRCUIT_TTL = 3600
 WB_QUOTA_CIRCUIT_KEY_PREFIX = "wb:seller_quota_exhausted:shop_"
+
+
+class WBSellerQuotaExhausted(Exception):
+    """WB seller 级 quota 熔断激活时抛出，让上层 fail-fast 跳过本次 SKU 处理。"""
+    pass
 
 # 模块级 Redis client（lazy-init 单例），避免每次 PATCH bids 都创建新连接。
 # redis-py 的 Redis 对象本身维护 ConnectionPool，单例就够用。
@@ -119,7 +125,15 @@ class WBClient(BasePlatformClient):
             logger.error(f"WB quota circuit trip failed: {e}")
 
     async def _request(self, method: str, url: str, **kwargs) -> dict:
-        """统一请求方法，带限速和重试"""
+        """统一请求方法，带限速、重试、seller 级 quota 熔断短路"""
+        # 前置：seller 级 quota 熔断已激活则立即 raise，不发请求
+        # 避免立即分析里 N 个 SKU 各卡 30s 退避（5+10+15=30s × N = 数分钟）
+        cooldown = self._check_quota_circuit()
+        if cooldown:
+            raise WBSellerQuotaExhausted(
+                f"WB seller quota cooldown shop_id={self.shop_id}, retry in {cooldown}s"
+            )
+
         await self._rate_limit()
         client = await self._get_client()
 
@@ -129,7 +143,20 @@ class WBClient(BasePlatformClient):
                 response = await client.request(method, url, **kwargs)
 
                 if response.status_code == 429:
-                    # 被限速，等待后重试
+                    # 识别 seller 级配额耗尽（跨端点共享池）→ trip + 立即短路
+                    detail = ""
+                    try:
+                        err_body = response.json()
+                        detail = err_body.get("detail") or err_body.get("title") or ""
+                    except Exception:
+                        detail = response.text[:300] if response.content else ""
+                    detail_lower = (detail or "").lower()
+                    if "global limiter" in detail_lower or "per seller" in detail_lower:
+                        self._trip_quota_circuit(str(detail))
+                        raise WBSellerQuotaExhausted(
+                            f"WB seller quota exhausted shop_id={self.shop_id}: {detail[:200]}"
+                        )
+                    # 普通端点级突发 429 → 走原退避重试
                     wait_time = min(30, 5 * (attempt + 1))
                     logger.warning(
                         f"WB API 限速(429)，shop_id={self.shop_id}，"
