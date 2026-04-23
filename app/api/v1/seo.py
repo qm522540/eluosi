@@ -24,6 +24,7 @@ from app.services.seo.roi_report_service import compute_roi_report
 from app.services.seo.keyword_rollup_service import (
     compute_keyword_rollup, list_rollup_products,
     compute_candidates_rollup, list_candidates_rollup_products,
+    list_category_evidence_top_products,
 )
 from app.utils.response import success, error
 
@@ -371,10 +372,34 @@ def shop_candidates_rollup_products(
     tenant_id: int = Depends(get_tenant_id),
     shop=Depends(get_owned_shop),
 ):
-    """单关键词下钻：展开该词下所有候选商品（含 self 真实数据 + category 推断，自带 has_self 标记）"""
+    """单关键词下钻：展开该词下所有候选商品（含 self 真实数据 + category 推断，自带 has_self 标记）
+
+    每条 category-only（0 曝光·系统推荐加词）行附带 category_evidence 字段，
+    说明"类目里 N 款真实搜中 · X 订单"作为推荐理由。
+    """
     result = list_candidates_rollup_products(
         db, tenant_id, shop,
         keyword=keyword, status=status, limit=limit,
+    )
+    if result.get("code") != 0:
+        return error(result["code"], result.get("msg", ""))
+    return success(result["data"])
+
+
+@router.get("/shop/{shop_id}/candidates-rollup/category-evidence")
+def shop_candidates_rollup_category_evidence(
+    shop_id: int,
+    keyword: str = Query(..., min_length=1, description="关键词"),
+    category_id: int = Query(..., description="商品本地类目 ID"),
+    limit: int = Query(5, ge=1, le=20),
+    db: Session = Depends(get_db),
+    tenant_id: int = Depends(get_tenant_id),
+    shop=Depends(get_owned_shop),
+):
+    """点推荐理由 Tag 弹出 Modal 展示：该类目下对该关键词真实搜中的 Top N 商品详情"""
+    result = list_category_evidence_top_products(
+        db, tenant_id, shop,
+        keyword=keyword, category_id=category_id, limit=limit,
     )
     if result.get("code") != 0:
         return error(result["code"], result.get("msg", ""))

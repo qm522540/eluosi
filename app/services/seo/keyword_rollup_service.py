@@ -385,6 +385,7 @@ def list_candidates_rollup_products(
                {_HAS_SELF_CLAUSE} AS has_self,
                COALESCE(pl.title_ru, p.name_ru, p.name_zh, '') AS title,
                p.image_url,
+               p.local_category_id AS cat_id,
                pl.platform_sku_id,
                pl.rating,
                pl.review_count
@@ -407,9 +408,16 @@ def list_candidates_rollup_products(
         "kw": keyword.strip(), "status": status, "lim": limit,
     }).fetchall()
 
+    # 一次查询该词 × 各类目的 evidence，按 cat_id 分组挂到每一行
+    evidence_by_cat = _fetch_category_evidence(
+        db=db, tenant_id=tenant_id, shop_id=shop.id,
+        keyword=keyword.strip(), days=30,
+    )
+
     items = []
     for r in rows:
         has_self = bool(r.has_self)
+        cat_id = int(r.cat_id) if r.cat_id is not None else None
         items.append({
             "candidate_id":    int(r.candidate_id),
             "shop_id":         int(r.shop_id),
@@ -425,6 +433,7 @@ def list_candidates_rollup_products(
             "in_attrs":        bool(r.in_attrs),
             "sources":         r.sources if isinstance(r.sources, list) else (json.loads(r.sources) if r.sources else []),
             "has_self":        has_self,
+            "cat_id":          cat_id,
             # 仅 self 行显示真实数字, category-only 行字段置 null 让前端知道"无实证"
             "paid_orders":     (int(r.paid_orders or 0) if has_self else None),
             "paid_revenue":    (round(float(r.paid_revenue or 0), 2) if has_self else None),
@@ -432,9 +441,115 @@ def list_candidates_rollup_products(
             "organic_orders":  (int(r.organic_orders or 0) if has_self else None),
             "organic_impressions": (int(r.organic_impressions or 0) if has_self else None),
             "organic_add_to_cart": (int(r.organic_add_to_cart or 0) if has_self else None),
+            # category evidence：给前端展示推断理由（"类目里 N 款真实搜中 · X 订单"）
+            # 仅对 has_self=false 行有意义，has_self 行 evidence 留着也无妨
+            "category_evidence": evidence_by_cat.get(cat_id) if cat_id is not None else None,
         })
 
     return {
         "code": 0,
         "data": {"keyword": keyword.strip(), "items": items, "total": len(items)},
     }
+
+
+def _fetch_category_evidence(
+    db: Session, tenant_id: int, shop_id: int, keyword: str, days: int = 30,
+) -> dict:
+    """查该 (shop, keyword) 在 product_search_queries 里按 local_category_id 分组的证据。
+
+    返回 {cat_id: {cat_id, cat_name, cat_name_ru, products_verified, total_orders, total_frequency, total_impressions}}
+    用于前端「推荐理由」Tag 展示 — 解答"为什么这些 0 曝光商品出现在推荐里"。
+    """
+    today = datetime.now(timezone.utc).date()
+    since = today - timedelta(days=days)
+    rows = db.execute(text("""
+        SELECT p.local_category_id AS cat_id,
+               COUNT(DISTINCT p.id)          AS products_verified,
+               COALESCE(SUM(q.orders), 0)      AS total_orders,
+               COALESCE(SUM(q.frequency), 0)   AS total_frequency,
+               COALESCE(SUM(q.impressions), 0) AS total_impressions,
+               COALESCE(SUM(q.add_to_cart), 0) AS total_add_to_cart
+        FROM product_search_queries q
+        JOIN products p ON p.id = q.product_id AND p.tenant_id = q.tenant_id
+        WHERE q.tenant_id = :tid AND q.shop_id = :sid
+          AND LOWER(q.query_text) = LOWER(:kw)
+          AND q.stat_date >= :since
+          AND p.local_category_id IS NOT NULL
+        GROUP BY p.local_category_id
+    """), {"tid": tenant_id, "sid": shop_id, "kw": keyword, "since": since}).fetchall()
+
+    if not rows:
+        return {}
+
+    cat_ids = [r.cat_id for r in rows]
+    # 取类目名（中文 + 俄文）便于前端直接显示
+    name_rows = db.execute(
+        text("SELECT id, name, name_ru FROM local_categories "
+             "WHERE tenant_id = :tid AND id IN :ids")
+        .bindparams(bindparam("ids", expanding=True)),
+        {"tid": tenant_id, "ids": cat_ids},
+    ).fetchall()
+    name_map = {n.id: (n.name, n.name_ru) for n in name_rows}
+
+    out = {}
+    for r in rows:
+        nm_cn, nm_ru = name_map.get(r.cat_id, (None, None))
+        out[r.cat_id] = {
+            "cat_id":            int(r.cat_id),
+            "cat_name":          nm_cn or "",
+            "cat_name_ru":       nm_ru or "",
+            "products_verified": int(r.products_verified or 0),
+            "total_orders":      int(r.total_orders or 0),
+            "total_frequency":   int(r.total_frequency or 0),
+            "total_impressions": int(r.total_impressions or 0),
+            "total_add_to_cart": int(r.total_add_to_cart or 0),
+        }
+    return out
+
+
+def list_category_evidence_top_products(
+    db: Session, tenant_id: int, shop,
+    *, keyword: str, category_id: int, limit: int = 5,
+) -> dict:
+    """弹窗展示：该类目下对该关键词真实搜中的 Top N 商品"""
+    if not keyword or not keyword.strip() or not category_id:
+        return {"code": 10002, "msg": "keyword / category_id 不能为空"}
+
+    rows = db.execute(text("""
+        SELECT p.id AS product_id,
+               ANY_VALUE(COALESCE(pl.title_ru, p.name_ru, p.name_zh, '')) AS title,
+               ANY_VALUE(p.image_url)          AS image_url,
+               ANY_VALUE(pl.platform_sku_id)   AS platform_sku_id,
+               SUM(q.frequency)                AS total_frequency,
+               SUM(q.impressions)              AS total_impressions,
+               SUM(q.add_to_cart)              AS total_add_to_cart,
+               SUM(q.orders)                   AS total_orders
+        FROM product_search_queries q
+        JOIN products p ON p.id = q.product_id AND p.tenant_id = q.tenant_id
+        LEFT JOIN platform_listings pl ON pl.product_id = p.id
+                                       AND pl.tenant_id = p.tenant_id
+                                       AND pl.shop_id = q.shop_id
+                                       AND pl.status NOT IN ('deleted', 'archived')
+        WHERE q.tenant_id = :tid AND q.shop_id = :sid
+          AND LOWER(q.query_text) = LOWER(:kw)
+          AND q.stat_date >= CURDATE() - INTERVAL 30 DAY
+          AND p.local_category_id = :cat_id
+        GROUP BY p.id
+        ORDER BY SUM(q.impressions) DESC, SUM(q.orders) DESC
+        LIMIT :lim
+    """), {
+        "tid": tenant_id, "sid": shop.id, "kw": keyword.strip(),
+        "cat_id": category_id, "lim": limit,
+    }).fetchall()
+
+    items = [{
+        "product_id":        int(r.product_id),
+        "title":             r.title or "",
+        "image_url":         r.image_url or "",
+        "platform_sku_id":   r.platform_sku_id or "",
+        "total_frequency":   int(r.total_frequency or 0),
+        "total_impressions": int(r.total_impressions or 0),
+        "total_add_to_cart": int(r.total_add_to_cart or 0),
+        "total_orders":      int(r.total_orders or 0),
+    } for r in rows]
+    return {"code": 0, "data": {"keyword": keyword.strip(), "category_id": category_id, "items": items}}
