@@ -2266,13 +2266,6 @@ async def _auto_execute(db, tenant_id: int, shop, suggestions: list) -> int:
 
                 # 关键：用实际执行价（可能被平台硬最低拉升）
                 actual_bid = api_result.get("actual_bid_rub") or s["suggested_bid"]
-                s_for_log = {
-                    **s,
-                    "suggested_bid": actual_bid,
-                    "adjust_pct": round(
-                        (actual_bid - s["current_bid"]) / s["current_bid"] * 100, 2
-                    ) if s.get("current_bid") else 0,
-                }
                 _upsert_group_last_auto(
                     db, campaign, s["platform_sku_id"],
                     s.get("sku_name") or "", actual_bid,
@@ -2283,6 +2276,25 @@ async def _auto_execute(db, tenant_id: int, shop, suggestions: list) -> int:
                     WHERE id = :id AND tenant_id = :tenant_id
                 """), {"id": s["id"], "tenant_id": tenant_id,
                        "now": _utc_now().replace(tzinfo=None)})
+                # 2026-04-23 老张 P2：WB 硬最低反拉到 current 价时实际没变化
+                # （e.g. 算法建议 ₽24 但 WB 硬最低 ₽30 = current_bid），不写 bidlog
+                # 调价历史从此只记真正变了的改价。
+                if (s.get("current_bid") is not None and
+                        abs(float(actual_bid) - float(s["current_bid"])) < 0.01):
+                    logger.info(
+                        f"[auto_execute skip bidlog] sku={s['platform_sku_id']} "
+                        f"WB 平台反拉 actual=₽{actual_bid} == current=₽{s['current_bid']}，"
+                        f"API 调了但实际没变，不写 bidlog"
+                    )
+                    executed += 1
+                    continue
+                s_for_log = {
+                    **s,
+                    "suggested_bid": actual_bid,
+                    "adjust_pct": round(
+                        (actual_bid - s["current_bid"]) / s["current_bid"] * 100, 2
+                    ) if s.get("current_bid") else 0,
+                }
                 _write_bidlog(db, campaign, s_for_log, "ai_auto", success=True)
                 executed += 1
             except Exception as e:
