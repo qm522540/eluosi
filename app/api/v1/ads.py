@@ -1301,7 +1301,11 @@ async def exclude_keywords(
 
 class ProbeClusterRepRequest(BaseModel):
     nm_id: int = Field(..., description="WB 商品 nm_id")
-    keyword: str = Field(..., min_length=1, max_length=500, description="用户从 WB 后台复制的集群代表词")
+    keyword: str = Field(..., min_length=1, max_length=500, description="集群代表词 / 要黑名单的脏词")
+    action: str = Field(
+        default="probe",
+        description="probe=WB oracle 验证并加入 known_reps; blacklist=标记脏词并从 known_reps 清除; unblacklist=撤销黑名单",
+    )
 
 
 @router.post("/campaign-keywords/{campaign_id}/probe-cluster-rep")
@@ -1311,15 +1315,17 @@ async def probe_cluster_rep(
     db: Session = Depends(get_db),
     tenant_id: int = Depends(get_tenant_id),
 ):
-    """用户手动提交一个候选簇代表词，让 WB oracle 验证是否认可
+    """用户手动提交一个候选簇代表词
 
-    通过 set-minus dry-run 测试：加入 minus list → 观察是否被 WB 拒绝 → 立即回滚。
-    验证通过后存入 Redis known_reps，下次查集群自动作为种子。
+    action=probe（默认）：让 WB oracle 验证是否认可，通过则存入 known_reps
+    action=blacklist：直接标记为脏代表词（DeepSeek propose 偶发污染），并从 known_reps 清除
+    action=unblacklist：撤销误加的黑名单
     """
     from app.models.ad import AdCampaign
     from app.models.shop import Shop
     from app.services.ad.keyword_clustering import (
-        validate_cluster_reps_with_wb, add_known_rep,
+        validate_cluster_reps_with_wb,
+        add_rep_to_blacklist, remove_rep_from_blacklist,
     )
 
     camp = db.query(AdCampaign).filter(
@@ -1330,11 +1336,44 @@ async def probe_cluster_rep(
     if camp.platform != "wb":
         return error(10002, "仅支持 WB 平台")
 
+    keyword = req.keyword.strip()
+    action = (req.action or "probe").strip().lower()
+
+    def _bust_cluster_cache():
+        try:
+            import redis as redis_lib
+            r = redis_lib.Redis.from_url(settings.REDIS_URL, decode_responses=True)
+            for pat in [f'wb:kw_clusters:{camp.platform_campaign_id}:*',
+                        f'wb:kw_cand:{camp.platform_campaign_id}:*',
+                        f'wb:kw_assign:{camp.platform_campaign_id}:*']:
+                for k in r.scan_iter(pat):
+                    r.delete(k)
+        except Exception:
+            pass
+
+    if action == "blacklist":
+        removed = add_rep_to_blacklist(camp.platform_campaign_id, req.nm_id, keyword)
+        _bust_cluster_cache()
+        return success({
+            "keyword": keyword, "action": "blacklist",
+            "removed_from_known_reps": removed,
+            "msg": f"已加入黑名单（从已知代表词清除 {removed} 个）",
+        })
+
+    if action == "unblacklist":
+        ok = remove_rep_from_blacklist(camp.platform_campaign_id, req.nm_id, keyword)
+        _bust_cluster_cache()
+        return success({
+            "keyword": keyword, "action": "unblacklist",
+            "removed": ok, "msg": "已移出黑名单" if ok else "该词不在黑名单中",
+        })
+
+    if action != "probe":
+        return error(10002, f"未知 action: {req.action}")
+
     shop = db.query(Shop).filter(Shop.id == camp.shop_id).first()
     if not shop:
         return error(30001, "店铺不存在")
-
-    keyword = req.keyword.strip()
     from app.services.platform.wb import WBClient
     client = WBClient(shop_id=shop.id, api_key=shop.api_key)
     try:
@@ -1346,21 +1385,9 @@ async def probe_cluster_rep(
         await client.close()
 
     is_valid = bool(result_map.get(keyword, False))
-
-    # 不论是否有效，都清 clusters 缓存强制下次重聚类
-    try:
-        import redis as redis_lib
-        r = redis_lib.Redis.from_url(settings.REDIS_URL, decode_responses=True)
-        for pat in [f'wb:kw_clusters:{camp.platform_campaign_id}:*',
-                    f'wb:kw_cand:{camp.platform_campaign_id}:*',
-                    f'wb:kw_assign:{camp.platform_campaign_id}:*']:
-            for k in r.scan_iter(pat):
-                r.delete(k)
-    except Exception:
-        pass
-
+    _bust_cluster_cache()
     return success({
-        "keyword": keyword,
+        "keyword": keyword, "action": "probe",
         "wb_valid": is_valid,
         "msg": "WB 认可，已存入已知代表词" if is_valid else "WB 拒绝，此词不是集群代表",
     })

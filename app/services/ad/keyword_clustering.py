@@ -222,15 +222,34 @@ async def cluster_keywords_ai(
 
 _VALID_CACHE_TTL = 86400  # WB 集群定义变化慢，缓存 24h
 _KNOWN_REPS_TTL = 86400 * 30  # 已知 WB 代表词持久化 30 天
+_REP_BLACKLIST_TTL = 86400 * 90  # 黑名单长于 known_reps，防 TTL 到期后脏词复活
 
 
 def _known_reps_key(advert_id, nm_id) -> str:
     return f"wb:known_reps:{advert_id}:{nm_id}"
 
 
-def add_known_rep(advert_id, nm_id, rep: str):
-    """把经 WB 确认的集群代表词加入 known set，30 天 TTL"""
+def _rep_blacklist_key(advert_id, nm_id) -> str:
+    return f"wb:cluster_rep_blacklist:{advert_id}:{nm_id}"
+
+
+def is_rep_blacklisted(advert_id, nm_id, rep: str) -> bool:
+    """检查某词是否在脏代表词黑名单里（WB set-minus 接受不等于真是集群代表）"""
     try:
+        import redis as redis_lib
+        r = redis_lib.Redis.from_url(settings.REDIS_URL, decode_responses=True)
+        return bool(r.sismember(_rep_blacklist_key(advert_id, nm_id), rep))
+    except Exception:
+        return False
+
+
+def add_known_rep(advert_id, nm_id, rep: str):
+    """把经 WB 确认的集群代表词加入 known set，30 天 TTL。
+    黑名单里的脏词（用户手动标记）直接跳过，防 DeepSeek propose 偶发污染。"""
+    try:
+        if is_rep_blacklisted(advert_id, nm_id, rep):
+            logger.info(f"add_known_rep 跳过黑名单词 advert={advert_id} nm={nm_id} rep={rep!r}")
+            return
         import redis as redis_lib
         r = redis_lib.Redis.from_url(settings.REDIS_URL, decode_responses=True)
         key = _known_reps_key(advert_id, nm_id)
@@ -240,12 +259,47 @@ def add_known_rep(advert_id, nm_id, rep: str):
         pass
 
 
+def add_rep_to_blacklist(advert_id, nm_id, rep: str) -> int:
+    """把脏代表词加入黑名单 + 从 known_reps 清除。返回从 known_reps 清掉的数量（0 或 1）"""
+    removed = 0
+    try:
+        import redis as redis_lib
+        r = redis_lib.Redis.from_url(settings.REDIS_URL, decode_responses=True)
+        bkey = _rep_blacklist_key(advert_id, nm_id)
+        r.sadd(bkey, rep)
+        r.expire(bkey, _REP_BLACKLIST_TTL)
+        removed = int(r.srem(_known_reps_key(advert_id, nm_id), rep) or 0)
+    except Exception as e:
+        logger.warning(f"add_rep_to_blacklist 失败 advert={advert_id} nm={nm_id} rep={rep!r}: {e}")
+    return removed
+
+
+def remove_rep_from_blacklist(advert_id, nm_id, rep: str) -> bool:
+    """撤销误加的黑名单。返回是否实际移除了一个词"""
+    try:
+        import redis as redis_lib
+        r = redis_lib.Redis.from_url(settings.REDIS_URL, decode_responses=True)
+        return bool(r.srem(_rep_blacklist_key(advert_id, nm_id), rep))
+    except Exception:
+        return False
+
+
 def get_known_reps(advert_id, nm_id) -> List[str]:
     """拿该 SKU 历史已知的所有 WB 代表词（用户解除屏蔽后也保留）"""
     try:
         import redis as redis_lib
         r = redis_lib.Redis.from_url(settings.REDIS_URL, decode_responses=True)
         return list(r.smembers(_known_reps_key(advert_id, nm_id)) or [])
+    except Exception:
+        return []
+
+
+def get_rep_blacklist(advert_id, nm_id) -> List[str]:
+    """拿该 SKU 的脏代表词黑名单（用户手动标记过的）"""
+    try:
+        import redis as redis_lib
+        r = redis_lib.Redis.from_url(settings.REDIS_URL, decode_responses=True)
+        return list(r.smembers(_rep_blacklist_key(advert_id, nm_id)) or [])
     except Exception:
         return []
 
