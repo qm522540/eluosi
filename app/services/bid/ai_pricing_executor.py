@@ -1850,7 +1850,24 @@ async def _analyze_now_inner(db, tenant_id: int, shop_id: int,
 
             optimal_bid = max(optimal_bid, MIN_BID)
 
-            # 2026-04-23 老张（用户反馈驱动）：optimal == current 时源头跳过，
+            # 2026-04-23 老张（用户反馈驱动 #2）：同时段 base 不变 → optimal 不变 → 跳过
+            # 例 MSK 10/11/12/13 同属"上午高峰"系数 1.10，若 base 没动，每次算出的
+            # optimal 完全一样。查 ad_groups.last_optimal_bid 比对，相等就跳过本 SKU
+            # （不写 suggestion、不走 auto_execute、不调 API）。
+            # 覆盖两种浪费场景：(1) 同时段重复算相同值；(2) 失败 SKU 每小时重试。
+            _last_opt = db.execute(text("""
+                SELECT last_optimal_bid FROM ad_groups
+                WHERE campaign_id = :cid AND platform_group_id = :sku
+                  AND tenant_id = :tid LIMIT 1
+            """), {"cid": camp.id, "sku": sku, "tid": tenant_id}).scalar()
+            if _last_opt is not None and abs(float(optimal_bid) - float(_last_opt)) < 0.01:
+                logger.info(
+                    f"[analyze skip] sku={sku} optimal=₽{optimal_bid} == "
+                    f"last_optimal=₽{_last_opt}（同时段 base 不变，跳过）"
+                )
+                continue
+
+            # 2026-04-23 老张（用户反馈驱动 #1）：optimal == current 时源头跳过，
             # 不写 suggestion、不走 auto_execute、不调 API、不写 bidlog。
             # 原 Day 1-20 保留"AI hold 态度建议"的设计（老林 04-23 §1.5）被用户
             # 否决——用户只想看真实调价动作。Day 21+ 爬山法原本就 MIN_DIFF 跳过，
@@ -1941,6 +1958,12 @@ async def _analyze_now_inner(db, tenant_id: int, shop_id: int,
                 "product_stage": _detect_stage(sku_stat, data_days, breakeven_roas),
                 "reason": reason,
             })
+            # 记录本次算出的 optimal，供下一小时 tick 比对同时段同值跳过
+            db.execute(text("""
+                UPDATE ad_groups SET last_optimal_bid = :opt
+                WHERE campaign_id = :cid AND platform_group_id = :sku
+                  AND tenant_id = :tid
+            """), {"opt": optimal_bid, "cid": camp.id, "sku": sku, "tid": tenant_id})
 
     db.commit()
 
