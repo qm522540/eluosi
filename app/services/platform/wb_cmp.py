@@ -23,6 +23,8 @@ from typing import List, Dict, Optional
 
 import httpx
 
+from app.utils.moscow_time import moscow_today
+
 from app.utils.logger import logger
 
 
@@ -138,7 +140,7 @@ class WBCmpClient:
           }
         """
         if date_to is None:
-            date_to = date.today() - timedelta(days=1)
+            date_to = moscow_today() - timedelta(days=1)
         if date_from is None:
             date_from = date_to - timedelta(days=6)  # 默认 7 天窗口，对齐 WB 后台
 

@@ -12,6 +12,8 @@
 """
 
 from datetime import datetime, date, timedelta, timezone
+
+from app.utils.moscow_time import moscow_today
 from decimal import Decimal
 
 from sqlalchemy import func
@@ -38,7 +40,7 @@ def generate_daily_report(self):
     """生成昨日运营日报并保存ROI快照"""
     db = SessionLocal()
     log_id = None
-    yesterday = date.today() - timedelta(days=1)
+    yesterday = moscow_today() - timedelta(days=1)
 
     try:
         task_log = TaskLog(

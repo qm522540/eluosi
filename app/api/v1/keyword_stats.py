@@ -12,7 +12,7 @@ from app.services.keyword_stats.rules import (
     DEFAULT_RULES, FIELD_BOUNDS, get_rules, set_rules, reset_rules,
 )
 from app.utils.errors import ErrorCode
-from app.utils.moscow_time import utc_now_naive
+from app.utils.moscow_time import moscow_today, utc_now_naive
 from app.utils.response import success, error
 
 router = APIRouter()
@@ -152,7 +152,7 @@ def word_changes(
     from sqlalchemy import text
     from datetime import date as _date, timedelta as _td
 
-    today = _date.today()
+    today = moscow_today()
     yest = today - _td(days=1)
     cutoff_vanish = today - _td(days=30)
     cutoff_active = today - _td(days=3)

@@ -14,11 +14,12 @@ from app.models.keyword_stat import KeywordDailyStat
 from app.services.keyword_stats.rules import get_rules, classify
 from app.utils.errors import ErrorCode
 from app.utils.logger import logger
+from app.utils.moscow_time import moscow_today
 
 
 def _default_dates(date_from: Optional[str], date_to: Optional[str]):
     if not date_to:
-        date_to = (date.today() - timedelta(days=1)).isoformat()
+        date_to = (moscow_today() - timedelta(days=1)).isoformat()
     if not date_from:
         date_from = (date.fromisoformat(date_to) - timedelta(days=6)).isoformat()
     return date_from, date_to
@@ -191,7 +192,7 @@ def summary(
     # 7 天曝光趋势 sparkline 数据：最近 7 天每天的 impressions
     # 不受 date_from/date_to 影响，固定取近 7 天（包含今天）
     from datetime import date as _date, timedelta as _td
-    spark_today = _date.today()
+    spark_today = moscow_today()
     spark_start = spark_today - _td(days=6)
     trend_map = {}  # {keyword: [imp_d0, imp_d1, ..., imp_d6]}
     if rows:

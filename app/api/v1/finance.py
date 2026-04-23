@@ -10,6 +10,7 @@ from app.services.finance.service import (
     get_revenue_list, get_cost_list, create_cost,
     get_roi_snapshots, get_finance_summary, get_dashboard_overview,
 )
+from app.utils.moscow_time import moscow_today
 from app.utils.response import success, error
 
 router = APIRouter()
@@ -92,7 +93,7 @@ def finance_summary(
     tenant_id: int = Depends(get_tenant_id),
 ):
     """获取财务汇总（收入/成本/利润/ROI）"""
-    today = date.today()
+    today = moscow_today()
     if not end_date:
         end_date = today
     if not start_date:

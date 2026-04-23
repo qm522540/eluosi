@@ -10,7 +10,7 @@ import io
 from pydantic import BaseModel, Field
 from app.dependencies import get_db, get_current_user, get_tenant_id, get_owned_shop
 from app.utils.logger import setup_logger
-from app.utils.moscow_time import utc_now_naive
+from app.utils.moscow_time import moscow_today, utc_now_naive
 
 logger = setup_logger("api.ads")
 from app.schemas.ad import (
@@ -373,7 +373,7 @@ def ad_summary(
     tenant_id: int = Depends(get_tenant_id),
 ):
     """获取广告汇总数据（Dashboard用）"""
-    today = date.today()
+    today = moscow_today()
     if not start_date:
         start_date = today
     if not end_date:
@@ -805,7 +805,7 @@ async def campaign_keywords(
     # WB 数据有 ~1 天延迟，今天那格通常是空的；用 [today-7, today-1] 拿满 7 天数据。
     # WB 限制：from 和 to 跨度最多 7 天（差值 ≤ 6 天），否则 400
     span = min(days, 7) - 1
-    date_to = _date.today() - _td(days=1)
+    date_to = moscow_today() - _td(days=1)
     date_from = date_to - _td(days=span)
 
     from app.services.platform.wb import WBClient
@@ -987,7 +987,7 @@ async def campaign_keyword_clusters(
 
     # 拉活跃触发词（campaign-keywords 的简化版，只取有点击 + 未被屏蔽）
     span = min(days, 7) - 1
-    date_to = _date.today() - _td(days=1)
+    date_to = moscow_today() - _td(days=1)
     date_from = date_to - _td(days=span)
     df = date_from.strftime("%Y-%m-%d")
     dt = date_to.strftime("%Y-%m-%d")
@@ -1492,7 +1492,7 @@ async def exclude_keywords(
             import uuid as _uuid
             from datetime import date as _date, timedelta as _td
             run_id = _uuid.uuid4().hex[:16]
-            since = (_date.today() - _td(days=6)).isoformat()
+            since = (moscow_today() - _td(days=6)).isoformat()
             for w in added_effective:
                 avg_daily = db.execute(text("""
                     SELECT AVG(spend) FROM keyword_daily_stats
@@ -2337,7 +2337,7 @@ async def campaign_summary(
     if not shop:
         return error(30001, "店铺不存在")
 
-    today = _date.today()
+    today = moscow_today()
     date_to = today.strftime("%Y-%m-%d")
     date_from = (today - _td(days=days - 1)).strftime("%Y-%m-%d")
 
@@ -2401,7 +2401,7 @@ def get_auto_exclude_config(
 
     # 累计：本月已屏蔽词数 + 累计估算节省（按 source 分组）
     from datetime import date as _date
-    month_start = _date.today().replace(day=1).isoformat()
+    month_start = moscow_today().replace(day=1).isoformat()
     rows = db.execute(text("""
         SELECT source, COUNT(*) cnt, COALESCE(SUM(saved_per_day), 0) saved_per_day
         FROM ad_auto_exclude_log
@@ -2515,7 +2515,7 @@ def list_auto_exclude_logs(
         return error(50001, "广告活动不存在")
 
     from datetime import date as _date, timedelta as _td
-    since = (_date.today() - _td(days=days)).isoformat()
+    since = (moscow_today() - _td(days=days)).isoformat()
     rows = db.execute(text("""
         SELECT keyword, nm_id, excluded_at, saved_per_day, reason
         FROM ad_auto_exclude_log
@@ -2622,7 +2622,7 @@ async def today_summary_campaign(
             cached["from_cache"] = True
             return success(cached)
 
-    today_iso = _date.today().isoformat()
+    today_iso = moscow_today().isoformat()
 
     # 优先复用店铺级缓存里的 per_campaign 数据（避免 WB 限速重复打）
     # 用户打开活动详情时，活动列表的 today-summary/shop 已经在 5 分钟内拉过
@@ -2685,7 +2685,7 @@ async def today_summary_campaign(
     # 对齐店铺级 today-summary/shop 的 fallback 逻辑（04-20 commit 2c98096）
     # ad_stats 表字段是 impressions（不是 views），且无 atbs 列
     from datetime import timedelta as _td
-    yesterday = _date.today() - _td(days=1)
+    yesterday = moscow_today() - _td(days=1)
     local = db.execute(text("""
         SELECT SUM(impressions) AS impressions, SUM(clicks) AS clicks,
                SUM(orders) AS orders,
@@ -2802,7 +2802,7 @@ async def today_summary_shop(
             cached["from_cache"] = True
             return success(cached)
 
-    today_iso = _date.today().isoformat()
+    today_iso = moscow_today().isoformat()
     if shop.platform != "wb":
         result = {
             "today_date": today_iso, "platform": shop.platform,
@@ -2835,7 +2835,7 @@ async def today_summary_shop(
     # 26+ 个活动串行 2s 间隔 + 429 重试累计 10+ 分钟导致前端超时。
     # ad_stats 表由 smart_sync 入库，数据到昨日（今日实时 WB 那份反正也是昨日）。
     from datetime import timedelta as _td
-    yesterday = _date.today() - _td(days=1)
+    yesterday = moscow_today() - _td(days=1)
     # ad_stats 表字段是 impressions（不是 views），且无 atbs 列 — 按 impressions 查
     local_stats = db.execute(text("""
         SELECT s.campaign_id,
@@ -2946,7 +2946,7 @@ async def today_alerts_shop(
     if cached is not None:
         return success(cached)
 
-    today_iso = _date.today().isoformat()
+    today_iso = moscow_today().isoformat()
     if shop.platform != "wb":
         result = {"today_date": today_iso, "alerts": [], "msg": "Ozon/Yandex 后续接入"}
         _set_cached_today("alerts", shop.id, result)

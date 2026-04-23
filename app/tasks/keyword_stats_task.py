@@ -7,6 +7,8 @@ import asyncio
 import math
 from datetime import date, timedelta, datetime, timezone
 
+from app.utils.moscow_time import moscow_today
+
 from app.tasks.celery_app import celery_app
 from app.database import SessionLocal
 from app.models.shop import Shop
@@ -106,7 +108,7 @@ def sync_keyword_stats(self):
     """每日增量拉取昨天的关键词统计"""
     db = SessionLocal()
     try:
-        yesterday = (date.today() - timedelta(days=1)).isoformat()
+        yesterday = (moscow_today() - timedelta(days=1)).isoformat()
         shops = db.query(Shop).filter(
             Shop.status == "active", Shop.api_key.isnot(None),
         ).all()
@@ -118,7 +120,7 @@ def sync_keyword_stats(self):
                 logger.info(f"WB shop={shop.id} 关键词同步: {r}")
             # OZON: 异步报告，后续补
         # 清理 90 天前数据
-        cutoff = (date.today() - timedelta(days=90)).isoformat()
+        cutoff = (moscow_today() - timedelta(days=90)).isoformat()
         deleted = db.query(KeywordDailyStat).filter(
             KeywordDailyStat.stat_date < cutoff,
         ).delete()
@@ -146,7 +148,7 @@ def backfill_keyword_stats(self, shop_id: int, tenant_id: int, days: int = 90):
         if not shop:
             return {"error": "店铺不存在"}
         if shop.platform == "wb":
-            today = date.today()
+            today = moscow_today()
             total = 0
             # 拆成 7 天窗口
             for i in range(0, days, 7):

@@ -6,6 +6,8 @@ from typing import List, Tuple
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from app.utils.moscow_time import moscow_today
+
 
 def find_missing_ranges(
     db: Session,
@@ -25,8 +27,8 @@ def find_missing_ranges(
       - ranges: [(date_from, date_to), ...] 每段闭区间，按时间升序
       - is_first_sync: True=首次同步（DB空），False=增量/补齐
     """
-    yesterday = date.today() - timedelta(days=1)
-    window_start = date.today() - timedelta(days=window_days)
+    yesterday = moscow_today() - timedelta(days=1)
+    window_start = moscow_today() - timedelta(days=window_days)
 
     # 查已有的 stat_date
     rows = db.execute(text("""

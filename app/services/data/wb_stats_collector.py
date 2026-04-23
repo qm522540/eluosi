@@ -18,6 +18,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.models.ad import AdCampaign, AdStat
+from app.utils.moscow_time import moscow_today
 from app.models.shop import Shop
 from app.models.shop_data_init import ShopDataInitStatus
 from app.services.platform.wb import WBClient
@@ -44,7 +45,7 @@ async def smart_sync(db: Session, shop_id: int, tenant_id: int) -> dict:
     if not shop:
         raise ValueError("店铺不存在")
 
-    yesterday = date.today() - timedelta(days=1)
+    yesterday = moscow_today() - timedelta(days=1)
 
     # 1. 找缺失日期段
     ranges, is_first = find_missing_ranges(
@@ -172,7 +173,7 @@ def _save_sku_stats(db: Session, campaign: AdCampaign, stats: list) -> int:
 
 
 def _clean_old_data(db: Session, shop_id: int, tenant_id: int) -> int:
-    cutoff = date.today() - timedelta(days=MAX_KEEP_DAYS)
+    cutoff = moscow_today() - timedelta(days=MAX_KEEP_DAYS)
     result = db.execute(text("""
         DELETE s FROM ad_stats s
         JOIN ad_campaigns c ON s.campaign_id = c.id

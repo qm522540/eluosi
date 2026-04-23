@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 
 from app.models.promo_calendar import PromoCalendar
 from app.utils.logger import setup_logger
+from app.utils.moscow_time import moscow_today
 
 logger = setup_logger("ai.promo_detector")
 
@@ -29,7 +30,7 @@ class PromoContext:
 
 def detect_promo_context(db: Session, tenant_id: int) -> PromoContext:
     """检测当前日期是否处于大促周期"""
-    today = date.today()
+    today = moscow_today()
 
     # 查询近期大促（未来1天 + 过去3天）
     promos = db.query(PromoCalendar).filter(

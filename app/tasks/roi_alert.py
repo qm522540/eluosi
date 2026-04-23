@@ -11,6 +11,8 @@
 """
 
 from datetime import datetime, date, timedelta, timezone
+
+from app.utils.moscow_time import moscow_today
 from decimal import Decimal
 
 from app.tasks.celery_app import celery_app
@@ -60,7 +62,7 @@ def check_roi_anomaly(self):
         db.refresh(task_log)
         log_id = task_log.id
 
-        today = date.today()
+        today = moscow_today()
         alerts_generated = 0
 
         # 获取所有active店铺

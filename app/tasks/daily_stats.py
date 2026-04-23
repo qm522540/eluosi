@@ -12,6 +12,8 @@
 import asyncio
 from datetime import datetime, date, timedelta, timezone
 
+from app.utils.moscow_time import moscow_today
+
 from app.tasks.celery_app import celery_app
 from app.database import SessionLocal
 from app.models.shop import Shop
@@ -78,7 +80,7 @@ def fetch_wb_daily(self):
     """
     db = SessionLocal()
     log_id = None
-    yesterday = (date.today() - timedelta(days=1)).isoformat()
+    yesterday = (moscow_today() - timedelta(days=1)).isoformat()
 
     try:
         log_id = _log_task(db, "fetch_wb_daily", self.request.id)
@@ -243,7 +245,7 @@ def fetch_ozon_daily(self):
     """每天01:00拉取Ozon前一天的完整统计数据"""
     db = SessionLocal()
     log_id = None
-    yesterday = (date.today() - timedelta(days=1)).isoformat()
+    yesterday = (moscow_today() - timedelta(days=1)).isoformat()
 
     try:
         log_id = _log_task(db, "fetch_ozon_daily", self.request.id)
@@ -402,7 +404,7 @@ def fetch_yandex_daily(self):
     """每天02:00拉取Yandex前一天的完整统计数据"""
     db = SessionLocal()
     log_id = None
-    yesterday = (date.today() - timedelta(days=1)).isoformat()
+    yesterday = (moscow_today() - timedelta(days=1)).isoformat()
 
     try:
         log_id = _log_task(db, "fetch_yandex_daily", self.request.id)

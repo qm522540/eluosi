@@ -25,7 +25,7 @@ from app.services.platform.wb_cmp import WBCmpClient, CmpAuthExpired
 from app.services.ad.cluster_oracle_service import upsert_from_cmp
 from app.tasks.celery_app import celery_app
 from app.utils.logger import logger
-from app.utils.moscow_time import utc_now_naive
+from app.utils.moscow_time import moscow_today, utc_now_naive
 
 
 async def _sync_one_shop(shop: Shop, db) -> dict:
@@ -49,7 +49,7 @@ async def _sync_one_shop(shop: Shop, db) -> dict:
         authorizev3=shop.wb_cmp_authorizev3,
         supplierid=shop.wb_cmp_supplierid,
     )
-    date_to   = date.today() - timedelta(days=1)
+    date_to   = moscow_today() - timedelta(days=1)
     date_from = date_to - timedelta(days=6)
 
     try:

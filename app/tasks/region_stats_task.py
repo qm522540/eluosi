@@ -3,6 +3,8 @@
 import asyncio
 from datetime import date, timedelta, datetime, timezone
 
+from app.utils.moscow_time import moscow_today
+
 from app.tasks.celery_app import celery_app
 from app.database import SessionLocal
 from app.models.shop import Shop
@@ -134,7 +136,7 @@ async def _ozon_backfill_bulk(db, shop, days: int) -> dict:
     from app.services.platform.ozon import OzonClient
     total = 0
     total_returns = 0
-    today = date.today()
+    today = moscow_today()
     oldest_stat = today - timedelta(days=days)
     city_map_from = (oldest_stat - timedelta(days=60)).isoformat()
     city_map_to = today.isoformat()
@@ -246,7 +248,7 @@ async def _sync_wb_region(db, shop, date_from, date_to):
 def sync_region_stats(self):
     db = SessionLocal()
     try:
-        yesterday = (date.today() - timedelta(days=1)).isoformat()
+        yesterday = (moscow_today() - timedelta(days=1)).isoformat()
         shops = db.query(Shop).filter(Shop.status == "active", Shop.api_key.isnot(None)).all()
         results = {}
         for shop in shops:
@@ -263,7 +265,7 @@ def sync_region_stats(self):
                 logger.error(f"地区同步 shop={shop.id} 失败: {e}")
                 results[shop.id] = {"error": str(e)}
         # 清理 90 天前
-        cutoff = (date.today() - timedelta(days=90)).isoformat()
+        cutoff = (moscow_today() - timedelta(days=90)).isoformat()
         deleted = db.query(RegionDailyStat).filter(RegionDailyStat.stat_date < cutoff).delete()
         db.commit()
         if deleted:
@@ -292,7 +294,7 @@ def backfill_region_stats(self, shop_id, tenant_id, days=90):
         if shop.platform == "wb":
             total = 0
             total_returns = 0
-            today = date.today()
+            today = moscow_today()
             for i in range(1, days + 1):
                 d_str = (today - timedelta(days=i)).isoformat()
                 try:

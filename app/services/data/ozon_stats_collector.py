@@ -16,6 +16,8 @@ import httpx
 from datetime import datetime, timedelta, date, timezone
 from typing import Optional
 
+from app.utils.moscow_time import moscow_today
+
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
@@ -52,7 +54,7 @@ async def smart_sync(db: Session, shop_id: int, tenant_id: int) -> dict:
     if not shop.client_id or not shop.api_key:
         raise ValueError("Ozon Seller API 凭证未配置")
 
-    yesterday = date.today() - timedelta(days=1)
+    yesterday = moscow_today() - timedelta(days=1)
 
     ranges, is_first = find_missing_ranges(
         db, shop_id, tenant_id, "ozon", MAX_KEEP_DAYS, FIRST_SYNC_DAYS,
@@ -414,7 +416,7 @@ async def _fetch_perf_data(
     # 更新 data_days
     data_days = _count_data_days(db, shop_data["id"], tenant_id)
     _update_init_status(db, shop_data["id"], tenant_id,
-                        date.today() - timedelta(days=1), data_days)
+                        moscow_today() - timedelta(days=1), data_days)
     logger.info(f"Performance API 后台完成，共 {data_days} 天数据")
 
 
@@ -464,7 +466,7 @@ def _upsert_stat(db: Session, campaign: AdCampaign, tenant_id: int,
 
 
 def _clean_old_data(db: Session, shop_id: int, tenant_id: int) -> int:
-    cutoff = date.today() - timedelta(days=MAX_KEEP_DAYS)
+    cutoff = moscow_today() - timedelta(days=MAX_KEEP_DAYS)
     result = db.execute(text("""
         DELETE s FROM ad_stats s
         JOIN ad_campaigns c ON s.campaign_id = c.id

@@ -7,11 +7,12 @@ from sqlalchemy.orm import Session
 from sqlalchemy import text
 
 from app.utils.errors import ErrorCode
+from app.utils.moscow_time import moscow_today
 
 
 def _default_dates(date_from, date_to):
     if not date_to:
-        date_to = (date.today() - timedelta(days=1)).isoformat()
+        date_to = (moscow_today() - timedelta(days=1)).isoformat()
     if not date_from:
         date_from = (date.fromisoformat(date_to) - timedelta(days=6)).isoformat()
     return date_from, date_to

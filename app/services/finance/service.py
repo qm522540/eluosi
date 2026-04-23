@@ -10,6 +10,7 @@ from app.models.shop import Shop
 from app.models.product import Product
 from app.utils.errors import ErrorCode
 from app.utils.logger import logger
+from app.utils.moscow_time import moscow_today
 
 
 def get_revenue_list(db: Session, tenant_id: int, start_date: date, end_date: date,
@@ -192,7 +193,7 @@ def get_finance_summary(db: Session, tenant_id: int, start_date: date, end_date:
 def get_dashboard_overview(db: Session, tenant_id: int) -> dict:
     """首页大盘统计数据"""
     try:
-        today = date.today()
+        today = moscow_today()
 
         # 店铺数量
         shop_count = db.query(Shop).filter(

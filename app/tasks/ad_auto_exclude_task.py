@@ -12,6 +12,8 @@ import asyncio
 import uuid
 from datetime import date, datetime, timedelta, timezone
 
+from app.utils.moscow_time import moscow_today
+
 from sqlalchemy import text
 
 from app.tasks.celery_app import celery_app
@@ -124,7 +126,7 @@ async def _exclude_one_campaign(db, shop, camp, run_id):
     total_saved = 0.0
 
     try:
-        today = date.today()
+        today = moscow_today()
         date_to = today.strftime("%Y-%m-%d")
         date_from = (today - timedelta(days=6)).strftime("%Y-%m-%d")
 

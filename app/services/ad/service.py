@@ -10,6 +10,7 @@ from app.models.ad import AdCampaign, AdGroup, AdKeyword, AdStat, AdAutomationRu
 from app.models.notification import Notification
 from app.utils.errors import ErrorCode
 from app.utils.logger import logger
+from app.utils.moscow_time import moscow_today
 
 
 def list_campaigns(db: Session, tenant_id: int, shop_id: int = None,
@@ -42,7 +43,7 @@ def list_campaigns(db: Session, tenant_id: int, shop_id: int = None,
         ).limit(page_size).all()
 
         campaign_ids = [c.id for c in campaigns]
-        today = date.today()
+        today = moscow_today()
         seven_days_ago = today - timedelta(days=7)
 
         # 今日数据
@@ -333,7 +334,7 @@ def get_ad_summary(db: Session, tenant_id: int, start_date: date, end_date: date
 def get_shop_summary(db: Session, tenant_id: int, shop_id: int) -> dict:
     """店铺今日/昨日/7天汇总数据（概览卡片用）"""
     from datetime import date, timedelta
-    today = date.today()
+    today = moscow_today()
     yesterday = today - timedelta(days=1)
     seven_days_ago = today - timedelta(days=7)
 
@@ -480,7 +481,7 @@ def create_campaign(db: Session, tenant_id: int, data: dict) -> dict:
             tenant_id=tenant_id,
             shop_id=data["shop_id"],
             platform=data["platform"],
-            platform_campaign_id=f"manual-{int(date.today().strftime('%Y%m%d'))}-{data['name'][:20]}",
+            platform_campaign_id=f"manual-{int(moscow_today().strftime('%Y%m%d'))}-{data['name'][:20]}",
             name=data["name"],
             ad_type=data["ad_type"],
             daily_budget=data.get("daily_budget"),
@@ -783,7 +784,7 @@ def optimize_bids(db: Session, tenant_id: int, data: dict) -> dict:
         ).all()
 
         suggestions = []
-        today = date.today()
+        today = moscow_today()
         from datetime import timedelta
         start = today - timedelta(days=7)
 
@@ -1299,7 +1300,7 @@ async def execute_automation_rules(
         rules = query.all()
 
         results = []
-        today = date.today()
+        today = moscow_today()
         week_ago = today - timedelta(days=7)
 
         for rule in rules:
@@ -1700,7 +1701,7 @@ def get_budget_overview(db: Session, tenant_id: int, shop_id: int = None,
                         platform: str = None) -> dict:
     """预算消耗概览"""
     try:
-        today = date.today()
+        today = moscow_today()
         month_start = today.replace(day=1)
 
         # 查询活跃活动
@@ -1831,7 +1832,7 @@ def get_budget_suggestions(db: Session, tenant_id: int, shop_id: int = None,
                            platform: str = None) -> dict:
     """预算分配优化建议"""
     try:
-        today = date.today()
+        today = moscow_today()
         week_ago = today - timedelta(days=7)
 
         camp_query = db.query(AdCampaign).filter(
