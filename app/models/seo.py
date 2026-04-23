@@ -1,10 +1,11 @@
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Optional
 from sqlalchemy import BigInteger, String, Enum, DateTime, Text, JSON, DECIMAL, Integer, SmallInteger
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database import Base
 from app.models.base import BaseMixin
+from app.utils.moscow_time import utc_now_naive
 
 
 class SeoKeyword(BaseMixin, Base):
@@ -115,10 +116,10 @@ class SeoKeywordCandidate(Base):
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime, nullable=False,
-        default=lambda: datetime.now(timezone.utc),
+        default=utc_now_naive,
     )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, nullable=False,
-        default=lambda: datetime.now(timezone.utc),
-        onupdate=lambda: datetime.now(timezone.utc),
+        default=utc_now_naive,
+        onupdate=utc_now_naive,
     )

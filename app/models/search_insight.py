@@ -7,12 +7,13 @@
 字段按两平台并集，平台特有字段存 extra JSON。
 """
 
-from datetime import datetime, date, timezone
+from datetime import datetime, date
 from typing import Optional
 from sqlalchemy import BigInteger, String, Enum, Integer, DECIMAL, Date, DateTime, JSON
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database import Base
+from app.utils.moscow_time import utc_now_naive
 
 
 class ProductSearchQuery(Base):
@@ -38,5 +39,5 @@ class ProductSearchQuery(Base):
     extra: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime, nullable=False,
-        default=lambda: datetime.now(timezone.utc),
+        default=utc_now_naive,
     )

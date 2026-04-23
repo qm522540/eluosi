@@ -55,10 +55,14 @@ bash deploy_remote.sh --db "<sql>" # 远程执行 SQL
 
 Python 3.12+ 已弃用 `utcnow()`；naive 与 aware 比较会出 bug；Celery 开了 `enable_utc=True`。
 
-- 模型 default：`default=lambda: datetime.now(timezone.utc)`，**不要**写 `default=datetime.utcnow`
-- 业务代码：永远 `datetime.now(timezone.utc)`，不写 `datetime.now()` 也不写 `datetime.utcnow()`
-- naive vs aware 比较前，把 naive 那一边补 tzinfo
-- 自查：`grep -n "datetime.utcnow\|datetime.now()" 文件` 必须为空
+- 模型 default：`default=lambda: utc_now_naive()`（from `app.utils.moscow_time`）
+  — 返回 naive UTC，与 SQLAlchemy `DateTime`（无 tz）列直接匹配，与规则 6
+  "唯一写入入口 `utc_now_naive()`" 字面对齐。**不要**写 `default=datetime.utcnow`，
+  也不要写 `default=lambda: datetime.now(timezone.utc)`（字面会让人误以为存 aware）。
+- 业务代码裸调时一律 `utc_now_naive()`（DB 写入）或 `datetime.now(timezone.utc)`
+  （纯 Python 比较），不写 `datetime.now()` 也不写 `datetime.utcnow()`。
+- naive vs aware 比较前，把 naive 那一边补 tzinfo。
+- 自查：`grep -n "datetime.utcnow\|datetime.now()" 文件` 必须为空。
 
 ### 规则 3：删文件时清理孤儿依赖
 

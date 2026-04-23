@@ -1,8 +1,9 @@
-from datetime import datetime, date, timezone
+from datetime import datetime, date
 from typing import Optional
 from sqlalchemy import BigInteger, String, Enum, Integer, DECIMAL, Date, DateTime
 from sqlalchemy.orm import Mapped, mapped_column
 from app.database import Base
+from app.utils.moscow_time import utc_now_naive
 
 
 class RegionDailyStat(Base):
@@ -17,4 +18,4 @@ class RegionDailyStat(Base):
     orders: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     revenue: Mapped[float] = mapped_column(DECIMAL(14, 2), nullable=False, default=0)
     returns: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc))
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utc_now_naive)
