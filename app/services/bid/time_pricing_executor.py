@@ -456,16 +456,18 @@ async def disable(db, tenant_id: int, shop_id: int) -> dict:
             # 写调价日志（关闭分时调价恢复原价）
             previous = float(row.last_auto_bid)
             pct = round((target_bid - previous) / previous * 100, 2) if previous > 0 else 0.0
+            reason = (f"[分时调价-停用恢复] 用户停用分时调价，"
+                      f"SKU 出价从 ₽{previous:.0f} 恢复到原价 ₽{target_bid:.0f}")
             db.execute(text("""
                 INSERT INTO bid_adjustment_logs (
                     tenant_id, shop_id, campaign_id, campaign_name,
                     platform_sku_id, sku_name,
                     old_bid, new_bid, adjust_pct,
-                    execute_type, success, created_at
+                    execute_type, success, reason, created_at
                 ) VALUES (
                     :tenant_id, :shop_id, :campaign_id, :campaign_name,
                     :sku, NULL, :old_bid, :new_bid, :pct,
-                    'time_restore', 1, :now_utc
+                    'time_restore', 1, :reason, :now_utc
                 )
             """), {
                 "tenant_id": tenant_id,
@@ -476,6 +478,7 @@ async def disable(db, tenant_id: int, shop_id: int) -> dict:
                 "old_bid": previous,
                 "new_bid": target_bid,
                 "pct": pct,
+                "reason": reason[:2000],
                 "now_utc": utc_now_naive(),
             })
 
@@ -558,16 +561,18 @@ async def restore_sku(db, tenant_id: int, shop_id: int, sku: str) -> dict:
                 continue
 
             previous = float(row.last_auto_bid or row.original_bid)
+            reason = (f"[分时调价-单 SKU 手动恢复] 用户手动恢复出价，"
+                      f"从 ₽{previous:.0f} 改到原价 ₽{target:.0f}")
             db.execute(text("""
                 INSERT INTO bid_adjustment_logs (
                     tenant_id, shop_id, campaign_id, campaign_name,
                     platform_sku_id, sku_name,
                     old_bid, new_bid, adjust_pct,
-                    execute_type, success, created_at
+                    execute_type, success, reason, created_at
                 ) VALUES (
                     :tenant_id, :shop_id, :campaign_id, :campaign_name,
                     :sku, NULL, :old_bid, :new_bid,
-                    :pct, 'user_manual', 1, :now_utc
+                    :pct, 'user_manual', 1, :reason, :now_utc
                 )
             """), {
                 "tenant_id": row.tenant_id,
@@ -578,6 +583,7 @@ async def restore_sku(db, tenant_id: int, shop_id: int, sku: str) -> dict:
                 "old_bid": previous,
                 "new_bid": target,
                 "pct": round((target - previous) / previous * 100, 2) if previous > 0 else 0,
+                "reason": reason[:2000],
                 "now_utc": utc_now_naive(),
             })
             restored_count += 1
@@ -728,19 +734,34 @@ def _write_log(db, campaign, sku: str, sku_name: str,
     pct = 0.0
     if old_bid > 0:
         pct = round((new_bid - old_bid) / old_bid * 100, 2)
+    # 分时调价的 reason 简单拼一段时段语义，方便前端 Tooltip 显示
+    period_name = {"peak": "高峰期", "mid": "次高峰期", "low": "低谷期",
+                    "base": "平谷期"}.get(time_period, time_period or "未知时段")
+    if execute_type == "time_restore":
+        reason = f"[分时调价-停用恢复] 从 ₽{old_bid:.0f} 恢复到原价 ₽{new_bid:.0f}"
+    elif execute_type == "user_manual":
+        reason = f"[分时调价-用户手动] 从 ₽{old_bid:.0f} 改到 ₽{new_bid:.0f}"
+    else:
+        ratio_pct = f"×{period_ratio}%" if period_ratio else ""
+        reason = (
+            f"[分时调价-{period_name}{ratio_pct}] 莫斯科{moscow_hour()}时 "
+            f"→ CPM/CPC ₽{old_bid:.0f} → ₽{new_bid:.0f}（{pct:+.1f}%）"
+        )
+    if error_msg:
+        reason = f"{reason} | ⚠ {error_msg[:200]}"
     db.execute(text("""
         INSERT INTO bid_adjustment_logs (
             tenant_id, shop_id, campaign_id, campaign_name,
             platform_sku_id, sku_name,
             old_bid, new_bid, adjust_pct,
             execute_type, time_period, period_ratio,
-            moscow_hour, success, error_msg, created_at
+            moscow_hour, success, error_msg, reason, created_at
         ) VALUES (
             :tenant_id, :shop_id, :campaign_id, :campaign_name,
             :sku, :sku_name,
             :old_bid, :new_bid, :pct,
             :execute_type, :period, :ratio,
-            :hour, :success, :error_msg, :now_utc
+            :hour, :success, :error_msg, :reason, :now_utc
         )
     """), {
         "tenant_id": campaign.tenant_id,
@@ -759,6 +780,7 @@ def _write_log(db, campaign, sku: str, sku_name: str,
         "hour": moscow_hour(),
         "success": 1 if success else 0,
         "error_msg": (error_msg or "")[:500] if error_msg else None,
+        "reason": reason[:2000],
     })
 
 

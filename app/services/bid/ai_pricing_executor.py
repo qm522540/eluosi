@@ -2037,14 +2037,29 @@ async def _check_and_remove_losing_sku(
         f"21-30天ROAS={roas_21_30:.2f}x < 保本线{breakeven_roas:.2f}x，自动删除"
     )
 
+    # 组装 reason 提前（成功/失败/转手动 都要用）
+    base_reason = (
+        f"[亏损自动删除] 21-30天ROAS={roas_21_30:.2f}x "
+        f"低于保本线{breakeven_roas:.2f}x，自动执行删除"
+    )
+    api_error_msg = None
     try:
         api_result = await _execute_bid_update(
             client, shop.platform, camp.platform_campaign_id, sku, 0, delete=True,
         )
         success = api_result.get("ok", False)
+        if not success:
+            api_error_msg = (api_result.get("error") or "API删除失败")[:300]
     except Exception as e:
         logger.error(f"auto_remove API失败 sku={sku}: {e}")
         success = False
+        api_error_msg = str(e)[:300]
+
+    # 成功的 reason 就是 base_reason；失败加一段"转手动"提示
+    log_reason = base_reason if success else (
+        f"{base_reason} | ⚠ WB/Ozon API 删除失败（{api_error_msg}），已转为"
+        f"待手动删除建议"
+    )
 
     db.execute(text("""
         INSERT INTO bid_adjustment_logs (
@@ -2052,13 +2067,13 @@ async def _check_and_remove_losing_sku(
             platform_sku_id, sku_name,
             old_bid, new_bid, adjust_pct,
             execute_type, product_stage, moscow_hour,
-            success, error_msg, created_at
+            success, error_msg, reason, created_at
         ) VALUES (
             :tenant_id, :shop_id, :campaign_id, :campaign_name,
             :sku, :sku_name,
             :old_bid, 0, -100,
             'auto_remove', 'declining', :hour,
-            :success, :error, :now_utc
+            :success, :error, :reason, :now_utc
         )
     """), {
         "tenant_id": tenant_id, "shop_id": shop.id,
@@ -2066,9 +2081,46 @@ async def _check_and_remove_losing_sku(
         "sku": sku, "sku_name": sku_name or "",
         "old_bid": current_bid, "hour": moscow_hour(),
         "success": 1 if success else 0,
-        "error": None if success else "API删除失败",
+        "error": None if success else api_error_msg or "API删除失败",
+        "reason": log_reason[:2000],
         "now_utc": _utc_now().replace(tzinfo=None),
     })
+
+    # 需求 2（2026-04-23）：API 删除失败 → 写一条 pending 建议让用户手动处理
+    # 用户在 /ads/bid-management 的建议列表看到这条红色"建议删除"，点执行会
+    # 再次调 POST /suggestions/{id}/remove-product（用户介入通常能解决 advert
+    # incorrect status 等场景）
+    if not success:
+        data_days = int(sku_stat.get("days", 0) or 0)
+        suggest_reason = (
+            f"[亏损删除·自动失败转手动] 21-30天ROAS={roas_21_30:.2f}x "
+            f"低于保本线{breakeven_roas:.2f}x，数据{data_days}天；"
+            f"AI 已尝试自动删除但 API 返回错误（{api_error_msg}），"
+            f"请人工在此确认是否从活动中移除该 SKU"
+        )
+        db.execute(text("""
+            INSERT INTO ai_pricing_suggestions (
+                tenant_id, shop_id, campaign_id, platform_sku_id, sku_name,
+                current_bid, suggested_bid, adjust_pct,
+                product_stage, decision_basis,
+                current_roas, expected_roas,
+                data_days, reason, status, generated_at
+            ) VALUES (
+                :tenant_id, :shop_id, :campaign_id, :sku, :sku_name,
+                :current_bid, 0, -100,
+                'declining', 'history_data',
+                :current_roas, NULL,
+                :data_days, :reason, 'pending', :now_utc
+            )
+        """), {
+            "tenant_id": tenant_id, "shop_id": shop.id,
+            "campaign_id": camp.id, "sku": sku, "sku_name": sku_name or "",
+            "current_bid": current_bid,
+            "current_roas": round(roas_21_30, 2) if roas_21_30 else None,
+            "data_days": data_days,
+            "reason": suggest_reason[:500],
+            "now_utc": _utc_now().replace(tzinfo=None),
+        })
 
     try:
         from app.services.notification.service import send_wechat_work
@@ -2725,13 +2777,13 @@ def _write_bidlog(db, campaign, suggestion: dict, execute_type: str,
             platform_sku_id, sku_name,
             old_bid, new_bid, adjust_pct,
             execute_type, product_stage, moscow_hour,
-            success, error_msg, created_at
+            success, error_msg, reason, created_at
         ) VALUES (
             :tenant_id, :shop_id, :campaign_id, :campaign_name,
             :sku, :sku_name,
             :old_bid, :new_bid, :pct,
             :execute_type, :stage, :hour,
-            :success, :error, :now_utc
+            :success, :error, :reason, :now_utc
         )
     """), {
         "tenant_id":    campaign.tenant_id,
@@ -2748,6 +2800,7 @@ def _write_bidlog(db, campaign, suggestion: dict, execute_type: str,
         "hour":    moscow_hour(),
         "success": 1 if success else 0,
         "error":   (error or "")[:500] if error else None,
+        "reason":  (suggestion.get("reason") or "")[:2000] or None,
         "now_utc": _utc_now().replace(tzinfo=None),
     })
 

@@ -313,7 +313,26 @@ const BidLogs = ({ shopId, refreshKey }) => {
     },
     {
       title: '状态', dataIndex: 'success', width: 70,
-      render: v => <Tag color={v ? 'green' : 'red'}>{v ? '成功' : '失败'}</Tag>,
+      render: (v, r) => {
+        const tag = <Tag color={v ? 'green' : 'red'} style={{ cursor: 'help' }}>{v ? '成功' : '失败'}</Tag>
+        // 悬停显示 AI 调价的决策理由（或分时调价的时段语义）
+        // reason 为 null 说明是 cutover 前的历史记录，提示一下
+        const tipContent = r.reason
+          ? (
+              <div style={{ maxWidth: 460, whiteSpace: 'pre-wrap', lineHeight: 1.6, fontSize: 12 }}>
+                {!v && r.error_msg && (
+                  <div style={{ color: '#FFB4B4', marginBottom: 6 }}>
+                    ⚠ 错误：{r.error_msg}
+                  </div>
+                )}
+                <div>{r.reason}</div>
+              </div>
+            )
+          : (!v && r.error_msg
+              ? <div style={{ maxWidth: 400, fontSize: 12 }}>⚠ {r.error_msg}</div>
+              : <span style={{ fontSize: 12, color: '#bbb' }}>无详细理由（历史记录）</span>)
+        return <Tooltip title={tipContent} placement="left">{tag}</Tooltip>
+      },
     },
   ]
 

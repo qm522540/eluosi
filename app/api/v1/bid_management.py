@@ -891,7 +891,8 @@ def get_bid_logs(
             l.platform_sku_id, l.sku_name,
             l.old_bid, l.new_bid, l.adjust_pct,
             l.execute_type, l.time_period, l.period_ratio,
-            l.product_stage, l.moscow_hour, l.success, l.error_msg, l.created_at,
+            l.product_stage, l.moscow_hour, l.success, l.error_msg, l.reason,
+            l.created_at,
             pl.platform_product_id AS platform_product_id,
             p.sku AS product_code
         FROM bid_adjustment_logs l
@@ -926,6 +927,7 @@ def get_bid_logs(
         "moscow_hour": r.moscow_hour,
         "success": bool(r.success),
         "error_msg": r.error_msg,
+        "reason": r.reason,
         "created_at": r.created_at.isoformat() if r.created_at else None,
     } for r in rows]
 
