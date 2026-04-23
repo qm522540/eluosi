@@ -1742,6 +1742,14 @@ const OzonAIPricing = ({ shopId, platform = 'ozon' }) => {
                 dataSource={history}
                 rowKey="id"
                 loading={historyLoading}
+                onRow={record => ({
+                  style: { cursor: 'help' },
+                  title: record.reason
+                    ? `${!record.success && record.error_msg ? '⚠ ' + record.error_msg + '\n\n' : ''}${record.reason}`
+                    : (!record.success && record.error_msg
+                        ? '⚠ ' + record.error_msg
+                        : '（此记录未保存调价理由，可能是今日修复前的历史数据）'),
+                })}
                 pagination={{
                   current: historyPage,
                   total: historyTotal,
