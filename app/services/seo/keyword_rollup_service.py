@@ -10,6 +10,7 @@
 
 import json
 from datetime import datetime, timedelta, timezone
+from typing import List
 
 from sqlalchemy import bindparam, text
 from sqlalchemy.orm import Session
@@ -385,6 +386,7 @@ def list_candidates_rollup_products(
                {_HAS_SELF_CLAUSE} AS has_self,
                COALESCE(pl.title_ru, p.name_ru, p.name_zh, '') AS title,
                p.image_url,
+               p.sku AS product_sku,
                p.local_category_id AS cat_id,
                pl.platform_sku_id,
                pl.rating,
@@ -399,9 +401,9 @@ def list_candidates_rollup_products(
           AND c.shop_id = :sid
           AND LOWER(c.keyword) = LOWER(:kw)
           AND c.status = :status
-        ORDER BY has_self DESC, c.score DESC, (COALESCE(c.paid_orders,0) + COALESCE(c.organic_orders,0)) DESC
         LIMIT :lim
     """)
+    # 注：ORDER BY 移到 Python 层，因为要把 cross_shop 插入 self 和 category 中间
 
     rows = db.execute(sql, {
         "tid": tenant_id, "sid": shop.id,
@@ -413,15 +415,26 @@ def list_candidates_rollup_products(
         db=db, tenant_id=tenant_id, shop_id=shop.id,
         keyword=keyword.strip(), days=30,
     )
+    # 跨店同款证据：对本店之外的其他 shop 里相同 p.sku 的 listing 查 product_search_queries
+    # 目的：WB 店铺里 0 曝光的 SK-E0001 若在 OZON 店里有 228 曝光 → 本店应感知此机会
+    product_skus = list({r.product_sku for r in rows if r.product_sku})
+    cross_shop_by_sku = _fetch_cross_shop_evidence(
+        db=db, tenant_id=tenant_id, current_shop_id=shop.id,
+        product_skus=product_skus, keyword=keyword.strip(), days=30,
+    )
 
     items = []
     for r in rows:
         has_self = bool(r.has_self)
         cat_id = int(r.cat_id) if r.cat_id is not None else None
+        product_sku = r.product_sku or ""
+        cross = cross_shop_by_sku.get(product_sku) if product_sku else None
+        has_cross_shop = bool(cross and cross.get("total_impressions", 0) > 0)
         items.append({
             "candidate_id":    int(r.candidate_id),
             "shop_id":         int(r.shop_id),
             "product_id":      int(r.product_id),
+            "product_sku":     product_sku,
             "title":           r.title or "",
             "image_url":       r.image_url or "",
             "platform_sku_id": r.platform_sku_id or "",
@@ -433,6 +446,7 @@ def list_candidates_rollup_products(
             "in_attrs":        bool(r.in_attrs),
             "sources":         r.sources if isinstance(r.sources, list) else (json.loads(r.sources) if r.sources else []),
             "has_self":        has_self,
+            "has_cross_shop":  has_cross_shop,
             "cat_id":          cat_id,
             # 仅 self 行显示真实数字, category-only 行字段置 null 让前端知道"无实证"
             "paid_orders":     (int(r.paid_orders or 0) if has_self else None),
@@ -442,9 +456,23 @@ def list_candidates_rollup_products(
             "organic_impressions": (int(r.organic_impressions or 0) if has_self else None),
             "organic_add_to_cart": (int(r.organic_add_to_cart or 0) if has_self else None),
             # category evidence：给前端展示推断理由（"类目里 N 款真实搜中 · X 订单"）
-            # 仅对 has_self=false 行有意义，has_self 行 evidence 留着也无妨
             "category_evidence": evidence_by_cat.get(cat_id) if cat_id is not None else None,
+            # cross_shop evidence：同 product.sku 在其他 shop 里真实搜中的汇总
+            # 业务语义"这款商品在别的店已证实吃到这词流量，你店同款加进标题也会受益"
+            "cross_shop_evidence": cross,
         })
+
+    # 排序：has_self > has_cross_shop > category > _other；同层按 score DESC + orders DESC
+    def _rank(it):
+        if it["has_self"]:         return 0
+        if it["has_cross_shop"]:   return 1  # 跨店同款优先级高于类目推断
+        if it.get("category_evidence"): return 2
+        return 3
+    items.sort(key=lambda it: (
+        _rank(it),
+        -float(it.get("score") or 0),
+        -(int(it.get("paid_orders") or 0) + int(it.get("organic_orders") or 0)),
+    ))
 
     return {
         "code": 0,
@@ -505,6 +533,142 @@ def _fetch_category_evidence(
             "total_add_to_cart": int(r.total_add_to_cart or 0),
         }
     return out
+
+
+def _fetch_cross_shop_evidence(
+    db: Session, tenant_id: int, current_shop_id: int,
+    product_skus: List[str], keyword: str, days: int = 30,
+) -> dict:
+    """对一批 products.sku，查它们在 current_shop 之外的其他 shop 的 product_search_queries 真实搜中汇总。
+
+    业务意图：同款商品跨店 SEO 共享 — A 店 WB-Shario 的 SK-E0001 搜中 189 曝光时，
+    B 店 OZON-Shario 的 SK-E0001 若 0 曝光应感知"同款已证明可行"这一信号。
+
+    返回 {product_sku: {other_shops_count, total_impressions, total_orders, total_add_to_cart, total_frequency, top_shops}}
+    top_shops: 前 3 个有证据的 shop [{shop_id, shop_name, platform, platform_sku_id, impressions, orders}]
+    """
+    if not product_skus:
+        return {}
+
+    rows = db.execute(
+        text(f"""
+            SELECT p.sku                       AS product_sku,
+                   q.shop_id                   AS shop_id,
+                   s.name                      AS shop_name,
+                   s.platform                  AS platform,
+                   ANY_VALUE(pl.platform_sku_id) AS platform_sku_id,
+                   SUM(q.frequency)            AS total_frequency,
+                   SUM(q.impressions)          AS total_impressions,
+                   SUM(q.add_to_cart)          AS total_add_to_cart,
+                   SUM(q.orders)               AS total_orders
+            FROM product_search_queries q
+            JOIN products p ON p.id = q.product_id AND p.tenant_id = q.tenant_id
+            JOIN shops    s ON s.id = q.shop_id   AND s.tenant_id = q.tenant_id
+            LEFT JOIN platform_listings pl ON pl.product_id = p.id
+                                           AND pl.tenant_id = p.tenant_id
+                                           AND pl.shop_id = q.shop_id
+                                           AND pl.status NOT IN ('deleted', 'archived')
+            WHERE q.tenant_id = :tid
+              AND q.shop_id != :current_sid
+              AND p.sku IN :skus
+              AND LOWER(q.query_text) = LOWER(:kw)
+              AND q.stat_date >= :since
+            GROUP BY p.sku, q.shop_id, s.name, s.platform
+            ORDER BY SUM(q.impressions) DESC
+        """).bindparams(bindparam("skus", expanding=True)),
+        {
+            "tid": tenant_id, "current_sid": current_shop_id,
+            "skus": product_skus, "kw": keyword,
+            "since": datetime.now(timezone.utc).date() - timedelta(days=days),
+        },
+    ).fetchall()
+
+    out: dict = {}
+    for r in rows:
+        sku = r.product_sku
+        if not sku:
+            continue
+        bucket = out.setdefault(sku, {
+            "product_sku": sku,
+            "other_shops_count": 0,
+            "total_impressions": 0,
+            "total_orders":      0,
+            "total_add_to_cart": 0,
+            "total_frequency":   0,
+            "top_shops":         [],
+        })
+        bucket["other_shops_count"] += 1
+        bucket["total_impressions"] += int(r.total_impressions or 0)
+        bucket["total_orders"]      += int(r.total_orders or 0)
+        bucket["total_add_to_cart"] += int(r.total_add_to_cart or 0)
+        bucket["total_frequency"]   += int(r.total_frequency or 0)
+        if len(bucket["top_shops"]) < 3:
+            bucket["top_shops"].append({
+                "shop_id":         int(r.shop_id),
+                "shop_name":       r.shop_name or "",
+                "platform":        r.platform or "",
+                "platform_sku_id": r.platform_sku_id or "",
+                "impressions":     int(r.total_impressions or 0),
+                "orders":          int(r.total_orders or 0),
+                "add_to_cart":     int(r.total_add_to_cart or 0),
+            })
+    return out
+
+
+def list_cross_shop_top_products(
+    db: Session, tenant_id: int, shop,
+    *, keyword: str, product_sku: str, limit: int = 10,
+) -> dict:
+    """弹窗展示：该 products.sku 在当前 shop 之外的其他 shop 里真实搜中的全部 listing 明细"""
+    if not keyword or not keyword.strip() or not product_sku:
+        return {"code": 10002, "msg": "keyword / product_sku 不能为空"}
+
+    rows = db.execute(text("""
+        SELECT q.shop_id,
+               s.name     AS shop_name,
+               s.platform AS platform,
+               ANY_VALUE(COALESCE(pl.title_ru, p.name_ru, p.name_zh, '')) AS title,
+               ANY_VALUE(p.image_url)          AS image_url,
+               ANY_VALUE(pl.platform_sku_id)   AS platform_sku_id,
+               SUM(q.frequency)                AS total_frequency,
+               SUM(q.impressions)              AS total_impressions,
+               SUM(q.add_to_cart)              AS total_add_to_cart,
+               SUM(q.orders)                   AS total_orders
+        FROM product_search_queries q
+        JOIN products p ON p.id = q.product_id AND p.tenant_id = q.tenant_id
+        JOIN shops    s ON s.id = q.shop_id   AND s.tenant_id = q.tenant_id
+        LEFT JOIN platform_listings pl ON pl.product_id = p.id
+                                       AND pl.tenant_id = p.tenant_id
+                                       AND pl.shop_id = q.shop_id
+                                       AND pl.status NOT IN ('deleted', 'archived')
+        WHERE q.tenant_id = :tid
+          AND q.shop_id != :current_sid
+          AND p.sku = :sku
+          AND LOWER(q.query_text) = LOWER(:kw)
+          AND q.stat_date >= CURDATE() - INTERVAL 30 DAY
+        GROUP BY q.shop_id, s.name, s.platform
+        ORDER BY SUM(q.impressions) DESC, SUM(q.orders) DESC
+        LIMIT :lim
+    """), {
+        "tid": tenant_id, "current_sid": shop.id, "sku": product_sku,
+        "kw": keyword.strip(), "lim": limit,
+    }).fetchall()
+
+    items = [{
+        "shop_id":         int(r.shop_id),
+        "shop_name":       r.shop_name or "",
+        "platform":        r.platform or "",
+        "title":           r.title or "",
+        "image_url":       r.image_url or "",
+        "platform_sku_id": r.platform_sku_id or "",
+        "total_frequency":   int(r.total_frequency or 0),
+        "total_impressions": int(r.total_impressions or 0),
+        "total_add_to_cart": int(r.total_add_to_cart or 0),
+        "total_orders":      int(r.total_orders or 0),
+    } for r in rows]
+    return {"code": 0, "data": {
+        "keyword": keyword.strip(), "product_sku": product_sku, "items": items,
+    }}
 
 
 def list_category_evidence_top_products(

@@ -24,7 +24,7 @@ from app.services.seo.roi_report_service import compute_roi_report
 from app.services.seo.keyword_rollup_service import (
     compute_keyword_rollup, list_rollup_products,
     compute_candidates_rollup, list_candidates_rollup_products,
-    list_category_evidence_top_products,
+    list_category_evidence_top_products, list_cross_shop_top_products,
 )
 from app.utils.response import success, error
 
@@ -400,6 +400,26 @@ def shop_candidates_rollup_category_evidence(
     result = list_category_evidence_top_products(
         db, tenant_id, shop,
         keyword=keyword, category_id=category_id, limit=limit,
+    )
+    if result.get("code") != 0:
+        return error(result["code"], result.get("msg", ""))
+    return success(result["data"])
+
+
+@router.get("/shop/{shop_id}/candidates-rollup/cross-shop-evidence")
+def shop_candidates_rollup_cross_shop_evidence(
+    shop_id: int,
+    keyword: str = Query(..., min_length=1, description="关键词"),
+    product_sku: str = Query(..., min_length=1, description="本地编码 products.sku"),
+    limit: int = Query(10, ge=1, le=50),
+    db: Session = Depends(get_db),
+    tenant_id: int = Depends(get_tenant_id),
+    shop=Depends(get_owned_shop),
+):
+    """点「跨店同款」Tag 弹 Modal：该 products.sku 在当前店铺外其他 shop 的真实搜中明细"""
+    result = list_cross_shop_top_products(
+        db, tenant_id, shop,
+        keyword=keyword, product_sku=product_sku, limit=limit,
     )
     if result.get("code") != 0:
         return error(result["code"], result.get("msg", ""))
