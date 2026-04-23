@@ -21,7 +21,7 @@ from app.database import SessionLocal
 from app.models.shop import Shop
 from app.services.search_insights.service import refresh_shop
 from app.utils.logger import setup_logger
-from app.utils.moscow_time import utc_now_naive
+from app.utils.moscow_time import moscow_today
 
 import asyncio
 
@@ -76,7 +76,7 @@ def sync_wb_search_texts(self):
                 results.append({"shop_id": shop.id, "error": str(e)[:200]})
 
         # 清理 90 天前 WB 数据（共用表，限定 platform='wb'）
-        cutoff = (utc_now_naive().date() - timedelta(days=90))
+        cutoff = (moscow_today() - timedelta(days=90))
         deleted = db.execute(text("""
             DELETE FROM product_search_queries
             WHERE platform='wb' AND stat_date < :cutoff

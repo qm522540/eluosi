@@ -21,11 +21,13 @@ from app.services.platform.wb import WBClient
 from app.services.platform.ozon import OzonClient
 from app.utils.errors import ErrorCode
 from app.utils.logger import logger
+from app.utils.moscow_time import moscow_today
 
 
 def _default_dates(date_from: Optional[str], date_to: Optional[str]):
+    # 规则 6：业务"昨天/今天"判断一律 MSK，OS 切 UTC 后 date.today() 可能落到上一天
     if not date_to:
-        date_to = (date.today() - timedelta(days=1)).isoformat()
+        date_to = (moscow_today() - timedelta(days=1)).isoformat()
     if not date_from:
         date_from = (date.fromisoformat(date_to) - timedelta(days=29)).isoformat()
     return date_from, date_to
@@ -314,7 +316,8 @@ async def refresh_shop(
     if shop.platform not in ("wb", "ozon"):
         return {"code": ErrorCode.PARAM_ERROR, "msg": "该平台暂不支持搜索词洞察"}
 
-    today = date.today()
+    # 规则 6：MSK 今天（OS 切 UTC 后 date.today() 可能跨日偏移）
+    today = moscow_today()
     date_from = (today - timedelta(days=days + 1)).isoformat()
     date_to = (today - timedelta(days=2)).isoformat()
 
