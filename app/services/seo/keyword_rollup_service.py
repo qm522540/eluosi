@@ -22,6 +22,14 @@ _NOT_READY_HINT = {
     "yandex": "Yandex Market 暂不支持商品级搜索词洞察。",
 }
 
+# candidates 表空态专用 hint（SEO Optimize「按商品看」Tab 的聚合视图）
+# 与 _NOT_READY_HINT 区别：这里会提示"需同步 + 引擎加工"两步，不是单纯看原始搜索词
+_CANDIDATES_NOT_READY_HINT = {
+    "wb":     "WB 候选池暂无数据。搜索词走 Jam 订阅，每日 MSK 04:00 自动同步入 product_search_queries；同步完成后候选池引擎加工才能生成反哺候选。若今日刚开通订阅，明早 04:00 首次同步后再回来刷新本页。",
+    "ozon":   "Ozon 候选池暂无数据。搜索词走 Premium 订阅，每日 MSK 02:30 自动同步；同步完成后候选池引擎加工才能生成反哺候选。",
+    "yandex": "Yandex Market 暂不支持候选词反哺功能。",
+}
+
 # 判断候选行是否来自 self scope 的 SQL 片段（self 才有真数据，category 继承的数字是假的）
 _HAS_SELF_CLAUSE = """(
     JSON_CONTAINS(c.sources, JSON_OBJECT('type','organic','scope','self'))
@@ -269,6 +277,27 @@ def compute_candidates_rollup(
 
     聚合维度：LOWER(keyword)；对 self scope 的行 SUM 真数据，非 self 只算推荐覆盖。
     """
+    # 空态快速判定：候选池表整体无数据 → 返 not_ready + 平台 hint
+    # 与 compute_keyword_rollup 对齐 data_status 契约，让前端能给出"数据在同步中"而非
+    # "当前条件下无候选词"的误导性空态（后者让用户以为功能坏了）
+    pool_count = db.execute(text(
+        "SELECT COUNT(*) FROM seo_keyword_candidates "
+        "WHERE tenant_id = :tid AND shop_id = :sid"
+    ), {"tid": tenant_id, "sid": shop.id}).scalar() or 0
+    if pool_count == 0:
+        return {
+            "code": 0,
+            "data": {
+                "items": [], "total": 0,
+                "summary": {
+                    "kw_count": 0, "total_impressions": 0,
+                    "total_orders": 0, "with_self_kw": 0,
+                },
+                "data_status": "not_ready",
+                "hint": _CANDIDATES_NOT_READY_HINT.get(shop.platform, "候选池暂无数据"),
+            },
+        }
+
     filters = [
         "c.tenant_id = :tid", "c.shop_id = :sid",
         "c.status = :status",

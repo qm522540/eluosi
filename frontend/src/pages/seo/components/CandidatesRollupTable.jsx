@@ -23,11 +23,22 @@ const SOURCE_OPTIONS = [
 ]
 
 // 合并多店铺响应：按 keyword SUM 所有字段
-const mergeRollup = (responses) => {
+// 返回的 data_status / notReadyShops 告诉上层"有哪些店是空状态，hint 是什么"
+const mergeRollup = (responses, shopIdsOrder = [], shopNameMap = {}) => {
   const map = new Map()
   let totalImpressions = 0, totalOrders = 0
-  responses.forEach(data => {
+  const notReadyShops = []  // [{ shop_id, shop_name, hint }]
+  responses.forEach((data, idx) => {
+    const sid = shopIdsOrder[idx]
     if (!data) return
+    if (data?.data_status === 'not_ready') {
+      notReadyShops.push({
+        shop_id: sid,
+        shop_name: shopNameMap[sid] || `shop#${sid}`,
+        hint: data.hint || '候选池暂无数据',
+      })
+      return
+    }
     const items = data?.items || []
     items.forEach(it => {
       const key = it.keyword.toLowerCase()
@@ -60,6 +71,7 @@ const mergeRollup = (responses) => {
       total_orders: totalOrders,
       total_impressions: totalImpressions,
     },
+    notReadyShops,
   }
 }
 
@@ -136,18 +148,26 @@ const CandidatesRollupTable = ({
 
   const sourceParam = useMemo(() => sources.join(',') || 'all', [sources])
 
+  const shopNameMap = useMemo(() => {
+    const m = {}
+    shops.forEach(s => { m[s.id] = s.name })
+    return m
+  }, [shops])
+
   const fetchData = useCallback(async () => {
     if (!shopIds.length) { setData(null); return }
     setLoading(true)
     try {
+      // 保持 shopIds 顺序与返回顺序一致，mergeRollup 才能正确映射 not_ready 归属店
+      const orderedShopIds = [...shopIds]
       const results = await Promise.all(
-        shopIds.map(sid => getCandidatesRollup(sid, {
+        orderedShopIds.map(sid => getCandidatesRollup(sid, {
           source: sourceParam, status, keyword: keyword.trim(),
           hide_covered: hideCovered, sort, limit: 500,
         }).catch(() => null))
       )
-      const valid = results.filter(r => r && r.code === 0).map(r => r.data)
-      const merged = mergeRollup(valid)
+      const valid = results.map(r => (r && r.code === 0) ? r.data : null)
+      const merged = mergeRollup(valid, orderedShopIds, shopNameMap)
       merged.items = sortItems(merged.items, sort)
       setData(merged)
       setExpanded({})
@@ -157,7 +177,7 @@ const CandidatesRollupTable = ({
     } finally {
       setLoading(false)
     }
-  }, [shopIds, sourceParam, status, keyword, hideCovered, sort])
+  }, [shopIds, sourceParam, status, keyword, hideCovered, sort, shopNameMap])
 
   useEffect(() => { fetchData() }, [fetchData])
 
@@ -250,12 +270,6 @@ const CandidatesRollupTable = ({
       ),
     },
   ]
-
-  const shopNameMap = useMemo(() => {
-    const m = {}
-    shops.forEach(s => { m[s.id] = s.name })
-    return m
-  }, [shops])
 
   const renderExpanded = (record) => {
     const kw = record.keyword
@@ -569,6 +583,31 @@ const CandidatesRollupTable = ({
         <Switch checked={hideCovered} onChange={setHideCovered} />
         <Button icon={<ReloadOutlined />} onClick={fetchData}>刷新</Button>
       </Space>
+
+      {data?.notReadyShops?.length > 0 && (
+        <Alert
+          type="warning" showIcon
+          style={{ marginBottom: 12 }}
+          message={(
+            <span>
+              以下店铺候选池暂无数据（不影响其他店展示）：
+              {data.notReadyShops.map(s => (
+                <Tag key={s.shop_id} color="orange" style={{ marginLeft: 6 }}>{s.shop_name}</Tag>
+              ))}
+            </span>
+          )}
+          description={(
+            <div style={{ fontSize: 12, lineHeight: 1.7, marginTop: 4 }}>
+              {data.notReadyShops.map(s => (
+                <div key={s.shop_id}>
+                  <Text strong>{s.shop_name}：</Text>
+                  <Text type="secondary">{s.hint}</Text>
+                </div>
+              ))}
+            </div>
+          )}
+        />
+      )}
 
       {summary && (
         <div style={{
