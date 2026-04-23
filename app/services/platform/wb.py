@@ -36,6 +36,12 @@ WB_PRICES_API = "https://discounts-prices-api.wildberries.ru"
 # 限速控制：两次请求之间的最小间隔(秒)
 MIN_REQUEST_INTERVAL = 60.0 / settings.WB_RATE_LIMIT_PER_MINUTE
 
+# WB seller 级 quota 熔断（2026-04-23 事故驱动）：
+# 一旦 PATCH /api/advert/v1/bids 返回 "Limited by global limiter, per seller ...",
+# 说明该 seller UUID 在 WB 侧的 daily quota 已耗尽，后续 API 调用会全部失败。
+# 熔断 1h，期间所有 PATCH bids 直接短路返回，避免继续打 API 延长冷却 + 浪费 Celery tick。
+WB_QUOTA_CIRCUIT_TTL = 3600
+
 
 class WBClient(BasePlatformClient):
     """Wildberries 平台客户端"""
@@ -67,6 +73,33 @@ class WBClient(BasePlatformClient):
         if elapsed < MIN_REQUEST_INTERVAL:
             await asyncio.sleep(MIN_REQUEST_INTERVAL - elapsed)
         self._last_request_time = time.monotonic()
+
+    def _quota_circuit_key(self) -> str:
+        return f"wb:seller_quota_exhausted:shop_{self.shop_id}"
+
+    def _check_quota_circuit(self) -> Optional[int]:
+        """命中 seller quota 熔断返回剩余冷却秒数，否则返回 None。"""
+        try:
+            import redis as redis_lib
+            r = redis_lib.Redis.from_url(settings.REDIS_URL, decode_responses=True)
+            ttl = r.ttl(self._quota_circuit_key())
+            return ttl if ttl and ttl > 0 else None
+        except Exception as e:
+            logger.warning(f"WB quota circuit check failed: {e}")
+            return None
+
+    def _trip_quota_circuit(self, detail: str) -> None:
+        """熔断：写 Redis key TTL 1h 冻住本 shop 的 PATCH bids 调用。"""
+        try:
+            import redis as redis_lib
+            r = redis_lib.Redis.from_url(settings.REDIS_URL, decode_responses=True)
+            r.setex(self._quota_circuit_key(), WB_QUOTA_CIRCUIT_TTL, (detail or "")[:200])
+            logger.warning(
+                f"WB seller quota circuit TRIPPED shop_id={self.shop_id} "
+                f"TTL={WB_QUOTA_CIRCUIT_TTL}s detail={(detail or '')[:100]}"
+            )
+        except Exception as e:
+            logger.error(f"WB quota circuit trip failed: {e}")
 
     async def _request(self, method: str, url: str, **kwargs) -> dict:
         """统一请求方法，带限速和重试"""
@@ -487,6 +520,12 @@ class WBClient(BasePlatformClient):
         self, advert_id: int, nm_id: int, bid_kopecks: int, placements: list,
     ) -> dict:
         """单次 PATCH /api/advert/v1/bids 调用，返回 {status, detail}"""
+        cooldown = self._check_quota_circuit()
+        if cooldown:
+            return {
+                "status": 429,
+                "detail": f"skipped: WB seller quota cooldown, retry in {cooldown}s",
+            }
         url = f"{WB_ADVERT_API}/api/advert/v1/bids"
         payload = {
             "bids": [
@@ -518,6 +557,11 @@ class WBClient(BasePlatformClient):
             detail = err_body.get("detail") or err_body.get("title") or r.text[:300]
         except Exception:
             detail = r.text[:300]
+
+        detail_lower = (detail or "").lower()
+        if "global limiter" in detail_lower or "per seller" in detail_lower:
+            self._trip_quota_circuit(str(detail))
+
         return {"status": r.status_code, "detail": detail}
 
     async def update_campaign_cpm(
