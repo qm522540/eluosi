@@ -337,6 +337,7 @@ const AdsOverview = ({ shopId, platform, shops, searched, syncing, lastSyncTime,
   const [kwViewMode, setKwViewMode] = useState({})  // 每个 SKU: 'active'|'excluded'|'all'，默认 'active'
   const [aiClustersBySku, setAiClustersBySku] = useState({})  // AI 聚类结果 per SKU
   const [aiClustersLoadingSku, setAiClustersLoadingSku] = useState({})  // AI 聚类 loading per SKU
+  const [clusterSourceBySku, setClusterSourceBySku] = useState({})  // 'oracle' | 'ai_cluster' | undefined
   const [kwSelectedBySku, setKwSelectedBySku] = useState({})  // {sku: [keyword,...]} 手动多选
   const [probeInputVisible, setProbeInputVisible] = useState({})  // {sku: bool}
   const [probeInput, setProbeInput] = useState({})  // {sku: str}
@@ -524,6 +525,7 @@ const AdsOverview = ({ shopId, platform, shops, searched, syncing, lastSyncTime,
         try {
           const resp = await getCampaignKeywordClusters(detailData.id, parseInt(sku), 7)
           setAiClustersBySku(m => ({ ...m, [sku]: resp.data?.clusters || [] }))
+          setClusterSourceBySku(m => ({ ...m, [sku]: resp.data?.source }))
         } finally {
           setAiClustersLoadingSku(m => ({ ...m, [sku]: false }))
         }
@@ -920,6 +922,7 @@ const AdsOverview = ({ shopId, platform, shops, searched, syncing, lastSyncTime,
             .then(resp => {
               const clusters = resp.data?.clusters || []
               setAiClustersBySku(m => ({ ...m, [sku]: clusters }))
+              setClusterSourceBySku(m => ({ ...m, [sku]: resp.data?.source }))
             })
             .catch(() => setAiClustersBySku(m => ({ ...m, [sku]: [] })))
             .finally(() => setAiClustersLoadingSku(m => ({ ...m, [sku]: false })))
@@ -1587,6 +1590,7 @@ const AdsOverview = ({ shopId, platform, shops, searched, syncing, lastSyncTime,
             first_seen: variants.map(v => v.first_seen).filter(Boolean).sort()[0] || '',
             last_seen: variants.map(v => v.last_seen).filter(Boolean).sort().slice(-1)[0] || '',
             wb_valid: !!c.wb_valid,  // WB 认可此代表词为集群 key
+            is_cluster_excluded: !!c.is_cluster_excluded,  // 整簇在 WB 后台为"Исключение"灰色
             _source: 'ai',
           }
         }).filter(Boolean)
@@ -1655,9 +1659,14 @@ const AdsOverview = ({ shopId, platform, shops, searched, syncing, lastSyncTime,
                   options={[
                     { label: aiLoading && kwMode === 'active'
                         ? <span><Spin size="small" style={{ marginRight: 4 }} />AI 聚类中</span>
-                        : `${aiClusters && aiClusters.length > 0 ? 'AI ' : ''}集群 (${clusters.length})`,
+                        : (() => {
+                            const src = clusterSourceBySku[sku]
+                            if (src === 'oracle') return `WB 集群 (${clusters.length})`
+                            if (src === 'ai_cluster') return `AI 集群 (${clusters.length})`
+                            return `集群 (${clusters.length})`
+                          })(),
                       value: 'active' },
-                    { label: `已屏蔽 (${excluded.length})`, value: 'excluded' },
+                    { label: `已屏蔽词 (${excluded.length})`, value: 'excluded' },
                     { label: `全部变体 (${kws.length})`, value: 'all' },
                   ]}
                 />
@@ -1666,6 +1675,28 @@ const AdsOverview = ({ shopId, platform, shops, searched, syncing, lastSyncTime,
                     <Tag color="green" style={{ margin: 0, fontSize: 11 }}>
                       ✓ {wbValidRepsLc.size} 可屏
                     </Tag>
+                  </Tooltip>
+                )}
+                {clusterSourceBySku[sku] === 'oracle' && (() => {
+                  const excludedClusterCount = clusters.filter(c => c.is_cluster_excluded).length
+                  return (
+                    <>
+                      <Tooltip title="该 SKU 上传过 WB 后台导出的集群表，簇名 + 成员 100% 对齐 WB 官方数据">
+                        <Tag color="blue" style={{ margin: 0, fontSize: 11 }}>🎯 WB 官方数据</Tag>
+                      </Tooltip>
+                      {excludedClusterCount > 0 && (
+                        <Tooltip title={`WB 后台把 ${excludedClusterCount} 个簇标为"Исключение"灰色 — 和下方"已屏蔽词"数量可能不同（一个是簇级一个是词级）`}>
+                          <Tag color="default" style={{ margin: 0, fontSize: 11, background: '#f5f5f5' }}>
+                            {excludedClusterCount} 簇 WB 屏蔽
+                          </Tag>
+                        </Tooltip>
+                      )}
+                    </>
+                  )
+                })()}
+                {clusterSourceBySku[sku] === 'ai_cluster' && (
+                  <Tooltip title="该 SKU 未上传 WB 集群表，用 DeepSeek AI 聚类 + 规则后处理对齐 WB 簇。覆盖率 ~95%，偶有分类误差。">
+                    <Tag color="orange" style={{ margin: 0, fontSize: 11 }}>🤖 AI 自动聚类</Tag>
                   </Tooltip>
                 )}
                 <Tooltip title={
@@ -1692,16 +1723,16 @@ const AdsOverview = ({ shopId, platform, shops, searched, syncing, lastSyncTime,
                 </Tooltip>
               </Space>
               <Space size={8}>
-                {kwMode === 'active' && (
+                {kwMode === 'active' && clusterSourceBySku[sku] !== 'oracle' && (
                   <Upload
                     accept=".xlsx,.xlsm"
                     showUploadList={false}
                     beforeUpload={(file) => handleUploadClusterOracle(sku, file)}
                     disabled={uploadingSku === sku}
                   >
-                    <Tooltip title="WB 后台「顶级搜索集群」页面右上角的「下载」按钮 — 导出 xlsx 后上传到这里，系统用 WB 官方数据（100% 对齐）直接替代 AI 聚类">
-                      <Button size="small" icon={<UploadOutlined />} loading={uploadingSku === sku}>
-                        上传 WB 集群表
+                    <Tooltip title="可选 — AI 自动聚类已 ~95% 对齐 WB。若想 100% 精确，可从 WB 后台「顶级搜索集群」下载 xlsx 上传（一次即可，以后不用管）">
+                      <Button size="small" icon={<UploadOutlined />} loading={uploadingSku === sku} type="dashed">
+                        升级到 WB 官方数据（可选）
                       </Button>
                     </Tooltip>
                   </Upload>
@@ -2039,12 +2070,15 @@ const AdsOverview = ({ shopId, platform, shops, searched, syncing, lastSyncTime,
                     </Space>
                   )
                 }},
-              { title: '首次出现', dataIndex: 'first_seen', key: 'first_seen', width: 100,
-                sorter: (a, b) => (a.first_seen || '').localeCompare(b.first_seen || ''),
-                render: v => v ? v.slice(5) : '-' },
-              { title: '天数', dataIndex: 'active_days', key: 'active_days', width: 60, align: 'center',
-                sorter: (a, b) => (a.active_days||0) - (b.active_days||0),
-                render: (v, r) => `${v||0}/${r.total_days||7}` },
+              // oracle 模式下首次出现 / 天数来自 xlsx date_from~date_to，全簇相同无比较价值 → 隐藏
+              ...(clusterSourceBySku[sku] === 'oracle' && kwMode === 'active' ? [] : [
+                { title: '首次出现', dataIndex: 'first_seen', key: 'first_seen', width: 100,
+                  sorter: (a, b) => (a.first_seen || '').localeCompare(b.first_seen || ''),
+                  render: v => v ? v.slice(5) : '-' },
+                { title: '天数', dataIndex: 'active_days', key: 'active_days', width: 60, align: 'center',
+                  sorter: (a, b) => (a.active_days||0) - (b.active_days||0),
+                  render: (v, r) => `${v||0}/${r.total_days||7}` },
+              ]),
               { title: '曝光', dataIndex: 'views', key: 'views', width: 80, align: 'right',
                 sorter: (a, b) => (a.views||0) - (b.views||0),
                 render: v => (v || 0).toLocaleString() },

@@ -82,9 +82,11 @@ celery_app.conf.beat_schedule = {
         "task": "app.tasks.ozon_product_queries_task.sync_ozon_product_queries",
         "schedule": crontab(hour=2, minute=30),
     },
-    # WB 顶级搜索集群 oracle 同步（莫斯科每日 03:30，遍历所有配了 JWT 的 WB 店铺）
-    "cluster-oracle-sync-daily": {
-        "task": "app.tasks.cluster_oracle_sync.sync_wb_cluster_oracle",
-        "schedule": crontab(hour=3, minute=30),
-    },
+    # WB 顶级搜索集群 oracle 同步 — 2026-04-23 证实 WB cmp API 做了 IP 绑定，
+    # 从服务器调会 401（JWT 只在用户浏览器 IP 下有效）。暂停定时，只保留 task
+    # 定义作为未来使用（若 WB 改策略或用户提供本地 agent）。
+    # "cluster-oracle-sync-daily": {
+    #     "task": "app.tasks.cluster_oracle_sync.sync_wb_cluster_oracle",
+    #     "schedule": crontab(hour=3, minute=30),
+    # },
 }
