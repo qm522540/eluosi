@@ -2233,6 +2233,27 @@ async def _auto_execute(db, tenant_id: int, shop, suggestions: list) -> int:
                 )
                 continue
 
+            # 2026-04-23 老林 P1 → 老张落地：
+            # Day 1-20 决策有意保留 0% 建议（让用户看到 AI "维持" 态度），
+            # 但 auto_execute 路径不应调 WB API 浪费配额，也不写 bid_adjustment_logs
+            # 让调价历史保持干净。直接把建议标 approved 即可（用户仍可在"已处理"
+            # 查到 AI 今天判 hold）。
+            if (s.get("current_bid") is not None and
+                    abs(float(s["suggested_bid"]) - float(s["current_bid"])) < 0.01):
+                logger.info(
+                    f"[auto_execute skip API] sku={s['platform_sku_id']} "
+                    f"suggested=₽{s['suggested_bid']} == current=₽{s['current_bid']}，"
+                    f"跳过 WB API 调用 + 不写 bidlog"
+                )
+                db.execute(text("""
+                    UPDATE ai_pricing_suggestions
+                    SET status = 'approved', executed_at = :now
+                    WHERE id = :id AND tenant_id = :tenant_id
+                """), {"id": s["id"], "tenant_id": tenant_id,
+                       "now": _utc_now().replace(tzinfo=None)})
+                executed += 1
+                continue
+
             try:
                 api_result = await _execute_bid_update(
                     client, shop.platform, campaign.platform_campaign_id,
@@ -2308,6 +2329,27 @@ async def approve_suggestion(db, tenant_id: int, suggestion_id: int,
     final_bid = 0 if is_delete else (
         override_bid if override_bid is not None else float(row.suggested_bid)
     )
+
+    # 2026-04-23 老张：手动点"执行"0% 建议（final ≈ current）时短路 API
+    # Day 1-20 决策保留 0% 建议让用户看到 AI "维持"态度；
+    # 若用户真点执行，也不该浪费 WB 配额 — 直接标 approved 返回 noop。
+    if (not is_delete and float(row.current_bid) > 0 and
+            abs(final_bid - float(row.current_bid)) < 0.01):
+        now_utc = _utc_now().replace(tzinfo=None)
+        db.execute(text("""
+            UPDATE ai_pricing_suggestions
+            SET status = 'approved', executed_at = :now
+            WHERE id = :id AND tenant_id = :tenant_id
+        """), {"id": suggestion_id, "tenant_id": tenant_id, "now": now_utc})
+        db.commit()
+        return {"code": 0, "data": {
+            "id": suggestion_id, "status": "approved",
+            "executed_at": now_utc.isoformat() + "Z",
+            "old_bid": float(row.current_bid),
+            "new_bid": float(row.current_bid),
+            "suggested_bid": final_bid,
+            "action": "noop",
+        }}
 
     client = _create_platform_client(shop)
     try:
