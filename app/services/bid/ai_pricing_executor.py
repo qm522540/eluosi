@@ -1850,9 +1850,12 @@ async def _analyze_now_inner(db, tenant_id: int, shop_id: int,
 
             optimal_bid = max(optimal_bid, MIN_BID)
 
-            # Day 1-20 新方案：所有决策都出建议让用户看到 AI 态度（包括 hold）
-            # 仅对 ≥21 天爬山法应用 MIN_DIFF 跳过（避免小数点波动造成噪音建议）
-            if data_days >= 21 and abs(optimal_bid - current_bid) < MIN_DIFF:
+            # 2026-04-23 老张（用户反馈驱动）：optimal == current 时源头跳过，
+            # 不写 suggestion、不走 auto_execute、不调 API、不写 bidlog。
+            # 原 Day 1-20 保留"AI hold 态度建议"的设计（老林 04-23 §1.5）被用户
+            # 否决——用户只想看真实调价动作。Day 21+ 爬山法原本就 MIN_DIFF 跳过，
+            # 现对 Day 1-20 统一口径，避免"原价 33 改 33"类建议污染历史。
+            if abs(optimal_bid - current_bid) < MIN_DIFF:
                 continue
 
             adjust_pct = (
