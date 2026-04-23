@@ -159,87 +159,349 @@ def _get_growth_count(db, campaign_id: int, sku: str, tenant_id: int,
     return min(count, 6)
 
 
-# ==================== 利润最大化决策（主决策器） ====================
+# ==================== Day 1-20 早期阶段决策器（2026-04-23 老林重构） ====================
+# 核心：base 每天最多动 1 次 + 早期删除阈值 + 近3 vs 前3 利润对比
+# 用独立字段 first_seen_bid / early_base_bid / early_last_eval_at
+# 不碰 hill_* 字段（Day 21+ 爬山法保留原行为）
+# 日 1: 初始化不动
+# 日 2-4: 无条件 +3%
+# 日 5-6: 前一天 vs 前前一天单位利润，好 +5% 否则不动
+# 日 7: 三条独立删除阈值 + 近3 vs 前3（不清洗），好 +10% 否则不动，不允许减
+# 日 8-10: 同 Day 7-10 流程（不重检查阈值）
+# 日 11: 二次阈值 + 近3 vs 前3（清洗健康天），±5%
+# 日 12-20: 同 Day 11 流程
 
-def _profit_max_decision(current_roas: float, breakeven_roas: float,
-                         data_days: int, trend: str,
-                         max_adjust_pct: float = 30.0) -> dict:
-    """利润最大化决策：以 current_roas/breakeven 比值为锚，决定是否调价 + 方向 + 幅度。
+EARLY_MIN_IMP_CTR      = 500     # Day 7/11 规则 1 最小曝光
+EARLY_MIN_IMP_BURN     = 1500    # 曝光 ≥ 1500 + 0 订单 → 删除
+EARLY_MIN_SPEND_BURN   = 150     # 花费 > ₽150 + 0 订单 → 删除
+EARLY_CTR_THRESHOLD    = 0.01    # CTR < 1% 算差
+EARLY_CR_THRESHOLD     = 0.01    # CR < 1% 算差
+EARLY_PROFIT_TIE       = 20.0    # 利润对比持平阈值 ₽20
 
-    核心原则：利润 = Revenue × net_margin - Spend = (ROAS × net_margin - 1) × Spend
-    - ROAS > breakeven (=1/net_margin)：spend 越多利润越多（但有边际递减）
-    - ROAS < breakeven：spend 越多亏越多
-    - 利润最大点不在 ROAS 极大处，而在 ROAS 略高于 breakeven 的"甜点区"
 
-    分档规则（ratio = current_roas / breakeven_roas）：
-    - ratio < 0.5  → 严重亏损，big_down -30%（或 max_adjust_pct）
-    - ratio < 1.0  → 亏损，small_down -15%
-    - 1.0 ≤ ratio ≤ 1.5  → 利润最大化甜点区，no_change（不修没坏的）
-    - ratio > 1.5 + 趋势 up/stable → small_up +5% 试探
-    - ratio > 1.5 + 趋势 down → no_change（高位但下行不冒险）
+def _save_early_state(db, tenant_id: int, campaign_id: int, sku: str,
+                      first_seen: float, new_base: float):
+    """写 Day 1-20 的 base 状态到 ad_groups（独立字段，不碰 hill_*）"""
+    db.execute(text("""
+        INSERT INTO ad_groups (
+            tenant_id, campaign_id, platform_group_id, name,
+            first_seen_bid, early_base_bid, early_last_eval_at
+        ) VALUES (
+            :tid, :cid, :sku, :sku,
+            :first_seen, :base, :now_utc
+        )
+        ON DUPLICATE KEY UPDATE
+            tenant_id = :tid,
+            first_seen_bid     = COALESCE(first_seen_bid, :first_seen),
+            early_base_bid     = :base,
+            early_last_eval_at = :now_utc
+    """), {"tid": tenant_id, "cid": campaign_id, "sku": sku,
+           "first_seen": round(first_seen, 2), "base": round(new_base, 2),
+           "now_utc": _utc_now().replace(tzinfo=None)})
 
-    数据不足（<7天）：偏保守 — 已盈利不动，亏损小幅降。
 
-    Returns: {action, multiplier, reason}
-      action ∈ {"no_change", "small_up", "small_down", "big_down", "skip"}
+def _get_or_init_early_base(db, tenant_id: int, campaign_id: int, sku: str,
+                             current_bid: float) -> tuple:
+    """读/初始化 Day 1-20 的 base 锚。首次见时用 current_bid 初始化。
+    Returns: (first_seen_bid, early_base_bid, early_last_eval_at)
     """
-    if not breakeven_roas or breakeven_roas <= 0:
-        return {"action": "skip", "multiplier": 1.0,
-                "reason": "无法算保本ROAS（净毛利率缺失）"}
+    row = db.execute(text("""
+        SELECT first_seen_bid, early_base_bid, early_last_eval_at
+        FROM ad_groups
+        WHERE tenant_id=:tid AND campaign_id=:cid AND platform_group_id=:sku
+        LIMIT 1
+    """), {"tid": tenant_id, "cid": campaign_id, "sku": sku}).fetchone()
 
-    if current_roas is None or current_roas < 0:
-        return {"action": "skip", "multiplier": 1.0, "reason": "无 ROAS 历史"}
+    if row is None or row.early_base_bid is None:
+        _save_early_state(db, tenant_id, campaign_id, sku, current_bid, current_bid)
+        return (current_bid, current_bid, None)
 
-    # Bug 3 修：trend='insufficient' 数据不足判趋势 → skip
-    # Bug 1 修后会出现这个新档（last5<3 天 或 全 5 段都找不到 baseline）
-    # 数据不足时连"亏不亏"都判不准，干脆不动比"小降"更稳妥
-    if trend == "insufficient":
-        return {"action": "skip", "multiplier": 1.0,
-                "reason": "数据不足判趋势（动态扩窗到 28 天仍无足够 baseline），先观察不动"}
+    return (float(row.first_seen_bid or row.early_base_bid),
+            float(row.early_base_bid),
+            row.early_last_eval_at)
 
-    # Bug 2 修：ROAS 异常高视为样本不足
-    # 真健康商品 ROAS 通常 5-25x，极个别爆款 30-40x
-    # 超 50x 几乎肯定是"1 次点击 + 1 单大订单"的偶然 → 不基于偶然加价烧钱
-    # 正常的健康加价场景（ROAS 5-50x）不受影响
-    if current_roas > 50:
-        return {"action": "skip", "multiplier": 1.0,
-                "reason": f"ROAS {current_roas:.1f}x>50x 视为样本不足（偶然爆单），先观察不动"}
 
-    # 数据不足兜底：偏保守
-    if data_days < 7:
-        if current_roas == 0:
-            return {"action": "skip", "multiplier": 1.0,
-                    "reason": f"数据{data_days}天且无订单，先观察不调价"}
-        if current_roas >= breakeven_roas:
-            return {"action": "no_change", "multiplier": 1.0,
-                    "reason": f"数据少{data_days}天 但当前 ROAS {current_roas:.2f}x ≥ 保本 {breakeven_roas:.2f}x，先观察不动"}
-        return {"action": "small_down", "multiplier": 0.85,
-                "reason": f"数据少{data_days}天 当前 ROAS {current_roas:.2f}x < 保本 {breakeven_roas:.2f}x，谨慎降价 -15%"}
+def _check_early_remove(imp: int, clk: int, ord_cnt: int, spend: float,
+                         day_threshold: int) -> tuple:
+    """Day 7 / Day 11 早期删除阈值检查（3 条独立规则，任一触发即删）
+    Returns: (should_remove, reason)
+    """
+    ctr = clk / imp if imp > 0 else 0
+    cr  = ord_cnt / clk if clk > 0 else 0
 
-    if current_roas == 0:
-        return {"action": "small_down", "multiplier": 0.7,
-                "reason": f"{data_days}天0订单，主动降价 -30% 减少烧钱"}
+    if day_threshold == 7:
+        if imp >= EARLY_MIN_IMP_CTR and ctr < EARLY_CTR_THRESHOLD and ord_cnt == 0:
+            return (True, f"[D7淘汰] 曝光{imp}≥{EARLY_MIN_IMP_CTR} + CTR {ctr*100:.2f}%<1% + 0订单")
+    elif day_threshold == 11:
+        if imp >= EARLY_MIN_IMP_CTR and ctr <= EARLY_CTR_THRESHOLD and cr <= EARLY_CR_THRESHOLD:
+            return (True, f"[D11二次淘汰] 曝光{imp}≥{EARLY_MIN_IMP_CTR} + CTR {ctr*100:.2f}%≤1% + CR {cr*100:.2f}%≤1%")
 
-    ratio = current_roas / breakeven_roas
+    if imp >= EARLY_MIN_IMP_BURN and ord_cnt == 0:
+        return (True, f"[D{day_threshold}淘汰] 曝光{imp}≥{EARLY_MIN_IMP_BURN} + 0订单，烧钱不出货")
 
-    if ratio < 0.5:
-        # 严重亏损 — 大降，受 max_adjust_pct 上限保护
-        mult = 1.0 - min(max_adjust_pct, 30.0) / 100.0
-        return {"action": "big_down", "multiplier": mult,
-                "reason": f"严重亏损 ROAS {current_roas:.2f}x < 保本 {breakeven_roas:.2f}x × 0.5，大降 {(1-mult)*100:.0f}%"}
-    if ratio < 1.0:
-        return {"action": "small_down", "multiplier": 0.85,
-                "reason": f"亏损 ROAS {current_roas:.2f}x < 保本 {breakeven_roas:.2f}x，降价 -15% 减耗等改善"}
-    if ratio <= 1.5:
-        return {"action": "no_change", "multiplier": 1.0,
-                "reason": f"利润最大化甜点区 ROAS {current_roas:.2f}x（保本 {breakeven_roas:.2f}x×1.0~1.5），不动"}
+    if spend > EARLY_MIN_SPEND_BURN and ord_cnt == 0:
+        return (True, f"[D{day_threshold}淘汰] 花费₽{spend:.0f}>₽{EARLY_MIN_SPEND_BURN} + 0订单，烧钱不出货")
 
-    # ratio > 1.5 — 远超保本
-    if trend == "down":
-        return {"action": "no_change", "multiplier": 1.0,
-                "reason": f"ROAS {current_roas:.2f}x 偏高但下降趋势，不冒险加价等观察"}
-    return {"action": "small_up", "multiplier": 1.05,
-            "reason": f"ROAS {current_roas:.2f}x 远超保本 {breakeven_roas:.2f}x×1.5，小幅 +5% 试探多赚总额"}
+    return (False, "")
+
+
+def _query_sku_window(db, tenant_id: int, campaign_id: int, sku: str,
+                       days: int, platform: str | None = None) -> dict:
+    """取 SKU 最近 N 天的累计指标"""
+    params = {"tid": tenant_id, "cid": campaign_id, "sku": sku,
+              "since": date.today() - timedelta(days=days)}
+    platform_clause = ""
+    if platform:
+        platform_clause = " AND platform=:platform"
+        params["platform"] = platform
+    row = db.execute(text(f"""
+        SELECT COALESCE(SUM(impressions), 0) AS imp,
+               COALESCE(SUM(clicks), 0)      AS clk,
+               COALESCE(SUM(orders), 0)      AS ord,
+               COALESCE(SUM(spend), 0)       AS spend,
+               COALESCE(SUM(revenue), 0)     AS rev
+        FROM ad_stats
+        WHERE tenant_id=:tid AND campaign_id=:cid AND ad_group_id=:sku
+          AND stat_date >= :since{platform_clause}
+    """), params).fetchone()
+    return {
+        "imp":   int(row.imp or 0),
+        "clk":   int(row.clk or 0),
+        "ord":   int(row.ord or 0),
+        "spend": float(row.spend or 0),
+        "rev":   float(row.rev or 0),
+    }
+
+
+def _calc_day_unit_profit(db, tenant_id: int, campaign_id: int, sku: str,
+                           stat_date, margin: float,
+                           platform: str | None = None) -> tuple:
+    """算某一天的单位花费利润 = (revenue × margin - spend) / spend
+    Returns: (unit_profit, spend, has_data)
+    """
+    params = {"tid": tenant_id, "cid": campaign_id, "sku": sku, "sd": stat_date}
+    platform_clause = ""
+    if platform:
+        platform_clause = " AND platform=:platform"
+        params["platform"] = platform
+    row = db.execute(text(f"""
+        SELECT COALESCE(SUM(spend), 0) AS s, COALESCE(SUM(revenue), 0) AS r
+        FROM ad_stats
+        WHERE tenant_id=:tid AND campaign_id=:cid AND ad_group_id=:sku
+          AND stat_date=:sd{platform_clause}
+    """), params).fetchone()
+    spend = float(row.s or 0) if row else 0
+    revenue = float(row.r or 0) if row else 0
+    if spend <= 0:
+        return (0, 0, False)
+    unit_profit = (revenue * margin - spend) / spend
+    return (unit_profit, spend, True)
+
+
+def _compare_1day_profit(db, tenant_id: int, campaign_id: int, sku: str,
+                          margin: float, platform: str | None = None) -> tuple:
+    """Day 5-6：比较前一天 vs 前前一天的单位花费利润。
+    Returns: (up, reason) up=True 表示前一天更好 → +5%
+    """
+    today = date.today()
+    yesterday = today - timedelta(days=1)
+    day_before = today - timedelta(days=2)
+
+    up_p, _, up_ok = _calc_day_unit_profit(db, tenant_id, campaign_id, sku,
+                                             yesterday, margin, platform)
+    dp_p, _, dp_ok = _calc_day_unit_profit(db, tenant_id, campaign_id, sku,
+                                             day_before, margin, platform)
+
+    if not up_ok or not dp_ok:
+        return (False, f"数据不足(昨日投放={up_ok}/前日={dp_ok})")
+    if up_p > dp_p:
+        return (True, f"昨日单位利润{up_p*100:+.1f}% > 前日{dp_p*100:+.1f}%")
+    return (False, f"昨日单位利润{up_p*100:+.1f}% ≤ 前日{dp_p*100:+.1f}%")
+
+
+def _compare_3day_profit(db, tenant_id: int, campaign_id: int, sku: str,
+                          margin: float, use_healthy: bool,
+                          platform: str | None = None) -> tuple:
+    """Day 7-20：近 3 天 vs 前 3 天单位花费利润对比。
+    use_healthy=True: Day 11-20 启用健康天清洗
+    Returns: (trend, reason) trend ∈ {"up","down","flat","insufficient"}
+    """
+    if use_healthy:
+        near_s, near_r, near_d = _calc_healthy_window_metrics(
+            db, tenant_id, campaign_id, sku, 3, 0, platform=platform)
+        prev_s, prev_r, prev_d = _calc_healthy_window_metrics(
+            db, tenant_id, campaign_id, sku, 3, 3, platform=platform)
+        if near_d < 3 or prev_d < 3:
+            return ("insufficient", f"健康天不足(近{near_d}/前{prev_d})")
+    else:
+        today = date.today()
+        near_from, near_to = today - timedelta(days=3), today - timedelta(days=1)
+        prev_from, prev_to = today - timedelta(days=6), today - timedelta(days=4)
+        params_base = {"tid": tenant_id, "cid": campaign_id, "sku": sku}
+        platform_clause = ""
+        if platform:
+            platform_clause = " AND platform=:platform"
+            params_base["platform"] = platform
+        near_row = db.execute(text(f"""
+            SELECT COALESCE(SUM(spend), 0) s, COALESCE(SUM(revenue), 0) r,
+                   COUNT(DISTINCT stat_date) d
+            FROM ad_stats
+            WHERE tenant_id=:tid AND campaign_id=:cid AND ad_group_id=:sku
+              AND stat_date BETWEEN :df AND :dt{platform_clause}
+        """), {**params_base, "df": near_from, "dt": near_to}).fetchone()
+        prev_row = db.execute(text(f"""
+            SELECT COALESCE(SUM(spend), 0) s, COALESCE(SUM(revenue), 0) r,
+                   COUNT(DISTINCT stat_date) d
+            FROM ad_stats
+            WHERE tenant_id=:tid AND campaign_id=:cid AND ad_group_id=:sku
+              AND stat_date BETWEEN :df AND :dt{platform_clause}
+        """), {**params_base, "df": prev_from, "dt": prev_to}).fetchone()
+        near_s = float(near_row.s or 0); near_r = float(near_row.r or 0)
+        prev_s = float(prev_row.s or 0); prev_r = float(prev_row.r or 0)
+
+    if near_s <= 0 or prev_s <= 0:
+        return ("insufficient", f"窗口spend不足(近₽{near_s:.0f}/前₽{prev_s:.0f})")
+
+    near_unit = (near_r * margin - near_s) / near_s
+    prev_unit = (prev_r * margin - prev_s) / prev_s
+    near_abs  = near_r * margin - near_s
+    prev_abs  = prev_r * margin - prev_s
+
+    if abs(near_abs - prev_abs) < EARLY_PROFIT_TIE:
+        return ("flat", f"近3单位利润{near_unit*100:+.1f}% ≈ 前3{prev_unit*100:+.1f}%(|Δ|<₽{EARLY_PROFIT_TIE:.0f})")
+    if near_unit > prev_unit:
+        return ("up", f"近3单位利润{near_unit*100:+.1f}% > 前3{prev_unit*100:+.1f}%")
+    return ("down", f"近3单位利润{near_unit*100:+.1f}% < 前3{prev_unit*100:+.1f}%")
+
+
+def _early_stage_decision(db, tenant_id: int, campaign_id: int, sku: str,
+                           current_bid: float, data_days: int,
+                           margin: float,
+                           time_multiplier: float, day_multiplier: float,
+                           platform: str | None = None) -> dict:
+    """Day 1-20 统一决策器。
+    Returns: {action, new_base, optimal_bid, reason, remove}
+    """
+    first_seen, base, last_eval = _get_or_init_early_base(
+        db, tenant_id, campaign_id, sku, current_bid)
+
+    # 一天一评护栏（莫斯科自然日切换）
+    today_msk = moscow_today()
+    if last_eval is not None:
+        last_eval_utc = last_eval.replace(tzinfo=timezone.utc)
+        last_eval_msk_date = last_eval_utc.astimezone(MOSCOW_TZ).date()
+        if last_eval_msk_date >= today_msk:
+            optimal_bid = int(round(base * time_multiplier * day_multiplier))
+            return {
+                "action": "hourly_reprice", "new_base": base,
+                "optimal_bid": max(optimal_bid, MIN_BID),
+                "reason": f"[D{data_days} 今日已评估] base ₽{base:.0f}×时段{time_multiplier}×星期{day_multiplier}=₽{optimal_bid}",
+                "remove": False,
+            }
+
+    # Day 1：初始化 + 不动
+    if data_days <= 1:
+        _save_early_state(db, tenant_id, campaign_id, sku, first_seen, base)
+        optimal_bid = int(round(base * time_multiplier * day_multiplier))
+        return {
+            "action": "init", "new_base": base,
+            "optimal_bid": max(optimal_bid, MIN_BID),
+            "reason": f"[D1 初始化] first_seen=₽{first_seen:.0f} base=₽{base:.0f}，观察不调价",
+            "remove": False,
+        }
+
+    # Day 2-4：无条件 +3%
+    if 2 <= data_days <= 4:
+        new_base = base * 1.03
+        _save_early_state(db, tenant_id, campaign_id, sku, first_seen, new_base)
+        optimal_bid = int(round(new_base * time_multiplier * day_multiplier))
+        return {
+            "action": "raise_3", "new_base": new_base,
+            "optimal_bid": max(optimal_bid, MIN_BID),
+            "reason": f"[D{data_days}] 象征性+3% → base ₽{base:.0f}→₽{new_base:.1f}",
+            "remove": False,
+        }
+
+    # Day 5-6：前一天 vs 前前一天
+    if 5 <= data_days <= 6:
+        up, sub = _compare_1day_profit(db, tenant_id, campaign_id, sku, margin, platform)
+        new_base = base * 1.05 if up else base
+        _save_early_state(db, tenant_id, campaign_id, sku, first_seen, new_base)
+        optimal_bid = int(round(new_base * time_multiplier * day_multiplier))
+        return {
+            "action": "raise_5" if up else "hold",
+            "new_base": new_base,
+            "optimal_bid": max(optimal_bid, MIN_BID),
+            "reason": f"[D{data_days}] {sub} → base ₽{base:.0f}→₽{new_base:.1f}",
+            "remove": False,
+        }
+
+    # Day 7：阈值检查
+    if data_days == 7:
+        stats_6d = _query_sku_window(db, tenant_id, campaign_id, sku, 6, platform)
+        should_remove, rm_reason = _check_early_remove(
+            stats_6d["imp"], stats_6d["clk"], stats_6d["ord"], stats_6d["spend"], 7)
+        if should_remove:
+            _save_early_state(db, tenant_id, campaign_id, sku, first_seen, base)
+            return {
+                "action": "remove", "new_base": base, "optimal_bid": 0,
+                "reason": rm_reason, "remove": True,
+            }
+
+    # Day 7-10：近 3 vs 前 3（不清洗），好 +10% 否则不动
+    if 7 <= data_days <= 10:
+        trend, sub = _compare_3day_profit(
+            db, tenant_id, campaign_id, sku, margin,
+            use_healthy=False, platform=platform)
+        new_base = base * 1.10 if trend == "up" else base
+        action = "raise_10" if trend == "up" else "hold"
+        _save_early_state(db, tenant_id, campaign_id, sku, first_seen, new_base)
+        optimal_bid = int(round(new_base * time_multiplier * day_multiplier))
+        return {
+            "action": action, "new_base": new_base,
+            "optimal_bid": max(optimal_bid, MIN_BID),
+            "reason": f"[D{data_days}] {sub} → base ₽{base:.0f}→₽{new_base:.1f}",
+            "remove": False,
+        }
+
+    # Day 11：二次阈值检查
+    if data_days == 11:
+        stats_10d = _query_sku_window(db, tenant_id, campaign_id, sku, 10, platform)
+        should_remove, rm_reason = _check_early_remove(
+            stats_10d["imp"], stats_10d["clk"], stats_10d["ord"], stats_10d["spend"], 11)
+        if should_remove:
+            _save_early_state(db, tenant_id, campaign_id, sku, first_seen, base)
+            return {
+                "action": "remove", "new_base": base, "optimal_bid": 0,
+                "reason": rm_reason, "remove": True,
+            }
+
+    # Day 11-20：近 3 vs 前 3（清洗健康天），±5%
+    if 11 <= data_days <= 20:
+        trend, sub = _compare_3day_profit(
+            db, tenant_id, campaign_id, sku, margin,
+            use_healthy=True, platform=platform)
+        if trend == "up":
+            new_base, action = base * 1.05, "raise_5"
+        elif trend == "down":
+            new_base, action = base * 0.95, "down_5"
+        else:
+            new_base, action = base, "hold"
+        _save_early_state(db, tenant_id, campaign_id, sku, first_seen, new_base)
+        optimal_bid = int(round(new_base * time_multiplier * day_multiplier))
+        return {
+            "action": action, "new_base": new_base,
+            "optimal_bid": max(optimal_bid, MIN_BID),
+            "reason": f"[D{data_days}] {sub} → base ₽{base:.0f}→₽{new_base:.1f}",
+            "remove": False,
+        }
+
+    # Fallback（理论不到这，data_days ≥21 应走爬山法）
+    return {
+        "action": "skip", "new_base": base,
+        "optimal_bid": int(round(base * time_multiplier * day_multiplier)),
+        "reason": f"[D{data_days}] 超出 Day 1-20 范围", "remove": False,
+    }
 
 
 # ==================== 方案 E 爬山法决策器（>=21天 SKU） ====================
@@ -249,7 +511,7 @@ def _profit_max_decision(current_roas: float, breakeven_roas: float,
 
 HILL_STEP_SEQUENCE = [0.20, 0.10, 0.05, 0.02]  # 步长收敛序列
 HILL_PROFIT_TIE_THRESHOLD = 20.0  # 持平阈值 ₽20（用户拍）
-HILL_ROAS_ANOMALY = 50.0          # ROAS > 50x 视为样本不足（与 _profit_max_decision Bug2 一致）
+HILL_ROAS_ANOMALY = 50.0          # ROAS > 50x 视为样本不足（偶然爆单守卫）
 # 一天 1 次评估护栏：按莫斯科自然日切换（非小时差），74335b8 改进，无需 SKIP_HOURS 常量
 
 
@@ -457,7 +719,7 @@ def _hill_climbing_decision(db, tenant_id: int, campaign_id: int, sku: str,
       optimal_bid = 应用时段+周末系数后的最终出价（int）
       new_base = 更新后的 base（已存到 ad_groups）
     """
-    # ROAS 异常守卫（与 _profit_max_decision Bug2 一致）
+    # ROAS 异常守卫（偶然爆单守卫）
     overall_roas = float(sku_stat.get("roas") or 0)
     if overall_roas > HILL_ROAS_ANOMALY:
         return {"action": "skip", "optimal_bid": int(current_bid), "new_base": None,
@@ -1398,9 +1660,9 @@ async def _analyze_now_inner(db, tenant_id: int, shop_id: int,
                         })
                         continue
 
-            # ── Step 1.5: 决策器 dispatch（2026-04-21 方案 E 引入分流） ──
-            # data_days >= 21: 走爬山法（_hill_climbing_decision，方案 E）
-            # data_days <  21: 走 _profit_max_decision（Step 1 已修 3 bug）
+            # ── Step 1.5: 决策器 dispatch ──
+            # data_days >= 21: 走爬山法（_hill_climbing_decision，完全不动）
+            # data_days <  21: 走 _early_stage_decision（2026-04-23 老林重构新方案）
             current_roas = sku_stat.get("roas") or 0
             trend = sku_stat.get("trend", "stable")
             # cfg.default_config 在 DB 是 TEXT 存 JSON，可能是 dict 或 str
@@ -1431,19 +1693,61 @@ async def _analyze_now_inner(db, tenant_id: int, shop_id: int,
                 optimal_bid = max(hill_decision["optimal_bid"], MIN_BID)
                 data_note = hill_decision["reason"]
             else:
-                # 老 _profit_max_decision（Step 1 已修 3 bug：trend动态窗口/ROAS>50/insufficient）
-                pm_decision = _profit_max_decision(
-                    current_roas=current_roas, breakeven_roas=breakeven_roas,
-                    data_days=data_days, trend=trend, max_adjust_pct=max_adjust_pct_cfg,
+                # Day 1-20 新方案（2026-04-23 老林重构）
+                # 独立字段 first_seen_bid / early_base_bid / early_last_eval_at，
+                # 不碰 hill_* 字段。出价 = base × 时段 × 星期。
+                early = _early_stage_decision(
+                    db, tenant_id, camp.id, sku, current_bid, data_days,
+                    net_margin, time_multiplier, day_multiplier,
+                    platform=platform,
                 )
-                if pm_decision["action"] == "no_change" or pm_decision["action"] == "skip":
-                    logger.info(f"sku={sku} 利润决策跳过：{pm_decision['reason']}")
+                # Day 7/11 阈值触发早期删除 → 复用 auto_remove 建议路径
+                if early.get("remove"):
+                    ctr_28 = float(sku_stat.get("ctr", 0) or 0)
+                    cr_28  = float(sku_stat.get("cr", 0)  or 0)
+                    reason_txt = (
+                        f"{early['reason']} | 数据天数{data_days}天，建议从活动中移除该 SKU"
+                        f" | CTR {ctr_28:.2f}%·CR {cr_28:.2f}%"
+                    )
+                    ins = db.execute(text("""
+                        INSERT INTO ai_pricing_suggestions (
+                            tenant_id, shop_id, campaign_id,
+                            platform_sku_id, sku_name,
+                            current_bid, suggested_bid, adjust_pct,
+                            product_stage, decision_basis,
+                            current_roas, expected_roas,
+                            data_days, reason, status, generated_at
+                        ) VALUES (
+                            :tenant_id, :shop_id, :campaign_id,
+                            :sku, :sku_name,
+                            :current_bid, 0, -100,
+                            'declining', 'history_data',
+                            :current_roas, NULL,
+                            :data_days, :reason, 'pending', :now_utc
+                        )
+                    """), {
+                        "tenant_id": tenant_id, "shop_id": shop_id,
+                        "campaign_id": camp.id, "sku": sku,
+                        "sku_name": sku_name,
+                        "current_bid": current_bid,
+                        "current_roas": round(current_roas, 2) if current_roas else None,
+                        "data_days": data_days,
+                        "reason": reason_txt[:500],
+                        "now_utc": _utc_now().replace(tzinfo=None),
+                    })
+                    saved.append({
+                        "id": ins.lastrowid,
+                        "tenant_id": tenant_id, "shop_id": shop_id,
+                        "campaign_id": camp.id,
+                        "platform_sku_id": sku, "sku_name": sku_name,
+                        "current_bid": current_bid, "suggested_bid": 0,
+                        "adjust_pct": -100, "reason": reason_txt[:500],
+                        "product_stage": "declining",
+                        "is_early_remove": True,
+                    })
                     continue
-                # 决策直接给出新出价：current_bid × multiplier
-                optimal_bid = int(round(current_bid * pm_decision["multiplier"]))
-                if optimal_bid < MIN_BID:
-                    optimal_bid = MIN_BID
-                data_note = pm_decision["reason"]
+                optimal_bid = max(early["optimal_bid"], MIN_BID)
+                data_note = early["reason"]
 
             # 冷启动 / 利润策略不需要 CPA 公式重算，但保留 CTR/CR 计算供后续 expected_roas 等用
             # ── Step 2 (legacy): 选取 CTR/CR 来源（旧 CPA 公式备用，仅供 expected_roas 兜底） ──
@@ -1486,8 +1790,9 @@ async def _analyze_now_inner(db, tenant_id: int, shop_id: int,
                     logger.info(f"sku={sku} CR=0且均值CR=0，跳过")
                     continue
 
-            # ── Step 3-4: 已被利润最大化决策器替代（见 Step 1.5）──
-            # optimal_bid 已在 Step 1.5 由 _profit_max_decision 给出
+            # ── Step 3-4: optimal_bid 已在 Step 1.5 由决策器给出 ──
+            # Day 1-20: _early_stage_decision（base × 时段 × 星期）
+            # Day 21+:  _hill_climbing_decision（hill_base × 时段 × 星期）
             # 仍计算 target_cpa 给 reason 文案用
             sku_cpa_ratio = None
             if data_days >= 21:
@@ -1545,7 +1850,9 @@ async def _analyze_now_inner(db, tenant_id: int, shop_id: int,
 
             optimal_bid = max(optimal_bid, MIN_BID)
 
-            if abs(optimal_bid - current_bid) < MIN_DIFF:
+            # Day 1-20 新方案：所有决策都出建议让用户看到 AI 态度（包括 hold）
+            # 仅对 ≥21 天爬山法应用 MIN_DIFF 跳过（避免小数点波动造成噪音建议）
+            if data_days >= 21 and abs(optimal_bid - current_bid) < MIN_DIFF:
                 continue
 
             adjust_pct = (
@@ -2255,7 +2562,12 @@ def _build_reason(platform, net_margin, client_price, max_cpa,
                   time_multiplier, day_multiplier, current_hour,
                   data_days, data_note,
                   breakeven_roas, current_roas) -> str:
-    direction   = "加价" if optimal_bid > current_bid else "降价"
+    if optimal_bid > current_bid:
+        direction = "加价"
+    elif optimal_bid < current_bid:
+        direction = "降价"
+    else:
+        direction = "保持"
     weekday_names = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"]
     msk = now_moscow()
     weekday_name = weekday_names[msk.weekday()]
