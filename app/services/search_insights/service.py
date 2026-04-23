@@ -347,6 +347,9 @@ async def refresh_shop(
         # 2026-04-23：WB 对单次 nmIds 数量上限未文档化，保守取 20
         WB_BATCH_SIZE = 20          # 单次调用 nmIds 个数上限
         WB_BATCH_PAUSE_S = 20       # 批间 sleep 秒，抵御 429
+        # 2026-04-23 实战：WB 触发 "global limiter per seller" 后整个任务周期挡死，
+        # 连续 3 批全空 = quota 耗尽，early exit 避免 30 批 × 20s = 10min 空跑
+        EMPTY_BATCH_ABORT = 3
 
         nm_to_pid = {}
         for l in listings:
@@ -355,6 +358,7 @@ async def refresh_shop(
         all_nm_ids = list(nm_to_pid.keys())
         batches_total = (len(all_nm_ids) + WB_BATCH_SIZE - 1) // WB_BATCH_SIZE
 
+        consecutive_empty = 0
         wb = WBClient(shop_id=shop.id, api_key=shop.api_key)
         try:
             for bi in range(batches_total):
@@ -374,6 +378,18 @@ async def refresh_shop(
                     errors.append({"batch": batch[:3], "error": str(e)[:200]})
                     logger.warning(f"WB fetch_product_search_texts batch={len(batch)} 失败: {e}")
                     continue
+                if not items:
+                    consecutive_empty += 1
+                    if consecutive_empty >= EMPTY_BATCH_ABORT:
+                        logger.warning(
+                            f"WB 连续 {EMPTY_BATCH_ABORT} 批返回空（疑似 global limiter 触发 quota 耗尽），"
+                            f"已完成 {bi + 1}/{batches_total} 批，early exit 节省时间"
+                        )
+                        errors.append({"early_exit": True,
+                                       "reason": f"{EMPTY_BATCH_ABORT} 批连续空（WB 限流/quota）"})
+                        break
+                else:
+                    consecutive_empty = 0
                 # items 每条含 nm_id → 按 nm_id 分组 upsert
                 grouped = {}
                 for it in items or []:
