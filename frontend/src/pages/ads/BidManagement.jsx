@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react'
 import { formatMoscowHourMinute } from '@/utils/time'
 import AdsAIPricing from './AdsAIPricing'
 import {
-  Button, Modal, message, Switch, Empty,
+  Button, Modal, message, Empty,
   Table, Tag, Tooltip, Space,
   InputNumber, Collapse, Spin, Badge,
   Card, Row, Col, Select, Alert,
@@ -12,7 +12,6 @@ import {
   enableTimePricing, disableTimePricing,
   getTimePricingStatus, restoreSku,
   checkConflict, getBidLogs,
-  getDataStatus, syncData, downloadData,
 } from '@/api/bid_management'
 
 // ==========================================
