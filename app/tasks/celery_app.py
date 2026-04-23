@@ -31,6 +31,7 @@ celery_app.conf.update(
         "app.tasks.region_stats_task",
         "app.tasks.ad_auto_exclude_task",
         "app.tasks.ozon_product_queries_task",
+        "app.tasks.wb_search_texts_task",
         "app.tasks.cluster_oracle_sync",
     ],
 )
@@ -81,6 +82,13 @@ celery_app.conf.beat_schedule = {
     "ozon-product-queries-daily": {
         "task": "app.tasks.ozon_product_queries_task.sync_ozon_product_queries",
         "schedule": crontab(hour=2, minute=30),
+    },
+    # WB SKU × 搜索词同步（搜索词洞察，MSK 04:00 触发，需 Jam 订阅）
+    # Celery timezone=Europe/Moscow → crontab(hour=X) 按 MSK 直解 = MSK X:00
+    # 选 MSK 04:00 错开 Ozon 的 02:30；单店 609 nmIds ~3min（批量 50 + 15s sleep）
+    "wb-search-texts-daily": {
+        "task": "app.tasks.wb_search_texts_task.sync_wb_search_texts",
+        "schedule": crontab(hour=4, minute=0),
     },
     # WB 顶级搜索集群 oracle 同步 — 2026-04-23 证实 WB cmp API 做了 IP 绑定，
     # 从服务器调会 401（JWT 只在用户浏览器 IP 下有效）。暂停定时，只保留 task

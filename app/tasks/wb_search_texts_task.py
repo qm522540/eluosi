@@ -1,0 +1,111 @@
+"""WB 商品搜索词（search-texts）每日同步 — 搜索词洞察 SEO 流量
+
+每日莫斯科 MSK 04:00（Celery `timezone="Europe/Moscow"` → crontab 按 MSK 直解）
+- 遍历所有 active WB 店铺（有 api_key）
+- 复用 search_insights.service.refresh_shop → 批量 nmIds + 限流间隔
+- 写入 product_search_queries（platform='wb'）—— 与 Ozon 共用底表
+- 清理 90 天前 WB 数据
+
+无 Jam 订阅的店铺 refresh_shop 返回 code=93001 → 本任务记 skipped，继续下一个店。
+
+实测 2026-04-23：WB search-texts 端点限流严（估 3-5 rpm），refresh_shop WB 分支
+每 50 nmIds 一批 + 批间 15s sleep。单店 609 nmIds ≈ 12 批 × 15s = 3 min。
+"""
+
+from datetime import timedelta
+
+from sqlalchemy import text
+
+from app.tasks.celery_app import celery_app
+from app.database import SessionLocal
+from app.models.shop import Shop
+from app.services.search_insights.service import refresh_shop
+from app.utils.logger import setup_logger
+from app.utils.moscow_time import utc_now_naive
+
+import asyncio
+
+logger = setup_logger("tasks.wb_search_texts")
+
+
+def _run_async(coro):
+    loop = asyncio.new_event_loop()
+    try:
+        return loop.run_until_complete(coro)
+    finally:
+        loop.close()
+
+
+@celery_app.task(
+    name="app.tasks.wb_search_texts_task.sync_wb_search_texts",
+    bind=True, max_retries=1, default_retry_delay=600,
+)
+def sync_wb_search_texts(self):
+    """每日扫所有 WB 店铺 → 拉过去 7 天 SKU × 搜索词数据（SEO 流量）"""
+    db = SessionLocal()
+    try:
+        shops = db.query(Shop).filter(
+            Shop.platform == "wb", Shop.status == "active",
+            Shop.api_key.isnot(None),
+        ).all()
+        results = []
+        for shop in shops:
+            try:
+                r = _run_async(refresh_shop(db, shop.tenant_id, shop, days=7))
+                code = r.get("code", 0)
+                data = r.get("data") or {}
+                if code == 93001:
+                    logger.info(f"shop_id={shop.id} {shop.name} 未开通 Jam，跳过")
+                    results.append({"shop_id": shop.id, "skipped": "no_jam"})
+                    continue
+                if code != 0:
+                    logger.warning(f"shop_id={shop.id} refresh 失败 code={code} msg={r.get('msg')}")
+                    results.append({"shop_id": shop.id, "error_code": code})
+                    continue
+                logger.info(
+                    f"shop_id={shop.id} {shop.name} synced_queries={data.get('synced_queries')} "
+                    f"range={data.get('date_range')}"
+                )
+                results.append({
+                    "shop_id": shop.id,
+                    "synced_queries": data.get("synced_queries"),
+                    "errors": data.get("errors"),
+                })
+            except Exception as e:
+                logger.error(f"shop_id={shop.id} 同步异常: {e}", exc_info=True)
+                results.append({"shop_id": shop.id, "error": str(e)[:200]})
+
+        # 清理 90 天前 WB 数据（共用表，限定 platform='wb'）
+        cutoff = (utc_now_naive().date() - timedelta(days=90))
+        deleted = db.execute(text("""
+            DELETE FROM product_search_queries
+            WHERE platform='wb' AND stat_date < :cutoff
+        """), {"cutoff": cutoff}).rowcount
+        db.commit()
+        if deleted:
+            logger.info(f"清理 {deleted} 条 90 天前 WB SKU×query 数据")
+        return {"shops": len(shops), "results": results, "cleaned": deleted}
+    except Exception as e:
+        logger.error(f"WB search-texts 全局任务异常: {e}", exc_info=True)
+        db.rollback()
+        raise self.retry(exc=e)
+    finally:
+        db.close()
+
+
+@celery_app.task(
+    name="app.tasks.wb_search_texts_task.sync_wb_search_texts_for_shop",
+    bind=True,
+)
+def sync_wb_search_texts_for_shop(self, shop_id: int, tenant_id: int, days: int = 7):
+    """单店铺手动触发（前端立即同步按钮/Celery 异步化入口）"""
+    db = SessionLocal()
+    try:
+        shop = db.query(Shop).filter(
+            Shop.id == shop_id, Shop.tenant_id == tenant_id, Shop.platform == "wb",
+        ).first()
+        if not shop:
+            return {"error": "店铺不存在或非 WB"}
+        return _run_async(refresh_shop(db, tenant_id, shop, days=days))
+    finally:
+        db.close()
