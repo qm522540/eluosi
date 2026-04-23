@@ -383,14 +383,17 @@ const WBAIPricing = ({ shopId }) => {
     {
       title: '建议CPM', dataIndex: 'suggested_bid', width: 120, align: 'right',
       render: (v, record) => {
-        const isUp = record.adjust_pct > 0
+        const pct = Number(record.adjust_pct) || 0
+        const isNoop = Math.abs(pct) < 0.01
+        const isUp = pct > 0
+        const color = isNoop ? '#999' : (isUp ? '#52c41a' : '#ff4d4f')
         return (
           <Space>
-            <span style={{ fontWeight: 600, color: isUp ? '#52c41a' : '#ff4d4f', fontSize: 15 }}>
+            <span style={{ fontWeight: 600, color, fontSize: 15 }}>
               ₽{Math.round(v)}
             </span>
-            <Tag color={isUp ? 'success' : 'error'} style={{ margin: 0 }}>
-              {isUp ? '↑' : '↓'}{Math.abs(record.adjust_pct).toFixed(1)}%
+            <Tag color={isNoop ? 'default' : (isUp ? 'success' : 'error')} style={{ margin: 0 }}>
+              {isNoop ? '— 维持' : `${isUp ? '↑' : '↓'}${Math.abs(pct).toFixed(1)}%`}
             </Tag>
           </Space>
         )
@@ -1138,10 +1141,14 @@ const OzonAIPricing = ({ shopId, platform = 'ozon' }) => {
         if (Number(v) === -100 && Number(r.suggested_bid) === 0) {
           return <Tag color="red">移除活动</Tag>
         }
-        const isUp = v > 0
+        const pct = Number(v) || 0
+        if (Math.abs(pct) < 0.01) {
+          return <Tag color="default">— 维持</Tag>
+        }
+        const isUp = pct > 0
         return (
           <Tag color={isUp ? 'green' : 'red'} icon={isUp ? <ArrowUpOutlined /> : <ArrowDownOutlined />}>
-            {isUp ? '+' : ''}{v}%
+            {isUp ? '+' : ''}{pct}%
           </Tag>
         )
       },
@@ -1582,7 +1589,10 @@ const OzonAIPricing = ({ shopId, platform = 'ozon' }) => {
             </div>
           )}
           {streamItems.map((item, idx) => {
-            const isUp = item.suggested_bid > item.current_bid
+            const diff = Number(item.suggested_bid) - Number(item.current_bid)
+            const isNoop = Math.abs(diff) < 0.01
+            const isUp = diff > 0
+            const arrowColor = isNoop ? '#999' : (isUp ? '#cf1322' : '#389e0d')
             const stageMap = {
               growing: { color: 'green', label: '放量期' },
               declining: { color: 'red', label: '衰退期' },
@@ -1608,8 +1618,8 @@ const OzonAIPricing = ({ shopId, platform = 'ozon' }) => {
                 <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, marginBottom: 6 }}>
                   <span style={{ color: '#999' }}>出价</span>
                   <span style={{ fontWeight: 500 }}>₽{item.current_bid}</span>
-                  <span style={{ color: isUp ? '#cf1322' : '#389e0d', fontSize: 16 }}>{isUp ? '↑' : '↓'}</span>
-                  <span style={{ fontWeight: 600, color: isUp ? '#cf1322' : '#389e0d', fontSize: 15 }}>
+                  <span style={{ color: arrowColor, fontSize: 16 }}>{isNoop ? '—' : (isUp ? '↑' : '↓')}</span>
+                  <span style={{ fontWeight: 600, color: arrowColor, fontSize: 15 }}>
                     ₽{item.suggested_bid}
                   </span>
                   {item.current_roas != null && (
