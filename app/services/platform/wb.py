@@ -1363,7 +1363,7 @@ class WBClient(BasePlatformClient):
 
     async def fetch_product_search_texts(
         self,
-        nm_id: int,
+        nm_ids,
         date_from: str,
         date_to: str,
         top_order_by: str = "orders",
@@ -1371,16 +1371,17 @@ class WBClient(BasePlatformClient):
         order_mode: str = "desc",
         limit: int = 30,
     ) -> list:
-        """拉取"用户搜哪些词点进了该商品"
+        """拉取"用户搜哪些词点进了这些商品"（批量支持）
 
         API: POST /api/v2/search-report/product/search-texts
         需要 WB Jam 订阅；无订阅返回 403 "Available only in a Jam subscription"。
 
-        每次调用仅拉 1 个 nm_id —— 因为平台返回的每条记录不含 nmId 字段，
-        只有一次只传一个才能把返回的 texts 对应回商品。上层按商品循环即可。
+        2026-04-23 实测确认：返回每条 item 带 `nmId` 字段，支持一次传多个 nmIds
+        批量查询。旧"每次 1 个 nm_id"的设计是未实测前的保守假设。
 
         Args:
-            nm_id: 商品 nmId（必须是数字）
+            nm_ids: int 或 list[int]。API 单次 nmIds 数量上限未文档化，
+                    调用方请保守批量（建议 ≤ 50）。
             date_from / date_to: YYYY-MM-DD，跨度 ≤ 31 天
             top_order_by: orders / openCard / addToCart / cartToOrder / openToCart
             order_field / order_mode: 明细排序
@@ -1389,14 +1390,22 @@ class WBClient(BasePlatformClient):
         Returns:
             [{nm_id, text, frequency, median_position, open_card, add_to_cart,
               orders, cart_to_order, extra}, ...]
+            调用方按 `nm_id` 字段分组定位商品。
 
         Raises:
             SubscriptionRequiredError: 店铺未开通 Jam
         """
+        if isinstance(nm_ids, int):
+            nm_ids_list = [nm_ids]
+        else:
+            nm_ids_list = [int(x) for x in nm_ids if x]
+        if not nm_ids_list:
+            return []
+
         url = "https://seller-analytics-api.wildberries.ru/api/v2/search-report/product/search-texts"
         payload = {
             "currentPeriod": {"start": date_from, "end": date_to},
-            "nmIds": [int(nm_id)],
+            "nmIds": nm_ids_list,
             "topOrderBy": top_order_by,
             "orderBy": {"field": order_field, "mode": order_mode},
             "limit": min(int(limit), 30),
@@ -1413,16 +1422,19 @@ class WBClient(BasePlatformClient):
             if status in (402, 403) and ("Jam" in body or "subscription" in body.lower()):
                 raise SubscriptionRequiredError("wb", body[:200])
             logger.warning(
-                f"WB search-texts 失败 shop_id={self.shop_id} nm_id={nm_id}: "
+                f"WB search-texts 失败 shop_id={self.shop_id} "
+                f"nm_ids={nm_ids_list[:3]}{'...' if len(nm_ids_list) > 3 else ''}: "
                 f"status={status} body={body[:200]}"
             )
             return []
         except Exception as e:
-            logger.warning(f"WB search-texts 异常 shop_id={self.shop_id} nm_id={nm_id}: {e}")
+            logger.warning(
+                f"WB search-texts 异常 shop_id={self.shop_id} "
+                f"nm_ids={nm_ids_list[:3]}{'...' if len(nm_ids_list) > 3 else ''}: {e}"
+            )
             return []
 
-        # 返回结构：{data: {items: [...]}} 或 {items: [...]} 或 直接数组，未实测
-        # 按照 WB analytics 系列惯例，先解 data.items / result / 根数组
+        # 返回结构实测（2026-04-23，Jam 订阅）：{"data": {"items": [...], "currency": "RUB"}}
         items = []
         if isinstance(result, dict):
             items = (
@@ -1445,8 +1457,15 @@ class WBClient(BasePlatformClient):
                     return v.get("current") or 0
                 return v or 0
 
+            # 单个 nm_id 调用时返回无 nmId → fallback 到传入的唯一 id
+            it_nm = it.get("nmId") or it.get("nm_id")
+            if it_nm is None and len(nm_ids_list) == 1:
+                it_nm = nm_ids_list[0]
+            if it_nm is None:
+                continue
+
             out.append({
-                "nm_id": int(nm_id),
+                "nm_id": int(it_nm),
                 "text": it.get("text") or it.get("searchText") or "",
                 "frequency": int(_cur("frequency") or 0),
                 "open_card": int(_cur("openCard") or 0),
@@ -1456,8 +1475,9 @@ class WBClient(BasePlatformClient):
                 "cart_to_order": float(_cur("cartToOrder") or 0) or None,
                 "extra": {
                     k: it.get(k) for k in it.keys()
-                    if k not in {"text", "searchText", "frequency", "openCard",
-                                 "addToCart", "orders", "medianPosition", "cartToOrder"}
+                    if k not in {"text", "searchText", "nmId", "nm_id",
+                                 "frequency", "openCard", "addToCart", "orders",
+                                 "medianPosition", "cartToOrder"}
                 } or None,
             })
         return out

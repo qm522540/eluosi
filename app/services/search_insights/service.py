@@ -338,16 +338,27 @@ async def refresh_shop(
     errors = []
 
     if shop.platform == "wb":
+        import asyncio
+        # WB search-texts 端点实测限流严格（估 3-5 rpm），批量 nmIds 降低调用次数
+        WB_BATCH_SIZE = 50          # 单次调用 nmIds 个数上限
+        WB_BATCH_PAUSE_S = 15       # 批间 sleep 秒，抵御 429
+
+        nm_to_pid = {}
+        for l in listings:
+            if str(l.psk).isdigit():
+                nm_to_pid[int(l.psk)] = l.pid
+        all_nm_ids = list(nm_to_pid.keys())
+        batches_total = (len(all_nm_ids) + WB_BATCH_SIZE - 1) // WB_BATCH_SIZE
+
         wb = WBClient(shop_id=shop.id, api_key=shop.api_key)
         try:
-            # WB 每次 1 个 nm_id（返回无 nmId 关联字段）
-            for l in listings:
-                if not str(l.psk).isdigit():
-                    continue
-                nm_id = int(l.psk)
+            for bi in range(batches_total):
+                batch = all_nm_ids[bi * WB_BATCH_SIZE : (bi + 1) * WB_BATCH_SIZE]
+                if bi > 0:
+                    await asyncio.sleep(WB_BATCH_PAUSE_S)
                 try:
                     items = await wb.fetch_product_search_texts(
-                        nm_id=nm_id, date_from=date_from, date_to=date_to,
+                        nm_ids=batch, date_from=date_from, date_to=date_to,
                     )
                 except SubscriptionRequiredError as e:
                     return {
@@ -355,13 +366,21 @@ async def refresh_shop(
                         "msg": f"WB 店铺未开通 Jam 订阅：{e.detail[:80]}",
                     }
                 except Exception as e:
-                    errors.append({"nm_id": nm_id, "error": str(e)[:200]})
-                    logger.warning(f"WB fetch_product_search_texts nm={nm_id} 失败: {e}")
+                    errors.append({"batch": batch[:3], "error": str(e)[:200]})
+                    logger.warning(f"WB fetch_product_search_texts batch={len(batch)} 失败: {e}")
                     continue
-                if items:
+                # items 每条含 nm_id → 按 nm_id 分组 upsert
+                grouped = {}
+                for it in items or []:
+                    nm = it.get("nm_id")
+                    if nm is None:
+                        continue
+                    grouped.setdefault(int(nm), []).append(it)
+                for nm_id, rows in grouped.items():
+                    pid = nm_to_pid.get(nm_id)
                     total_rows += _upsert_rows(
                         db, tenant_id, shop.id, "wb",
-                        str(nm_id), l.pid, date_to, items,
+                        str(nm_id), pid, date_to, rows,
                     )
         finally:
             await wb.close()
