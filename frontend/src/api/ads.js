@@ -275,32 +275,11 @@ export function unexcludeKeywords(campaignId, nmId, keywords) {
 }
 
 /** 手动探测候选集群代表词：调 WB oracle 验证是否为 WB 认可的集群代表词 */
-export function probeClusterRep(campaignId, nmId, keyword, action = 'probe') {
+export function probeClusterRep(campaignId, nmId, keyword) {
   return request.post(`/ads/campaign-keywords/${campaignId}/probe-cluster-rep`, {
     nm_id: nmId,
     keyword,
-    action,
   }, { timeout: 30000 })
-}
-
-/** 查询该活动该 SKU 是否已上传 WB 集群 oracle xlsx */
-export function getClusterOracleStatus(campaignId, nmId) {
-  return request.get(
-    `/ads/campaign-keywords/${campaignId}/cluster-oracle-status`,
-    { params: { nm_id: nmId } },
-  )
-}
-
-/** 上传 WB 后台导出的 preset-stat xlsx（FormData） */
-export function uploadClusterOracle(campaignId, nmId, file) {
-  const fd = new FormData()
-  fd.append('nm_id', String(nmId))
-  fd.append('file', file)
-  return request.post(
-    `/ads/campaign-keywords/${campaignId}/upload-cluster-oracle`,
-    fd,
-    { headers: { 'Content-Type': 'multipart/form-data' }, timeout: 60000 },
-  )
 }
 
 /** 修改商品出价 */
