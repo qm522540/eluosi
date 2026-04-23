@@ -1146,3 +1146,50 @@ def _next_execute_str() -> str:
     else:
         h = (now.hour + 1) % 24
     return f"{h:02d}:{EXECUTE_MINUTE:02d}"
+
+
+# ==================== WB seller 级 quota 熔断状态查询 ====================
+
+@router.get("/wb-quota-status")
+def get_wb_quota_status(
+    db: Session = Depends(get_db),
+    tenant_id: int = Depends(get_tenant_id),
+):
+    """查询本租户所有 WB shop 的 quota 熔断状态。
+
+    用于运维排查"为什么 AI 调价跳过某 shop"—— 命中的 shop 是该 seller UUID
+    被 WB 全局限流冷却中（见 docs/daily/2026-04-23 §十七 事故），
+    到 ttl_remaining_s=0 或手动解除后 PATCH bids 会自动恢复。
+
+    返回 data:
+      - count: 当前冷却中的 shop 数
+      - items: [{shop_id, shop_name, tripped_detail, ttl_remaining_s}]
+
+    未命中的 shop 不在 items 里（保持列表简洁）。
+    """
+    from app.services.platform.wb import _get_redis_client, quota_circuit_key_for_shop
+
+    wb_shops = db.execute(text("""
+        SELECT id, name FROM shops
+        WHERE tenant_id = :tid AND platform = 'wb' AND status = 'active'
+    """), {"tid": tenant_id}).fetchall()
+
+    items = []
+    try:
+        r = _get_redis_client()
+        for shop in wb_shops:
+            key = quota_circuit_key_for_shop(shop.id)
+            ttl = r.ttl(key)
+            if ttl and ttl > 0:
+                detail = r.get(key) or ""
+                items.append({
+                    "shop_id": shop.id,
+                    "shop_name": shop.name,
+                    "tripped_detail": detail,
+                    "ttl_remaining_s": ttl,
+                })
+    except Exception as e:
+        logger.error(f"WB quota status query failed tenant_id={tenant_id}: {e}")
+        return error(ErrorCode.UNKNOWN_ERROR, f"查询熔断状态失败: {e}")
+
+    return success(data={"count": len(items), "items": items})

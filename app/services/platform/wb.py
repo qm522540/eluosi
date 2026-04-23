@@ -41,6 +41,25 @@ MIN_REQUEST_INTERVAL = 60.0 / settings.WB_RATE_LIMIT_PER_MINUTE
 # 说明该 seller UUID 在 WB 侧的 daily quota 已耗尽，后续 API 调用会全部失败。
 # 熔断 1h，期间所有 PATCH bids 直接短路返回，避免继续打 API 延长冷却 + 浪费 Celery tick。
 WB_QUOTA_CIRCUIT_TTL = 3600
+WB_QUOTA_CIRCUIT_KEY_PREFIX = "wb:seller_quota_exhausted:shop_"
+
+# 模块级 Redis client（lazy-init 单例），避免每次 PATCH bids 都创建新连接。
+# redis-py 的 Redis 对象本身维护 ConnectionPool，单例就够用。
+_redis_client = None
+
+
+def _get_redis_client():
+    """返回模块级 Redis 单例；首次调用时 lazy-init，后续复用同一 ConnectionPool。"""
+    global _redis_client
+    if _redis_client is None:
+        import redis as redis_lib
+        _redis_client = redis_lib.Redis.from_url(settings.REDIS_URL, decode_responses=True)
+    return _redis_client
+
+
+def quota_circuit_key_for_shop(shop_id: int) -> str:
+    """供外部（查询 API）拼 Redis key 用。"""
+    return f"{WB_QUOTA_CIRCUIT_KEY_PREFIX}{shop_id}"
 
 
 class WBClient(BasePlatformClient):
@@ -75,14 +94,12 @@ class WBClient(BasePlatformClient):
         self._last_request_time = time.monotonic()
 
     def _quota_circuit_key(self) -> str:
-        return f"wb:seller_quota_exhausted:shop_{self.shop_id}"
+        return quota_circuit_key_for_shop(self.shop_id)
 
     def _check_quota_circuit(self) -> Optional[int]:
-        """命中 seller quota 熔断返回剩余冷却秒数，否则返回 None。"""
+        """命中 seller quota 熔断返回剩余冷却秒数，否则返回 None（含 Redis 异常 fail-open）。"""
         try:
-            import redis as redis_lib
-            r = redis_lib.Redis.from_url(settings.REDIS_URL, decode_responses=True)
-            ttl = r.ttl(self._quota_circuit_key())
+            ttl = _get_redis_client().ttl(self._quota_circuit_key())
             return ttl if ttl and ttl > 0 else None
         except Exception as e:
             logger.warning(f"WB quota circuit check failed: {e}")
@@ -91,9 +108,9 @@ class WBClient(BasePlatformClient):
     def _trip_quota_circuit(self, detail: str) -> None:
         """熔断：写 Redis key TTL 1h 冻住本 shop 的 PATCH bids 调用。"""
         try:
-            import redis as redis_lib
-            r = redis_lib.Redis.from_url(settings.REDIS_URL, decode_responses=True)
-            r.setex(self._quota_circuit_key(), WB_QUOTA_CIRCUIT_TTL, (detail or "")[:200])
+            _get_redis_client().setex(
+                self._quota_circuit_key(), WB_QUOTA_CIRCUIT_TTL, (detail or "")[:200]
+            )
             logger.warning(
                 f"WB seller quota circuit TRIPPED shop_id={self.shop_id} "
                 f"TTL={WB_QUOTA_CIRCUIT_TTL}s detail={(detail or '')[:100]}"
