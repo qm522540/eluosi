@@ -15,11 +15,14 @@ import {
   triggerAIAnalysis, getAIPricingSuggestions,
   approveAIPricingSuggestion, rejectAIPricingSuggestion,
   ignoreAIPricingSuggestion, restoreAIPricingSuggestion,
-  toggleAIAutoExecute, getAIPricingHistory,
+  getAIPricingHistory,
 } from '@/api/ads'
 import { triggerWBAnalysis, getWBSuggestions, rejectWBSuggestion } from '@/api/wb_pricing'
 import { getPromoStatus, getPromoCalendars, createPromoCalendar } from '@/api/ai_pricing'
-import { getDataStatus, syncData, downloadData } from '@/api/bid_management'
+import {
+  getDataStatus, syncData, downloadData,
+  enableAIPricing, disableAIPricing,
+} from '@/api/bid_management'
 import { useAuthStore } from '@/stores/authStore'
 import WbProductImg from '@/components/WbProductImg'
 
@@ -595,7 +598,10 @@ const OzonAIPricing = ({ shopId, platform = 'ozon' }) => {
       const res = await getAIPricingConfigs(shopId)
       const data = res.data || []
       setConfigs(data)
-      if (data.length > 0) setAutoExecute(!!data[0].auto_execute)
+      if (data.length > 0) {
+        // 全自动 = is_active=1 且 auto_execute=1；UI 开关同时切这两个字段
+        setAutoExecute(!!data[0].is_active && !!data[0].auto_execute)
+      }
     } catch {
       setConfigs([])
     } finally {
@@ -710,12 +716,34 @@ const OzonAIPricing = ({ shopId, platform = 'ozon' }) => {
 
   const handleToggleAuto = async (checked) => {
     try {
-      await toggleAIAutoExecute(shopId, { auto_execute: checked })
+      if (checked) {
+        // 开启 = is_active=1 + auto_execute=1（全自动：定时器跑分析 + 自动改价）
+        await enableAIPricing(shopId, true)
+      } else {
+        // 关闭 = is_active=0 + auto_execute=0（Celery 完全跳过此店）
+        await disableAIPricing(shopId)
+      }
       setAutoExecute(checked)
-      message.success(checked ? '已切换为自动模式' : '已切换为建议模式')
+      message.success(checked ? 'AI 智能调价已开启' : 'AI 智能调价已关闭')
       fetchConfigs()
     } catch (err) {
-      message.error(err.message || '切换失败')
+      const msg = err?.response?.data?.msg || err?.message || ''
+      if (msg.includes('分时调价') || msg.includes('互斥') || msg.includes('请先停用')) {
+        Modal.warning({
+          title: '规则冲突，无法开启',
+          content: (
+            <div>
+              <p>{msg}</p>
+              <p style={{ marginTop: 12, color: '#999', fontSize: 13 }}>
+                请先到出价管理-分时调价 Tab 停用分时调价，然后再回来开启 AI 调价。
+              </p>
+            </div>
+          ),
+          okText: '我知道了',
+        })
+      } else {
+        message.error(msg || '切换失败')
+      }
     }
   }
 

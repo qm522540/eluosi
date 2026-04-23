@@ -294,6 +294,7 @@ def _flatten_template_rows(row) -> list:
         "max_adjust_pct": cfg.get("max_adjust_pct"),
         "auto_remove_losing_sku": int(row.auto_remove_losing_sku or 0),
         "losing_days_threshold": int(row.losing_days_threshold or 21),
+        "is_active": bool(row.is_active),
         "auto_execute": bool(row.auto_execute),
         "is_current": True,
     }]
