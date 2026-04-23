@@ -54,6 +54,13 @@ class AdGroup(BaseMixin, Base):
     user_managed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     original_bid: Mapped[Optional[float]] = mapped_column(DECIMAL(10, 2), nullable=True)
     last_auto_bid: Mapped[Optional[float]] = mapped_column(DECIMAL(10, 2), nullable=True)
+    # 050_ad_groups_hill_climbing.sql 新增（方案 E 爬山法 SKU 级状态）
+    hill_base_bid: Mapped[Optional[float]] = mapped_column(DECIMAL(10, 2), nullable=True)
+    hill_step_direction: Mapped[Optional[int]] = mapped_column(SmallInteger, nullable=True)
+    hill_step_size: Mapped[Optional[float]] = mapped_column(DECIMAL(4, 2), nullable=True)
+    hill_last_eval_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    # 058_ad_groups_last_optimal_bid.sql 新增（同时段 optimal 重复 skip）
+    last_optimal_bid: Mapped[Optional[float]] = mapped_column(DECIMAL(10, 2), nullable=True)
 
 
 class AdKeyword(BaseMixin, Base):
