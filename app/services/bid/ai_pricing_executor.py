@@ -2220,6 +2220,19 @@ async def _auto_execute(db, tenant_id: int, shop, suggestions: list) -> int:
             if ag_row and ag_row.user_managed:
                 continue
 
+            # 亏损删除建议（suggested_bid=0 / adjust_pct=-100）属于"需要用户判断后
+            # 真正移除商品"的操作，不能走 _execute_bid_update 改价到 0（WB 会报
+            # "出价必须大于 0"），保留 pending 状态由用户在建议列表手动 approve
+            # （approve_suggestion 对 suggested_bid=0 的走 remove_product_from_campaign
+            # 真正调删除 API）。
+            if not s.get("suggested_bid") or s["suggested_bid"] <= 0:
+                logger.info(
+                    f"[auto_execute 跳过] sku={s['platform_sku_id']} "
+                    f"suggested_bid={s.get('suggested_bid')} 是删除建议，"
+                    f"保留 pending 等用户手动确认"
+                )
+                continue
+
             try:
                 api_result = await _execute_bid_update(
                     client, shop.platform, campaign.platform_campaign_id,

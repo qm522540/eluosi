@@ -92,3 +92,8 @@ export function getCandidatesRollupProducts(shopId, params) {
 export function getCandidatesRollupCategoryEvidence(shopId, params) {
   return request.get(`${BASE}/shop/${shopId}/candidates-rollup/category-evidence`, { params })
 }
+
+/** 跨店同款证据：同 products.sku 在其他 shop 对该关键词真实搜中明细（点跨店 Tag 弹 Modal） */
+export function getCandidatesRollupCrossShopEvidence(shopId, params) {
+  return request.get(`${BASE}/shop/${shopId}/candidates-rollup/cross-shop-evidence`, { params })
+}

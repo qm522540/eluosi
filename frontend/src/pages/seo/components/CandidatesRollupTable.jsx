@@ -9,7 +9,7 @@ import {
 } from '@ant-design/icons'
 import {
   getCandidatesRollup, getCandidatesRollupProducts,
-  getCandidatesRollupCategoryEvidence,
+  getCandidatesRollupCategoryEvidence, getCandidatesRollupCrossShopEvidence,
 } from '@/api/seo'
 
 const { Text } = Typography
@@ -91,12 +91,17 @@ const CandidatesRollupTable = ({
   const [loading, setLoading] = useState(false)
   const [expanded, setExpanded] = useState({})
   const [expandedKeys, setExpandedKeys] = useState([])
-  // 推荐理由 Modal：点"0 曝光·类目推断"行的 Tag 弹出 Top 5 真实命中商品
-  const [evidenceModal, setEvidenceModal] = useState({ open: false, loading: false, keyword: '', evidence: null, items: [], shopId: null })
+  // 推荐理由 Modal：点行的 Tag 弹出 Top N
+  // type = 'category'（类目推断）或 'cross_shop'（跨店同款）
+  const [evidenceModal, setEvidenceModal] = useState({
+    open: false, loading: false, type: null,
+    keyword: '', evidence: null, items: [], shopId: null, productSku: null,
+  })
+  const closeEvidenceModal = () => setEvidenceModal({ open: false, loading: false, type: null, keyword: '', evidence: null, items: [], shopId: null, productSku: null })
 
-  const openEvidenceModal = useCallback(async (keyword, evidence, shopId) => {
+  const openCategoryEvidenceModal = useCallback(async (keyword, evidence, shopId) => {
     if (!evidence || !evidence.cat_id) return
-    setEvidenceModal({ open: true, loading: true, keyword, evidence, items: [], shopId })
+    setEvidenceModal({ open: true, loading: true, type: 'category', keyword, evidence, items: [], shopId, productSku: null })
     try {
       const r = await getCandidatesRollupCategoryEvidence(shopId, {
         keyword, category_id: evidence.cat_id, limit: 5,
@@ -105,6 +110,20 @@ const CandidatesRollupTable = ({
     } catch (err) {
       setEvidenceModal(s => ({ ...s, loading: false }))
       message.error('加载证据失败：' + (err.response?.data?.msg || err.message))
+    }
+  }, [])
+
+  const openCrossShopEvidenceModal = useCallback(async (keyword, evidence, shopId, productSku) => {
+    if (!evidence || !productSku) return
+    setEvidenceModal({ open: true, loading: true, type: 'cross_shop', keyword, evidence, items: [], shopId, productSku })
+    try {
+      const r = await getCandidatesRollupCrossShopEvidence(shopId, {
+        keyword, product_sku: productSku, limit: 10,
+      })
+      setEvidenceModal(s => ({ ...s, loading: false, items: r.data?.items || [] }))
+    } catch (err) {
+      setEvidenceModal(s => ({ ...s, loading: false }))
+      message.error('加载跨店证据失败：' + (err.response?.data?.msg || err.message))
     }
   }, [])
 
@@ -265,9 +284,18 @@ const CandidatesRollupTable = ({
               <Text style={{ fontSize: 12, maxWidth: 260 }} ellipsis={{ tooltip: r.title }}>
                 {r.title || '(无标题)'}
               </Text>
-              <Text type="secondary" style={{ fontSize: 11 }}>
-                SKU {r.platform_sku_id || r.product_id}
-              </Text>
+              <Space size={4} wrap>
+                <Text type="secondary" style={{ fontSize: 11 }}>
+                  SKU {r.platform_sku_id || r.product_id}
+                </Text>
+                {r.product_sku && (
+                  <Tooltip title="本地编码（products.sku）— 跨店同一商品共用此编码">
+                    <Tag color="cyan" style={{ margin: 0, fontSize: 10 }}>
+                      {r.product_sku}
+                    </Tag>
+                  </Tooltip>
+                )}
+              </Space>
             </Space>
           </Space>
         ),
@@ -288,18 +316,53 @@ const CandidatesRollupTable = ({
         },
       },
       {
-        title: '实证表现', key: 'evidence', width: 220,
+        title: '实证表现', key: 'evidence', width: 240,
         render: (_, r) => {
+          const shopIdForEv = r.shop_id || shopIds[0] || defaultShopId
+          // 跨店同款证据（即使 has_self=true 也可能有 —— 两者可共存展示）
+          const cross = r.cross_shop_evidence
+          const crossTag = (cross && cross.total_impressions > 0) ? (
+            <Tooltip
+              overlayStyle={{ maxWidth: 380 }}
+              title={(
+                <div style={{ lineHeight: 1.6 }}>
+                  <div><strong>跨店同款（点 Tag 看详情）</strong></div>
+                  <div style={{ marginTop: 4 }}>
+                    本地编码 <Text strong style={{ color: '#b37feb' }}>{r.product_sku}</Text> 在其他 <Text strong style={{ color: '#b37feb' }}>{cross.other_shops_count}</Text> 家店真实搜中此词：
+                    曝光 <Text strong style={{ color: '#b37feb' }}>{cross.total_impressions.toLocaleString()}</Text>
+                    {cross.total_orders > 0 && <> · 订单 <Text strong style={{ color: '#b37feb' }}>{cross.total_orders}</Text></>}
+                  </div>
+                  <div style={{ marginTop: 6, color: '#d3adf7' }}>
+                    跨店同款比类目推断精准 —— 同一件商品在其他店已验证吃到这词流量
+                  </div>
+                </div>
+              )}
+            >
+              <Tag
+                color="purple"
+                icon={<InfoCircleOutlined />}
+                style={{ fontSize: 11, cursor: 'pointer', marginRight: 0 }}
+                onClick={(e) => {
+                  e.stopPropagation()
+                  openCrossShopEvidenceModal(kw, cross, shopIdForEv, r.product_sku)
+                }}
+              >
+                跨店同款 · {cross.other_shops_count}店 · {cross.total_impressions.toLocaleString()} 曝光
+              </Tag>
+            </Tooltip>
+          ) : null
+
           if (!r.has_self) {
             const ev = r.category_evidence
             const catName = ev?.cat_name_ru || ev?.cat_name || '同类目'
             const pv  = ev?.products_verified || 0
             const ord = ev?.total_orders || 0
             const imp = ev?.total_impressions || 0
-            const shopIdForEv = r.shop_id || shopIds[0] || defaultShopId
+            // 有跨店同款优先展示（业务优先级：self > cross_shop > category）
+            if (crossTag) return <Space direction="vertical" size={2}>{crossTag}</Space>
             if (!ev || pv === 0) {
               return (
-                <Tooltip title="本商品在此词上 0 曝光；类目层面也没有 product_search_queries 证据（可能 seo_keyword_candidates 表有旧数据、或最近刚触发过推断）">
+                <Tooltip title="本商品在此词上 0 曝光；类目/跨店均无 product_search_queries 证据（可能 seo_keyword_candidates 表有旧数据、或最近刚触发过推断）">
                   <Tag color="default" style={{ fontSize: 11, cursor: 'help' }}>0 曝光 · 系统推荐加词</Tag>
                 </Tooltip>
               )
@@ -326,7 +389,7 @@ const CandidatesRollupTable = ({
                   style={{ fontSize: 11, cursor: 'pointer', marginRight: 0 }}
                   onClick={(e) => {
                     e.stopPropagation()
-                    openEvidenceModal(kw, ev, shopIdForEv)
+                    openCategoryEvidenceModal(kw, ev, shopIdForEv)
                   }}
                 >
                   {summary}
@@ -346,6 +409,7 @@ const CandidatesRollupTable = ({
               {r.paid_roas != null && (
                 <div style={{ color: '#888', fontSize: 11 }}>ROAS {r.paid_roas.toFixed(2)}</div>
               )}
+              {crossTag && <div style={{ marginTop: 2 }}>{crossTag}</div>}
             </div>
           )
         },
@@ -554,21 +618,23 @@ const CandidatesRollupTable = ({
       <Modal
         title={(
           <Space>
-            <InfoCircleOutlined style={{ color: '#faad14' }} />
-            <span>推荐理由 · 类目内真实搜中明细</span>
+            <InfoCircleOutlined style={{ color: evidenceModal.type === 'cross_shop' ? '#722ed1' : '#faad14' }} />
+            <span>
+              {evidenceModal.type === 'cross_shop'
+                ? '跨店同款 · 本地编码在其他店真实搜中'
+                : '推荐理由 · 类目内真实搜中明细'}
+            </span>
           </Space>
         )}
         open={evidenceModal.open}
-        onCancel={() => setEvidenceModal({ open: false, loading: false, keyword: '', evidence: null, items: [], shopId: null })}
+        onCancel={closeEvidenceModal}
         footer={null}
-        width={680}
+        width={720}
       >
-        {evidenceModal.evidence && (
+        {evidenceModal.evidence && evidenceModal.type === 'category' && (
           <>
             <Alert
-              type="info"
-              showIcon
-              style={{ marginBottom: 12 }}
+              type="info" showIcon style={{ marginBottom: 12 }}
               message={(
                 <Space size={6} wrap>
                   <Text>关键词</Text>
@@ -592,9 +658,7 @@ const CandidatesRollupTable = ({
               )}
             />
             <List
-              loading={evidenceModal.loading}
-              bordered
-              size="small"
+              loading={evidenceModal.loading} bordered size="small"
               dataSource={evidenceModal.items}
               locale={{ emptyText: '无数据' }}
               renderItem={(it, idx) => (
@@ -610,6 +674,64 @@ const CandidatesRollupTable = ({
                     <div style={{ flex: 1 }}>
                       <div style={{ fontSize: 12, fontWeight: 500 }}>{it.title || '(无标题)'}</div>
                       <Text type="secondary" style={{ fontSize: 11 }}>SKU {it.platform_sku_id || it.product_id}</Text>
+                    </div>
+                    <Space size={12} style={{ fontSize: 12 }}>
+                      <span>曝光 <Text strong>{(it.total_impressions || 0).toLocaleString()}</Text></span>
+                      <span>加购 <Text strong>{it.total_add_to_cart || 0}</Text></span>
+                      <span>订单 <Text strong style={{ color: (it.total_orders || 0) > 0 ? '#cf1322' : undefined }}>{it.total_orders || 0}</Text></span>
+                    </Space>
+                  </Space>
+                </List.Item>
+              )}
+            />
+          </>
+        )}
+        {evidenceModal.evidence && evidenceModal.type === 'cross_shop' && (
+          <>
+            <Alert
+              type="info" showIcon style={{ marginBottom: 12, borderColor: '#d3adf7', background: '#f9f0ff' }}
+              icon={<InfoCircleOutlined style={{ color: '#722ed1' }} />}
+              message={(
+                <Space size={6} wrap>
+                  <Text>关键词</Text>
+                  <Tag color="blue" style={{ margin: 0 }}>{evidenceModal.keyword}</Tag>
+                  <Text>本地编码</Text>
+                  <Tag color="purple" style={{ margin: 0 }}>{evidenceModal.productSku}</Tag>
+                </Space>
+              )}
+              description={(
+                <div style={{ marginTop: 4, fontSize: 12 }}>
+                  同款在其他 <Text strong style={{ color: '#722ed1' }}>{evidenceModal.evidence.other_shops_count}</Text> 家店：
+                  {' '}曝光 <Text strong>{(evidenceModal.evidence.total_impressions || 0).toLocaleString()}</Text> ·
+                  {' '}加购 <Text strong>{evidenceModal.evidence.total_add_to_cart || 0}</Text> ·
+                  {' '}订单 <Text strong style={{ color: (evidenceModal.evidence.total_orders || 0) > 0 ? '#cf1322' : undefined }}>{evidenceModal.evidence.total_orders || 0}</Text>
+                  <div style={{ marginTop: 4, color: '#888' }}>
+                    同一件商品在其他店已验证吃到这词流量 → 本店该商品加进标题可直接复用这份搜索机会（跨店同款比类目推断精准）
+                  </div>
+                </div>
+              )}
+            />
+            <List
+              loading={evidenceModal.loading} bordered size="small"
+              dataSource={evidenceModal.items}
+              locale={{ emptyText: '无数据' }}
+              renderItem={(it, idx) => (
+                <List.Item>
+                  <Space align="start" style={{ width: '100%' }}>
+                    <span style={{ fontSize: 14, color: '#999', width: 22, textAlign: 'center' }}>#{idx + 1}</span>
+                    {it.image_url && (
+                      <Image src={it.image_url} width={42} height={42}
+                             style={{ borderRadius: 4, objectFit: 'cover' }} preview={false}
+                             fallback="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='42' height='42'%3E%3Crect fill='%23eee' width='42' height='42'/%3E%3C/svg%3E"
+                      />
+                    )}
+                    <div style={{ flex: 1 }}>
+                      <Space size={6} wrap>
+                        <Tag color="geekblue" style={{ margin: 0 }}>{it.shop_name}</Tag>
+                        <Tag style={{ margin: 0, fontSize: 10, textTransform: 'uppercase' }}>{it.platform}</Tag>
+                      </Space>
+                      <div style={{ fontSize: 12, fontWeight: 500, marginTop: 2 }}>{it.title || '(无标题)'}</div>
+                      <Text type="secondary" style={{ fontSize: 11 }}>平台 SKU {it.platform_sku_id}</Text>
                     </div>
                     <Space size={12} style={{ fontSize: 12 }}>
                       <span>曝光 <Text strong>{(it.total_impressions || 0).toLocaleString()}</Text></span>
