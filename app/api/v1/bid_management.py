@@ -23,7 +23,7 @@ from app.dependencies import get_db, get_owned_shop, get_tenant_id
 from app.models.shop import Shop
 from app.utils.errors import ErrorCode
 from app.utils.logger import setup_logger
-from app.utils.moscow_time import EXECUTE_MINUTE, get_dashboard_info, now_moscow
+from app.utils.moscow_time import EXECUTE_MINUTE, get_dashboard_info, now_moscow, utc_now_naive
 from app.utils.response import error, success
 
 logger = setup_logger("api.bid_management")
@@ -684,16 +684,17 @@ def ignore_suggestion(
             tenant_id, campaign_id, platform_group_id, name,
             user_managed, user_managed_at, status
         ) VALUES (
-            :tid, :cid, :sku, :name, 1, NOW(), 'active'
+            :tid, :cid, :sku, :name, 1, :now_utc, 'active'
         )
         ON DUPLICATE KEY UPDATE
             user_managed = 1,
-            user_managed_at = NOW(),
-            updated_at = NOW()
+            user_managed_at = :now_utc,
+            updated_at = :now_utc
     """), {
         "tid": tenant_id, "cid": row.campaign_id,
         "sku": row.platform_sku_id,
         "name": (row.sku_name or f"SKU-{row.platform_sku_id}")[:200],
+        "now_utc": utc_now_naive(),
     })
     db.commit()
     return success({"id": suggestion_id, "is_ignored": True})
@@ -716,12 +717,13 @@ def restore_suggestion(
 
     db.execute(text("""
         UPDATE ad_groups
-        SET user_managed = 0, user_managed_at = NULL, updated_at = NOW()
+        SET user_managed = 0, user_managed_at = NULL, updated_at = :now_utc
         WHERE tenant_id = :tid AND campaign_id = :cid
           AND platform_group_id = :sku
     """), {
         "tid": tenant_id, "cid": row.campaign_id,
         "sku": row.platform_sku_id,
+        "now_utc": utc_now_naive(),
     })
     db.commit()
     return success({"id": suggestion_id, "is_ignored": False})

@@ -1,19 +1,25 @@
-"""莫斯科时间工具
+"""项目统一时间工具 — 时间规范 §6
 
-为出价管理模块提供统一的"当前时段"判断和"下次执行时间"计算。
-
-调度约定：每小时莫斯科时间 :05 分由 Celery 触发执行。
+统一时间策略（2026-04-23 大改造后）：
+    - DATETIME 字段全部存真 UTC（naive）
+    - 业务判断（"是不是凌晨/今天"）用 moscow_hour() / moscow_today() / now_moscow()
+    - UI 展示用 _iso() 等工具从 UTC naive → MSK ISO 串
+    - Celery beat 配 timezone="Europe/Moscow"，触发时刻按真 MSK 对齐
+    - 禁用：datetime.now()（无 tz）/ MySQL 裸 NOW()、CURRENT_TIMESTAMP（在 INSERT/UPDATE 运行时）
+    - 唯一写入入口：utc_now_naive() 或 utc_now()
 
 老林规范要求的函数签名（docs/api/bid_management.md §11）：
     now_moscow() -> datetime
     moscow_hour() -> int
     moscow_today() -> date
+    utc_now() -> datetime          (aware UTC)
+    utc_now_naive() -> datetime    (naive UTC，DB 写入用)
     get_current_period(rule) -> Literal['peak','mid','low']
     get_dashboard_info(db, shop_id) -> dict
 """
 
 import json
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from typing import Optional
 
 import pytz
@@ -23,7 +29,7 @@ EXECUTE_MINUTE = 5  # 每小时第5分钟由 Celery 触发
 
 
 def now_moscow() -> datetime:
-    """返回带 tzinfo 的莫斯科当前时间"""
+    """返回带 tzinfo 的莫斯科当前时间（业务判断用）"""
     return datetime.now(MOSCOW_TZ)
 
 
@@ -35,6 +41,26 @@ def moscow_hour() -> int:
 def moscow_today() -> date:
     """返回莫斯科当前日期（用于建议次日过期判断）"""
     return now_moscow().date()
+
+
+def utc_now() -> datetime:
+    """返回带 tzinfo 的 UTC 当前时间（与 datetime.now(timezone.utc) 等价）"""
+    return datetime.now(timezone.utc)
+
+
+def utc_now_naive() -> datetime:
+    """返回 naive UTC 当前时间 — DB INSERT/UPDATE 时间字段的**唯一正确写入源**
+
+    用法：
+        db.execute(text("... SET updated_at = :now_utc ..."),
+                   {"now_utc": utc_now_naive(), ...})
+
+    不要用：
+        - NOW() / CURRENT_TIMESTAMP（MySQL session time_zone 影响结果）
+        - datetime.now()（无 tz 且依赖 OS 时区）
+        - datetime.utcnow()（Python 3.12 已弃用）
+    """
+    return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
 def get_current_period(rule) -> Optional[str]:

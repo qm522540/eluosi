@@ -12,6 +12,7 @@ from app.services.keyword_stats.rules import (
     DEFAULT_RULES, FIELD_BOUNDS, get_rules, set_rules, reset_rules,
 )
 from app.utils.errors import ErrorCode
+from app.utils.moscow_time import utc_now_naive
 from app.utils.response import success, error
 
 router = APIRouter()
@@ -485,12 +486,13 @@ def update_translation(
     h = hashlib.md5(req.keyword.encode("utf-8")).hexdigest()
     db.execute(text("""
         INSERT INTO ru_zh_dict (text_ru_hash, text_ru, text_zh, field_type, source, created_at, updated_at)
-        VALUES (:h, :ru, :zh, :ft, 'manual', NOW(), NOW())
+        VALUES (:h, :ru, :zh, :ft, 'manual', :now_utc, :now_utc)
         ON DUPLICATE KEY UPDATE
             text_zh = VALUES(text_zh),
             source = 'manual',
-            updated_at = NOW()
-    """), {"h": h, "ru": req.keyword[:500], "zh": req.translation[:500], "ft": _FIELD_TYPE})
+            updated_at = :now_utc
+    """), {"h": h, "ru": req.keyword[:500], "zh": req.translation[:500], "ft": _FIELD_TYPE,
+           "now_utc": utc_now_naive()})
     db.commit()
     # 同步刷 L1 进程缓存
     _cache[req.keyword] = req.translation

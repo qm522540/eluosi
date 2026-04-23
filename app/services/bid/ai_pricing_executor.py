@@ -729,10 +729,11 @@ def _save_sku_cpa_ratio(db, tenant_id: int, campaign_id: int,
     """保存 SKU 级动态 cpa_ratio 到 ad_groups"""
     db.execute(text("""
         UPDATE ad_groups
-        SET cpa_ratio = :ratio, cpa_ratio_updated = NOW()
+        SET cpa_ratio = :ratio, cpa_ratio_updated = :now_utc
         WHERE campaign_id = :cid AND platform_group_id = :sku
           AND tenant_id = :tid
-    """), {"ratio": new_ratio, "cid": campaign_id, "sku": sku, "tid": tenant_id})
+    """), {"ratio": new_ratio, "cid": campaign_id, "sku": sku, "tid": tenant_id,
+           "now_utc": _utc_now().replace(tzinfo=None)})
 
 
 # ==================== 净毛利率和客单价读取 ====================
@@ -903,7 +904,7 @@ def update_config(db, tenant_id: int, shop_id: int, data: dict) -> dict:
             "default_client_price = :default_client_price",
             "auto_remove_losing_sku = :auto_remove_losing_sku",
             "losing_days_threshold = :losing_days_threshold",
-            "updated_at = NOW()",
+            "updated_at = :now_utc",
         ]
         params = {
             "id": existing.id, "tenant_id": tenant_id,
@@ -911,6 +912,7 @@ def update_config(db, tenant_id: int, shop_id: int, data: dict) -> dict:
             "default_client_price": default_client_price,
             "auto_remove_losing_sku": auto_remove_losing_sku,
             "losing_days_threshold": losing_days_threshold,
+            "now_utc": _utc_now().replace(tzinfo=None),
         }
         for k, v in fields.items():
             sets.append(f"{k} = :{k}")
@@ -976,10 +978,11 @@ def enable(db, tenant_id: int, shop_id: int, auto_execute: bool = False) -> dict
 
     db.execute(text("""
         UPDATE ai_pricing_configs
-        SET is_active = 1, auto_execute = :auto_execute, updated_at = NOW()
+        SET is_active = 1, auto_execute = :auto_execute, updated_at = :now_utc
         WHERE shop_id = :shop_id AND tenant_id = :tenant_id
     """), {"shop_id": shop_id, "tenant_id": tenant_id,
-           "auto_execute": 1 if auto_execute else 0})
+           "auto_execute": 1 if auto_execute else 0,
+           "now_utc": _utc_now().replace(tzinfo=None)})
     db.commit()
     return {"code": 0}
 
@@ -987,9 +990,10 @@ def enable(db, tenant_id: int, shop_id: int, auto_execute: bool = False) -> dict
 def disable(db, tenant_id: int, shop_id: int) -> dict:
     db.execute(text("""
         UPDATE ai_pricing_configs
-        SET is_active = 0, auto_execute = 0, updated_at = NOW()
+        SET is_active = 0, auto_execute = 0, updated_at = :now_utc
         WHERE shop_id = :shop_id AND tenant_id = :tenant_id
-    """), {"shop_id": shop_id, "tenant_id": tenant_id})
+    """), {"shop_id": shop_id, "tenant_id": tenant_id,
+           "now_utc": _utc_now().replace(tzinfo=None)})
     db.commit()
     return {"code": 0}
 
@@ -1370,7 +1374,7 @@ async def _analyze_now_inner(db, tenant_id: int, shop_id: int,
                                 :current_bid, 0, -100,
                                 'declining', 'history_data',
                                 :current_roas, NULL,
-                                :data_days, :reason, 'pending', NOW()
+                                :data_days, :reason, 'pending', :now_utc
                             )
                         """), {
                             "tenant_id": tenant_id, "shop_id": shop_id,
@@ -1380,6 +1384,7 @@ async def _analyze_now_inner(db, tenant_id: int, shop_id: int,
                             "current_roas": round(roas_21_30, 2),
                             "data_days": data_days,
                             "reason": reason_txt[:500],
+                            "now_utc": _utc_now().replace(tzinfo=None),
                         })
                         saved.append({
                             "id": ins.lastrowid,
@@ -1577,13 +1582,14 @@ async def _analyze_now_inner(db, tenant_id: int, shop_id: int,
                     :current_bid, :suggested_bid, :adjust_pct,
                     :stage, :basis,
                     :current_roas, :expected_roas,
-                    :data_days, :reason, 'pending', NOW()
+                    :data_days, :reason, 'pending', :now_utc
                 )
             """), {
                 "tenant_id": tenant_id, "shop_id": shop_id,
                 "campaign_id": camp.id, "sku": sku, "sku_name": sku_name,
                 "current_bid": current_bid, "suggested_bid": optimal_bid,
                 "adjust_pct": adjust_pct,
+                "now_utc": _utc_now().replace(tzinfo=None),
                 "stage": _detect_stage(sku_stat, data_days, breakeven_roas),
                 "basis": ("history_data" if data_days >= 21
                           else "shop_benchmark" if data_days < 7
@@ -1745,7 +1751,7 @@ async def _check_and_remove_losing_sku(
             :sku, :sku_name,
             :old_bid, 0, -100,
             'auto_remove', 'declining', :hour,
-            :success, :error, NOW()
+            :success, :error, :now_utc
         )
     """), {
         "tenant_id": tenant_id, "shop_id": shop.id,
@@ -1754,6 +1760,7 @@ async def _check_and_remove_losing_sku(
         "old_bid": current_bid, "hour": moscow_hour(),
         "success": 1 if success else 0,
         "error": None if success else "API删除失败",
+        "now_utc": _utc_now().replace(tzinfo=None),
     })
 
     try:
@@ -1976,12 +1983,13 @@ async def approve_suggestion(db, tenant_id: int, suggestion_id: int,
         # 删除操作：给 ad_groups 打 user_managed=1 锁，避免下次分析又对此 SKU 重复出建议
         db.execute(text("""
             UPDATE ad_groups
-            SET user_managed = 1, user_managed_at = NOW()
+            SET user_managed = 1, user_managed_at = :now_utc
             WHERE campaign_id = :cid AND platform_group_id = :sku
               AND tenant_id = :tid
         """), {
             "cid": row.campaign_id,
             "sku": row.platform_sku_id,
+            "now_utc": _utc_now().replace(tzinfo=None),
             "tid": tenant_id,
         })
     _write_bidlog(db, campaign, {
@@ -2388,11 +2396,12 @@ def _upsert_group_last_auto(db, campaign, sku: str, sku_name: str, last_auto: fl
             tenant_id     = VALUES(tenant_id),
             name          = VALUES(name),
             last_auto_bid = :last_auto,
-            updated_at    = NOW()
+            updated_at    = :now_utc
     """), {
         "tenant_id": campaign.tenant_id, "campaign_id": campaign.id,
         "sku": sku, "name": sku_name[:200] if sku_name else f"SKU-{sku}",
         "last_auto": last_auto,
+        "now_utc": _utc_now().replace(tzinfo=None),
     })
 
 
@@ -2410,7 +2419,7 @@ def _write_bidlog(db, campaign, suggestion: dict, execute_type: str,
             :sku, :sku_name,
             :old_bid, :new_bid, :pct,
             :execute_type, :stage, :hour,
-            :success, :error, NOW()
+            :success, :error, :now_utc
         )
     """), {
         "tenant_id":    campaign.tenant_id,
@@ -2427,19 +2436,21 @@ def _write_bidlog(db, campaign, suggestion: dict, execute_type: str,
         "hour":    moscow_hour(),
         "success": 1 if success else 0,
         "error":   (error or "")[:500] if error else None,
+        "now_utc": _utc_now().replace(tzinfo=None),
     })
 
 
 def _update_status(db, tenant_id: int, shop_id: int,
                    status: str, msg: str, retry: bool = False):
+    now_utc = _utc_now().replace(tzinfo=None)
     db.execute(text("""
         UPDATE ai_pricing_configs
-        SET last_executed_at    = NOW(),
+        SET last_executed_at    = :now_utc,
             last_execute_status = :status,
             last_error_msg      = :msg,
             retry_at = CASE
                 WHEN :retry = 1
-                THEN DATE_ADD(NOW(), INTERVAL 30 MINUTE)
+                THEN :retry_at
                 ELSE NULL
             END
         WHERE shop_id = :shop_id AND tenant_id = :tenant_id
@@ -2448,5 +2459,7 @@ def _update_status(db, tenant_id: int, shop_id: int,
         "status": status,
         "msg":    msg[:500] if msg else None,
         "retry":  1 if retry else 0,
+        "now_utc": now_utc,
+        "retry_at": now_utc + timedelta(minutes=30),
     })
     db.commit()

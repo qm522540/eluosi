@@ -9,6 +9,7 @@ from app.models.product import Product, PlatformListing
 from app.models.shop import Shop
 from app.utils.errors import ErrorCode
 from app.utils.logger import logger
+from app.utils.moscow_time import utc_now_naive
 
 
 # ==================== 商品 CRUD ====================
@@ -1099,9 +1100,9 @@ def _get_or_create_product(db: Session, tenant_id: int,
 
 def _update_sync_time(db: Session, shop_id: int, tenant_id: int):
     db.execute(text("""
-        UPDATE shop_data_init_status SET last_sync_at = NOW()
+        UPDATE shop_data_init_status SET last_sync_at = :now_utc
         WHERE shop_id = :shop_id AND tenant_id = :tenant_id
-    """), {"shop_id": shop_id, "tenant_id": tenant_id})
+    """), {"shop_id": shop_id, "tenant_id": tenant_id, "now_utc": utc_now_naive()})
     db.commit()
 
 

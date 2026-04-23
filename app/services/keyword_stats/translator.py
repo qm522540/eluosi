@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 
 from app.services.category_mapping.ai_suggester import _translate_batch
 from app.utils.logger import logger
+from app.utils.moscow_time import utc_now_naive
 
 # 进程级缓存（仍保留作 L1，避免反复查 DB）
 _cache: dict = {}
@@ -45,16 +46,17 @@ def _save_db_cache(db: Session, translations: dict):
     # Kimi 翻译写入：如果该词已被用户手动改过 (source='manual')，不覆盖
     sql = text("""
         INSERT INTO ru_zh_dict (text_ru_hash, text_ru, text_zh, field_type, source, created_at, updated_at)
-        VALUES (:h, :ru, :zh, :ft, 'kimi', NOW(), NOW())
+        VALUES (:h, :ru, :zh, :ft, 'kimi', :now_utc, :now_utc)
         ON DUPLICATE KEY UPDATE
             text_zh = IF(source = 'manual', text_zh, VALUES(text_zh)),
-            updated_at = IF(source = 'manual', updated_at, NOW())
+            updated_at = IF(source = 'manual', updated_at, :now_utc)
     """)
     try:
+        now_utc = utc_now_naive()
         for ru, zh in translations.items():
             db.execute(sql, {
                 "h": _ru_hash(ru), "ru": ru[:500], "zh": (zh or "")[:500],
-                "ft": _FIELD_TYPE,
+                "ft": _FIELD_TYPE, "now_utc": now_utc,
             })
         db.commit()
     except Exception as e:

@@ -19,6 +19,8 @@ from typing import Optional
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from app.utils.moscow_time import utc_now_naive
+
 from app.models.ad import AdCampaign, AdStat
 from app.models.shop import Shop
 from app.models.shop_data_init import ShopDataInitStatus
@@ -367,13 +369,14 @@ async def _fetch_perf_data(
                                 spend = :spend,
                                 orders = CASE WHEN :orders > 0 THEN :orders ELSE orders END,
                                 revenue = CASE WHEN :revenue > 0 THEN :revenue ELSE revenue END,
-                                updated_at = NOW()
+                                updated_at = :now_utc
                             WHERE campaign_id = :cid AND ad_group_id = :sku
                               AND stat_date = :sd AND platform = 'ozon'
                         """), {
                             "cid": internal_cid, "sku": sku, "sd": stat_date,
                             "views": views, "clicks": clicks, "spend": spend,
                             "orders": orders, "revenue": revenue,
+                            "now_utc": utc_now_naive(),
                         })
 
                         if db.execute(text("SELECT ROW_COUNT()")).scalar() == 0:
@@ -386,13 +389,14 @@ async def _fetch_perf_data(
                                 ) VALUES (
                                     :tid, :cid, :sku, 'ozon', :sd,
                                     :views, :clicks, :spend, :orders, :revenue,
-                                    NOW(), NOW()
+                                    :now_utc, :now_utc
                                 )
                             """), {
                                 "tid": tenant_id, "cid": internal_cid, "sku": sku,
                                 "sd": stat_date,
                                 "views": views, "clicks": clicks, "spend": spend,
                                 "orders": orders, "revenue": revenue,
+                                "now_utc": utc_now_naive(),
                             })
                         updated += 1
 
@@ -437,8 +441,8 @@ def _upsert_stat(db: Session, campaign: AdCampaign, tenant_id: int,
 
     if existing:
         sets = ", ".join(f"{k} = :{k}" for k in data)
-        db.execute(text(f"UPDATE ad_stats SET {sets}, updated_at = NOW() WHERE id = :id"),
-                   {"id": existing.id, **data})
+        db.execute(text(f"UPDATE ad_stats SET {sets}, updated_at = :now_utc WHERE id = :id"),
+                   {"id": existing.id, "now_utc": utc_now_naive(), **data})
         return 0
     else:
         db.execute(text("""
@@ -449,10 +453,11 @@ def _upsert_stat(db: Session, campaign: AdCampaign, tenant_id: int,
             ) VALUES (
                 :tid, :cid, :sku, 'ozon', :sd,
                 0, 0, 0, :orders, :revenue,
-                NOW(), NOW()
+                :now_utc, :now_utc
             )
         """), {
             "tid": tenant_id, "cid": campaign.id, "sku": sku_id, "sd": stat_date,
+            "now_utc": utc_now_naive(),
             **data,
         })
         return 1

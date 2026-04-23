@@ -22,7 +22,7 @@ from sqlalchemy import text
 
 from app.utils.errors import ErrorCode
 from app.utils.logger import setup_logger
-from app.utils.moscow_time import get_current_period, moscow_hour, now_moscow
+from app.utils.moscow_time import get_current_period, moscow_hour, now_moscow, utc_now_naive
 
 logger = setup_logger("bid.time_pricing_executor")
 
@@ -197,9 +197,9 @@ async def _process_sku(db, client, campaign, sku: str, sku_name: str,
             )
             db.execute(text("""
                 UPDATE ad_groups
-                SET user_managed = 1, user_managed_at = NOW()
+                SET user_managed = 1, user_managed_at = :now_utc
                 WHERE campaign_id = :cid AND platform_group_id = :sku
-            """), {"cid": campaign.id, "sku": sku})
+            """), {"cid": campaign.id, "sku": sku, "now_utc": utc_now_naive()})
             return "skipped"
 
     # 3. first run：original_bid 为空时写入当前价
@@ -332,7 +332,7 @@ def update_rule(db, tenant_id: int, shop_id: int, data: dict) -> dict:
             mid_ratio = VALUES(mid_ratio),
             low_hours = VALUES(low_hours),
             low_ratio = VALUES(low_ratio),
-            updated_at = NOW()
+            updated_at = :now_utc
     """), {
         "tenant_id": tenant_id,
         "shop_id": shop_id,
@@ -342,6 +342,7 @@ def update_rule(db, tenant_id: int, shop_id: int, data: dict) -> dict:
         "mid_ratio": mid_ratio,
         "low_hours": json.dumps(low),
         "low_ratio": low_ratio,
+        "now_utc": utc_now_naive(),
     })
     db.commit()
     return {"code": 0}
@@ -368,9 +369,9 @@ def enable(db, tenant_id: int, shop_id: int) -> dict:
         return {"code": ErrorCode.BID_CONFLICT_TIME_AI, "msg": "AI调价已启用，请先停用"}
 
     db.execute(text("""
-        UPDATE time_pricing_rules SET is_active = 1, updated_at = NOW()
+        UPDATE time_pricing_rules SET is_active = 1, updated_at = :now_utc
         WHERE shop_id = :shop_id AND tenant_id = :tenant_id
-    """), {"shop_id": shop_id, "tenant_id": tenant_id})
+    """), {"shop_id": shop_id, "tenant_id": tenant_id, "now_utc": utc_now_naive()})
     db.commit()
     return {"code": 0}
 
@@ -390,9 +391,9 @@ async def disable(db, tenant_id: int, shop_id: int) -> dict:
 
     # 1. 先停 executor（避免回弹途中被并发执行覆盖）
     db.execute(text("""
-        UPDATE time_pricing_rules SET is_active = 0, updated_at = NOW()
+        UPDATE time_pricing_rules SET is_active = 0, updated_at = :now_utc
         WHERE shop_id = :shop_id AND tenant_id = :tenant_id
-    """), {"shop_id": shop_id, "tenant_id": tenant_id})
+    """), {"shop_id": shop_id, "tenant_id": tenant_id, "now_utc": utc_now_naive()})
     db.commit()
 
     shop = db.query(Shop).filter(
@@ -464,7 +465,7 @@ async def disable(db, tenant_id: int, shop_id: int) -> dict:
                 ) VALUES (
                     :tenant_id, :shop_id, :campaign_id, :campaign_name,
                     :sku, NULL, :old_bid, :new_bid, :pct,
-                    'time_restore', 1, NOW()
+                    'time_restore', 1, :now_utc
                 )
             """), {
                 "tenant_id": tenant_id,
@@ -475,13 +476,14 @@ async def disable(db, tenant_id: int, shop_id: int) -> dict:
                 "old_bid": previous,
                 "new_bid": target_bid,
                 "pct": pct,
+                "now_utc": utc_now_naive(),
             })
 
             # 清空 last_auto_bid → 该行从"当前执行状态"消失
             db.execute(text("""
-                UPDATE ad_groups SET last_auto_bid = NULL, updated_at = NOW()
+                UPDATE ad_groups SET last_auto_bid = NULL, updated_at = :now_utc
                 WHERE id = :id AND tenant_id = :tenant_id
-            """), {"id": row.id, "tenant_id": tenant_id})
+            """), {"id": row.id, "tenant_id": tenant_id, "now_utc": utc_now_naive()})
 
             restored += 1
 
@@ -565,7 +567,7 @@ async def restore_sku(db, tenant_id: int, shop_id: int, sku: str) -> dict:
                 ) VALUES (
                     :tenant_id, :shop_id, :campaign_id, :campaign_name,
                     :sku, NULL, :old_bid, :new_bid,
-                    :pct, 'user_manual', 1, NOW()
+                    :pct, 'user_manual', 1, :now_utc
                 )
             """), {
                 "tenant_id": row.tenant_id,
@@ -576,6 +578,7 @@ async def restore_sku(db, tenant_id: int, shop_id: int, sku: str) -> dict:
                 "old_bid": previous,
                 "new_bid": target,
                 "pct": round((target - previous) / previous * 100, 2) if previous > 0 else 0,
+                "now_utc": utc_now_naive(),
             })
             restored_count += 1
             last_target = target
@@ -705,7 +708,7 @@ def _upsert_group(db, campaign, sku: str, sku_name: str,
             name = VALUES(name),
             original_bid = COALESCE(original_bid, VALUES(original_bid)),
             last_auto_bid = VALUES(last_auto_bid),
-            updated_at = NOW()
+            updated_at = :now_utc
     """), {
         "tenant_id": campaign.tenant_id,
         "campaign_id": campaign.id,
@@ -713,6 +716,7 @@ def _upsert_group(db, campaign, sku: str, sku_name: str,
         "name": sku_name[:200] if sku_name else f"SKU-{sku}",
         "original": base_bid,
         "last_auto": last_auto,
+        "now_utc": utc_now_naive(),
     })
 
 
@@ -736,7 +740,7 @@ def _write_log(db, campaign, sku: str, sku_name: str,
             :sku, :sku_name,
             :old_bid, :new_bid, :pct,
             :execute_type, :period, :ratio,
-            :hour, :success, :error_msg, NOW()
+            :hour, :success, :error_msg, :now_utc
         )
     """), {
         "tenant_id": campaign.tenant_id,
@@ -747,6 +751,7 @@ def _write_log(db, campaign, sku: str, sku_name: str,
         "sku_name": sku_name[:300] if sku_name else None,
         "old_bid": old_bid,
         "new_bid": new_bid,
+        "now_utc": utc_now_naive(),
         "pct": pct,
         "execute_type": execute_type,
         "period": time_period,
@@ -794,7 +799,8 @@ def _save_result(db, shop_id: int, tenant_id: int, counters: dict, summary: str)
     """保存最后一次执行结果摘要到 time_pricing_rules（多租户过滤）"""
     db.execute(text("""
         UPDATE time_pricing_rules
-        SET last_executed_at = NOW(), last_execute_result = :summary
+        SET last_executed_at = :now_utc, last_execute_result = :summary
         WHERE shop_id = :shop_id AND tenant_id = :tenant_id
-    """), {"shop_id": shop_id, "tenant_id": tenant_id, "summary": summary[:200]})
+    """), {"shop_id": shop_id, "tenant_id": tenant_id,
+           "summary": summary[:200], "now_utc": utc_now_naive()})
     db.commit()

@@ -10,6 +10,7 @@ import io
 from pydantic import BaseModel, Field
 from app.dependencies import get_db, get_current_user, get_tenant_id, get_owned_shop
 from app.utils.logger import setup_logger
+from app.utils.moscow_time import utc_now_naive
 
 logger = setup_logger("api.ads")
 from app.schemas.ad import (
@@ -1987,14 +1988,14 @@ async def _sync_ozon_campaigns(db, shop) -> tuple:
                 :shop_id, :tenant_id, 'ozon',
                 :platform_id,
                 :name, :ad_type, :payment_type, :status,
-                :budget, NOW()
+                :budget, :now_utc
             )
             ON DUPLICATE KEY UPDATE
                 name          = VALUES(name),
                 payment_type  = VALUES(payment_type),
                 status        = VALUES(status),
                 daily_budget  = VALUES(daily_budget),
-                updated_at    = NOW()
+                updated_at    = :now_utc
         """), {
             "shop_id": shop.id,
             "tenant_id": shop.tenant_id,
@@ -2004,6 +2005,7 @@ async def _sync_ozon_campaigns(db, shop) -> tuple:
             "payment_type": c.get("payment_type", "cpc"),
             "status": mapped_status,
             "budget": min(float(c.get("daily_budget") or 0), 99999999.99),
+            "now_utc": utc_now_naive(),
         })
 
         if result.rowcount > 0:
@@ -2068,14 +2070,14 @@ async def _sync_wb_campaigns(db, shop) -> tuple:
                 :shop_id, :tenant_id, 'wb',
                 :platform_id,
                 :name, :ad_type, :payment_type, :status,
-                :budget, NOW()
+                :budget, :now_utc
             )
             ON DUPLICATE KEY UPDATE
                 name          = IF(VALUES(name) != '', VALUES(name), name),
                 payment_type  = VALUES(payment_type),
                 status        = VALUES(status),
                 daily_budget  = VALUES(daily_budget),
-                updated_at    = NOW()
+                updated_at    = :now_utc
         """), {
             "shop_id": shop.id,
             "tenant_id": shop.tenant_id,
@@ -2085,6 +2087,7 @@ async def _sync_wb_campaigns(db, shop) -> tuple:
             "payment_type": c.get("payment_type", "cpm"),
             "status": mapped_status,
             "budget": min(float(c.get("daily_budget") or 0), 99999999.99),
+            "now_utc": utc_now_naive(),
         })
 
         if result.rowcount > 0:
