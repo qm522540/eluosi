@@ -78,11 +78,14 @@ function buildStageTip(stage, record, baseCfg) {
   const m5  = reason.match(/\[recent5d:\s*ctr=([\d.-]+)%\s+cr=([\d.-]+)%\s+profit=([+-]?\d+)\s+days=(\d+)\]/)
   if (!m28 && !m5) return baseCfg.tip
 
-  const lines = [<div key="t" style={{ fontWeight: 600, marginBottom: 4 }}>{baseCfg.label}</div>]
+  const lines = [
+    <div key="t" style={{ fontWeight: 600, marginBottom: 2 }}>{baseCfg.label}</div>,
+    <div key="ts" style={{ fontSize: 11, color: '#bfbfbf', marginBottom: 4 }}>{baseCfg.tip}</div>,
+  ]
 
   if (m28) {
     const ctr = parseFloat(m28[1]); const cr = parseFloat(m28[2])
-    lines.push(<div key="h" style={{ marginTop: 6, color: '#bfbfbf', fontSize: 11 }}>━ 历史 28 天 ━</div>)
+    lines.push(<div key="h" style={{ marginTop: 6, color: '#bfbfbf', fontSize: 11 }}>━ 近 28 天 CTR/CR 窗口 ━</div>)
     lines.push(<div key="hc" style={{ paddingLeft: 4 }}>CTR {ctr.toFixed(2)}% {ctr >= 2 ? <span style={{ color: '#52c41a' }}>≥2% 达标</span> : <span style={{ color: '#ff4d4f' }}>&lt;2% 待提升</span>}</div>)
     lines.push(<div key="hr" style={{ paddingLeft: 4 }}>CR {cr.toFixed(2)}% {cr >= 2 ? <span style={{ color: '#52c41a' }}>≥2% 达标</span> : <span style={{ color: '#ff4d4f' }}>&lt;2% 转化链待验证</span>}</div>)
   }
