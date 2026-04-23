@@ -85,7 +85,7 @@ def parse_preset_stat_xlsx(file_bytes: bytes) -> Tuple[List[Dict], List[Dict]]:
     """
     import openpyxl
 
-    wb = openpyxl.load_workbook(io.BytesIO(file_bytes), data_only=True, read_only=True)
+    wb = openpyxl.load_workbook(io.BytesIO(file_bytes), data_only=True)
 
     if SUMMARY_SHEET not in wb.sheetnames or MAPPING_SHEET not in wb.sheetnames:
         raise ValueError(
@@ -98,10 +98,10 @@ def parse_preset_stat_xlsx(file_bytes: bytes) -> Tuple[List[Dict], List[Dict]]:
     summary_rows: List[Dict] = []
     for i, row in enumerate(ws1.iter_rows(values_only=True)):
         if i == 0:
-            # 校验表头至少包含 Кластер 和 Просмотры
-            hdr = [str(c or "").strip() for c in row]
-            if "Кластер" not in hdr or "Просмотры" not in hdr:
-                raise ValueError(f"xlsx Sheet {SUMMARY_SHEET!r} 表头不匹配: {hdr}")
+            # 只要第一列 == "Кластер" 就认（其他列可能被合并单元格占用）
+            first = str(row[0] or "").strip() if row else ""
+            if first != "Кластер":
+                raise ValueError(f"xlsx Sheet {SUMMARY_SHEET!r} 首列非 'Кластер': {first!r}")
             continue
         if not row or not row[0]:
             continue
@@ -126,6 +126,8 @@ def parse_preset_stat_xlsx(file_bytes: bytes) -> Tuple[List[Dict], List[Dict]]:
         })
 
     # Sheet 2 mapping
+    # 去重 key 做 ё→е + lowercase 归一：MySQL utf8mb4_unicode_ci 把 ё/е + 大小写视为等价，
+    # 若去重只看精确字符串会在 DB UNIQUE 层冲突（Duplicate entry for uk_oracle_kw）
     ws2 = wb[MAPPING_SHEET]
     mapping_rows: List[Dict] = []
     seen = set()
@@ -138,10 +140,10 @@ def parse_preset_stat_xlsx(file_bytes: bytes) -> Tuple[List[Dict], List[Dict]]:
         kw      = str(row[1]).strip()
         if not cluster or not kw:
             continue
-        key = (cluster, kw.lower())
-        if key in seen:
+        norm_kw = kw.lower().replace("ё", "е")
+        if norm_kw in seen:
             continue
-        seen.add(key)
+        seen.add(norm_kw)
         mapping_rows.append({"cluster_name": cluster, "keyword": kw})
 
     return summary_rows, mapping_rows
