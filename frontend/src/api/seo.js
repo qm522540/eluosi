@@ -87,3 +87,8 @@ export function getCandidatesRollup(shopId, params) {
 export function getCandidatesRollupProducts(shopId, params) {
   return request.get(`${BASE}/shop/${shopId}/candidates-rollup/products`, { params })
 }
+
+/** 类目推断证据：该类目下对该关键词真实搜中的 Top N 商品（点"推荐理由"Tag 弹 Modal） */
+export function getCandidatesRollupCategoryEvidence(shopId, params) {
+  return request.get(`${BASE}/shop/${shopId}/candidates-rollup/category-evidence`, { params })
+}

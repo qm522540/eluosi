@@ -1,14 +1,15 @@
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import {
-  Card, Table, Space, Segmented, Input, Button, Tag, Badge,
-  Empty, Alert, Typography, Image, message, Select, Rate, Tooltip, Switch,
+  Card, Table, Space, Segmented, Input, Button, Tag, Badge, Modal,
+  Empty, Alert, Typography, Image, message, Select, Rate, Tooltip, Switch, List,
 } from 'antd'
 import {
   ReloadOutlined, SearchOutlined, DownOutlined, RightOutlined,
-  TagOutlined, CheckCircleFilled, CloseCircleFilled,
+  TagOutlined, CheckCircleFilled, CloseCircleFilled, InfoCircleOutlined,
 } from '@ant-design/icons'
 import {
   getCandidatesRollup, getCandidatesRollupProducts,
+  getCandidatesRollupCategoryEvidence,
 } from '@/api/seo'
 
 const { Text } = Typography
@@ -90,6 +91,22 @@ const CandidatesRollupTable = ({
   const [loading, setLoading] = useState(false)
   const [expanded, setExpanded] = useState({})
   const [expandedKeys, setExpandedKeys] = useState([])
+  // 推荐理由 Modal：点"0 曝光·类目推断"行的 Tag 弹出 Top 5 真实命中商品
+  const [evidenceModal, setEvidenceModal] = useState({ open: false, loading: false, keyword: '', evidence: null, items: [], shopId: null })
+
+  const openEvidenceModal = useCallback(async (keyword, evidence, shopId) => {
+    if (!evidence || !evidence.cat_id) return
+    setEvidenceModal({ open: true, loading: true, keyword, evidence, items: [], shopId })
+    try {
+      const r = await getCandidatesRollupCategoryEvidence(shopId, {
+        keyword, category_id: evidence.cat_id, limit: 5,
+      })
+      setEvidenceModal(s => ({ ...s, loading: false, items: r.data?.items || [] }))
+    } catch (err) {
+      setEvidenceModal(s => ({ ...s, loading: false }))
+      message.error('加载证据失败：' + (err.response?.data?.msg || err.message))
+    }
+  }, [])
 
   // defaultShopId 变化时（父层切了主店铺）同步多选默认
   useEffect(() => {
@@ -271,24 +288,48 @@ const CandidatesRollupTable = ({
         },
       },
       {
-        title: '实证表现', key: 'evidence', width: 180,
+        title: '实证表现', key: 'evidence', width: 220,
         render: (_, r) => {
           if (!r.has_self) {
+            const ev = r.category_evidence
+            const catName = ev?.cat_name_ru || ev?.cat_name || '同类目'
+            const pv  = ev?.products_verified || 0
+            const ord = ev?.total_orders || 0
+            const imp = ev?.total_impressions || 0
+            const shopIdForEv = r.shop_id || shopIds[0] || defaultShopId
+            if (!ev || pv === 0) {
+              return (
+                <Tooltip title="本商品在此词上 0 曝光；类目层面也没有 product_search_queries 证据（可能 seo_keyword_candidates 表有旧数据、或最近刚触发过推断）">
+                  <Tag color="default" style={{ fontSize: 11, cursor: 'help' }}>0 曝光 · 系统推荐加词</Tag>
+                </Tooltip>
+              )
+            }
+            const summary = ord > 0
+              ? `${pv} 款验证 · ${ord} 单 · ${imp.toLocaleString()} 曝光`
+              : `${pv} 款验证 · ${imp.toLocaleString()} 曝光`
             return (
               <Tooltip
-                overlayStyle={{ maxWidth: 340 }}
+                overlayStyle={{ maxWidth: 360 }}
                 title={(
                   <div style={{ lineHeight: 1.6 }}>
-                    <div><strong>本商品在此词上：0 曝光 · 0 订单</strong></div>
-                    <div style={{ marginTop: 4 }}>用户搜这词时本商品没被展示过，所以没流量。</div>
-                    <div style={{ marginTop: 4, color: '#ffd591' }}>
-                      系统推荐：把这词加进本商品标题/属性 → 下次有人搜这词就可能触发展示 → 产生首个曝光。
+                    <div><strong>推荐理由（点 Tag 看详情）</strong></div>
+                    <div style={{ marginTop: 4 }}>同类目 <Text strong style={{ color: '#ffd591' }}>{catName}</Text> 里有 <Text strong style={{ color: '#ffd591' }}>{pv}</Text> 款商品真实搜中此词，产生 <Text strong style={{ color: '#ffd591' }}>{imp.toLocaleString()}</Text> 曝光{ord > 0 ? ` / ${ord} 订单` : ''}</div>
+                    <div style={{ marginTop: 6, color: '#ffe58f' }}>
+                      系统认为同类目商品都适合加这词 → 把词加进本商品标题/属性 → 下次搜此词可能触发展示
                     </div>
                   </div>
                 )}
               >
-                <Tag color="default" style={{ fontSize: 11, cursor: 'help' }}>
-                  0 曝光 · 系统推荐加词
+                <Tag
+                  color="gold"
+                  icon={<InfoCircleOutlined />}
+                  style={{ fontSize: 11, cursor: 'pointer', marginRight: 0 }}
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    openEvidenceModal(kw, ev, shopIdForEv)
+                  }}
+                >
+                  {summary}
                 </Tag>
               </Tooltip>
             )
@@ -509,6 +550,79 @@ const CandidatesRollupTable = ({
         }}
         locale={{ emptyText: <Empty description="当前条件下无候选词" /> }}
       />
+
+      <Modal
+        title={(
+          <Space>
+            <InfoCircleOutlined style={{ color: '#faad14' }} />
+            <span>推荐理由 · 类目内真实搜中明细</span>
+          </Space>
+        )}
+        open={evidenceModal.open}
+        onCancel={() => setEvidenceModal({ open: false, loading: false, keyword: '', evidence: null, items: [], shopId: null })}
+        footer={null}
+        width={680}
+      >
+        {evidenceModal.evidence && (
+          <>
+            <Alert
+              type="info"
+              showIcon
+              style={{ marginBottom: 12 }}
+              message={(
+                <Space size={6} wrap>
+                  <Text>关键词</Text>
+                  <Tag color="blue" style={{ margin: 0 }}>{evidenceModal.keyword}</Tag>
+                  <Text>在类目</Text>
+                  <Tag color="purple" style={{ margin: 0 }}>
+                    {evidenceModal.evidence.cat_name_ru || evidenceModal.evidence.cat_name || `cat#${evidenceModal.evidence.cat_id}`}
+                  </Tag>
+                </Space>
+              )}
+              description={(
+                <div style={{ marginTop: 4, fontSize: 12 }}>
+                  <Text strong style={{ color: '#389e0d' }}>{evidenceModal.evidence.products_verified}</Text> 款真实搜中 ·
+                  {' '}曝光 <Text strong>{(evidenceModal.evidence.total_impressions || 0).toLocaleString()}</Text> ·
+                  {' '}加购 <Text strong>{evidenceModal.evidence.total_add_to_cart || 0}</Text> ·
+                  {' '}订单 <Text strong style={{ color: (evidenceModal.evidence.total_orders || 0) > 0 ? '#cf1322' : undefined }}>{evidenceModal.evidence.total_orders || 0}</Text>
+                  <div style={{ marginTop: 4, color: '#888' }}>
+                    系统由此推断"同类目其他商品也适合加这词" → 把此词加进本商品标题可能抢到一份搜索流量
+                  </div>
+                </div>
+              )}
+            />
+            <List
+              loading={evidenceModal.loading}
+              bordered
+              size="small"
+              dataSource={evidenceModal.items}
+              locale={{ emptyText: '无数据' }}
+              renderItem={(it, idx) => (
+                <List.Item>
+                  <Space align="start" style={{ width: '100%' }}>
+                    <span style={{ fontSize: 14, color: '#999', width: 22, textAlign: 'center' }}>#{idx + 1}</span>
+                    {it.image_url && (
+                      <Image src={it.image_url} width={42} height={42}
+                             style={{ borderRadius: 4, objectFit: 'cover' }} preview={false}
+                             fallback="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='42' height='42'%3E%3Crect fill='%23eee' width='42' height='42'/%3E%3C/svg%3E"
+                      />
+                    )}
+                    <div style={{ flex: 1 }}>
+                      <div style={{ fontSize: 12, fontWeight: 500 }}>{it.title || '(无标题)'}</div>
+                      <Text type="secondary" style={{ fontSize: 11 }}>SKU {it.platform_sku_id || it.product_id}</Text>
+                    </div>
+                    <Space size={12} style={{ fontSize: 12 }}>
+                      <span>曝光 <Text strong>{(it.total_impressions || 0).toLocaleString()}</Text></span>
+                      <span>加购 <Text strong>{it.total_add_to_cart || 0}</Text></span>
+                      <span>订单 <Text strong style={{ color: (it.total_orders || 0) > 0 ? '#cf1322' : undefined }}>{it.total_orders || 0}</Text></span>
+                    </Space>
+                  </Space>
+                </List.Item>
+              )}
+            />
+          </>
+        )}
+      </Modal>
     </div>
   )
 }
