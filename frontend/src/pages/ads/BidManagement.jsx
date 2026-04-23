@@ -491,21 +491,6 @@ const TimePricingConfig = ({ shopId, platform, activeMode, onSaved }) => {
     return (utcH + 3) % 24
   }
 
-  /** 根据用户配置的时段，找下一个非平谷期的小时和对应时段名 */
-  const getNextActiveSlot = (currentMoscowHour) => {
-    const allConfigured = [
-      ...peakHours.map(h => ({ h, label: '高峰', ratio: peakRatio })),
-      ...midHours.map(h => ({ h, label: '次高峰', ratio: midRatio })),
-      ...lowHours.map(h => ({ h, label: '低谷', ratio: lowRatio })),
-    ].sort((a, b) => a.h - b.h)
-    if (allConfigured.length === 0) return null
-    // 找当前小时之后最近的
-    const after = allConfigured.find(s => s.h > currentMoscowHour)
-    if (after) return { ...after, tomorrow: false }
-    // 没有 → wrap 到明天第一个
-    return { ...allConfigured[0], tomorrow: true }
-  }
-
   const doSaveAndEnable = async () => {
     setSaving(true)
     setSavingMsg('正在保存配置...')
@@ -524,6 +509,7 @@ const TimePricingConfig = ({ shopId, platform, activeMode, onSaved }) => {
       setSavingMsg('正在刷新执行状态...')
       await loadStatus()
       message.success('分时调价已开启')
+      onSaved?.()
     } catch (e) {
       setLocalEnabled(false)
       message.error(e?.message || '保存失败')
@@ -834,6 +820,7 @@ const TimePricingConfig = ({ shopId, platform, activeMode, onSaved }) => {
                           message.success('分时调价已关闭')
                         }
                         setLocalEnabled(false)
+                        onSaved?.()
                       } catch (e) {
                         message.error(e?.message || '关闭失败')
                       } finally {
