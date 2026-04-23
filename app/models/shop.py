@@ -28,6 +28,11 @@ class Shop(BaseMixin, Base):
     # Yandex Market 专用（YandexClient.fetch_products 必需）
     yandex_business_id: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     yandex_campaign_id: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    # WB cmp.wildberries.ru seller-panel 内部 API 凭证（用于「顶级搜索集群」自动同步）
+    wb_cmp_authorizev3:      Mapped[Optional[str]] = mapped_column(String(2000), nullable=True)
+    wb_cmp_supplierid:       Mapped[Optional[str]] = mapped_column(String(64),   nullable=True)
+    wb_cmp_token_updated_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    wb_cmp_token_exp_at:     Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     currency: Mapped[str] = mapped_column(String(3), nullable=False, default="RUB")
     timezone: Mapped[str] = mapped_column(String(50), nullable=False, default="Europe/Moscow")
     status: Mapped[str] = mapped_column(
