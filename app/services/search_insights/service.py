@@ -319,11 +319,12 @@ async def refresh_shop(
     date_to = (today - timedelta(days=2)).isoformat()
 
     # 拉取租户+店铺下的 listing（带 product_id 映射）
+    # 规则 1 纵深：pl + p 双表都带 tenant_id
     listings_sql = text("""
         SELECT pl.platform_sku_id AS psk, pl.product_id AS pid
         FROM platform_listings pl
         JOIN products p ON p.id = pl.product_id
-        WHERE pl.shop_id = :sid AND pl.platform = :plat
+        WHERE pl.tenant_id = :tid AND pl.shop_id = :sid AND pl.platform = :plat
           AND p.tenant_id = :tid AND pl.platform_sku_id IS NOT NULL
           AND (p.status NOT IN ('deleted') OR p.status IS NULL)
     """)
