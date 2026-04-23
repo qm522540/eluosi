@@ -36,7 +36,7 @@ CTR/CR 取值（按数据天数）：
 import asyncio as _asyncio
 import json
 import re
-from datetime import datetime, timezone, date, timedelta
+from datetime import datetime, timezone, timedelta
 from typing import Optional
 
 from sqlalchemy import text
@@ -45,7 +45,7 @@ from app.config import get_settings
 from app.services.ai.stage_detector import ProductStage, detect_product_stage
 from app.utils.errors import ErrorCode
 from app.utils.logger import setup_logger
-from app.utils.moscow_time import moscow_hour, moscow_today, now_moscow, MOSCOW_TZ
+from app.utils.moscow_time import moscow_hour, moscow_today, now_moscow, utc_now_naive, MOSCOW_TZ
 
 logger = setup_logger("bid.ai_pricing_executor")
 settings = get_settings()
@@ -249,7 +249,7 @@ def _query_sku_window(db, tenant_id: int, campaign_id: int, sku: str,
                        days: int, platform: str | None = None) -> dict:
     """取 SKU 最近 N 天的累计指标"""
     params = {"tid": tenant_id, "cid": campaign_id, "sku": sku,
-              "since": date.today() - timedelta(days=days)}
+              "since": moscow_today() - timedelta(days=days)}
     platform_clause = ""
     if platform:
         platform_clause = " AND platform=:platform"
@@ -303,7 +303,7 @@ def _compare_1day_profit(db, tenant_id: int, campaign_id: int, sku: str,
     """Day 5-6：比较前一天 vs 前前一天的单位花费利润。
     Returns: (up, reason) up=True 表示前一天更好 → +5%
     """
-    today = date.today()
+    today = moscow_today()
     yesterday = today - timedelta(days=1)
     day_before = today - timedelta(days=2)
 
@@ -334,7 +334,7 @@ def _compare_3day_profit(db, tenant_id: int, campaign_id: int, sku: str,
         if near_d < 3 or prev_d < 3:
             return ("insufficient", f"健康天不足(近{near_d}/前{prev_d})")
     else:
-        today = date.today()
+        today = moscow_today()
         near_from, near_to = today - timedelta(days=3), today - timedelta(days=1)
         prev_from, prev_to = today - timedelta(days=6), today - timedelta(days=4)
         params_base = {"tid": tenant_id, "cid": campaign_id, "sku": sku}
@@ -556,7 +556,7 @@ def _calc_healthy_window_metrics(db, tenant_id: int, campaign_id: int, sku: str,
     platform 参数：纵深防御，防止 ad_stats 写入端 bug 把跨平台行混入同一 (tid,cid,sku)。
     返回 (spend_sum, revenue_sum, days_count)
     """
-    today = date.today()
+    today = moscow_today()
     params = {"tid": tenant_id, "cid": campaign_id, "sku": sku,
               "since": today - timedelta(days=28)}
     platform_clause = ""
@@ -598,7 +598,7 @@ def _calc_healthy_window_full(db, tenant_id: int, campaign_id: int, sku: str,
     platform 参数：纵深防御，防止跨平台行混入。
     返回 dict: {spend, revenue, impressions, clicks, orders, days}
     """
-    today = date.today()
+    today = moscow_today()
     params = {"tid": tenant_id, "cid": campaign_id, "sku": sku,
               "since": today - timedelta(days=28)}
     platform_clause = ""
@@ -654,16 +654,17 @@ def _save_hill_state(db, tenant_id: int, campaign_id: int, sku: str,
             hill_base_bid, hill_step_direction, hill_step_size, hill_last_eval_at
         ) VALUES (
             :tid, :cid, :sku, :sku,
-            :base, :dir, :step, UTC_TIMESTAMP()
+            :base, :dir, :step, :now_utc
         )
         ON DUPLICATE KEY UPDATE
             tenant_id = :tid,
             hill_base_bid       = :base,
             hill_step_direction = :dir,
             hill_step_size      = :step,
-            hill_last_eval_at   = UTC_TIMESTAMP()
+            hill_last_eval_at   = :now_utc
     """), {"tid": tenant_id, "cid": campaign_id, "sku": sku,
-           "base": round(base_bid, 2), "dir": direction, "step": step_size})
+           "base": round(base_bid, 2), "dir": direction, "step": step_size,
+           "now_utc": utc_now_naive()})
 
 
 def _cold_start_direction(sku_stat: dict, breakeven_roas: float) -> tuple:
@@ -780,7 +781,7 @@ def _hill_climbing_decision(db, tenant_id: int, campaign_id: int, sku: str,
     # 实证 sku 498605688 在 21h 内被评估 5 次，base 从 ₽33→₽22 + step 从 0.20→0.05
     # 改用"自然日比较"：莫斯科 0 点过了就触发新评估，时间点固定可预测
     if row.hill_last_eval_at is not None:
-        # hill_last_eval_at 是 UTC naive datetime（由 UTC_TIMESTAMP() 写入）
+        # hill_last_eval_at 是 UTC naive datetime（由 utc_now_naive() 写入）
         last_eval_utc = row.hill_last_eval_at.replace(tzinfo=timezone.utc)
         last_eval_moscow_date = last_eval_utc.astimezone(MOSCOW_TZ).date()
         today_moscow_date = now_moscow().date()
@@ -880,7 +881,7 @@ def _roas_gate(db, campaign_id: int, sku: str, tenant_id: int,
         return optimal_bid  # 降价直接放行
 
     sku_col = "s.ad_group_id" if platform == "wb" else "COALESCE(s.ad_group_id, 0)"
-    today = date.today()
+    today = moscow_today()
     last3_from = today - timedelta(days=3)
     prev3_from = today - timedelta(days=6)
 
@@ -937,7 +938,7 @@ def _evaluate_profit_trial(db, tenant_id: int, campaign_id: int, sku: str,
     CPA_MAX  = 0.85
 
     sku_col = "s.ad_group_id" if platform == "wb" else "COALESCE(s.ad_group_id, 0)"
-    today = date.today()
+    today = moscow_today()
     last3_from = today - timedelta(days=3)
     prev3_from = today - timedelta(days=6)
 
@@ -1066,7 +1067,7 @@ def _get_client_price(db, tenant_id: int, shop_id: int, platform_sku_id: str) ->
 # ==================== 店铺均值 ====================
 
 def _get_shop_avg(db, shop_id: int, tenant_id: int, platform: str) -> dict:
-    today = date.today()
+    today = moscow_today()
     since = today - timedelta(days=21)
 
     row = db.execute(text("""
@@ -2178,7 +2179,7 @@ def _get_roas_21_30(db, campaign_id: int, sku: str,
     凑齐 9 个真实投放天，算合并 ROAS。无论投放断续与否，看到的都是
     真实投放期的 9 天数据。长尾 SKU（每天 ₽5-10 投入）也能正确进窗口。
     """
-    today     = date.today()
+    today     = moscow_today()
     cutoff    = today - timedelta(days=21)
     sku_col   = "s.ad_group_id" if platform == "wb" else "COALESCE(s.ad_group_id, 0)"
 
@@ -2509,7 +2510,7 @@ def reject_batch(db, tenant_id: int, ids: list) -> dict:
 # ==================== SKU历史数据查询 ====================
 
 def _query_sku_history(db, shop_id: int, tenant_id: int, platform: str) -> dict:
-    today = date.today()
+    today = moscow_today()
     boundaries = {
         "last5": (today - timedelta(days=5),  today),
         "prev5": (today - timedelta(days=10), today - timedelta(days=5)),
