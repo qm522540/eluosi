@@ -11,6 +11,7 @@ import {
 import {
   getCandidatesRollup, getCandidatesRollupProducts,
   getCandidatesRollupCategoryEvidence, getCandidatesRollupCrossShopEvidence,
+  refreshSeo,
 } from '@/api/seo'
 import { translateKeywords, updateTranslation } from '@/api/keyword_stats'
 
@@ -115,6 +116,10 @@ const CandidatesRollupTable = ({
   const [keyword, setKeyword] = useState('')
   const [hideCovered, setHideCovered] = useState(true)
   const [sort, setSort] = useState('score_desc')
+  // 时间窗口：决定"刷新候选池"按钮调 analyze_paid_to_organic 的 days 参数
+  // 候选池表 seo_keyword_candidates 无时间维度，切 days 要重跑引擎才生效
+  const [days, setDays] = useState(30)
+  const [refreshingEngine, setRefreshingEngine] = useState(false)
 
   const [data, setData] = useState(null)
   const [loading, setLoading] = useState(false)
@@ -205,6 +210,51 @@ const CandidatesRollupTable = ({
   }, [shopIds, sourceParam, status, keyword, hideCovered, sort, shopNameMap])
 
   useEffect(() => { fetchData() }, [fetchData])
+
+  // 重跑候选池引擎：按当前 days 窗口扫 ad_stats + product_search_queries →
+  // 重算 seo_keyword_candidates。耗时 10-30s/店，多店并发。
+  const handleRefreshEngine = useCallback(async () => {
+    if (!shopIds.length) {
+      message.warning('请先选择店铺')
+      return
+    }
+    setRefreshingEngine(true)
+    const hide = message.loading(`正在刷新候选池（近 ${days} 天数据，预计 10-30s/店）...`, 0)
+    try {
+      const results = await Promise.allSettled(
+        shopIds.map(sid => refreshSeo(sid, { days }).then(r => ({ sid, r })))
+      )
+      let totalWritten = 0
+      let okShops = 0
+      const failures = []
+      results.forEach(res => {
+        if (res.status === 'fulfilled' && res.value?.r?.code === 0) {
+          totalWritten += res.value.r.data?.written || 0
+          okShops += 1
+        } else {
+          const sid = res.reason?.sid || res.value?.sid
+          const msg = res.reason?.response?.data?.msg ||
+                      res.value?.r?.msg || '失败'
+          failures.push(`${shopNameMap[sid] || `shop#${sid}`}: ${msg}`)
+        }
+      })
+      hide()
+      if (okShops === shopIds.length) {
+        message.success(`候选池已刷新：${okShops} 家店 · 写入 ${totalWritten} 条候选`)
+      } else if (okShops > 0) {
+        message.warning(`${okShops}/${shopIds.length} 成功，${failures.length} 失败：${failures.slice(0, 2).join('；')}`)
+      } else {
+        message.error(`候选池刷新失败：${failures.slice(0, 2).join('；')}`)
+      }
+      // 无论成败都重拉一次 rollup（成功的店有新数据，失败的保持原状）
+      await fetchData()
+    } catch (e) {
+      hide()
+      message.error('网络错误：' + (e?.message || ''))
+    } finally {
+      setRefreshingEngine(false)
+    }
+  }, [shopIds, days, shopNameMap, fetchData])
 
   const loadProducts = async (kw) => {
     setExpanded(prev => ({ ...prev, [kw]: { loading: true, items: [] } }))
@@ -609,6 +659,41 @@ const CandidatesRollupTable = ({
           maxTagCount="responsive"
           allowClear={false}
         />
+        <Input
+          placeholder="搜关键词（俄文）"
+          prefix={<SearchOutlined />}
+          allowClear
+          value={keyword}
+          onChange={e => setKeyword(e.target.value)}
+          onPressEnter={fetchData}
+          style={{ width: 200 }}
+        />
+        <Text type="secondary">时间窗口：</Text>
+        <Tooltip title="决定「刷新候选池」重跑引擎时扫描的天数。切换 days 后要点右侧按钮才生效（候选池表无时间维度）">
+          <Segmented
+            value={days}
+            onChange={setDays}
+            options={[
+              { label: '7 天', value: 7 },
+              { label: '14 天', value: 14 },
+              { label: '30 天', value: 30 },
+              { label: '60 天', value: 60 },
+            ]}
+          />
+        </Tooltip>
+        <Tooltip title={`按「近 ${days} 天」重跑引擎，扫 ad_stats + product_search_queries 生成候选词。多店并发，10-30 秒/店`}>
+          <Button
+            type="primary"
+            icon={<ReloadOutlined />}
+            loading={refreshingEngine}
+            onClick={handleRefreshEngine}
+          >
+            刷新候选池
+          </Button>
+        </Tooltip>
+      </Space>
+      <br />
+      <Space wrap style={{ marginBottom: 12 }}>
         <Text type="secondary">数据源：</Text>
         <Select
           mode="multiple"
@@ -620,9 +705,6 @@ const CandidatesRollupTable = ({
           maxTagCount="responsive"
           allowClear
         />
-      </Space>
-      <br />
-      <Space wrap style={{ marginBottom: 12 }}>
         <Text type="secondary">状态：</Text>
         <Segmented
           value={status}
@@ -644,18 +726,9 @@ const CandidatesRollupTable = ({
             { label: '覆盖商品 ↓', value: 'products_desc' },
           ]}
         />
-        <Input
-          placeholder="关键词筛"
-          prefix={<SearchOutlined />}
-          allowClear
-          value={keyword}
-          onChange={e => setKeyword(e.target.value)}
-          onPressEnter={fetchData}
-          style={{ width: 160 }}
-        />
         <Text type="secondary">隐藏已覆盖：</Text>
         <Switch checked={hideCovered} onChange={setHideCovered} />
-        <Button icon={<ReloadOutlined />} onClick={fetchData}>刷新</Button>
+        <Button icon={<ReloadOutlined />} onClick={fetchData}>仅刷新视图</Button>
       </Space>
 
       {data?.notReadyShops?.length > 0 && (
