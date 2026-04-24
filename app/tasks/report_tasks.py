@@ -43,11 +43,14 @@ def generate_daily_report(self):
     yesterday = moscow_today() - timedelta(days=1)
 
     try:
+        # 保存 Python 内存变量供 duration 计算用：MySQL DATETIME(0) round 到秒，
+        # refresh 后 task_log.started_at 会损失毫秒，导致 finished - started 出现负数
+        started_at_local = utc_now_naive()
         task_log = TaskLog(
             task_name="generate_daily_report",
             celery_task_id=self.request.id,
             status="running",
-            started_at=utc_now_naive(),
+            started_at=started_at_local,
         )
         db.add(task_log)
         db.commit()
@@ -96,10 +99,10 @@ def generate_daily_report(self):
         task_log.status = "success"
         task_log.result = result
         task_log.finished_at = utc_now_naive()
-        if task_log.started_at:
-            task_log.duration_ms = int(
-                (task_log.finished_at - task_log.started_at).total_seconds() * 1000
-            )
+        # 用 Python 局部 started_at_local 算 duration（不走 DB round 损失精度）
+        task_log.duration_ms = max(0, int(
+            (task_log.finished_at - started_at_local).total_seconds() * 1000
+        ))
         db.commit()
 
         logger.info(f"日报生成完成: {result}")
