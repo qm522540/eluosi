@@ -9,13 +9,16 @@
 """
 
 import asyncio
+import re
 import time
 from datetime import datetime, date, timedelta
 from typing import Optional
 
 import httpx
+from sqlalchemy import text
 
 from app.config import get_settings
+from app.database import SessionLocal
 from app.services.platform.base import (
     BasePlatformClient,
     PlatformClientFactory,
@@ -36,13 +39,27 @@ WB_PRICES_API = "https://discounts-prices-api.wildberries.ru"
 # 限速控制：两次请求之间的最小间隔(秒)
 MIN_REQUEST_INTERVAL = 60.0 / settings.WB_RATE_LIMIT_PER_MINUTE
 
-# WB seller 级 quota 熔断（2026-04-23 事故驱动）：
-# 一旦任意 WB 端点返回 "Limited by global limiter, per seller ..." 即说明该 seller UUID
-# 在 WB 侧的 daily quota 已耗尽。WB 是 per-seller-per-endpoint-group 共享池，写端点烧光
-# 后读端点也会被殃及（实证：04-23 PATCH bids + 立即分析读 API 全 429）。
-# 熔断 1h，期间所有 WB API 调用前置短路 raise，避免每个调用卡 5/10/15s 退避 × N SKU。
+# WB seller 级 quota 熔断（2026-04-23 事故 + 2026-04-24 同 seller 多 shop 误冷却 followup）：
+# WB 是 per-seller-per-endpoint-group 共享池：同一 seller 名下所有 shop 烧的是同一池。
+# 熔断 key 按 platform_seller_id 隔离 → 同 seller 任一 shop trip 后，其余 shop 立即短路，
+# 无需各自再撞 WB API 才 trip 自己的 key。shop 级 key 仅作历史兼容 fallback。
 WB_QUOTA_CIRCUIT_TTL = 3600
-WB_QUOTA_CIRCUIT_KEY_PREFIX = "wb:seller_quota_exhausted:shop_"
+WB_QUOTA_CIRCUIT_KEY_PREFIX_SHOP = "wb:seller_quota_exhausted:shop_"      # 老 key，兼容
+WB_QUOTA_CIRCUIT_KEY_PREFIX_SELLER = "wb:seller_quota_exhausted:seller_"  # 新 key，按 seller
+
+# 解析 WB 错误体里的 seller UUID："Limited by global limiter, per seller {uuid}; ..."
+_SELLER_UUID_RE = re.compile(r"per seller ([0-9a-fA-F-]{36})")
+
+# 哨兵：区分 "DB 里就是 NULL" 和 "还没查过" 两种状态
+_UNSET = object()
+
+
+def parse_seller_uuid(detail: str) -> Optional[str]:
+    """从 WB 429 detail 文本提取 seller UUID，无则返 None。"""
+    if not detail:
+        return None
+    m = _SELLER_UUID_RE.search(detail)
+    return m.group(1).lower() if m else None
 
 
 class WBSellerQuotaExhausted(Exception):
@@ -50,7 +67,7 @@ class WBSellerQuotaExhausted(Exception):
     pass
 
 # 模块级 Redis client（lazy-init 单例），避免每次 PATCH bids 都创建新连接。
-# redis-py 的 Redis 对象本身维护 ConnectionPool，单例就够用。
+# redis-py 的 Redis 对象本身维护 ConnectionPool,单例就够用。
 _redis_client = None
 
 
@@ -64,8 +81,13 @@ def _get_redis_client():
 
 
 def quota_circuit_key_for_shop(shop_id: int) -> str:
-    """供外部（查询 API）拼 Redis key 用。"""
-    return f"{WB_QUOTA_CIRCUIT_KEY_PREFIX}{shop_id}"
+    """老 shop 级 key（仅兼容历史数据 + /wb-quota-status 查询用）。"""
+    return f"{WB_QUOTA_CIRCUIT_KEY_PREFIX_SHOP}{shop_id}"
+
+
+def quota_circuit_key_for_seller(seller_id: str) -> str:
+    """新 seller 级 key（同 seller 多 shop 共享冷却）。"""
+    return f"{WB_QUOTA_CIRCUIT_KEY_PREFIX_SELLER}{seller_id}"
 
 
 class WBClient(BasePlatformClient):
@@ -75,6 +97,7 @@ class WBClient(BasePlatformClient):
         super().__init__(shop_id=shop_id, api_key=api_key, **kwargs)
         self._last_request_time = 0.0
         self._http_client: Optional[httpx.AsyncClient] = None
+        self._wb_seller_id_cached: object = _UNSET
 
     def _get_headers(self) -> dict:
         return {
@@ -99,27 +122,83 @@ class WBClient(BasePlatformClient):
             await asyncio.sleep(MIN_REQUEST_INTERVAL - elapsed)
         self._last_request_time = time.monotonic()
 
-    def _quota_circuit_key(self) -> str:
-        return quota_circuit_key_for_shop(self.shop_id)
+    def _get_wb_seller_id(self) -> Optional[str]:
+        """懒加载本 shop 的 platform_seller_id；DB 查一次缓存到实例。"""
+        if self._wb_seller_id_cached is not _UNSET:
+            return self._wb_seller_id_cached  # type: ignore[return-value]
+        try:
+            with SessionLocal() as db:
+                row = db.execute(
+                    text("SELECT platform_seller_id FROM shops "
+                         "WHERE id = :sid AND platform = 'wb' LIMIT 1"),
+                    {"sid": self.shop_id},
+                ).first()
+            seller = ((row[0] or "").strip() or None) if row else None
+            self._wb_seller_id_cached = seller
+            return seller
+        except Exception as e:
+            logger.warning(f"WB seller_id lookup failed shop_id={self.shop_id}: {e}")
+            self._wb_seller_id_cached = None
+            return None
+
+    def _persist_wb_seller_id(self, seller_id: str) -> None:
+        """trip 时首次拿到 seller_id 持久化到 shops.platform_seller_id，便于后续按 seller 隔离 key。"""
+        try:
+            with SessionLocal() as db:
+                db.execute(
+                    text("UPDATE shops SET platform_seller_id = :seller "
+                         "WHERE id = :sid AND platform = 'wb' "
+                         "AND (platform_seller_id IS NULL OR platform_seller_id = '')"),
+                    {"seller": seller_id, "sid": self.shop_id},
+                )
+                db.commit()
+            self._wb_seller_id_cached = seller_id
+            logger.info(f"WB shop_id={self.shop_id} platform_seller_id 持久化: {seller_id}")
+        except Exception as e:
+            logger.error(f"WB seller_id persist failed shop_id={self.shop_id}: {e}")
 
     def _check_quota_circuit(self) -> Optional[int]:
-        """命中 seller quota 熔断返回剩余冷却秒数，否则返回 None（含 Redis 异常 fail-open）。"""
+        """命中 seller quota 熔断返回剩余冷却秒数，否则返回 None（含 Redis 异常 fail-open）。
+
+        优先 seller 级 key（同 seller 多 shop 共享冷却），fallback shop 级 key（兼容历史）。
+        """
         try:
-            ttl = _get_redis_client().ttl(self._quota_circuit_key())
+            r = _get_redis_client()
+            seller_id = self._get_wb_seller_id()
+            if seller_id:
+                ttl = r.ttl(quota_circuit_key_for_seller(seller_id))
+                if ttl and ttl > 0:
+                    return ttl
+            ttl = r.ttl(quota_circuit_key_for_shop(self.shop_id))
             return ttl if ttl and ttl > 0 else None
         except Exception as e:
             logger.warning(f"WB quota circuit check failed: {e}")
             return None
 
     def _trip_quota_circuit(self, detail: str) -> None:
-        """熔断：写 Redis key TTL 1h 冻住本 shop 的 PATCH bids 调用。"""
+        """熔断：解析 detail 里的 seller UUID，按 seller 写 Redis key TTL 1h，
+        让同 seller 全部 shop 共享冷却（避免每家各撞一次 WB API 才 trip）。
+
+        - 解析到 seller_id 且 DB 还没存 → 持久化到 shops.platform_seller_id
+        - 拿到 seller_id → 写 seller 级 key（共享冷却）
+        - 没拿到（旧错误格式 / 文本变更）→ fallback 写 shop 级 key
+        """
         try:
-            _get_redis_client().setex(
-                self._quota_circuit_key(), WB_QUOTA_CIRCUIT_TTL, (detail or "")[:200]
-            )
+            r = _get_redis_client()
+            seller_id = parse_seller_uuid(detail)
+            if seller_id and not self._get_wb_seller_id():
+                self._persist_wb_seller_id(seller_id)
+            if seller_id:
+                key = quota_circuit_key_for_seller(seller_id)
+                scope = f"seller={seller_id}"
+            else:
+                key = quota_circuit_key_for_shop(self.shop_id)
+                scope = f"shop={self.shop_id} (seller_uuid 未解析到，fallback shop key)"
+            r.setex(key, WB_QUOTA_CIRCUIT_TTL, (detail or "")[:200])
             logger.warning(
-                f"WB seller quota circuit TRIPPED shop_id={self.shop_id} "
-                f"TTL={WB_QUOTA_CIRCUIT_TTL}s detail={(detail or '')[:100]}"
+                f"WB seller quota circuit TRIPPED {scope} "
+                f"(triggered by shop_id={self.shop_id}) TTL={WB_QUOTA_CIRCUIT_TTL}s "
+                f"detail={(detail or '')[:120]}"
             )
         except Exception as e:
             logger.error(f"WB quota circuit trip failed: {e}")
