@@ -90,6 +90,11 @@ export function getLastSyncTime(shopId) {
   return request.get(`/shops/${shopId}`)
 }
 
+/** 同步店铺广告活动列表（不含统计数据） */
+export function syncShopCampaigns(shopId) {
+  return request.post(`/ads/sync/${shopId}`, null, { timeout: 120000 })
+}
+
 /** 出价优化建议 */
 export function getOptimizeSuggestions(data) {
   return request.post('/ads/optimize', data)

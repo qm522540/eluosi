@@ -8,7 +8,7 @@ import dayjs from 'dayjs'
 import relativeTime from 'dayjs/plugin/relativeTime'
 import 'dayjs/locale/zh-cn'
 import { getShops } from '@/api/shops'
-import { getLastSyncTime } from '@/api/ads'
+import { getLastSyncTime, syncShopCampaigns } from '@/api/ads'
 import { syncData } from '@/api/bid_management'
 import { useAuthStore } from '@/stores/authStore'
 import AdsOverview from './AdsOverview'
@@ -72,16 +72,27 @@ const Ads = () => {
               setLastSyncTime(new Date())
               message.info('数据已超过30分钟，已自动同步')
               if (searched) refreshCurrentTab()
-            }).catch(() => {}).finally(() => setSyncing(false))
+            }).catch(e => {
+              const detail = e?.response?.data?.detail || e?.response?.data?.msg || e?.message || '未知错误'
+              message.error('自动同步失败：' + detail)
+            }).finally(() => setSyncing(false))
           }
         } else {
           setLastSyncTime(null)
           setSyncing(true)
-          syncData(committedShopId).then(() => {
-            setLastSyncTime(new Date())
-            message.info('首次进入，已自动同步数据')
-            if (searched) refreshCurrentTab()
-          }).catch(() => {}).finally(() => setSyncing(false))
+          // 首次进入：先拉活动列表，再触发统计后台同步
+          syncShopCampaigns(committedShopId)
+            .then(() => syncData(committedShopId))
+            .then(() => {
+              setLastSyncTime(new Date())
+              message.info('首次进入，已自动同步数据')
+              if (searched) refreshCurrentTab()
+            })
+            .catch(e => {
+              const detail = e?.response?.data?.detail || e?.response?.data?.msg || e?.message || '未知错误'
+              message.error('首次自动同步失败：' + detail)
+            })
+            .finally(() => setSyncing(false))
         }
       }).catch(() => {})
     } else if (!committedShopId) {
@@ -106,12 +117,16 @@ const Ads = () => {
     if (!committedShopId) return
     setSyncing(true)
     try {
+      // 先拉活动列表（新店首次无活动时，后续 data-sync 会因无活动退出）
+      await syncShopCampaigns(committedShopId)
+      // 再触发统计数据后台同步
       await syncData(committedShopId)
       setLastSyncTime(new Date())
       message.success('同步任务已提交，数据将在后台更新')
       if (searched) refreshCurrentTab()
-    } catch {
-      message.error('同步失败，请稍后重试')
+    } catch (e) {
+      const detail = e?.response?.data?.detail || e?.response?.data?.msg || e?.message || '未知错误'
+      message.error('同步失败：' + detail)
     } finally {
       setSyncing(false)
     }
