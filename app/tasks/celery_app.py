@@ -38,11 +38,12 @@ celery_app.conf.update(
 
 # 定时任务调度表
 celery_app.conf.beat_schedule = {
-    # 每日数据同步：莫斯科凌晨2点拉取所有Ozon店铺昨日数据
-    "daily-sync-all-shops": {
-        "task": "app.tasks.daily_sync_task.daily_sync_all_shops",
-        "schedule": crontab(hour=2, minute=0),
-    },
+    # 【已禁 - 调 WB】每日数据同步：调 wb_smart_sync + ozon_smart_sync 拉昨日 ad_stats
+    # 2026-04-24 用户拍 "WB 定时全停"。要恢复去掉下面 4 行注释 + deploy。
+    # "daily-sync-all-shops": {
+    #     "task": "app.tasks.daily_sync_task.daily_sync_all_shops",
+    #     "schedule": crontab(hour=2, minute=0),
+    # },
     # 日报：莫斯科早8点发送
     "daily-report": {
         "task": "app.tasks.report_tasks.generate_daily_report",
@@ -59,15 +60,17 @@ celery_app.conf.beat_schedule = {
     #     "schedule": crontab(minute=25),
     # },
     # 出价管理统一入口（莫斯科时间每小时:05触发，分时调价 + AI调价二选一）
-    "bid-management-hourly": {
-        "task": "app.tasks.bid_management.run_bid_management",
-        "schedule": crontab(minute=5),
-    },
+    # 【已禁 - 调 WB】出价管理每小时 :05 — 遍历 wb+ozon shop 跑 ai_pricing/分时调价
+    # "bid-management-hourly": {
+    #     "task": "app.tasks.bid_management.run_bid_management",
+    #     "schedule": crontab(minute=5),
+    # },
     # 关键词统计每日增量拉取（莫斯科凌晨3点 = UTC 0:00）
-    "keyword-stats-daily": {
-        "task": "app.tasks.keyword_stats_task.sync_keyword_stats",
-        "schedule": crontab(hour=0, minute=0),
-    },
+    # 【已禁 - 调 WB】关键词统计每日增量：fetch_keyword_stats (WB + Ozon)
+    # "keyword-stats-daily": {
+    #     "task": "app.tasks.keyword_stats_task.sync_keyword_stats",
+    #     "schedule": crontab(hour=0, minute=0),
+    # },
     # 地区销售定时同步已禁用（2026-04-24 用户拍：地区销售功能目前不用，删此 entry 省 WB quota）
     # 代码 / 表 / 前端页面保留 — backfill_region_stats 仍可手动调；如需恢复每天自动跑，
     # 把下面 4 行的注释去掉即可。
@@ -76,10 +79,11 @@ celery_app.conf.beat_schedule = {
     #     "schedule": crontab(hour=1, minute=0),
     # },
     # 活动级自动屏蔽托管（莫斯科凌晨4:30 = UTC 1:30）
-    "ad-auto-exclude-daily": {
-        "task": "app.tasks.ad_auto_exclude_task.auto_exclude_keywords",
-        "schedule": crontab(hour=1, minute=30),
-    },
+    # 【已禁 - 调 WB】活动级自动屏蔽托管：遍历 wb+ozon 调广告 API
+    # "ad-auto-exclude-daily": {
+    #     "task": "app.tasks.ad_auto_exclude_task.auto_exclude_keywords",
+    #     "schedule": crontab(hour=1, minute=30),
+    # },
     # Ozon SKU × 搜索词同步（莫斯科凌晨5:30 = UTC 2:30，错开自动屏蔽）
     "ozon-product-queries-daily": {
         "task": "app.tasks.ozon_product_queries_task.sync_ozon_product_queries",
@@ -88,10 +92,11 @@ celery_app.conf.beat_schedule = {
     # WB SKU × 搜索词同步（搜索词洞察，MSK 04:00 触发，需 Jam 订阅）
     # Celery timezone=Europe/Moscow → crontab(hour=X) 按 MSK 直解 = MSK X:00
     # 选 MSK 04:00 错开 Ozon 的 02:30；单店 609 nmIds ~3min（批量 50 + 15s sleep）
-    "wb-search-texts-daily": {
-        "task": "app.tasks.wb_search_texts_task.sync_wb_search_texts",
-        "schedule": crontab(hour=4, minute=0),
-    },
+    # 【已禁 - WB only】WB 搜索词洞察同步：fetch_product_search_texts
+    # "wb-search-texts-daily": {
+    #     "task": "app.tasks.wb_search_texts_task.sync_wb_search_texts",
+    #     "schedule": crontab(hour=4, minute=0),
+    # },
     # WB 顶级搜索集群 oracle 同步 — 2026-04-23 证实 WB cmp API 做了 IP 绑定，
     # 从服务器调会 401（JWT 只在用户浏览器 IP 下有效）。暂停定时，只保留 task
     # 定义作为未来使用（若 WB 改策略或用户提供本地 agent）。
