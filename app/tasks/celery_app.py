@@ -68,12 +68,14 @@ celery_app.conf.beat_schedule = {
         "task": "app.tasks.keyword_stats_task.sync_keyword_stats",
         "schedule": crontab(hour=0, minute=0),
     },
-    # 地区销售每日增量拉取（莫斯科凌晨4点 = UTC 1:00）
-    "region-stats-daily": {
-        "task": "app.tasks.region_stats_task.sync_region_stats",
-        "schedule": crontab(hour=1, minute=0),
-    },
-    # 活动级自动屏蔽托管（莫斯科凌晨4:30 = UTC 1:30，错开 region-stats）
+    # 地区销售定时同步已禁用（2026-04-24 用户拍：地区销售功能目前不用，删此 entry 省 WB quota）
+    # 代码 / 表 / 前端页面保留 — backfill_region_stats 仍可手动调；如需恢复每天自动跑，
+    # 把下面 4 行的注释去掉即可。
+    # "region-stats-daily": {
+    #     "task": "app.tasks.region_stats_task.sync_region_stats",
+    #     "schedule": crontab(hour=1, minute=0),
+    # },
+    # 活动级自动屏蔽托管（莫斯科凌晨4:30 = UTC 1:30）
     "ad-auto-exclude-daily": {
         "task": "app.tasks.ad_auto_exclude_task.auto_exclude_keywords",
         "schedule": crontab(hour=1, minute=30),
