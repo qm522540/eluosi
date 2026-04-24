@@ -6,11 +6,28 @@ import {
 import {
   ReloadOutlined, SearchOutlined, DownOutlined, RightOutlined,
   TagOutlined, CheckCircleFilled, CloseCircleFilled, InfoCircleOutlined,
+  EditOutlined,
 } from '@ant-design/icons'
 import {
   getCandidatesRollup, getCandidatesRollupProducts,
   getCandidatesRollupCategoryEvidence, getCandidatesRollupCrossShopEvidence,
 } from '@/api/seo'
+import { translateKeywords, updateTranslation } from '@/api/keyword_stats'
+
+// 按空格分词计数，与后端 keyword_stats._classify_word_type 一致
+const classifyWordType = (kw) => {
+  if (!kw) return 'unknown'
+  const n = kw.trim().split(/\s+/).filter(Boolean).length
+  if (n <= 1) return 'single'
+  if (n <= 4) return 'short'
+  return 'long'
+}
+
+const WORD_TYPE_MAP = {
+  single: { label: '单词', color: 'default' },
+  short:  { label: '短词', color: 'blue' },
+  long:   { label: '长尾', color: 'purple' },
+}
 
 const { Text } = Typography
 
@@ -103,6 +120,7 @@ const CandidatesRollupTable = ({
   const [loading, setLoading] = useState(false)
   const [expanded, setExpanded] = useState({})
   const [expandedKeys, setExpandedKeys] = useState([])
+  const [kwTranslations, setKwTranslations] = useState({})
   // 推荐理由 Modal：点行的 Tag 弹出 Top N
   // type = 'category'（类目推断）或 'cross_shop'（跨店同款）
   const [evidenceModal, setEvidenceModal] = useState({
@@ -172,6 +190,13 @@ const CandidatesRollupTable = ({
       setData(merged)
       setExpanded({})
       setExpandedKeys([])
+      // 异步批量翻译当前视图关键词，不阻塞展示（命中 ru_zh_dict L2 缓存瞬间返回）
+      const kws = merged.items.map(it => it.keyword).filter(Boolean)
+      if (kws.length > 0) {
+        translateKeywords(kws).then(res => {
+          setKwTranslations(prev => ({ ...prev, ...(res.data || {}) }))
+        }).catch(() => {})
+      }
     } catch (e) {
       message.error('网络错误')
     } finally {
@@ -216,18 +241,67 @@ const CandidatesRollupTable = ({
 
   const summary = data?.summary
 
+  const handleEditTranslation = (v) => {
+    const zh = kwTranslations[v] || ''
+    Modal.confirm({
+      title: '编辑中文翻译',
+      icon: null,
+      content: (
+        <div style={{ marginTop: 12 }}>
+          <div style={{ fontSize: 12, color: '#999', marginBottom: 6 }}>俄文：{v}</div>
+          <Input id={`seo-tr-input-${v}`} defaultValue={zh} placeholder="输入中文翻译" />
+          <div style={{ fontSize: 11, color: '#bbb', marginTop: 6 }}>
+            手动修改后标记为 manual，之后 AI 不会覆盖此翻译
+          </div>
+        </div>
+      ),
+      onOk: async () => {
+        const newVal = document.getElementById(`seo-tr-input-${v}`)?.value?.trim()
+        if (!newVal) return
+        try {
+          await updateTranslation(v, newVal)
+          setKwTranslations(prev => ({ ...prev, [v]: newVal }))
+          message.success('翻译已更新')
+        } catch (e) {
+          message.error(e?.response?.data?.msg || '更新失败')
+        }
+      },
+    })
+  }
+
   const mainColumns = [
     {
       title: '关键词', dataIndex: 'keyword', key: 'keyword',
-      render: (v, r) => (
-        <Space direction="vertical" size={2}>
-          <Text strong style={{ fontSize: 13 }}>{v}</Text>
-          <Space size={4} wrap>
-            {r.has_paid && <Tag color="purple" style={{ margin: 0, fontSize: 10 }}>付费</Tag>}
-            {r.has_organic && <Tag color="cyan" style={{ margin: 0, fontSize: 10 }}>自然</Tag>}
+      render: (v, r) => {
+        const zh = kwTranslations[v]
+        const hasZh = zh && zh !== v
+        const wt = WORD_TYPE_MAP[classifyWordType(v)]
+        return (
+          <Space direction="vertical" size={2} style={{ lineHeight: 1.3 }}>
+            <Space size={4} wrap style={{ alignItems: 'center' }}>
+              <Text strong style={{ fontSize: 13 }}>{v}</Text>
+              {wt && (
+                <Tag color={wt.color} style={{ margin: 0, fontSize: 10, padding: '0 4px', lineHeight: '14px' }}>
+                  {wt.label}
+                </Tag>
+              )}
+            </Space>
+            <Space size={4} style={{ alignItems: 'center' }}>
+              <Text style={{ fontSize: 11, color: '#999' }}>
+                {hasZh ? zh : <span style={{ color: '#ccc' }}>翻译中...</span>}
+              </Text>
+              <EditOutlined
+                style={{ fontSize: 10, color: '#bbb', cursor: 'pointer' }}
+                onClick={() => handleEditTranslation(v)}
+              />
+            </Space>
+            <Space size={4} wrap>
+              {r.has_paid && <Tag color="purple" style={{ margin: 0, fontSize: 10 }}>付费</Tag>}
+              {r.has_organic && <Tag color="cyan" style={{ margin: 0, fontSize: 10 }}>自然</Tag>}
+            </Space>
           </Space>
-        </Space>
-      ),
+        )
+      },
     },
     {
       title: (

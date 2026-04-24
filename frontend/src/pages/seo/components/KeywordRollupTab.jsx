@@ -1,10 +1,26 @@
 import { useState, useEffect, useCallback } from 'react'
 import {
-  Card, Table, Space, Segmented, Input, InputNumber, Button, Tag,
+  Card, Table, Space, Segmented, Input, InputNumber, Button, Tag, Modal,
   Empty, Alert, Typography, Image, message, Select, Rate, Tooltip,
 } from 'antd'
-import { ReloadOutlined, SearchOutlined, DownOutlined, RightOutlined } from '@ant-design/icons'
+import { ReloadOutlined, SearchOutlined, DownOutlined, RightOutlined, EditOutlined } from '@ant-design/icons'
 import { getKeywordRollup, getKeywordRollupProducts } from '@/api/seo'
+import { translateKeywords, updateTranslation } from '@/api/keyword_stats'
+
+// 按空格分词计数，与后端 keyword_stats._classify_word_type 一致
+const classifyWordType = (kw) => {
+  if (!kw) return 'unknown'
+  const n = kw.trim().split(/\s+/).filter(Boolean).length
+  if (n <= 1) return 'single'
+  if (n <= 4) return 'short'
+  return 'long'
+}
+
+const WORD_TYPE_MAP = {
+  single: { label: '单词', color: 'default' },
+  short:  { label: '短词', color: 'blue' },
+  long:   { label: '长尾', color: 'purple' },
+}
 
 const { Text } = Typography
 
@@ -16,6 +32,7 @@ const KeywordRollupTab = ({ shops = [], shopId, onShopChange, onJumpToProduct })
   const [onlyWithOrders, setOnlyWithOrders] = useState(false)
   const [data, setData] = useState(null)
   const [loading, setLoading] = useState(false)
+  const [kwTranslations, setKwTranslations] = useState({})
 
   // 展开行 state: { [keyword]: { loading, items } }
   const [expanded, setExpanded] = useState({})
@@ -35,6 +52,13 @@ const KeywordRollupTab = ({ shops = [], shopId, onShopChange, onJumpToProduct })
         // 拉新数据时清空已展开 cache，避免看到陈旧数据
         setExpanded({})
         setExpandedKeys([])
+        // 异步批量翻译当前页关键词（命中 ru_zh_dict 共享缓存瞬间返回）
+        const kws = (res.data?.items || []).map(it => it.keyword).filter(Boolean)
+        if (kws.length > 0) {
+          translateKeywords(kws).then(tr => {
+            setKwTranslations(prev => ({ ...prev, ...(tr.data || {}) }))
+          }).catch(() => {})
+        }
       } else {
         message.error(res.msg || '拉取失败')
       }
@@ -75,10 +99,65 @@ const KeywordRollupTab = ({ shops = [], shopId, onShopChange, onJumpToProduct })
 
   const summary = data?.summary
 
+  const handleEditTranslation = (v) => {
+    const zh = kwTranslations[v] || ''
+    Modal.confirm({
+      title: '编辑中文翻译',
+      icon: null,
+      content: (
+        <div style={{ marginTop: 12 }}>
+          <div style={{ fontSize: 12, color: '#999', marginBottom: 6 }}>俄文：{v}</div>
+          <Input id={`seo-kr-tr-input-${v}`} defaultValue={zh} placeholder="输入中文翻译" />
+          <div style={{ fontSize: 11, color: '#bbb', marginTop: 6 }}>
+            手动修改后标记为 manual，之后 AI 不会覆盖此翻译
+          </div>
+        </div>
+      ),
+      onOk: async () => {
+        const newVal = document.getElementById(`seo-kr-tr-input-${v}`)?.value?.trim()
+        if (!newVal) return
+        try {
+          await updateTranslation(v, newVal)
+          setKwTranslations(prev => ({ ...prev, [v]: newVal }))
+          message.success('翻译已更新')
+        } catch (e) {
+          message.error(e?.response?.data?.msg || '更新失败')
+        }
+      },
+    })
+  }
+
   const mainColumns = [
     {
       title: '关键词', dataIndex: 'keyword', key: 'keyword',
-      render: (v) => <Text strong style={{ fontSize: 13 }}>{v}</Text>,
+      render: (v) => {
+        const zh = kwTranslations[v]
+        const hasZh = zh && zh !== v
+        const wt = WORD_TYPE_MAP[classifyWordType(v)]
+        return (
+          <div style={{ lineHeight: 1.3 }}>
+            <Space size={4} style={{ alignItems: 'center' }}>
+              <Text strong style={{ fontSize: 13 }}>{v}</Text>
+              {wt && (
+                <Tag color={wt.color} style={{ margin: 0, fontSize: 10, padding: '0 4px', lineHeight: '14px' }}>
+                  {wt.label}
+                </Tag>
+              )}
+            </Space>
+            <div style={{ marginTop: 1 }}>
+              <Space size={4} style={{ alignItems: 'center' }}>
+                <Text style={{ fontSize: 11, color: '#999' }}>
+                  {hasZh ? zh : <span style={{ color: '#ccc' }}>翻译中...</span>}
+                </Text>
+                <EditOutlined
+                  style={{ fontSize: 10, color: '#bbb', cursor: 'pointer' }}
+                  onClick={() => handleEditTranslation(v)}
+                />
+              </Space>
+            </div>
+          </div>
+        )
+      },
     },
     {
       title: (
