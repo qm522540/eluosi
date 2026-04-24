@@ -1315,6 +1315,7 @@ async def analyze_stream(db, tenant_id: int, shop_id: int,
     """SSE 流式分析包装器：调 analyze_now 拿结果，按 SSE 协议分阶段推送给前端。
     当前不做真流式（DeepSeek token 级别），仅分阶段事件 + 建议逐条推送。
     """
+    from app.services.platform.wb import WBSellerQuotaExhausted
     def _sse(event: str, data) -> str:
         return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
 
@@ -1384,10 +1385,28 @@ async def analyze_stream(db, tenant_id: int, shop_id: int,
         yield _sse("phase", msg)
         yield _sse("done", msg)
 
+    except WBSellerQuotaExhausted as e:
+        # WBSellerQuotaExhausted 继承 BaseException（不是 Exception），下面的 except Exception
+        # 抓不到。必须显式 catch 转成 SSE error 消息，否则异常穿透 SSE generator → fastapi
+        # 强行关闭连接 → nginx upstream prematurely closed → 前端看到 "network error"
+        # 而不是清晰的 cooldown 文案（2026-04-24 实测 BaseException 改造后回归）。
+        logger.warning(f"analyze_stream WB quota cooldown shop_id={shop_id}: {e}")
+        msg = f"WB 配额冷却中，请稍候重试（{e}）"
+        yield _sse("error", msg)
+        yield _sse("done", f"分析失败：{msg}")
     except Exception as e:
         logger.exception(f"analyze_stream 失败 shop_id={shop_id}: {e}")
         yield _sse("error", f"分析失败: {e}")
         yield _sse("done", f"分析失败: {e}")
+    except BaseException as e:
+        # 兜底任何其他 BaseException（asyncio.CancelledError 用 try/finally 处理；这里
+        # 防止未来新增的 BaseException 子类穿透 SSE generator）。
+        logger.exception(f"analyze_stream BaseException shop_id={shop_id}: {type(e).__name__}: {e}")
+        yield _sse("error", f"分析失败: {type(e).__name__}: {e}")
+        yield _sse("done", f"分析失败: {type(e).__name__}: {e}")
+        # CancelledError 必须 raise 让 asyncio 知道任务被取消；其他 BaseException 静默退出
+        if isinstance(e, _asyncio.CancelledError):
+            raise
 
 
 async def _analyze_now_inner(db, tenant_id: int, shop_id: int,
