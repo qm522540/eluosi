@@ -19,7 +19,7 @@ from sqlalchemy.orm import Session
 from app.services.platform.base import SubscriptionRequiredError
 from app.services.platform.wb import (
     WBClient, WBSellerQuotaExhausted,
-    _get_redis_client, quota_circuit_key_for_shop,
+    _get_redis_client, quota_circuit_key_for_shop, quota_circuit_key_for_seller,
 )
 from app.services.platform.ozon import OzonClient
 from app.utils.errors import ErrorCode
@@ -348,11 +348,20 @@ async def refresh_shop(
         import asyncio
         # WB seller quota 熔断 pre-check（2026-04-23 晚老林 review 驱动）：
         # quota 是 per-seller-per-endpoint-group 共享池，写端点烧光读端点也 429。
-        # 老林 ca5a96b 把熔断挪到通用 _request，但这里 for 循环里 except Exception
-        # 会吞掉 WBSellerQuotaExhausted 然后 continue → 下一批再 sleep 20s 再 fail，
-        # 30 批 × 20s = 10min 白烧。顶层 pre-check 让 beat 直接跳过不进循环。
+        # 2026-04-24 ab895eb 后 key 主走 seller_{uuid}（同 seller 多 shop 共享冷却），
+        # 历史 shop_{id} key 仅作 fallback。两个 key 任一命中就 skip。
         try:
-            cooldown = _get_redis_client().ttl(quota_circuit_key_for_shop(shop.id))
+            r = _get_redis_client()
+            cooldown = 0
+            seller_id = (getattr(shop, "platform_seller_id", None) or "").strip() or None
+            if seller_id:
+                ttl_seller = r.ttl(quota_circuit_key_for_seller(seller_id))
+                if ttl_seller and ttl_seller > 0:
+                    cooldown = ttl_seller
+            if not cooldown:
+                ttl_shop = r.ttl(quota_circuit_key_for_shop(shop.id))
+                if ttl_shop and ttl_shop > 0:
+                    cooldown = ttl_shop
         except Exception as e:
             logger.warning(f"WB quota circuit pre-check Redis err: {e}")
             cooldown = 0

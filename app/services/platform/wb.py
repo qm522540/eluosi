@@ -62,8 +62,20 @@ def parse_seller_uuid(detail: str) -> Optional[str]:
     return m.group(1).lower() if m else None
 
 
-class WBSellerQuotaExhausted(Exception):
-    """WB seller 级 quota 熔断激活时抛出，让上层 fail-fast 跳过本次 SKU 处理。"""
+class WBSellerQuotaExhausted(BaseException):
+    """WB seller 级 quota 熔断信号 — 继承 BaseException 而不是 Exception。
+
+    设计理由（asyncio.CancelledError 同思路，Python 3.8+ 也是这么改的）：
+    本异常不是"业务错误"，是"立刻停止本轮所有 WB 调用"的流控信号。fetch_xxx 函数
+    普遍写 `except Exception: return []` 兜底网络/解析错误 — 如果 WBSellerQuotaExhausted
+    被这个网吞了，refresh_shop 的 `except WBSellerQuotaExhausted: break` 永远进不去
+    （04-24 01:53 实测：shop=5/6 cooldown 命中后还跑 3 批白等 40s，老张 22d1ebb 在
+    fetch_product_search_texts 显式补穿透才解决一半）。
+
+    继承 BaseException 让 `except Exception` 自动放行，无需在 17+ 个 fetch_xxx 各自
+    补一遍 `except WBSellerQuotaExhausted: raise`。显式 catch by class（如 search_insights
+    `except WBSellerQuotaExhausted as e:` / `except SubscriptionRequiredError`）不受影响。
+    """
     pass
 
 # 模块级 Redis client（lazy-init 单例），避免每次 PATCH bids 都创建新连接。
