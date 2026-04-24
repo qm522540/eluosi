@@ -23,17 +23,18 @@ _NOT_READY_HINT = {
 }
 
 # candidates 表空态专用 hint（SEO Optimize「按商品看」Tab 的聚合视图）
-# 与 _NOT_READY_HINT 区别：这里区分"无源数据"和"有源但引擎未跑"两档，精准引导用户
-# 真实场景（2026-04-24 Pt.Gril）：店铺 ad_campaigns 全 archived/paused → 候选池永远空，
-# 旧文案"等订阅同步"会让用户误以为是订阅问题（实则该店没在跑广告）
+# 与 _NOT_READY_HINT 区别：这里按"源数据存在性"分诊，精准引导用户
+# 引擎依赖：源 A=ad_keywords（不是 ad_stats，关键词级数据才能反哺）/ 源 B=product_search_queries
+# 真实场景（2026-04-24 Pt.Gril）：店铺所有活动是 Trafareti CPC（自动广告无关键词），
+# ad_keywords=0 → 引擎源 A 永远空；同时 Premium 未配 → 源 B 也空 → 候选池永远生不出
 _CANDIDATES_NO_SOURCE_HINT = {
-    "wb":     "WB 候选池暂无数据。可能原因：① 该店无 active 广告活动（无广告统计可分析）；② Jam 订阅刚开通或同步未完成，每日 MSK 04:00 自动拉取入 product_search_queries。请先在 WB 后台确认有广告在跑，或等次日 MSK 04:00 同步后再回来。",
-    "ozon":   "Ozon 候选池暂无数据。可能原因：① 该店无 active 广告活动（无广告统计可分析）；② Premium 订阅刚开通或同步未完成，每日 MSK 02:30 自动拉取。请先在 Ozon 后台确认有广告在跑，或等次日 MSK 02:30 同步后再回来。",
+    "wb":     "WB 候选池暂无数据。可能原因：① 该店广告活动是「自动广告」类型（无关键词级数据，候选池引擎依赖关键词）；② 无 active 广告活动；③ Jam 订阅刚开通或同步未完成，每日 MSK 04:00 自动拉取。请先在 WB 后台检查广告类型与订阅状态。",
+    "ozon":   "Ozon 候选池暂无数据。可能原因：① 该店广告活动是 Trafareti CPC 等「自动广告」类型（无关键词级数据，候选池引擎依赖关键词）；② 无 active 广告活动；③ Premium 订阅刚开通或同步未完成，每日 MSK 02:30 自动拉取。请先在 Ozon 后台检查广告类型与订阅状态。",
     "yandex": "Yandex Market 暂不支持候选词反哺功能。",
 }
 _CANDIDATES_ENGINE_NOT_RUN_HINT = {
-    "wb":     "WB 已有广告或搜索词数据但候选池尚未生成。候选池引擎按需触发，请联系管理员手动跑一次 analyze_paid_to_organic，或在「按商品单商品」模式下点「刷新候选池」。",
-    "ozon":   "Ozon 已有广告或搜索词数据但候选池尚未生成。候选池引擎按需触发，请联系管理员手动跑一次 analyze_paid_to_organic，或在「按商品单商品」模式下点「刷新候选池」。",
+    "wb":     "WB 已有广告关键词或搜索词数据但候选池尚未生成。候选池引擎按需触发，请联系管理员手动跑一次 analyze_paid_to_organic，或在「按商品单商品」模式下点「刷新候选池」。",
+    "ozon":   "Ozon 已有广告关键词或搜索词数据但候选池尚未生成。候选池引擎按需触发，请联系管理员手动跑一次 analyze_paid_to_organic，或在「按商品单商品」模式下点「刷新候选池」。",
     "yandex": "Yandex Market 暂不支持候选词反哺功能。",
 }
 
@@ -292,18 +293,20 @@ def compute_candidates_rollup(
         "WHERE tenant_id = :tid AND shop_id = :sid"
     ), {"tid": tenant_id, "sid": shop.id}).scalar() or 0
     if pool_count == 0:
-        # 分诊源数据：源 A=ad_stats(走 ad_campaigns JOIN 取 shop)、源 B=product_search_queries
-        # 全空 → 该店没在跑广告或订阅未同步；有源但池空 → 引擎未运行
-        ad_stats_count = db.execute(text(
-            "SELECT 1 FROM ad_stats s "
-            "JOIN ad_campaigns c ON c.id = s.campaign_id AND c.tenant_id = s.tenant_id "
+        # 分诊源数据：源 A=ad_keywords(引擎 self_sql 强依赖，自动广告类型该表 0 行)
+        # 源 B=product_search_queries(订阅同步)
+        # 全空 → 业务侧无源数据；有源但池空 → 引擎漏跑
+        ad_kw_count = db.execute(text(
+            "SELECT 1 FROM ad_keywords kw "
+            "JOIN ad_groups g ON g.id = kw.ad_group_id AND g.tenant_id = kw.tenant_id "
+            "JOIN ad_campaigns c ON c.id = g.campaign_id AND c.tenant_id = kw.tenant_id "
             "WHERE c.shop_id = :sid AND c.tenant_id = :tid LIMIT 1"
         ), {"tid": tenant_id, "sid": shop.id}).scalar() or 0
         psq_count = db.execute(text(
             "SELECT 1 FROM product_search_queries "
             "WHERE tenant_id = :tid AND shop_id = :sid LIMIT 1"
         ), {"tid": tenant_id, "sid": shop.id}).scalar() or 0
-        if ad_stats_count == 0 and psq_count == 0:
+        if ad_kw_count == 0 and psq_count == 0:
             reason = "no_source"
             hint = _CANDIDATES_NO_SOURCE_HINT.get(shop.platform, "候选池暂无数据")
         else:
