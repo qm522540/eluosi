@@ -23,10 +23,17 @@ _NOT_READY_HINT = {
 }
 
 # candidates 表空态专用 hint（SEO Optimize「按商品看」Tab 的聚合视图）
-# 与 _NOT_READY_HINT 区别：这里会提示"需同步 + 引擎加工"两步，不是单纯看原始搜索词
-_CANDIDATES_NOT_READY_HINT = {
-    "wb":     "WB 候选池暂无数据。搜索词走 Jam 订阅，每日 MSK 04:00 自动同步入 product_search_queries；同步完成后候选池引擎加工才能生成反哺候选。若今日刚开通订阅，明早 04:00 首次同步后再回来刷新本页。",
-    "ozon":   "Ozon 候选池暂无数据。搜索词走 Premium 订阅，每日 MSK 02:30 自动同步；同步完成后候选池引擎加工才能生成反哺候选。",
+# 与 _NOT_READY_HINT 区别：这里区分"无源数据"和"有源但引擎未跑"两档，精准引导用户
+# 真实场景（2026-04-24 Pt.Gril）：店铺 ad_campaigns 全 archived/paused → 候选池永远空，
+# 旧文案"等订阅同步"会让用户误以为是订阅问题（实则该店没在跑广告）
+_CANDIDATES_NO_SOURCE_HINT = {
+    "wb":     "WB 候选池暂无数据。可能原因：① 该店无 active 广告活动（无广告统计可分析）；② Jam 订阅刚开通或同步未完成，每日 MSK 04:00 自动拉取入 product_search_queries。请先在 WB 后台确认有广告在跑，或等次日 MSK 04:00 同步后再回来。",
+    "ozon":   "Ozon 候选池暂无数据。可能原因：① 该店无 active 广告活动（无广告统计可分析）；② Premium 订阅刚开通或同步未完成，每日 MSK 02:30 自动拉取。请先在 Ozon 后台确认有广告在跑，或等次日 MSK 02:30 同步后再回来。",
+    "yandex": "Yandex Market 暂不支持候选词反哺功能。",
+}
+_CANDIDATES_ENGINE_NOT_RUN_HINT = {
+    "wb":     "WB 已有广告或搜索词数据但候选池尚未生成。候选池引擎按需触发，请联系管理员手动跑一次 analyze_paid_to_organic，或在「按商品单商品」模式下点「刷新候选池」。",
+    "ozon":   "Ozon 已有广告或搜索词数据但候选池尚未生成。候选池引擎按需触发，请联系管理员手动跑一次 analyze_paid_to_organic，或在「按商品单商品」模式下点「刷新候选池」。",
     "yandex": "Yandex Market 暂不支持候选词反哺功能。",
 }
 
@@ -285,6 +292,23 @@ def compute_candidates_rollup(
         "WHERE tenant_id = :tid AND shop_id = :sid"
     ), {"tid": tenant_id, "sid": shop.id}).scalar() or 0
     if pool_count == 0:
+        # 分诊源数据：源 A=ad_stats(走 ad_campaigns JOIN 取 shop)、源 B=product_search_queries
+        # 全空 → 该店没在跑广告或订阅未同步；有源但池空 → 引擎未运行
+        ad_stats_count = db.execute(text(
+            "SELECT 1 FROM ad_stats s "
+            "JOIN ad_campaigns c ON c.id = s.campaign_id AND c.tenant_id = s.tenant_id "
+            "WHERE c.shop_id = :sid AND c.tenant_id = :tid LIMIT 1"
+        ), {"tid": tenant_id, "sid": shop.id}).scalar() or 0
+        psq_count = db.execute(text(
+            "SELECT 1 FROM product_search_queries "
+            "WHERE tenant_id = :tid AND shop_id = :sid LIMIT 1"
+        ), {"tid": tenant_id, "sid": shop.id}).scalar() or 0
+        if ad_stats_count == 0 and psq_count == 0:
+            reason = "no_source"
+            hint = _CANDIDATES_NO_SOURCE_HINT.get(shop.platform, "候选池暂无数据")
+        else:
+            reason = "engine_not_run"
+            hint = _CANDIDATES_ENGINE_NOT_RUN_HINT.get(shop.platform, "候选池引擎未运行")
         return {
             "code": 0,
             "data": {
@@ -294,7 +318,8 @@ def compute_candidates_rollup(
                     "total_orders": 0, "with_self_kw": 0,
                 },
                 "data_status": "not_ready",
-                "hint": _CANDIDATES_NOT_READY_HINT.get(shop.platform, "候选池暂无数据"),
+                "not_ready_reason": reason,
+                "hint": hint,
             },
         }
 
