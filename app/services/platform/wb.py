@@ -1579,6 +1579,11 @@ class WBClient(BasePlatformClient):
         }
         try:
             result = await self._request("POST", url, json=payload)
+        except WBSellerQuotaExhausted:
+            # 必须穿透：refresh_shop 顶层 except WBSellerQuotaExhausted 要 break 整个循环，
+            # 否则 cooldown 命中后还会继续 sleep 20s × N 批白跑（实测 04-24 01:53-55
+            # shop=5/6 各跑 3 批就是被下面 except Exception 吞掉了）
+            raise
         except httpx.HTTPStatusError as e:
             status = e.response.status_code
             body = ""
