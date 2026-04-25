@@ -154,6 +154,25 @@ const SearchInsights = () => {
       sorter: (a, b) => a.impressions - b.impressions,
       render: v => (v || 0).toLocaleString(),
     },
+    {
+      title: <Tooltip title="曝光比例 = 曝光 / 搜索次数。反映「你商品在搜索结果里被翻到的程度」 — 越高说明排名越靠前 / 相关性越强。但「相关性强」不等于「适合卖」：曝光高 + 点击 0 反而是错配信号（用户看到了但不是他要的）。最终适合度要看下单率（下单 / 曝光）。">
+        曝光比例 <InfoCircleOutlined style={{ color: '#999' }} />
+      </Tooltip>,
+      key: 'view_rate', width: 110, align: 'right',
+      sorter: (a, b) => {
+        const ra = a.frequency ? a.impressions / a.frequency : 0
+        const rb = b.frequency ? b.impressions / b.frequency : 0
+        return ra - rb
+      },
+      render: (_, r) => {
+        if (!r.frequency) return '-'
+        const pct = r.impressions / r.frequency * 100
+        let color = '#f5222d'
+        if (pct >= 60) color = '#52c41a'
+        else if (pct >= 30) color = '#faad14'
+        return <Text style={{ color, fontWeight: 500 }}>{pct.toFixed(0)}%</Text>
+      },
+    },
     { title: '点击', dataIndex: 'clicks', key: 'clicks', width: 90, align: 'right' },
     { title: '加购', dataIndex: 'add_to_cart', key: 'add_to_cart', width: 90, align: 'right' },
     { title: '下单', dataIndex: 'orders', key: 'orders', width: 90, align: 'right' },

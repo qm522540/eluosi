@@ -48,6 +48,20 @@ const SearchInsightsSection = ({ productId }) => {
       width: 90, align: 'right',
       render: v => (v || 0).toLocaleString(),
     },
+    {
+      title: <Tooltip title="曝光比例 = 曝光 / 搜索次数。反映该商品在搜索列表里被翻到的程度。">
+        曝光比例 <InfoCircleOutlined style={{ color: '#999' }} />
+      </Tooltip>,
+      key: 'view_rate', width: 100, align: 'right',
+      render: (_, r) => {
+        if (!r.frequency) return '-'
+        const pct = r.impressions / r.frequency * 100
+        let color = '#f5222d'
+        if (pct >= 60) color = '#52c41a'
+        else if (pct >= 30) color = '#faad14'
+        return <Text style={{ color, fontWeight: 500 }}>{pct.toFixed(0)}%</Text>
+      },
+    },
     { title: '点击', dataIndex: 'clicks', key: 'clicks', width: 80, align: 'right' },
     { title: '加购', dataIndex: 'add_to_cart', key: 'add_to_cart', width: 80, align: 'right' },
     { title: '下单', dataIndex: 'orders', key: 'orders', width: 80, align: 'right' },
