@@ -160,12 +160,19 @@ const SearchInsights = () => {
       dataIndex: 'add_to_cart', key: 'add_to_cart', width: 65, align: 'right',
       render: v => shopPlatform === 'ozon' ? <Text type="secondary">—</Text> : (v || 0),
     },
-    { title: '下单', dataIndex: 'orders', key: 'orders', width: 65, align: 'right' },
+    {
+      title: '下单', dataIndex: 'orders', key: 'orders', width: 65, align: 'right',
+      sorter: (a, b) => (a.orders || 0) - (b.orders || 0),
+    },
     {
       title: '销售额(₽)', dataIndex: 'revenue', key: 'revenue', width: 105, align: 'right',
+      sorter: (a, b) => (a.revenue || 0) - (b.revenue || 0),
       render: v => (v || 0).toFixed(2),
     },
-    { title: '商品数', dataIndex: 'sku_count', key: 'sku_count', width: 75, align: 'right' },
+    {
+      title: '商品数', dataIndex: 'sku_count', key: 'sku_count', width: 75, align: 'right',
+      sorter: (a, b) => (a.sku_count || 0) - (b.sku_count || 0),
+    },
   ]
 
   return (
