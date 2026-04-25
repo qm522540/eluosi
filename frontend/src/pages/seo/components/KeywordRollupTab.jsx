@@ -161,25 +161,14 @@ const KeywordRollupTab = ({ shops = [], shopId, onShopChange, onJumpToProduct })
     },
     {
       title: (
-        <Tooltip title="蓝=真给这么多商品带过搜索流量/订单；橙=「按商品看」把这词推荐加进的商品数（含类目扩散推断，未必真带过流量）">
-          真实贡献 <Text type="secondary" style={{ fontSize: 11 }}>/ 推荐覆盖</Text>
+        <Tooltip title="该词真有搜索流量/订单打到的本店商品数（不含引擎按类目散播推断的商品）">
+          商品数
         </Tooltip>
       ),
-      key: 'coverage', align: 'center', width: 140,
-      render: (_, r) => (
-        <Space size={2}>
-          <Tag color="blue" style={{ margin: 0, fontSize: 12 }}>
-            {r.product_count} 商品
-          </Tag>
-          <Text type="secondary" style={{ fontSize: 11 }}>/</Text>
-          <Tag
-            color={r.candidate_row_count > r.product_count ? 'orange' : 'default'}
-            style={{ margin: 0, fontSize: 12 }}
-          >
-            {r.candidate_row_count || r.product_count} 商品
-          </Tag>
-        </Space>
-      ),
+      dataIndex: 'product_count', key: 'product_count',
+      align: 'right', width: 80,
+      sorter: (a, b) => (a.product_count || 0) - (b.product_count || 0),
+      render: v => (v || 0),
     },
     {
       title: (
