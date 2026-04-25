@@ -337,7 +337,7 @@ def shop_keyword_rollup_products(
 @router.get("/shop/{shop_id}/candidates-rollup")
 def shop_candidates_rollup(
     shop_id: int,
-    source: str = Query("all", description="all / paid_self / paid_category / organic_self / organic_category / with_orders"),
+    source: str = Query("all", description="all / paid_self / paid_category / organic_self / organic_category / cross_shop_self / with_orders"),
     status: str = Query("pending", description="pending / adopted / ignored"),
     keyword: str = Query("", description="关键词模糊筛"),
     hide_covered: bool = Query(True, description="隐藏已在标题/属性的候选"),

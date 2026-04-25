@@ -346,6 +346,9 @@ def compute_candidates_rollup(
         "paid_category":    "JSON_CONTAINS(c.sources, JSON_OBJECT('type','paid','scope','category'))",
         "organic_self":     "JSON_CONTAINS(c.sources, JSON_OBJECT('type','organic','scope','self'))",
         "organic_category": "JSON_CONTAINS(c.sources, JSON_OBJECT('type','organic','scope','category'))",
+        # cross_shop_self: 引擎 Step G 写入。entry 含 source_shop_id 等业务字段,
+        # JSON_CONTAINS 只能匹配子对象 → 用 JSON_SEARCH 找 type 是否含 'cross_shop'
+        "cross_shop_self":  "JSON_SEARCH(c.sources, 'one', 'cross_shop', NULL, '$[*].type') IS NOT NULL",
         "with_orders":      f"({_HAS_SELF_CLAUSE} AND (COALESCE(c.paid_orders,0) + COALESCE(c.organic_orders,0)) > 0)",
     }
     source_list = [s.strip() for s in (source or "").split(",") if s.strip()]
@@ -380,7 +383,9 @@ def compute_candidates_rollup(
                         THEN 1 ELSE 0 END) AS has_paid,
                MAX(CASE WHEN JSON_CONTAINS(c.sources, JSON_OBJECT('type','organic','scope','self'))
                          OR JSON_CONTAINS(c.sources, JSON_OBJECT('type','organic','scope','category'))
-                        THEN 1 ELSE 0 END) AS has_organic
+                        THEN 1 ELSE 0 END) AS has_organic,
+               MAX(CASE WHEN JSON_SEARCH(c.sources, 'one', 'cross_shop', NULL, '$[*].type') IS NOT NULL
+                        THEN 1 ELSE 0 END) AS has_cross_shop
         FROM seo_keyword_candidates c
         WHERE {where_clause}
         GROUP BY c.keyword
@@ -400,6 +405,7 @@ def compute_candidates_rollup(
         "max_score":          float(r.max_score or 0),
         "has_paid":           bool(r.has_paid),
         "has_organic":        bool(r.has_organic),
+        "has_cross_shop":     bool(r.has_cross_shop),
     } for r in rows]
 
     summary = {

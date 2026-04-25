@@ -1,4 +1,4 @@
-"""SEO 候选词池引擎：多源融合（付费 + 自然搜索）
+"""SEO 候选词池引擎：多源融合（付费 + 自然搜索 + 跨店同款）
 
 源接入状态：
 - 源 A  paid self     本商品付费词    依赖 ad_keywords + ad_stats（WB/Ozon 当前都缺数据）
@@ -6,6 +6,7 @@
 - 源 B  organic self  本商品自然搜索词 依赖 product_search_queries（Ozon Premium 通后有数据）
 - 源 B' organic category 同类目自然词  同上
 - 源 C  Wordstat 搜索引擎趋势         三期 Yandex OAuth 通后接
+- 源 D  cross_shop self 跨店同 SKU 验证词 同 tenant 同 sku 跨 shop psq 召回（严阈值）
 
 核心函数：
 - analyze_paid_to_organic: 刷引擎，扫近 N 天 → upsert 候选池
@@ -321,6 +322,85 @@ def analyze_paid_to_organic(
                     cand["_title"] = pr.title or ""
                     cand["_attrs"] = pr.attrs or ""
                     cand["_cat_id"] = pr.cat_id
+
+    # ===== Step G: 跨店同 SKU 召回 (源 D cross_shop self) =====
+    # 业务模型：products.sku 是用户自定义的本地编码，跨店相同 = 同一商品。
+    # 当前店该商品如果他店同 sku 在 psq 里有"验证过"的高价值词，召回作为参考。
+    # 严阈值：SUM(orders) >= 3 OR SUM(frequency) >= 20 —— 防止偶然词误判为"优秀"。
+    # 不写 organic_xxx 字段（语义是他店表现，不是本店）；信息存 sources JSON entry。
+    cross_shop_sql = text("""
+        SELECT
+            q.query_text AS keyword,
+            p_local.id AS product_id,
+            ANY_VALUE(COALESCE(pl_local.title_ru, '')) AS title,
+            ANY_VALUE(COALESCE(CAST(pl_local.variant_attrs AS CHAR), '')) AS attrs,
+            ANY_VALUE(p_local.local_category_id) AS cat_id,
+            pl_src.shop_id AS source_shop_id,
+            SUM(q.orders) AS source_orders,
+            SUM(q.frequency) AS source_frequency,
+            SUM(q.impressions) AS source_impressions,
+            SUM(q.revenue) AS source_revenue
+        FROM products p_local
+        JOIN products p_other ON p_other.sku = p_local.sku
+                              AND p_other.tenant_id = p_local.tenant_id
+                              AND p_other.shop_id != p_local.shop_id
+                              AND (p_other.status != 'deleted' OR p_other.status IS NULL)
+        JOIN product_search_queries q ON q.product_id = p_other.id
+                                      AND q.tenant_id = p_other.tenant_id
+                                      AND q.stat_date >= :since
+        JOIN platform_listings pl_src ON pl_src.product_id = p_other.id
+                                      AND pl_src.tenant_id = p_other.tenant_id
+                                      AND pl_src.shop_id = q.shop_id
+        LEFT JOIN platform_listings pl_local ON pl_local.product_id = p_local.id
+                                             AND pl_local.tenant_id = p_local.tenant_id
+                                             AND pl_local.shop_id = p_local.shop_id
+                                             AND pl_local.status NOT IN ('deleted', 'archived')
+        WHERE p_local.tenant_id = :tid
+          AND p_local.shop_id = :sid
+          AND p_local.sku IS NOT NULL
+          AND p_local.sku != ''
+          AND (p_local.status != 'deleted' OR p_local.status IS NULL)
+        GROUP BY q.query_text, p_local.id, pl_src.shop_id
+        HAVING SUM(q.orders) >= 3 OR SUM(q.frequency) >= 20
+    """)
+    cross_rows = db.execute(cross_shop_sql, {
+        "tid": tenant_id, "sid": shop.id, "since": since,
+    }).fetchall()
+
+    # 一次性查所有 source_shop 名称（避免 N+1）
+    src_shop_ids = list({r.source_shop_id for r in cross_rows})
+    src_shop_name_map = {}
+    if src_shop_ids:
+        shop_name_sql = text("""
+            SELECT id, name FROM shops
+            WHERE id IN :ids AND tenant_id = :tid
+        """).bindparams(bindparam("ids", expanding=True))
+        for r in db.execute(shop_name_sql, {
+            "ids": src_shop_ids, "tid": tenant_id,
+        }).fetchall():
+            src_shop_name_map[r.id] = r.name
+
+    for r in cross_rows:
+        kw = (r.keyword or "").strip().lower()
+        if not kw:
+            continue
+        key = (r.product_id, kw)
+        cand = candidates.setdefault(key, _new_candidate(r.product_id, kw))
+        cand["sources"].append({
+            "type": "cross_shop",
+            "scope": "self",
+            "source_shop_id": int(r.source_shop_id),
+            "source_shop_name": src_shop_name_map.get(r.source_shop_id, ""),
+            "orders": int(r.source_orders or 0),
+            "frequency": int(r.source_frequency or 0),
+            "impressions": int(r.source_impressions or 0),
+            "revenue": round(float(r.source_revenue or 0), 2),
+        })
+        # title/attrs 兜底（跨店召回的本店商品可能没在 paid/organic self 命中过）
+        if not cand.get("_title"):
+            cand["_title"] = r.title or ""
+            cand["_attrs"] = r.attrs or ""
+            cand["_cat_id"] = r.cat_id
 
     # ===== Step D: 覆盖判断 + 算分 + 过滤已覆盖 =====
     finalized = []
