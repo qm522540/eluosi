@@ -173,8 +173,24 @@ const SearchInsights = () => {
         return <Text style={{ color, fontWeight: 500 }}>{pct.toFixed(0)}%</Text>
       },
     },
-    { title: '点击', dataIndex: 'clicks', key: 'clicks', width: 90, align: 'right' },
-    { title: '加购', dataIndex: 'add_to_cart', key: 'add_to_cart', width: 90, align: 'right' },
+    {
+      title: shopPlatform === 'ozon'
+        ? <Tooltip title="Ozon /v1/analytics/product-queries/details 接口不返点击数据，列固定为 — （不要误读为 0）。所以即使下单 > 0，点击也显示 — 是正常的。">
+            点击 <InfoCircleOutlined style={{ color: '#999' }} />
+          </Tooltip>
+        : '点击',
+      dataIndex: 'clicks', key: 'clicks', width: 90, align: 'right',
+      render: v => shopPlatform === 'ozon' ? <Text type="secondary">—</Text> : (v || 0),
+    },
+    {
+      title: shopPlatform === 'ozon'
+        ? <Tooltip title="Ozon 此接口不返加购数据，列固定为 —">
+            加购 <InfoCircleOutlined style={{ color: '#999' }} />
+          </Tooltip>
+        : '加购',
+      dataIndex: 'add_to_cart', key: 'add_to_cart', width: 90, align: 'right',
+      render: v => shopPlatform === 'ozon' ? <Text type="secondary">—</Text> : (v || 0),
+    },
     { title: '下单', dataIndex: 'orders', key: 'orders', width: 90, align: 'right' },
     {
       title: '销售额(₽)', dataIndex: 'revenue', key: 'revenue', width: 110, align: 'right',
