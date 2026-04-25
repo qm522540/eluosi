@@ -38,6 +38,7 @@ const SOURCE_OPTIONS = [
   { label: '付费·类目', value: 'paid_category' },
   { label: '自然·本商品', value: 'organic_self' },
   { label: '自然·类目', value: 'organic_category' },
+  { label: '其他店同款', value: 'cross_shop_self' },
 ]
 
 // 合并多店铺响应：按 keyword SUM 所有字段
@@ -65,7 +66,7 @@ const mergeRollup = (responses, shopIdsOrder = [], shopNameMap = {}) => {
         keyword: it.keyword,
         product_count: 0, self_product_count: 0,
         total_orders: 0, total_impressions: 0, total_add_to_cart: 0,
-        max_score: 0, has_paid: false, has_organic: false,
+        max_score: 0, has_paid: false, has_organic: false, has_cross_shop: false,
       }
       cur.product_count += it.product_count
       cur.self_product_count += it.self_product_count
@@ -75,6 +76,7 @@ const mergeRollup = (responses, shopIdsOrder = [], shopNameMap = {}) => {
       cur.max_score = Math.max(cur.max_score, it.max_score || 0)
       cur.has_paid = cur.has_paid || it.has_paid
       cur.has_organic = cur.has_organic || it.has_organic
+      cur.has_cross_shop = cur.has_cross_shop || it.has_cross_shop
       map.set(key, cur)
     })
     if (data?.summary) {
@@ -373,6 +375,11 @@ const CandidatesRollupTable = ({
             <Space size={4} wrap>
               {r.has_paid && <Tag color="purple" style={{ margin: 0, fontSize: 10 }}>付费</Tag>}
               {r.has_organic && <Tag color="cyan" style={{ margin: 0, fontSize: 10 }}>自然</Tag>}
+              {r.has_cross_shop && (
+                <Tooltip title="同 SKU 商品在其他店铺验证过此关键词。点开关键词可查看具体来源店和真实订单/曝光数据。">
+                  <Tag color="orange" style={{ margin: 0, fontSize: 10 }}>跨店</Tag>
+                </Tooltip>
+              )}
             </Space>
           </Space>
         )
