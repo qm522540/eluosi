@@ -53,7 +53,7 @@ const SearchInsights = () => {
     const params = {
       ...range,
       page: 1,
-      size: 100,
+      size: 2000,
       sort_by: 'frequency',
       sort_order: 'desc',
     }
@@ -317,8 +317,8 @@ const SearchInsights = () => {
                 type="info" showIcon style={{ marginBottom: 12 }}
                 message={
                   <span>
-                    按搜索次数降序展示前 <Text strong>{items.length}</Text> 条；全店共 <Text strong>{totals.query_count}</Text> 个搜索词。
-                    要看长尾低频词请用上方搜索框，或翻页。
+                    数据量超过 2000 条，按搜索次数降序仅展示前 <Text strong>{items.length}</Text> 条；
+                    全店共 <Text strong>{totals.query_count}</Text> 个搜索词。要看更长尾的低频词请用上方搜索框定位。
                   </span>
                 }
               />

@@ -25,7 +25,7 @@ def shop_summary(
     sort_by: str = Query("frequency"),
     sort_order: str = Query("desc"),
     page: int = Query(1, ge=1),
-    size: int = Query(50, ge=1, le=200),
+    size: int = Query(50, ge=1, le=2000),
     db: Session = Depends(get_db),
     tenant_id: int = Depends(get_tenant_id),
     shop=Depends(get_owned_shop),
