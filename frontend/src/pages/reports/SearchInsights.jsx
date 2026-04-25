@@ -187,21 +187,62 @@ const SearchInsights = () => {
 
       <Alert
         type="info" showIcon style={{ marginBottom: 16 }}
-        message="此功能需开通 WB Jam / Ozon Premium 订阅"
+        message="此功能依赖搜索词分析订阅（WB / Ozon 各自独立）"
         description={
-          <span>
-            数据源：WB 的 <code>/search-report/product/search-texts</code> 和 Ozon 的
-            <code> /v1/analytics/product-queries/details</code>，未订阅会 403。
-            订阅后点「同步数据」拉取近 N 天，之后查本地表秒出。
-          </span>
+          <div style={{ fontSize: 12, lineHeight: 1.7 }}>
+            <div>
+              · <strong>WB</strong>：需开通 <strong>Jam 订阅</strong>，调
+              <code> /search-report/product/search-texts</code>
+            </div>
+            <div>
+              · <strong>Ozon</strong>：需开通 <strong>搜索词分析订阅（Premium 或 Premium Plus，按 Ozon 后台档位）</strong>，调
+              <code> /v1/analytics/product-queries/details</code>
+            </div>
+            <div style={{ marginTop: 4, color: '#d46b08' }}>
+              ⚠ <strong>订阅过期 / 降级也会 403</strong>，不只是"没开过"。
+              如果之前能用现在不行，请去平台后台检查订阅状态（很可能已开过但失效）。
+            </div>
+            <div style={{ marginTop: 4, color: '#999' }}>
+              订阅生效后点「同步数据」拉取近 N 天，之后查本地表秒出。
+            </div>
+          </div>
         }
       />
 
       {subscriptionMsg && (
         <Alert
           type="warning" showIcon style={{ marginBottom: 16 }} closable
-          message="该店铺未开通订阅"
-          description={subscriptionMsg}
+          message={
+            shopPlatform === 'wb'
+              ? 'WB 店铺订阅状态异常 — 请去 WB 后台检查 Jam 订阅'
+              : shopPlatform === 'ozon'
+                ? 'Ozon 店铺订阅状态异常 — 请去 Ozon 后台检查搜索词分析订阅'
+                : '该店铺订阅状态异常 — 请去平台后台检查'
+          }
+          description={
+            <div style={{ fontSize: 12, lineHeight: 1.7 }}>
+              <div>
+                {shopPlatform === 'wb'
+                  ? '可能原因：① 未开通 WB Jam 订阅；② 之前开过但已过期 — 请到 WB 后台续费。'
+                  : shopPlatform === 'ozon'
+                    ? '可能原因：① 未开通 Ozon 搜索词分析专项（Premium / Premium Plus）；② 之前开过但已过期或降级 — 请到 Ozon 后台账号订阅页检查档位。'
+                    : '可能原因：未开通对应平台的搜索词分析订阅，或订阅已过期 / 降级。'}
+              </div>
+              <details style={{ marginTop: 6 }}>
+                <summary style={{ cursor: 'pointer', color: '#999', fontSize: 11 }}>
+                  展开技术细节（平台返回的原始错误）
+                </summary>
+                <pre style={{
+                  fontSize: 11, background: '#fafafa',
+                  padding: 6, marginTop: 4, borderRadius: 4,
+                  whiteSpace: 'pre-wrap',
+                  maxHeight: 100, overflow: 'auto',
+                }}>
+                  {subscriptionMsg}
+                </pre>
+              </details>
+            </div>
+          }
           onClose={() => setSubscriptionMsg('')}
         />
       )}
