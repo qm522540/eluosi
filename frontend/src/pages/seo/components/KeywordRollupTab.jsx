@@ -161,6 +161,47 @@ const KeywordRollupTab = ({ shops = [], shopId, onShopChange, onJumpToProduct })
     },
     {
       title: (
+        <Tooltip title="搜索量 = 你商品在搜索结果列表中出现的累计次数（WB frequency / Ozon unique_search_users，SKU 级累加）">
+          搜索量
+        </Tooltip>
+      ),
+      dataIndex: 'frequency', align: 'right', width: 100,
+      sorter: (a, b) => (a.frequency || 0) - (b.frequency || 0),
+      render: v => (v || 0).toLocaleString(),
+    },
+    {
+      title: (
+        <Tooltip title="曝光 = 用户搜该词后真正滚动看见你商品卡片的累计次数（Ozon unique_view_users）。恒有 曝光 ≤ 搜索量">
+          曝光
+        </Tooltip>
+      ),
+      dataIndex: 'impressions', align: 'right', width: 90,
+      sorter: (a, b) => (a.impressions || 0) - (b.impressions || 0),
+      render: v => (v || 0).toLocaleString(),
+    },
+    {
+      title: (
+        <Tooltip title="曝光比例 = 曝光 / 搜索量。反映商品在搜索结果里被翻到的程度。≥60% 绿（排名好）/ 30~60% 橙 / <30% 红（排名靠后）">
+          曝光比例
+        </Tooltip>
+      ),
+      key: 'view_rate', align: 'right', width: 95,
+      sorter: (a, b) => {
+        const ra = a.frequency ? a.impressions / a.frequency : 0
+        const rb = b.frequency ? b.impressions / b.frequency : 0
+        return ra - rb
+      },
+      render: (_, r) => {
+        if (!r.frequency) return '-'
+        const pct = r.impressions / r.frequency * 100
+        let color = '#f5222d'
+        if (pct >= 60) color = '#52c41a'
+        else if (pct >= 30) color = '#faad14'
+        return <Text style={{ color, fontWeight: 500 }}>{pct.toFixed(0)}%</Text>
+      },
+    },
+    {
+      title: (
         <Tooltip title="该词真有搜索流量/订单打到的本店商品数（不含引擎按类目散播推断的商品）">
           商品数
         </Tooltip>
@@ -169,15 +210,6 @@ const KeywordRollupTab = ({ shops = [], shopId, onShopChange, onJumpToProduct })
       align: 'right', width: 80,
       sorter: (a, b) => (a.product_count || 0) - (b.product_count || 0),
       render: v => (v || 0),
-    },
-    {
-      title: (
-        <Tooltip title="impressions：用户搜该词后真把你商品翻出来看到的独立用户数。注意区别于「搜索词洞察」页的「曝光/频次」（那个是 frequency = 搜索结果含你商品的用户数，含未翻到的）">
-          曝光 <span style={{ color: '#bbb', fontSize: 11 }}>ⓘ</span>
-        </Tooltip>
-      ),
-      dataIndex: 'impressions', align: 'right', width: 90,
-      render: v => (v || 0).toLocaleString(),
     },
     { title: '加购', dataIndex: 'add_to_cart', align: 'right', width: 70 },
     {
