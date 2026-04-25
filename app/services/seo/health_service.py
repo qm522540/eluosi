@@ -336,3 +336,83 @@ def compute_shop_health(
             "size": size,
         },
     }
+
+
+def list_missing_candidates_for_product(
+    db: Session,
+    tenant_id: int,
+    shop,
+    product_id: int,
+) -> dict:
+    """单商品全部未覆盖候选词（健康诊断行展开用）。
+
+    与 compute_shop_health.missing_top_keywords 相比：
+    - 不限 Top 3，返回全部 in_title=0 AND in_attrs=0 的 pending 候选
+    - 每条字段更全：本店付费/自然指标 + 跨店 source_shop/曝光/订单
+    - 前端展开抽屉用：分类筛选 / 多选生成新标题
+    """
+    sql = text("""
+        SELECT id AS candidate_id,
+               keyword, score, sources,
+               paid_orders, paid_revenue, paid_roas, paid_spend,
+               organic_orders, organic_impressions, organic_add_to_cart,
+               in_title, in_attrs
+        FROM seo_keyword_candidates
+        WHERE tenant_id = :tid
+          AND shop_id = :sid
+          AND product_id = :pid
+          AND status = 'pending'
+          AND in_title = 0 AND in_attrs = 0
+        ORDER BY score DESC
+    """)
+    rows = db.execute(sql, {
+        "tid": tenant_id, "sid": shop.id, "pid": product_id,
+    }).fetchall()
+
+    items = []
+    for r in rows:
+        srcs = r.sources if isinstance(r.sources, list) else (
+            json.loads(r.sources) if r.sources else []
+        )
+        has_paid = any(s.get("type") == "paid" for s in srcs)
+        has_organic = any(s.get("type") == "organic" for s in srcs)
+        cross_entry = next((s for s in srcs if s.get("type") == "cross_shop"), None)
+
+        if has_paid:
+            source_type = "paid"
+        elif has_organic:
+            source_type = "organic"
+        elif cross_entry:
+            source_type = "cross_shop"
+        else:
+            source_type = "unknown"
+
+        items.append({
+            "candidate_id": int(r.candidate_id),
+            "keyword": r.keyword,
+            "score": float(r.score or 0),
+            "source_type": source_type,
+            "sources": srcs,
+            # 本店指标（paid/organic 来源时填）
+            "paid_orders": int(r.paid_orders) if r.paid_orders is not None else None,
+            "paid_revenue": float(r.paid_revenue) if r.paid_revenue is not None else None,
+            "paid_roas": float(r.paid_roas) if r.paid_roas is not None else None,
+            "organic_orders": int(r.organic_orders) if r.organic_orders is not None else None,
+            "organic_impressions": int(r.organic_impressions) if r.organic_impressions is not None else None,
+            "organic_add_to_cart": int(r.organic_add_to_cart) if r.organic_add_to_cart is not None else None,
+            # 跨店指标（cross_shop 来源时填，他店真实数据）
+            "cross_shop_name": cross_entry.get("source_shop_name") if cross_entry else None,
+            "cross_shop_id": cross_entry.get("source_shop_id") if cross_entry else None,
+            "cross_frequency": int(cross_entry.get("frequency") or 0) if cross_entry else None,
+            "cross_orders": int(cross_entry.get("orders") or 0) if cross_entry else None,
+            "cross_impressions": int(cross_entry.get("impressions") or 0) if cross_entry else None,
+        })
+
+    return {
+        "code": ErrorCode.SUCCESS,
+        "data": {
+            "product_id": product_id,
+            "items": items,
+            "total": len(items),
+        },
+    }

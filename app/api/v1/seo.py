@@ -17,7 +17,7 @@ from app.services.seo.service import (
     list_champion_keywords,
 )
 from app.services.seo.title_generator import generate_title
-from app.services.seo.health_service import compute_shop_health
+from app.services.seo.health_service import compute_shop_health, list_missing_candidates_for_product
 from app.services.seo.generated_history import list_generated_titles, mark_title_applied
 from app.services.seo.keyword_tracking_service import compute_keyword_tracking, list_query_top_skus
 from app.services.seo.roi_report_service import compute_roi_report
@@ -169,6 +169,25 @@ def shop_health(
         score_range=score_range, sort=sort, keyword=keyword,
         page=page, size=size,
     )
+    if result.get("code") != 0:
+        return error(result["code"], result.get("msg", ""))
+    return success(result["data"])
+
+
+@router.get("/shop/{shop_id}/product/{product_id}/missing-candidates")
+def shop_product_missing_candidates(
+    shop_id: int,
+    product_id: int,
+    db: Session = Depends(get_db),
+    tenant_id: int = Depends(get_tenant_id),
+    shop=Depends(get_owned_shop),
+):
+    """单商品全部未覆盖候选词（健康诊断行展开用）。
+
+    返回该商品所有 in_title=0 AND in_attrs=0 的 pending 候选，按 score DESC 排序。
+    每条带本店付费/自然指标 + 跨店来源店/曝光/订单的完整数据。
+    """
+    result = list_missing_candidates_for_product(db, tenant_id, shop, product_id)
     if result.get("code") != 0:
         return error(result["code"], result.get("msg", ""))
     return success(result["data"])
