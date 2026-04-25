@@ -43,6 +43,11 @@ export function getSeoHealth(shopId, params) {
   return request.get(`${BASE}/shop/${shopId}/health`, { params })
 }
 
+/** 单商品全部未覆盖候选词（健康诊断行展开用） */
+export function getProductMissingCandidates(shopId, productId) {
+  return request.get(`${BASE}/shop/${shopId}/product/${productId}/missing-candidates`)
+}
+
 /** AI 生成标题历史（分页） */
 export function getGeneratedTitles(shopId, params) {
   return request.get(`${BASE}/shop/${shopId}/generated-titles`, { params })
