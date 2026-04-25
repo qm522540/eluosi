@@ -149,10 +149,15 @@ const KeywordRollupTab = ({ shops = [], shopId, onShopChange, onJumpToProduct })
   const mainColumns = [
     {
       title: '关键词', dataIndex: 'keyword', key: 'keyword',
-      render: (v) => {
+      render: (v, r) => {
         const zh = kwTranslations[v]
         const hasZh = zh && zh !== v
         const wt = WORD_TYPE_MAP[classifyWordType(v)]
+        const crossCount = r.cross_shop_count || 0
+        const crossShops = r.cross_shop_shops || []
+        const crossTip = crossCount > 0
+          ? `当前未选中的 ${crossCount} 家店也搜到过此词：${crossShops.map(s => shopNameMap[s.shop_id] || `shop#${s.shop_id}`).join('、')}。多选这些店一起看可合并跨店数据。`
+          : ''
         return (
           <div style={{ lineHeight: 1.3 }}>
             <Space size={4} style={{ alignItems: 'center' }}>
@@ -161,6 +166,13 @@ const KeywordRollupTab = ({ shops = [], shopId, onShopChange, onJumpToProduct })
                 <Tag color={wt.color} style={{ margin: 0, fontSize: 10, padding: '0 4px', lineHeight: '14px' }}>
                   {wt.label}
                 </Tag>
+              )}
+              {crossCount > 0 && (
+                <Tooltip title={crossTip}>
+                  <Tag color="orange" style={{ margin: 0, fontSize: 10, padding: '0 4px', lineHeight: '14px' }}>
+                    跨店 +{crossCount}
+                  </Tag>
+                </Tooltip>
               )}
             </Space>
             <div style={{ marginTop: 1 }}>

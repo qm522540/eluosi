@@ -221,6 +221,36 @@ def compute_keyword_rollup(
         for it in items:
             it["candidate_row_count"] = cand_map.get(it["keyword"].lower(), 0)
 
+        # 跨店覆盖：每个词在当前 tenant 下出现在哪些 shop（不限 sids，全店扫一遍）
+        # cross_shop_count = 该词在多少家店出现过
+        # cross_shop_shop_ids = 哪些店（前端可对比当前 sids，差额标记"+N 跨店"）
+        cross_rows = db.execute(text("""
+            SELECT LOWER(q.query_text) AS kw_lower,
+                   q.shop_id AS shop_id,
+                   SUM(q.orders) AS orders
+            FROM product_search_queries q
+            WHERE q.tenant_id = :tid
+              AND q.stat_date >= :since
+              AND q.product_id IS NOT NULL
+              AND LOWER(q.query_text) IN :kws
+            GROUP BY LOWER(q.query_text), q.shop_id
+        """).bindparams(bindparam("kws", expanding=True)), {
+            "tid": tenant_id, "since": since,
+            "kws": [kw.lower() for kw in kw_list],
+        }).fetchall()
+        cross_map = {}
+        for r in cross_rows:
+            cross_map.setdefault(r.kw_lower, []).append({
+                "shop_id": int(r.shop_id),
+                "orders": int(r.orders or 0),
+            })
+        sids_set = set(sids)
+        for it in items:
+            shops_for_kw = cross_map.get(it["keyword"].lower(), [])
+            other_shops = [s for s in shops_for_kw if s["shop_id"] not in sids_set]
+            it["cross_shop_count"] = len(other_shops)
+            it["cross_shop_shops"] = other_shops[:5]  # 防止前端过载，只返前 5 家
+
     summary = {
         "kw_count":         int(sum_row.kw_count or 0),
         "total_impressions": int(sum_row.total_impressions or 0),
