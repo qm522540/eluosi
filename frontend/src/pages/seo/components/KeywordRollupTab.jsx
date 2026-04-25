@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import {
   Card, Table, Space, Segmented, Input, InputNumber, Button, Tag, Modal,
-  Empty, Alert, Typography, Image, message, Select, Rate, Tooltip,
+  Empty, Alert, Typography, Image, message, Select, Tooltip,
 } from 'antd'
 import { ReloadOutlined, SearchOutlined, DownOutlined, RightOutlined, EditOutlined } from '@ant-design/icons'
 import { getKeywordRollup, getKeywordRollupProducts } from '@/api/seo'
@@ -211,14 +211,39 @@ const KeywordRollupTab = ({ shops = [], shopId, onShopChange, onJumpToProduct })
       sorter: (a, b) => (a.product_count || 0) - (b.product_count || 0),
       render: v => (v || 0),
     },
-    { title: '加购', dataIndex: 'add_to_cart', align: 'right', width: 70 },
+    {
+      title: '加购', dataIndex: 'add_to_cart', align: 'right', width: 70,
+      sorter: (a, b) => (a.add_to_cart || 0) - (b.add_to_cart || 0),
+    },
     {
       title: '订单', dataIndex: 'orders', align: 'right', width: 80,
+      sorter: (a, b) => (a.orders || 0) - (b.orders || 0),
       render: v => v > 0 ? <Text strong style={{ color: '#52c41a' }}>{v}</Text> : (v || 0),
     },
     {
-      title: '收入', dataIndex: 'revenue', align: 'right', width: 110,
-      render: v => `¥${Number(v || 0).toFixed(2)}`,
+      title: '销售额', dataIndex: 'revenue', align: 'right', width: 110,
+      sorter: (a, b) => (a.revenue || 0) - (b.revenue || 0),
+      render: v => `₽${Number(v || 0).toFixed(2)}`,
+    },
+    {
+      title: (
+        <Tooltip title="优先级 = 销售额 + 订单×100 + 加购×5。已下单(🔥)→待加固(⭐)→观察(👁)→无(—)。点表头按数值排序">
+          优先级
+        </Tooltip>
+      ),
+      key: 'priority', align: 'center', width: 100,
+      sorter: (a, b) => {
+        const pa = (a.revenue || 0) + (a.orders || 0) * 100 + (a.add_to_cart || 0) * 5
+        const pb = (b.revenue || 0) + (b.orders || 0) * 100 + (b.add_to_cart || 0) * 5
+        return pa - pb
+      },
+      defaultSortOrder: 'descend',
+      render: (_, r) => {
+        if (r.orders > 0) return <Tag color="red" style={{ margin: 0 }}>🔥 已下单</Tag>
+        if (r.add_to_cart > 0) return <Tag color="gold" style={{ margin: 0 }}>⭐ 待加固</Tag>
+        if (r.impressions > 0) return <Tag style={{ margin: 0 }}>👁 观察</Tag>
+        return <Text type="secondary">—</Text>
+      },
     },
   ]
 
@@ -253,34 +278,28 @@ const KeywordRollupTab = ({ shops = [], shopId, onShopChange, onJumpToProduct })
         ),
       },
       {
-        title: '评分', key: 'rating', width: 130, align: 'center',
-        render: (_, r) => {
-          if (r.rating == null) return <Text type="secondary" style={{ fontSize: 11 }}>-</Text>
-          return (
-            <Space direction="vertical" size={0} style={{ lineHeight: 1.2 }}>
-              <Space size={4}>
-                <Rate disabled value={r.rating} allowHalf style={{ fontSize: 11 }} />
-                <Text strong style={{ fontSize: 11 }}>{Number(r.rating).toFixed(1)}</Text>
-              </Space>
-              <Text type="secondary" style={{ fontSize: 10 }}>
-                {r.review_count || 0} 条评价
-              </Text>
-            </Space>
-          )
-        },
+        title: '搜索量', dataIndex: 'frequency', align: 'right', width: 90,
+        sorter: (a, b) => (a.frequency || 0) - (b.frequency || 0),
+        render: v => (v || 0).toLocaleString(),
       },
       {
         title: '曝光', dataIndex: 'impressions', align: 'right', width: 80,
+        sorter: (a, b) => (a.impressions || 0) - (b.impressions || 0),
         render: v => (v || 0).toLocaleString(),
       },
-      { title: '加购', dataIndex: 'add_to_cart', align: 'right', width: 60 },
+      {
+        title: '加购', dataIndex: 'add_to_cart', align: 'right', width: 60,
+        sorter: (a, b) => (a.add_to_cart || 0) - (b.add_to_cart || 0),
+      },
       {
         title: '订单', dataIndex: 'orders', align: 'right', width: 70,
+        sorter: (a, b) => (a.orders || 0) - (b.orders || 0),
         render: v => v > 0 ? <Text strong style={{ color: '#52c41a' }}>{v}</Text> : (v || 0),
       },
       {
-        title: '收入', dataIndex: 'revenue', align: 'right', width: 100,
-        render: v => `¥${Number(v || 0).toFixed(2)}`,
+        title: '销售额', dataIndex: 'revenue', align: 'right', width: 100,
+        sorter: (a, b) => (a.revenue || 0) - (b.revenue || 0),
+        render: v => `₽${Number(v || 0).toFixed(2)}`,
       },
       {
         title: '操作', key: 'action', width: 110, align: 'center',
