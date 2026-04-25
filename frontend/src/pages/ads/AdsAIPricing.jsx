@@ -1572,15 +1572,16 @@ const OzonAIPricing = ({ shopId, platform = 'ozon' }) => {
             ? '✓ AI 将自动调整出价（高峰 30 分钟 / 平稳 2 小时巡检）'
             : '✓ AI 将生成建议，需要你手动确认执行'}
         </span>
-        <Tooltip title={WB_QUOTA_SILENT_MODE ? WB_SILENT_TIP : ''}>
+        {/* WB 静默期：仅 WB 平台 disable，Ozon 不受影响 */}
+        <Tooltip title={(platform === 'wb' && WB_QUOTA_SILENT_MODE) ? WB_SILENT_TIP : ''}>
           <Button
             icon={<RobotOutlined />}
             onClick={handleManualAnalyze}
             loading={analyzing}
-            disabled={WB_QUOTA_SILENT_MODE}
+            disabled={platform === 'wb' && WB_QUOTA_SILENT_MODE}
             style={{ marginLeft: 'auto' }}
           >
-            {WB_QUOTA_SILENT_MODE ? '立即分析（静默期暂停）' : '立即分析'}
+            {(platform === 'wb' && WB_QUOTA_SILENT_MODE) ? '立即分析（WB 静默期暂停）' : '立即分析'}
           </Button>
         </Tooltip>
       </div>
