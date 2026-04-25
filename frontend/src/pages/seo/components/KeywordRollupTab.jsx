@@ -182,7 +182,12 @@ const KeywordRollupTab = ({ shops = [], shopId, onShopChange, onJumpToProduct })
       ),
     },
     {
-      title: '曝光', dataIndex: 'impressions', align: 'right', width: 90,
+      title: (
+        <Tooltip title="impressions：用户搜该词后真把你商品翻出来看到的独立用户数。注意区别于「搜索词洞察」页的「曝光/频次」（那个是 frequency = 搜索结果含你商品的用户数，含未翻到的）">
+          曝光 <span style={{ color: '#bbb', fontSize: 11 }}>ⓘ</span>
+        </Tooltip>
+      ),
+      dataIndex: 'impressions', align: 'right', width: 90,
       render: v => (v || 0).toLocaleString(),
     },
     { title: '加购', dataIndex: 'add_to_cart', align: 'right', width: 70 },
@@ -391,7 +396,7 @@ const KeywordRollupTab = ({ shops = [], shopId, onShopChange, onJumpToProduct })
               background: '#f6ffed', border: '1px solid #b7eb8f',
               borderRadius: 4, fontSize: 13,
             }}>
-              <Text>近 {data?.days} 天汇总：</Text>
+              <Text>近 {data?.days} 天全店汇总：</Text>
               <Text strong style={{ marginLeft: 10 }}>{summary.kw_count}</Text>
               <Text type="secondary"> 个词 · </Text>
               <Text strong>{summary.total_impressions.toLocaleString()}</Text>
@@ -400,6 +405,11 @@ const KeywordRollupTab = ({ shops = [], shopId, onShopChange, onJumpToProduct })
               <Text type="secondary"> 总订单 · </Text>
               <Text strong>¥{summary.total_revenue.toFixed(2)}</Text>
               <Text type="secondary"> 总收入</Text>
+              {summary.shown_count != null && summary.shown_count < summary.kw_count && (
+                <Text type="secondary" style={{ marginLeft: 10, fontSize: 12 }}>
+                  （列表按当前排序展示前 {summary.shown_count} 条；汇总不受排序/截断影响）
+                </Text>
+              )}
             </div>
           )}
 

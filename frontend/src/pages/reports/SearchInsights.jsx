@@ -139,7 +139,7 @@ const SearchInsights = () => {
       ),
     },
     {
-      title: <Tooltip title="平台返回的搜索频次（WB frequency / Ozon unique_search_users）">
+      title: <Tooltip title="frequency = 用户搜该词后，搜索结果里包含你商品的独立用户数（WB frequency / Ozon unique_search_users）。注意：≠ 全平台总搜索量；也 ≠ 「优化建议·店级 TOP」页的「曝光」（那个是 impressions = 用户真把你商品翻出来看到的数）">
         曝光/频次 <InfoCircleOutlined style={{ color: '#999' }} />
       </Tooltip>,
       dataIndex: 'frequency', key: 'frequency', width: 120, align: 'right',
@@ -319,6 +319,17 @@ const SearchInsights = () => {
               </Text>
             }
           >
+            {totals?.query_count > items.length && (
+              <Alert
+                type="info" showIcon style={{ marginBottom: 12 }}
+                message={
+                  <span>
+                    按 frequency 降序展示前 <Text strong>{items.length}</Text> 条；全店共 <Text strong>{totals.query_count}</Text> 个搜索词。
+                    要看长尾低频词请用上方搜索框，或翻页。
+                  </span>
+                }
+              />
+            )}
             <Spin spinning={loading}>
               <Table
                 rowKey="query_text"

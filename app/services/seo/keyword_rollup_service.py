@@ -144,6 +144,40 @@ def compute_keyword_rollup(
         "candidate_row_count": 0,
     } for r in rows]
 
+    # 全店汇总：套相同 WHERE + HAVING（含 keyword/min_orders 过滤），但不带 ORDER BY + LIMIT。
+    # 修复 UX bug：之前 summary 基于 items 求和，切排序后取出的 200 词集合变化导致
+    # "总订单/总收入"漂移（用户截图 9→5 / 3360→1919），违反"切排序词集不应变"直觉。
+    summary_sql = text(f"""
+        SELECT COUNT(*) AS kw_count,
+               COALESCE(SUM(impressions), 0) AS total_impressions,
+               COALESCE(SUM(orders), 0)      AS total_orders,
+               COALESCE(SUM(revenue), 0)     AS total_revenue
+        FROM (
+            SELECT
+                SUM(q.frequency)    AS frequency,
+                SUM(q.impressions)  AS impressions,
+                SUM(q.orders)       AS orders,
+                SUM(q.revenue)      AS revenue
+            FROM product_search_queries q
+            JOIN products p ON p.id = q.product_id AND p.tenant_id = q.tenant_id
+            WHERE q.tenant_id = :tid
+              AND q.shop_id = :sid
+              AND q.stat_date >= :since
+              AND q.product_id IS NOT NULL
+              AND (p.status != 'deleted' OR p.status IS NULL)
+              {kw_clause}
+            GROUP BY q.query_text
+            HAVING (SUM(q.frequency) >= 5 OR SUM(q.orders) >= 1)
+              {having_min_orders}
+        ) t
+    """)
+    sum_params = {"tid": tenant_id, "sid": shop.id, "since": since}
+    if kw_like:
+        sum_params["kw"] = kw_like
+    if min_orders > 0:
+        sum_params["min_orders"] = min_orders
+    sum_row = db.execute(summary_sql, sum_params).fetchone()
+
     # 旁路查询：每个 keyword 在 seo_keyword_candidates 表出现多少行
     # 用于前端"口径差异说明"：按商品看里同一词可能展示 N 次（含类目推断），
     # 帮用户理解为什么按商品看"看起来订单多"而 rollup"看起来订单少"
@@ -164,10 +198,11 @@ def compute_keyword_rollup(
             it["candidate_row_count"] = cand_map.get(it["keyword"].lower(), 0)
 
     summary = {
-        "kw_count":         len(items),
-        "total_impressions": sum(it["impressions"] for it in items),
-        "total_orders":     sum(it["orders"] for it in items),
-        "total_revenue":    round(sum(it["revenue"] for it in items), 2),
+        "kw_count":         int(sum_row.kw_count or 0),
+        "total_impressions": int(sum_row.total_impressions or 0),
+        "total_orders":     int(sum_row.total_orders or 0),
+        "total_revenue":    round(float(sum_row.total_revenue or 0), 2),
+        "shown_count":      len(items),
     }
 
     return {
