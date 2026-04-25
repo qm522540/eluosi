@@ -262,18 +262,16 @@ const BidLogs = ({ shopId, refreshKey }) => {
       render: (_, r) => (
         <div>
           <div style={{ fontSize: 12, fontWeight: 500 }}>{r.campaign_name}</div>
-          <Tooltip title={r.sku_name}>
-            <div style={{
-              fontSize: 11,
-              color: 'var(--color-text-secondary, #666)',
-              maxWidth: 160,
-              overflow: 'hidden',
-              textOverflow: 'ellipsis',
-              whiteSpace: 'nowrap',
-            }}>
-              {r.sku_name}
-            </div>
-          </Tooltip>
+          <div style={{
+            fontSize: 11,
+            color: 'var(--color-text-secondary, #666)',
+            maxWidth: 160,
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            whiteSpace: 'nowrap',
+          }}>
+            {r.sku_name}
+          </div>
         </div>
       ),
     },
