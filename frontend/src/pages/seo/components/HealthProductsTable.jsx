@@ -3,9 +3,23 @@ import { Table, Tag, Space, Typography, Tooltip, Progress, Button, message } fro
 import { RobotOutlined, ThunderboltOutlined } from '@ant-design/icons'
 import { useNavigate } from 'react-router-dom'
 import { getProductMissingCandidates } from '@/api/seo'
+import { translateKeywords } from '@/api/keyword_stats'
 import AiTitleModal from './AiTitleModal'
 
 const { Text } = Typography
+
+// 与后端 keyword_stats._classify_word_type 一致：按空格分词
+const classifyWordType = (kw) => {
+  const n = (kw || '').trim().split(/\s+/).filter(Boolean).length
+  if (n <= 1) return 'single'
+  if (n <= 4) return 'short'
+  return 'long'
+}
+const WORD_TYPE_MAP = {
+  single: { label: '单词', color: 'default' },
+  short:  { label: '短词', color: 'blue' },
+  long:   { label: '长尾', color: 'purple' },
+}
 
 const SOURCE_TAG = {
   paid: {
@@ -106,6 +120,8 @@ const HealthProductsTable = ({
   const [expandedData, setExpandedData] = useState({})    // pid -> items[]
   const [expandedLoading, setExpandedLoading] = useState({}) // pid -> bool
   const [selectedByPid, setSelectedByPid] = useState({})  // pid -> selected rows
+  // 翻译缓存（俄→中），全局 dict 跨 pid 共享，命中 L2 ru_zh_dict 瞬间返
+  const [kwTranslations, setKwTranslations] = useState({})
 
   // AiTitleModal 控制
   const [aiModal, setAiModal] = useState({
@@ -129,7 +145,17 @@ const HealthProductsTable = ({
     try {
       const res = await getProductMissingCandidates(shopId, pid)
       if (res.code === 0) {
-        setExpandedData(prev => ({ ...prev, [pid]: res.data.items || [] }))
+        const items = res.data.items || []
+        setExpandedData(prev => ({ ...prev, [pid]: items }))
+        // 异步批量翻译缺词（命中 L2 ru_zh_dict 缓存瞬返；新词走 Kimi 后写回 DB）
+        const kws = items.map(it => it.keyword).filter(Boolean)
+        if (kws.length > 0) {
+          translateKeywords(kws).then(r => {
+            if (r.code === 0) {
+              setKwTranslations(prev => ({ ...prev, ...(r.data || {}) }))
+            }
+          }).catch(() => {})
+        }
       } else {
         message.error(res.msg || '拉取失败')
       }
@@ -176,7 +202,25 @@ const HealthProductsTable = ({
     },
     {
       title: '关键词', dataIndex: 'keyword', key: 'keyword',
-      render: (v) => <Text style={{ fontSize: 12 }}>{v}</Text>,
+      render: (v) => {
+        const zh = kwTranslations[v]
+        const wt = WORD_TYPE_MAP[classifyWordType(v)]
+        return (
+          <Space direction="vertical" size={1} style={{ lineHeight: 1.2 }}>
+            <Space size={4} style={{ alignItems: 'center' }}>
+              <Text style={{ fontSize: 12, fontWeight: 500 }}>{v}</Text>
+              {wt && (
+                <Tag color={wt.color} style={{ margin: 0, fontSize: 10, padding: '0 4px', lineHeight: '14px' }}>
+                  {wt.label}
+                </Tag>
+              )}
+            </Space>
+            <Text style={{ fontSize: 11, color: zh ? '#999' : '#ccc' }}>
+              {zh || '翻译中...'}
+            </Text>
+          </Space>
+        )
+      },
     },
     {
       title: '来源店', key: 'src_shop', width: 120,
