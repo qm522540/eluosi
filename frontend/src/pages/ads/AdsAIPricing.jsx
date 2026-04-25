@@ -29,6 +29,13 @@ import WbProductImg from '@/components/WbProductImg'
 const { Text } = Typography
 const { RangePicker } = DatePicker
 
+// ==================== WB quota 静默期硬关 ====================
+// 2026-04-25 老林：seller A+B 双 24h MANUAL HOLD #3 —— 24h+ 静默实证 WB quota 仍锁
+// 任何 WB endpoint 调用都会被 Redis pre-check 拦下，但前端按钮点了仍会跳错误消息丑
+// 解 hold 时改 false（同时取消 celery_app.py 中 2a3452b 的 5 个 WB beat 注释）
+const WB_QUOTA_SILENT_MODE = true
+const WB_SILENT_TIP = 'WB quota 锁期超 24h，已进入静默期暂停所有 WB 主动调用。等 B/C/D 路径决策（换账号 / 联系客服 / 继续等）后再恢复。'
+
 // ==================== 平台配置 ====================
 
 const PLATFORM_CONFIG = {
@@ -469,9 +476,17 @@ const WBAIPricing = ({ shopId }) => {
           待执行建议
           {suggestions.length > 0 && <Badge count={suggestions.length} style={{ marginLeft: 8 }} />}
         </div>
-        <Button type="primary" loading={analyzing} icon={<RobotOutlined />} onClick={handleAnalyze}>
-          立即分析
-        </Button>
+        <Tooltip title={WB_QUOTA_SILENT_MODE ? WB_SILENT_TIP : ''}>
+          <Button
+            type="primary"
+            loading={analyzing}
+            icon={<RobotOutlined />}
+            disabled={WB_QUOTA_SILENT_MODE}
+            onClick={handleAnalyze}
+          >
+            {WB_QUOTA_SILENT_MODE ? '立即分析（静默期暂停）' : '立即分析'}
+          </Button>
+        </Tooltip>
       </div>
 
       {suggestions.length === 0 ? (
@@ -1557,9 +1572,17 @@ const OzonAIPricing = ({ shopId, platform = 'ozon' }) => {
             ? '✓ AI 将自动调整出价（高峰 30 分钟 / 平稳 2 小时巡检）'
             : '✓ AI 将生成建议，需要你手动确认执行'}
         </span>
-        <Button icon={<RobotOutlined />} onClick={handleManualAnalyze} loading={analyzing} style={{ marginLeft: 'auto' }}>
-          立即分析
-        </Button>
+        <Tooltip title={WB_QUOTA_SILENT_MODE ? WB_SILENT_TIP : ''}>
+          <Button
+            icon={<RobotOutlined />}
+            onClick={handleManualAnalyze}
+            loading={analyzing}
+            disabled={WB_QUOTA_SILENT_MODE}
+            style={{ marginLeft: 'auto' }}
+          >
+            {WB_QUOTA_SILENT_MODE ? '立即分析（静默期暂停）' : '立即分析'}
+          </Button>
+        </Tooltip>
       </div>
 
       {/* DeepSeek 智能分析弹窗（流式） */}
