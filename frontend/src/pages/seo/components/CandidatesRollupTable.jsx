@@ -45,7 +45,7 @@ const SOURCE_OPTIONS = [
 const mergeRollup = (responses, shopIdsOrder = [], shopNameMap = {}) => {
   const map = new Map()
   let totalImpressions = 0, totalOrders = 0
-  const notReadyShops = []  // [{ shop_id, shop_name, hint }]
+  const notReadyShops = []  // [{ shop_id, shop_name, hint, reason }]
   responses.forEach((data, idx) => {
     const sid = shopIdsOrder[idx]
     if (!data) return
@@ -54,6 +54,7 @@ const mergeRollup = (responses, shopIdsOrder = [], shopNameMap = {}) => {
         shop_id: sid,
         shop_name: shopNameMap[sid] || `shop#${sid}`,
         hint: data.hint || '候选池暂无数据',
+        reason: data.not_ready_reason || null,
       })
       return
     }
@@ -120,6 +121,8 @@ const CandidatesRollupTable = ({
   // 候选池表 seo_keyword_candidates 无时间维度，切 days 要重跑引擎才生效
   const [days, setDays] = useState(30)
   const [refreshingEngine, setRefreshingEngine] = useState(false)
+  // not_ready Alert 里的 per-shop 刷新引擎按钮 loading 标记（哪个 shop_id 正在刷）
+  const [refreshingShop, setRefreshingShop] = useState(null)
 
   const [data, setData] = useState(null)
   const [loading, setLoading] = useState(false)
@@ -255,6 +258,30 @@ const CandidatesRollupTable = ({
       setRefreshingEngine(false)
     }
   }, [shopIds, days, shopNameMap, fetchData])
+
+  // 单店刷新引擎（not_ready Alert 里 per-shop 按钮入口）
+  // 只在 reason='engine_not_run' 时显示，no_source 时按钮也救不了不显示
+  const handleRefreshSingle = useCallback(async (shopId) => {
+    setRefreshingShop(shopId)
+    const hide = message.loading(
+      `${shopNameMap[shopId] || `shop#${shopId}`} 刷新引擎中（近 ${days} 天，10-30s）...`, 0
+    )
+    try {
+      const r = await refreshSeo(shopId, { days })
+      hide()
+      if (r?.code === 0) {
+        message.success(`${shopNameMap[shopId] || `shop#${shopId}`} 已刷新：写入 ${r.data?.written || 0} 条候选`)
+      } else {
+        message.warning(`${shopNameMap[shopId] || `shop#${shopId}`} 刷新失败：${r?.msg || '未知错误'}`)
+      }
+      await fetchData()
+    } catch (e) {
+      hide()
+      message.error('网络错误：' + (e?.message || ''))
+    } finally {
+      setRefreshingShop(null)
+    }
+  }, [days, shopNameMap, fetchData])
 
   const loadProducts = async (kw) => {
     setExpanded(prev => ({ ...prev, [kw]: { loading: true, items: [] } }))
@@ -746,9 +773,24 @@ const CandidatesRollupTable = ({
           description={(
             <div style={{ fontSize: 12, lineHeight: 1.7, marginTop: 4 }}>
               {data.notReadyShops.map(s => (
-                <div key={s.shop_id}>
-                  <Text strong>{s.shop_name}：</Text>
-                  <Text type="secondary">{s.hint}</Text>
+                <div key={s.shop_id} style={{ display: 'flex', alignItems: 'flex-start', gap: 8 }}>
+                  <div style={{ flex: 1 }}>
+                    <Text strong>{s.shop_name}：</Text>
+                    <Text type="secondary">{s.hint}</Text>
+                  </div>
+                  {s.reason === 'engine_not_run' && (
+                    <Tooltip title={`本地已有源数据，重跑引擎扫近 ${days} 天即可填充候选池（10-30s）`}>
+                      <Button
+                        size="small"
+                        icon={<ReloadOutlined />}
+                        loading={refreshingShop === s.shop_id}
+                        disabled={refreshingShop !== null && refreshingShop !== s.shop_id}
+                        onClick={() => handleRefreshSingle(s.shop_id)}
+                      >
+                        刷新引擎
+                      </Button>
+                    </Tooltip>
+                  )}
                 </div>
               ))}
             </div>
