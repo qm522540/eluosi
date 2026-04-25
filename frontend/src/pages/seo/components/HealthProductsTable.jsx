@@ -122,7 +122,7 @@ const HealthProductsTable = ({
     {
       title: '缺的高价值词 Top 3',
       key: 'missing',
-      width: 320,
+      width: 360,
       render: (_, r) => {
         if (!r.missing_top_keywords?.length) {
           if (r.dimensions.coverage.data_insufficient) {
@@ -130,14 +130,36 @@ const HealthProductsTable = ({
           }
           return <Text type="success" style={{ fontSize: 12 }}>✓ 核心词已全部覆盖</Text>
         }
+        // 来源分色：付费=紫 / 自然=蓝 / 跨店=橙 / 未知=火山
+        const tagColorMap = {
+          paid: 'purple',
+          organic: 'blue',
+          cross_shop: 'orange',
+          unknown: 'volcano',
+        }
+        const tagLabelMap = {
+          paid: '付费',
+          organic: '自然',
+          cross_shop: '跨店',
+        }
         return (
           <Space size={4} direction="vertical" style={{ width: '100%' }}>
-            {r.missing_top_keywords.map((k, i) => (
-              <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                <Tag color="volcano" style={{ margin: 0 }}>{k.keyword}</Tag>
-                {k.metric && <Text type="secondary" style={{ fontSize: 11 }}>{k.metric}</Text>}
-              </div>
-            ))}
+            {r.missing_top_keywords.map((k, i) => {
+              const stype = k.source_type || 'unknown'
+              const color = tagColorMap[stype] || 'volcano'
+              const label = tagLabelMap[stype]
+              return (
+                <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                  {label && (
+                    <Tag color={color} style={{ margin: 0, fontSize: 10, padding: '0 4px', lineHeight: '16px' }}>
+                      {label}
+                    </Tag>
+                  )}
+                  <Tag color={color} style={{ margin: 0 }}>{k.keyword}</Tag>
+                  {k.metric && <Text type="secondary" style={{ fontSize: 11 }}>{k.metric}</Text>}
+                </div>
+              )
+            })}
           </Space>
         )
       },
