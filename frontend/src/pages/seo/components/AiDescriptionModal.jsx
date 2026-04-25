@@ -160,10 +160,31 @@ const AiDescriptionModal = ({
               </Text>
             )}
         </Descriptions.Item>
-        <Descriptions.Item label="候选词来源">
-          <Text type="secondary" style={{ fontSize: 12 }}>
-            后端按推荐系数 score 降序自取 Top 50 缺词喂入 GLM；GLM 优先融入前 20-30 个高分词，低分长尾词若不契合可不融入。
-          </Text>
+        <Descriptions.Item label="喂给 GLM 的内容">
+          <div style={{ fontSize: 12, lineHeight: 1.7 }}>
+            <Text strong style={{ fontSize: 12 }}>📋 商品上下文（从 DB 抓取，空字段不会喂）</Text>
+            <ul style={{ margin: '2px 0 6px 18px', paddingLeft: 0 }}>
+              <li>平台风格规则（WB 紧凑 800-1200 字 / Ozon 长结构化 1200-2000 字）</li>
+              <li>商品中文名 + 俄语名 + 品牌</li>
+              <li><Text strong>类目路径</Text>（如 "Дом и сад / Товары для праздников / Шарик"）</li>
+              <li>当前俄语标题 + 当前俄语描述（如有 → 走「渐进改写」保留卖点）</li>
+              <li><Text strong>商品属性 variant_attrs</Text>（JSON 截断 1500 字符内，自然融入正文）</li>
+            </ul>
+            <Text strong style={{ fontSize: 12 }}>🔑 关键词</Text>
+            <ul style={{ margin: '2px 0 6px 18px', paddingLeft: 0 }}>
+              <li>缺词候选池 Top 50（按 score 降序，附 ROAS / 付费订单 / 自然订单 / 自然曝光 指标）</li>
+              <li>必须保留的高价值词（标题/属性里已有 + 带订单或曝光≥20，最多 15 个）</li>
+            </ul>
+            <Text strong style={{ fontSize: 12 }}>📐 写死规则（system_prompt）</Text>
+            <ul style={{ margin: '2px 0 0 18px', paddingLeft: 0 }}>
+              <li>描述长度 800-2000 字符 / 段落分隔 / 标点正常使用</li>
+              <li>关键词自然融入禁止堆砌、同义词换着用避免重复</li>
+              <li><Text type="warning" strong>不能编造原数据没有的属性</Text>（如原品没说防水，AI 不能加 водостойкий）</li>
+            </ul>
+            <Text type="secondary" style={{ fontSize: 11, display: 'block', marginTop: 6 }}>
+              GLM 优先融入前 20-30 个高分候选词；低分长尾词若不契合可不融入。DB 里 NULL 的字段（比如品牌空、属性空）整段不会出现在 prompt 里。
+            </Text>
+          </div>
         </Descriptions.Item>
       </Descriptions>
 

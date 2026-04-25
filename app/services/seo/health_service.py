@@ -173,11 +173,13 @@ def compute_shop_health(
     rows = db.execute(main_sql, {"tid": tenant_id, "sid": shop_id}).fetchall()
 
     # ---------- 过滤关键词（Python 层，商品量少）----------
+    # 支持搜：商品中文名 / 俄语标题 / 本地编码 sku（用户输 QQ-B0062 类编码也能匹配）
     if keyword and keyword.strip():
         kw_low = keyword.strip().lower()
         rows = [r for r in rows
                 if (r.name_zh or "").lower().find(kw_low) >= 0
-                or (r.title_ru or "").lower().find(kw_low) >= 0]
+                or (r.title_ru or "").lower().find(kw_low) >= 0
+                or (r.sku or "").lower().find(kw_low) >= 0]
 
     # ---------- Python 算分 ----------
     items = []

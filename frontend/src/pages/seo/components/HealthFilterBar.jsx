@@ -31,12 +31,12 @@ const HealthFilterBar = ({
         </Select>
 
         <Input.Search
-          placeholder="搜索商品名"
+          placeholder="搜索商品名 / 俄语标题 / 本地编码"
           value={keyword}
           onChange={e => onKeywordChange(e.target.value)}
           onSearch={onReload}
           allowClear
-          style={{ width: 220 }}
+          style={{ width: 280 }}
         />
 
         <Button icon={<SyncOutlined />} onClick={onReload} disabled={!shopId}>
