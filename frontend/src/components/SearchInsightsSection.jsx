@@ -70,11 +70,6 @@ const SearchInsightsSection = ({ productId }) => {
       width: 110, align: 'right',
       render: v => (v || 0).toFixed(2),
     },
-    {
-      title: '中位位置', dataIndex: 'median_position', key: 'median_position',
-      width: 100, align: 'right',
-      render: v => v ? v.toFixed(1) : '-',
-    },
   ]
 
   return (

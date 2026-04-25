@@ -197,11 +197,6 @@ const SearchInsights = () => {
       render: v => (v || 0).toFixed(2),
     },
     {
-      title: '中位位置', dataIndex: 'median_position', key: 'median_position',
-      width: 100, align: 'right',
-      render: v => v ? v.toFixed(1) : '-',
-    },
-    {
       title: '标签', dataIndex: 'tag', key: 'tag', width: 140,
       render: (v) => {
         const meta = TAG_META[v] || TAG_META.normal
