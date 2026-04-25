@@ -18,6 +18,7 @@ from app.services.seo.service import (
 )
 from app.services.seo.title_generator import generate_title
 from app.services.seo.health_service import compute_shop_health, list_missing_candidates_for_product
+from app.services.seo.description_generator import generate_description
 from app.services.seo.generated_history import list_generated_titles, mark_title_applied
 from app.services.seo.keyword_tracking_service import compute_keyword_tracking, list_query_top_skus
 from app.services.seo.roi_report_service import compute_roi_report
@@ -45,6 +46,12 @@ class GenerateTitleBody(BaseModel):
     product_id: int = Field(..., gt=0, description="products.id")
     candidate_ids: List[int] = Field(..., min_length=1, max_length=30,
                                      description="要融合的候选词 id，最多 30 个")
+
+
+class GenerateDescriptionBody(BaseModel):
+    product_id: int = Field(..., gt=0, description="products.id")
+    max_candidates: int = Field(50, ge=10, le=80,
+                                description="后端取候选词全集的上限（按 score desc）")
 
 
 @router.get("/shop/{shop_id}/champion-keywords")
@@ -465,6 +472,35 @@ async def generate_title_for_product(
         product_id=body.product_id,
         candidate_ids=body.candidate_ids,
         user_id=user_id,
+    )
+    if result.get("code") != 0:
+        return error(result["code"], result.get("msg", ""))
+    return success(result["data"])
+
+
+@router.post("/shop/{shop_id}/generate-description")
+async def generate_description_for_product(
+    shop_id: int,
+    body: GenerateDescriptionBody,
+    db: Session = Depends(get_db),
+    tenant_id: int = Depends(get_tenant_id),
+    shop=Depends(get_owned_shop),
+    current_user=Depends(get_current_user),
+):
+    """AI 生成商品俄语描述（走 GLM）。
+
+    与 generate-title 不同：
+    - 不让用户预选候选词，后端自取全量缺词（按 score desc 限 max_candidates 个）
+    - 长度 800-2000 字符，段落分隔，纯营销文案 + SEO 自然融入
+    - 若 listing.description_ru 已有内容，走"渐进改写"模式保留卖点
+    生成内容入库 seo_generated_contents 表 content_type='description'。
+    """
+    user_id = getattr(current_user, "id", None)
+    result = await generate_description(
+        db, tenant_id, shop,
+        product_id=body.product_id,
+        user_id=user_id,
+        max_candidates=body.max_candidates,
     )
     if result.get("code") != 0:
         return error(result["code"], result.get("msg", ""))

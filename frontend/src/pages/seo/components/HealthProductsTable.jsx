@@ -4,6 +4,7 @@ import { RobotOutlined, ThunderboltOutlined, EditOutlined } from '@ant-design/ic
 import { getProductMissingCandidates } from '@/api/seo'
 import { translateKeywords, updateTranslation } from '@/api/keyword_stats'
 import AiTitleModal from './AiTitleModal'
+import AiDescriptionModal from './AiDescriptionModal'
 
 const { Text } = Typography
 
@@ -126,6 +127,10 @@ const HealthProductsTable = ({
   const [aiModal, setAiModal] = useState({
     open: false, productId: null, productName: '', currentTitle: '', selected: [],
   })
+  // AiDescriptionModal 控制（描述不需要 selected 候选词，后端自取全集）
+  const [descModal, setDescModal] = useState({
+    open: false, productId: null, productName: '', currentTitle: '', currentDescription: '',
+  })
 
   // "AI 优化标题"按钮：自动取该商品候选词 Top 3 → 当前页弹 AiTitleModal
   // 旧版是 navigate('/seo/optimize?...') 跳转优化页，改 in-page 保持上下文
@@ -156,6 +161,17 @@ const HealthProductsTable = ({
       productName: record.product_name,
       currentTitle: record.current_title || '',
       selected: top3.map(it => ({ id: it.candidate_id, keyword: it.keyword })),
+    })
+  }
+
+  // "AI 优化描述"按钮：直接打开描述 Modal（候选词由后端自取，不需要前端预拉）
+  const handleAiDescription = (record) => {
+    setDescModal({
+      open: true,
+      productId: record.product_id,
+      productName: record.product_name,
+      currentTitle: record.current_title || '',
+      currentDescription: record.current_description || '',
     })
   }
 
@@ -475,6 +491,14 @@ const HealthProductsTable = ({
           >
             AI 优化标题
           </Button>
+          <Button
+            size="small"
+            icon={<RobotOutlined />}
+            onClick={() => handleAiDescription(r)}
+            disabled={!r.candidate_count}
+          >
+            AI 优化描述
+          </Button>
           {!r.candidate_count && (
             <Text type="secondary" style={{ fontSize: 11 }}>先去刷新引擎</Text>
           )}
@@ -509,6 +533,15 @@ const HealthProductsTable = ({
         productName={aiModal.productName}
         currentTitle={aiModal.currentTitle}
         selectedCandidates={aiModal.selected}
+      />
+      <AiDescriptionModal
+        open={descModal.open}
+        onClose={() => setDescModal(prev => ({ ...prev, open: false }))}
+        shopId={shopId}
+        productId={descModal.productId}
+        productName={descModal.productName}
+        currentTitle={descModal.currentTitle}
+        currentDescription={descModal.currentDescription}
       />
     </>
   )

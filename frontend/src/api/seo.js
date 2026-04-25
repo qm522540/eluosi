@@ -38,6 +38,15 @@ export function generateSeoTitle(shopId, productId, candidateIds) {
   )
 }
 
+/** AI 生成商品俄语描述（走 GLM，5-15 秒）— 后端自取候选词全集，不需要前端勾选 */
+export function generateSeoDescription(shopId, productId, maxCandidates = 50) {
+  return request.post(
+    `${BASE}/shop/${shopId}/generate-description`,
+    { product_id: productId, max_candidates: maxCandidates },
+    { timeout: 60000 },
+  )
+}
+
 /** 店铺 SEO 健康分诊断 + Top 缺词 */
 export function getSeoHealth(shopId, params) {
   return request.get(`${BASE}/shop/${shopId}/health`, { params })
