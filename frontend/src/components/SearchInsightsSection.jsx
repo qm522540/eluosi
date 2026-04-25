@@ -33,11 +33,19 @@ const SearchInsightsSection = ({ productId }) => {
       render: v => <Text strong>{v}</Text>,
     },
     {
-      title: <Tooltip title="搜索频次（WB frequency / Ozon unique_search_users）">
-        频次 <InfoCircleOutlined style={{ color: '#999' }} />
+      title: <Tooltip title="搜索量 = 这个词当天在全网被搜索的总次数（WB frequency / Ozon unique_search_users）。跟商品无关。">
+        搜索量 <InfoCircleOutlined style={{ color: '#999' }} />
       </Tooltip>,
       dataIndex: 'frequency', key: 'frequency',
       width: 100, align: 'right',
+      render: v => (v || 0).toLocaleString(),
+    },
+    {
+      title: <Tooltip title="曝光 = 用户搜该词后真正在搜索结果里看到该商品的次数（WB 不返此字段为 0；Ozon unique_view_users）。">
+        曝光 <InfoCircleOutlined style={{ color: '#999' }} />
+      </Tooltip>,
+      dataIndex: 'impressions', key: 'impressions',
+      width: 90, align: 'right',
       render: v => (v || 0).toLocaleString(),
     },
     { title: '点击', dataIndex: 'clicks', key: 'clicks', width: 80, align: 'right' },

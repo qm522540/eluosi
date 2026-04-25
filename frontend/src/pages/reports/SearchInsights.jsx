@@ -139,12 +139,20 @@ const SearchInsights = () => {
       ),
     },
     {
-      title: <Tooltip title="frequency = 用户搜该词后，搜索结果里包含你商品的独立用户数（WB frequency / Ozon unique_search_users）。注意：≠ 全平台总搜索量；也 ≠ 「优化建议·店级 TOP」页的「曝光」（那个是 impressions = 用户真把你商品翻出来看到的数）">
-        曝光/频次 <InfoCircleOutlined style={{ color: '#999' }} />
+      title: <Tooltip title="搜索量 = 这个词当天在全网被搜索的总次数（WB frequency / Ozon unique_search_users）。跟你的 SKU 无关 — 同一个词当天命中你 N 个 SKU 时，每个 SKU 的搜索量是同一个全网数字。">
+        搜索量 <InfoCircleOutlined style={{ color: '#999' }} />
       </Tooltip>,
-      dataIndex: 'frequency', key: 'frequency', width: 120, align: 'right',
+      dataIndex: 'frequency', key: 'frequency', width: 110, align: 'right',
       sorter: (a, b) => a.frequency - b.frequency,
-      render: v => v.toLocaleString(),
+      render: v => (v || 0).toLocaleString(),
+    },
+    {
+      title: <Tooltip title="曝光 = 用户搜该词后，真正在搜索结果里看到你商品的次数（WB 不返此字段为 0；Ozon unique_view_users）。同一个词命中你多个 SKU 会按 SKU 累计。「优化建议·店级 TOP」页用的就是这个数。">
+        曝光 <InfoCircleOutlined style={{ color: '#999' }} />
+      </Tooltip>,
+      dataIndex: 'impressions', key: 'impressions', width: 90, align: 'right',
+      sorter: (a, b) => a.impressions - b.impressions,
+      render: v => (v || 0).toLocaleString(),
     },
     { title: '点击', dataIndex: 'clicks', key: 'clicks', width: 90, align: 'right' },
     { title: '加购', dataIndex: 'add_to_cart', key: 'add_to_cart', width: 90, align: 'right' },
@@ -293,7 +301,7 @@ const SearchInsights = () => {
               <Card size="small"><Statistic title="搜索词总数" value={totals?.query_count || 0} /></Card>
             </Col>
             <Col xs={12} md={6}>
-              <Card size="small"><Statistic title="总频次" value={totals?.frequency || 0} /></Card>
+              <Card size="small"><Statistic title="总搜索量" value={totals?.frequency || 0} /></Card>
             </Col>
             <Col xs={12} md={6}>
               <Card size="small"><Statistic title="下单数" value={totals?.orders || 0} /></Card>
@@ -324,7 +332,7 @@ const SearchInsights = () => {
                 type="info" showIcon style={{ marginBottom: 12 }}
                 message={
                   <span>
-                    按 frequency 降序展示前 <Text strong>{items.length}</Text> 条；全店共 <Text strong>{totals.query_count}</Text> 个搜索词。
+                    按搜索量降序展示前 <Text strong>{items.length}</Text> 条；全店共 <Text strong>{totals.query_count}</Text> 个搜索词。
                     要看长尾低频词请用上方搜索框，或翻页。
                   </span>
                 }

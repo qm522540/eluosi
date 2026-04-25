@@ -93,18 +93,34 @@ def list_shop(
         params["kw"] = f"%{keyword}%"
 
     # 聚合
+    # frequency 是"全网当天搜该词的总次数"，平台 API 在每个命中本店 SKU 的行
+    # 都会复制同一个值。直接 SUM 会按 SKU 数重复计算（命中 N 个 SKU → ×N）。
+    # 所以子查询先按 (query_text, stat_date) MAX 取每天唯一值，外层再跨天 SUM。
+    # impressions/clicks/orders/... 是按 SKU 真实分桶的，仍走 SUM。
     agg_sql = f"""
         SELECT query_text,
-               SUM(frequency) AS frequency,
-               SUM(impressions) AS impressions,
-               SUM(clicks) AS clicks,
-               SUM(add_to_cart) AS add_to_cart,
-               SUM(orders) AS orders,
-               SUM(revenue) AS revenue,
-               AVG(median_position) AS median_position,
-               COUNT(DISTINCT platform_sku_id) AS sku_count
-        FROM product_search_queries
-        {where}
+               SUM(daily_freq) AS frequency,
+               SUM(daily_imps) AS impressions,
+               SUM(daily_clk) AS clicks,
+               SUM(daily_atc) AS add_to_cart,
+               SUM(daily_ord) AS orders,
+               SUM(daily_rev) AS revenue,
+               AVG(daily_pos) AS median_position,
+               MAX(daily_skus) AS sku_count
+        FROM (
+            SELECT query_text, stat_date,
+                   MAX(frequency) AS daily_freq,
+                   SUM(impressions) AS daily_imps,
+                   SUM(clicks) AS daily_clk,
+                   SUM(add_to_cart) AS daily_atc,
+                   SUM(orders) AS daily_ord,
+                   SUM(revenue) AS daily_rev,
+                   AVG(median_position) AS daily_pos,
+                   COUNT(DISTINCT platform_sku_id) AS daily_skus
+            FROM product_search_queries
+            {where}
+            GROUP BY query_text, stat_date
+        ) daily
         GROUP BY query_text
     """
     rows = db.execute(text(agg_sql), params).fetchall()
