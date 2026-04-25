@@ -492,6 +492,7 @@ const HealthProductsTable = ({
             AI 优化标题
           </Button>
           <Button
+            type="primary"
             size="small"
             icon={<RobotOutlined />}
             onClick={() => handleAiDescription(r)}
