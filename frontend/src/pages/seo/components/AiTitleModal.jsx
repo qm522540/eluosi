@@ -3,9 +3,9 @@ import {
   Modal, Button, Typography, Space, Tag, Alert, Descriptions, Spin, message,
 } from 'antd'
 import {
-  CopyOutlined, ThunderboltOutlined, RobotOutlined,
+  CopyOutlined, ThunderboltOutlined, RobotOutlined, CheckCircleOutlined,
 } from '@ant-design/icons'
-import { generateSeoTitle } from '@/api/seo'
+import { generateSeoTitle, applyGeneratedTitle } from '@/api/seo'
 import { copyText } from '@/utils/clipboard'
 
 const { Text, Paragraph } = Typography
@@ -67,6 +67,59 @@ const AiTitleModal = ({
     }
   }
 
+  const handleApply = () => {
+    if (!result?.generated_content_id) return
+    Modal.confirm({
+      title: '确认启用新标题？',
+      width: 560,
+      icon: <CheckCircleOutlined style={{ color: '#52c41a' }} />,
+      content: (
+        <div style={{ fontSize: 13, lineHeight: 1.7 }}>
+          <div style={{ marginBottom: 8 }}>
+            <Text type="secondary">原标题：</Text>
+            <div style={{ background: '#fafafa', padding: '4px 8px', borderRadius: 4, marginTop: 2 }}>
+              {currentTitle || <Text type="secondary">（空）</Text>}
+            </div>
+          </div>
+          <div style={{ marginBottom: 12 }}>
+            <Text type="secondary">新标题：</Text>
+            <div style={{ background: '#f6ffed', padding: '4px 8px', borderRadius: 4, marginTop: 2, color: '#222', fontWeight: 500 }}>
+              {result.new_title}
+            </div>
+          </div>
+          <div style={{ background: '#fffbe6', padding: '8px 10px', borderRadius: 4, border: '1px solid #ffe58f' }}>
+            <div style={{ marginBottom: 4 }}><strong>启用后系统会做：</strong></div>
+            <div style={{ paddingLeft: 12 }}>
+              ✓ 标记此标题为「已应用」<br/>
+              ✓ 以本时间点为基线追踪 ROI（改前 / 改后曝光、订单、ROAS 对比）
+            </div>
+            <div style={{ marginTop: 8, color: '#d46b08' }}>
+              ⚠ 本期暂不自动写回到 WB / Ozon 商品后台，请你<strong>手动</strong>到平台后台「编辑商品」粘贴新标题让平台真正生效
+            </div>
+          </div>
+        </div>
+      ),
+      okText: '确认启用',
+      cancelText: '取消',
+      // antd: onOk 返 Promise 时按钮自动处理 confirmLoading（无需手动 state）
+      onOk: async () => {
+        try {
+          const r = await applyGeneratedTitle(shopId, result.generated_content_id)
+          if (r?.code === 0) {
+            message.success('已启用，ROI 基线已建立。请到平台后台粘贴新标题让平台生效。')
+            onClose && onClose()
+          } else {
+            message.warning(`启用失败：${r?.msg || '未知错误'}`)
+            return Promise.reject()  // 返 reject 让 confirm 不关闭，用户可以重试
+          }
+        } catch (e) {
+          message.error(e?.response?.data?.msg || e?.message || '启用失败')
+          return Promise.reject()
+        }
+      },
+    })
+  }
+
   return (
     <Modal
       open={open}
@@ -79,8 +132,16 @@ const AiTitleModal = ({
         <Button key="regen" icon={<ThunderboltOutlined />} onClick={handleGenerate} loading={loading}>
           重新生成
         </Button>,
-        <Button key="copy" type="primary" icon={<CopyOutlined />} onClick={handleCopy}>
+        <Button key="copy" icon={<CopyOutlined />} onClick={handleCopy}>
           一键复制新标题
+        </Button>,
+        <Button
+          key="apply"
+          type="primary"
+          icon={<CheckCircleOutlined />}
+          onClick={handleApply}
+        >
+          启用新标题
         </Button>,
       ] : [
         <Button key="cancel" onClick={onClose}>取消</Button>,
