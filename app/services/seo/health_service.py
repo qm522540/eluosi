@@ -408,6 +408,7 @@ def list_missing_candidates_for_product(
             "cross_frequency": int(cross_entry.get("frequency") or 0) if cross_entry else None,
             "cross_orders": int(cross_entry.get("orders") or 0) if cross_entry else None,
             "cross_impressions": int(cross_entry.get("impressions") or 0) if cross_entry else None,
+            "cross_add_to_cart": int(cross_entry.get("add_to_cart") or 0) if cross_entry else None,
         })
 
     return {

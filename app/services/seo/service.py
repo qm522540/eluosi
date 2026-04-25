@@ -339,6 +339,7 @@ def analyze_paid_to_organic(
             SUM(q.orders) AS source_orders,
             SUM(q.frequency) AS source_frequency,
             SUM(q.impressions) AS source_impressions,
+            SUM(q.add_to_cart) AS source_add_to_cart,
             SUM(q.revenue) AS source_revenue
         FROM products p_local
         JOIN products p_other ON p_other.sku = p_local.sku
@@ -394,6 +395,7 @@ def analyze_paid_to_organic(
             "orders": int(r.source_orders or 0),
             "frequency": int(r.source_frequency or 0),
             "impressions": int(r.source_impressions or 0),
+            "add_to_cart": int(r.source_add_to_cart or 0),
             "revenue": round(float(r.source_revenue or 0), 2),
         })
         # title/attrs 兜底（跨店召回的本店商品可能没在 paid/organic self 命中过）
@@ -452,19 +454,55 @@ def _new_candidate(product_id: int, keyword: str) -> dict:
 
 
 def _compute_score(cand: dict) -> float:
-    """综合得分：来源数×2 + ROAS + log10(付费订单+1)×2 + log10(自然曝光+1) +
-       log10(自然订单+1)×2，上限 100"""
-    src_count = len(cand.get("sources") or [])
+    """综合得分：多源命中 + 本店付费/自然 + 跨店他店指标，上限 100。
+
+    本店指标权重最高（直接证据），跨店指标权重低（间接证据，是他店真实数据但
+    不一定本店复用就有效）。
+
+    本店：
+      - 来源数 × 2
+      - ROAS（直接加）
+      - log10(付费订单+1) × 2
+      - log10(自然曝光+1) × 1
+      - log10(自然订单+1) × 2
+      - log10(自然加购+1) × 1.5
+
+    跨店（取所有 cross_shop entry 的 max 指标，避免多店 entry 时被低估）：
+      - log10(跨店订单+1) × 1.5
+      - log10(跨店曝光+1) × 0.5
+      - log10(跨店加购+1) × 1
+    """
+    sources = cand.get("sources") or []
+    src_count = len(sources)
     roas = float(cand.get("paid_roas") or 0)
     paid_orders = int(cand.get("paid_orders") or 0)
     org_imp = int(cand.get("organic_impressions") or 0)
     org_orders = int(cand.get("organic_orders") or 0)
+    org_atc = int(cand.get("organic_add_to_cart") or 0)
+
+    cross_orders = max(
+        (int(s.get("orders", 0) or 0) for s in sources if s.get("type") == "cross_shop"),
+        default=0,
+    )
+    cross_freq = max(
+        (int(s.get("frequency", 0) or 0) for s in sources if s.get("type") == "cross_shop"),
+        default=0,
+    )
+    cross_atc = max(
+        (int(s.get("add_to_cart", 0) or 0) for s in sources if s.get("type") == "cross_shop"),
+        default=0,
+    )
+
     score = (
         src_count * 2
         + roas
         + math.log10(paid_orders + 1) * 2
         + math.log10(org_imp + 1)
         + math.log10(org_orders + 1) * 2
+        + math.log10(org_atc + 1) * 1.5
+        + math.log10(cross_orders + 1) * 1.5
+        + math.log10(cross_freq + 1) * 0.5
+        + math.log10(cross_atc + 1) * 1.0
     )
     return round(min(score, 100.0), 2)
 

@@ -192,10 +192,18 @@ const HealthProductsTable = ({
       },
     },
     {
+      title: <Tooltip title="用户搜该词后看到商品并加进购物车的次数">加购</Tooltip>,
+      key: 'atc', width: 70, align: 'right',
+      render: (_, r) => {
+        const v = r.cross_add_to_cart ?? r.organic_add_to_cart
+        return v != null && v > 0 ? <Text style={{ fontSize: 12, color: '#fa8c16' }}>{v}</Text> : <Text type="secondary">-</Text>
+      },
+    },
+    {
       title: '订单', key: 'orders', width: 70, align: 'right',
       render: (_, r) => {
         const v = r.cross_orders ?? r.paid_orders ?? r.organic_orders
-        return v != null ? <Text style={{ fontSize: 12 }}>{v}</Text> : <Text type="secondary">-</Text>
+        return v != null ? <Text style={{ fontSize: 12, color: v > 0 ? '#3f8600' : undefined }}>{v}</Text> : <Text type="secondary">-</Text>
       },
     },
     {
