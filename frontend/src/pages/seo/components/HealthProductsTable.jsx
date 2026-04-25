@@ -8,10 +8,30 @@ import AiTitleModal from './AiTitleModal'
 const { Text } = Typography
 
 const SOURCE_TAG = {
-  paid: { color: 'purple', label: '付费' },
-  organic: { color: 'blue', label: '自然' },
-  cross_shop: { color: 'orange', label: '跨店' },
-  unknown: { color: 'default', label: '其他' },
+  paid: {
+    color: 'purple',
+    label: '本店付费投放',
+    short: '付费',
+    tip: '你在本店给这个商品配过该关键词的广告，且实际有曝光/订单数据。这是"花钱买过验证"的词。',
+  },
+  organic: {
+    color: 'blue',
+    label: '本店自然搜索',
+    short: '自然',
+    tip: '用户在 OZON/WB 搜索框输入该词后看到了本商品（来自 search-texts / GetProductQueries）。这是"用户主动找你"的词，加进标题最有价值。',
+  },
+  cross_shop: {
+    color: 'orange',
+    label: '他店自然搜索',
+    short: '跨店',
+    tip: '同 SKU 商品在你旗下其他店里被用户搜过该词（也是搜索流量，非广告投放）。本店是新店没数据时尤其有参考价值。',
+  },
+  unknown: {
+    color: 'default',
+    label: '其他',
+    short: '其他',
+    tip: '来源不明确',
+  },
 }
 
 const GRADE_META = {
@@ -139,10 +159,19 @@ const HealthProductsTable = ({
   // 嵌套表格列
   const expandedColumns = [
     {
-      title: '来源', key: 'source', width: 80,
+      title: (
+        <Tooltip title="付费投放=你给该商品配过该词的广告并产生曝光；自然搜索=用户主动搜该词找到商品；他店自然=同款 SKU 在你其他店有自然搜索数据。">
+          <span style={{ cursor: 'help' }}>来源 ⓘ</span>
+        </Tooltip>
+      ),
+      key: 'source', width: 130,
       render: (_, r) => {
         const meta = SOURCE_TAG[r.source_type] || SOURCE_TAG.unknown
-        return <Tag color={meta.color} style={{ margin: 0 }}>{meta.label}</Tag>
+        return (
+          <Tooltip title={meta.tip}>
+            <Tag color={meta.color} style={{ margin: 0, cursor: 'help' }}>{meta.label}</Tag>
+          </Tooltip>
+        )
       },
     },
     {
@@ -280,32 +309,19 @@ const HealthProductsTable = ({
           }
           return <Text type="success" style={{ fontSize: 12 }}>✓ 核心词已全部覆盖</Text>
         }
-        // 来源分色：付费=紫 / 自然=蓝 / 跨店=橙 / 未知=火山
-        const tagColorMap = {
-          paid: 'purple',
-          organic: 'blue',
-          cross_shop: 'orange',
-          unknown: 'volcano',
-        }
-        const tagLabelMap = {
-          paid: '付费',
-          organic: '自然',
-          cross_shop: '跨店',
-        }
         return (
           <Space size={4} direction="vertical" style={{ width: '100%' }}>
             {r.missing_top_keywords.map((k, i) => {
               const stype = k.source_type || 'unknown'
-              const color = tagColorMap[stype] || 'volcano'
-              const label = tagLabelMap[stype]
+              const meta = SOURCE_TAG[stype] || SOURCE_TAG.unknown
               return (
                 <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
-                  {label && (
-                    <Tag color={color} style={{ margin: 0, fontSize: 10, padding: '0 4px', lineHeight: '16px' }}>
-                      {label}
+                  <Tooltip title={meta.tip}>
+                    <Tag color={meta.color} style={{ margin: 0, fontSize: 10, padding: '0 4px', lineHeight: '16px', cursor: 'help' }}>
+                      {meta.short}
                     </Tag>
-                  )}
-                  <Tag color={color} style={{ margin: 0 }}>{k.keyword}</Tag>
+                  </Tooltip>
+                  <Tag color={meta.color} style={{ margin: 0 }}>{k.keyword}</Tag>
                   {k.metric && <Text type="secondary" style={{ fontSize: 11 }}>{k.metric}</Text>}
                 </div>
               )
