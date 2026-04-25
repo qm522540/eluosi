@@ -43,18 +43,29 @@ def _float(v):
 
 
 def _tag_query(row: dict, avg_freq: float, avg_orders_per_freq: float, avg_clicks_per_freq: float,
-               invested_keywords: set) -> tuple:
-    """返回 (tag, invested) ，tag ∈ opportunity/high_convert/low_ctr/normal"""
+               invested_keywords: set, platform: str = None) -> tuple:
+    """返回 (tag, invested) ，tag ∈ opportunity/high_convert/low_ctr/normal
+
+    Ozon 特殊处理（platform='ozon'）：
+    - Trafareti CPC 自动广告平台不返词级广告数据 → ad_keywords 表必空 →
+      invested 永远 False → 所有高频词被错标"机会词"。
+      用"该词已下单 ≥ 1 = Trafareti 已覆盖"反推，过滤掉红海词。
+      未来开通 Ozon 关键词级广告订阅后 ad_keywords 会有数据，本逻辑可去掉。
+    - clicks 全 0（接口不返），CTR 算法分母分子都失真 → 跳过 low_ctr 标签。
+    """
     freq = row.get("frequency") or 0
     orders = row.get("orders") or 0
     clicks = row.get("clicks") or row.get("impressions") or 0  # WB 无 clicks 时用 openCard 代理
     invested = (row.get("query_text") or "").lower() in invested_keywords
 
-    if freq >= avg_freq * 1.5 and not invested:
+    ozon_already_covered = platform == "ozon" and orders >= 1
+
+    if freq >= avg_freq * 1.5 and not invested and not ozon_already_covered:
         return "opportunity", invested
     if freq > 0 and orders / max(freq, 1) >= avg_orders_per_freq * 2:
         return "high_convert", invested
-    if freq >= avg_freq and clicks / max(freq, 1) < avg_clicks_per_freq * 0.3:
+    # Ozon clicks 不可信，跳过 low_ctr 判定（避免把全店每个词都打成低 CTR）
+    if platform != "ozon" and freq >= avg_freq and clicks / max(freq, 1) < avg_clicks_per_freq * 0.3:
         return "low_ctr", invested
     return "normal", invested
 
@@ -139,8 +150,14 @@ def list_shop(
 
     # 标签
     invested_set = _load_invested_keywords(db, tenant_id, shop_id)
+    # 取 platform 用于 _tag_query 的平台特殊判定（Ozon Trafareti 自动广告无 ad_keywords）
+    plat_row = db.execute(text(
+        "SELECT platform FROM shops WHERE id = :sid AND tenant_id = :tid"
+    ), {"sid": shop_id, "tid": tenant_id}).fetchone()
+    platform = plat_row.platform if plat_row else None
     for it in items:
-        t, inv = _tag_query(it, avg_freq, avg_orders_per_freq, avg_clicks_per_freq, invested_set)
+        t, inv = _tag_query(it, avg_freq, avg_orders_per_freq, avg_clicks_per_freq,
+                            invested_set, platform)
         it["tag"] = t
         it["invested"] = inv
 
