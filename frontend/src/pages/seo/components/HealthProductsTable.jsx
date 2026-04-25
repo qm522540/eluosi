@@ -1,7 +1,6 @@
 import { useState, useCallback } from 'react'
 import { Table, Tag, Space, Typography, Tooltip, Progress, Button, message, Modal, Input } from 'antd'
 import { RobotOutlined, ThunderboltOutlined, EditOutlined } from '@ant-design/icons'
-import { useNavigate } from 'react-router-dom'
 import { getProductMissingCandidates } from '@/api/seo'
 import { translateKeywords, updateTranslation } from '@/api/keyword_stats'
 import AiTitleModal from './AiTitleModal'
@@ -113,13 +112,13 @@ const DimensionBar = ({ label, detail }) => {
 const HealthProductsTable = ({
   shopId, data, loading, pagination, onPaginationChange,
 }) => {
-  const navigate = useNavigate()
-
   // 行展开状态：每个 pid 独立维护数据/loading/已勾选
   const [expandedKeys, setExpandedKeys] = useState([])
   const [expandedData, setExpandedData] = useState({})    // pid -> items[]
   const [expandedLoading, setExpandedLoading] = useState({}) // pid -> bool
   const [selectedByPid, setSelectedByPid] = useState({})  // pid -> selected rows
+  // "AI 优化标题"按钮 per-row loading（fetch 候选词时显示）
+  const [titleLoading, setTitleLoading] = useState({})    // pid -> bool
   // 翻译缓存（俄→中），全局 dict 跨 pid 共享，命中 L2 ru_zh_dict 瞬间返
   const [kwTranslations, setKwTranslations] = useState({})
 
@@ -128,8 +127,36 @@ const HealthProductsTable = ({
     open: false, productId: null, productName: '', currentTitle: '', selected: [],
   })
 
-  const handleAiTitle = (pid) => {
-    navigate(`/seo/optimize?shopId=${shopId}&productId=${pid}&autoAi=1`)
+  // "AI 优化标题"按钮：自动取该商品候选词 Top 3 → 当前页弹 AiTitleModal
+  // 旧版是 navigate('/seo/optimize?...') 跳转优化页，改 in-page 保持上下文
+  const handleAiTitle = async (record) => {
+    const pid = record.product_id
+    let items = expandedData[pid]
+    if (!items) {
+      setTitleLoading(prev => ({ ...prev, [pid]: true }))
+      try {
+        const r = await getProductMissingCandidates(shopId, pid)
+        items = r?.data?.items || []
+        setExpandedData(prev => ({ ...prev, [pid]: items }))
+      } catch (e) {
+        message.error(e?.response?.data?.msg || e?.message || '拉取候选词失败')
+        return
+      } finally {
+        setTitleLoading(prev => ({ ...prev, [pid]: false }))
+      }
+    }
+    const top3 = items.slice(0, 3)  // 后端按 score desc 已排
+    if (!top3.length) {
+      message.warning('该商品暂无可用候选词')
+      return
+    }
+    setAiModal({
+      open: true,
+      productId: pid,
+      productName: record.product_name,
+      currentTitle: record.current_title || '',
+      selected: top3.map(it => ({ id: it.candidate_id, keyword: it.keyword })),
+    })
   }
 
   // 行展开：拉单商品全部缺词
@@ -442,7 +469,8 @@ const HealthProductsTable = ({
             type="primary"
             size="small"
             icon={<RobotOutlined />}
-            onClick={() => handleAiTitle(r.product_id)}
+            loading={titleLoading[r.product_id]}
+            onClick={() => handleAiTitle(r)}
             disabled={!r.candidate_count}
           >
             AI 优化标题
