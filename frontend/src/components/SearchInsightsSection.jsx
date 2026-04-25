@@ -33,15 +33,15 @@ const SearchInsightsSection = ({ productId }) => {
       render: v => <Text strong>{v}</Text>,
     },
     {
-      title: <Tooltip title="搜索量 = 这个词当天在全网被搜索的总次数（WB frequency / Ozon unique_search_users）。跟商品无关。">
-        搜索量 <InfoCircleOutlined style={{ color: '#999' }} />
+      title: <Tooltip title="搜索次数 = 该商品在搜索结果列表中出现的累计次数（WB frequency / Ozon unique_search_users，SKU 级字段）。">
+        搜索次数 <InfoCircleOutlined style={{ color: '#999' }} />
       </Tooltip>,
       dataIndex: 'frequency', key: 'frequency',
       width: 100, align: 'right',
       render: v => (v || 0).toLocaleString(),
     },
     {
-      title: <Tooltip title="曝光 = 用户搜该词后真正在搜索结果里看到该商品的次数（WB 不返此字段为 0；Ozon unique_view_users）。">
+      title: <Tooltip title="曝光 = 用户搜词后真正滚动看见该商品卡片的次数（WB 不返此字段为 0；Ozon unique_view_users）。恒有 曝光 ≤ 搜索次数。">
         曝光 <InfoCircleOutlined style={{ color: '#999' }} />
       </Tooltip>,
       dataIndex: 'impressions', key: 'impressions',

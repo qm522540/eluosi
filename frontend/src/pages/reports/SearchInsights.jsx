@@ -139,15 +139,15 @@ const SearchInsights = () => {
       ),
     },
     {
-      title: <Tooltip title="搜索量 = 这个词当天在全网被搜索的总次数（WB frequency / Ozon unique_search_users）。跟你的 SKU 无关 — 同一个词当天命中你 N 个 SKU 时，每个 SKU 的搜索量是同一个全网数字。">
-        搜索量 <InfoCircleOutlined style={{ color: '#999' }} />
+      title: <Tooltip title="搜索次数 = 用户搜该词时，你商品在搜索结果列表中出现的累计次数（WB frequency / Ozon unique_search_users）。SKU 级字段：同一个词命中你多个 SKU 会按 SKU 累计。注意：含同一用户跨 SKU 重复计数（平台无跨 SKU 去重数据）。">
+        搜索次数 <InfoCircleOutlined style={{ color: '#999' }} />
       </Tooltip>,
       dataIndex: 'frequency', key: 'frequency', width: 110, align: 'right',
       sorter: (a, b) => a.frequency - b.frequency,
       render: v => (v || 0).toLocaleString(),
     },
     {
-      title: <Tooltip title="曝光 = 用户搜该词后，真正在搜索结果里看到你商品的次数（WB 不返此字段为 0；Ozon unique_view_users）。同一个词命中你多个 SKU 会按 SKU 累计。「优化建议·店级 TOP」页用的就是这个数。">
+      title: <Tooltip title="曝光 = 用户搜词后，真正滚动看见你商品卡片的累计次数（WB 不返此字段为 0；Ozon unique_view_users）。恒有 曝光 ≤ 搜索次数（出现 ≥ 滚动看到）。「优化建议·店级 TOP」页累加的就是这个数。">
         曝光 <InfoCircleOutlined style={{ color: '#999' }} />
       </Tooltip>,
       dataIndex: 'impressions', key: 'impressions', width: 90, align: 'right',
@@ -301,7 +301,7 @@ const SearchInsights = () => {
               <Card size="small"><Statistic title="搜索词总数" value={totals?.query_count || 0} /></Card>
             </Col>
             <Col xs={12} md={6}>
-              <Card size="small"><Statistic title="总搜索量" value={totals?.frequency || 0} /></Card>
+              <Card size="small"><Statistic title="总搜索次数" value={totals?.frequency || 0} /></Card>
             </Col>
             <Col xs={12} md={6}>
               <Card size="small"><Statistic title="下单数" value={totals?.orders || 0} /></Card>
@@ -332,7 +332,7 @@ const SearchInsights = () => {
                 type="info" showIcon style={{ marginBottom: 12 }}
                 message={
                   <span>
-                    按搜索量降序展示前 <Text strong>{items.length}</Text> 条；全店共 <Text strong>{totals.query_count}</Text> 个搜索词。
+                    按搜索次数降序展示前 <Text strong>{items.length}</Text> 条；全店共 <Text strong>{totals.query_count}</Text> 个搜索词。
                     要看长尾低频词请用上方搜索框，或翻页。
                   </span>
                 }

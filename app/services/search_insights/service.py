@@ -93,34 +93,25 @@ def list_shop(
         params["kw"] = f"%{keyword}%"
 
     # 聚合
-    # frequency 是"全网当天搜该词的总次数"，平台 API 在每个命中本店 SKU 的行
-    # 都会复制同一个值。直接 SUM 会按 SKU 数重复计算（命中 N 个 SKU → ×N）。
-    # 所以子查询先按 (query_text, stat_date) MAX 取每天唯一值，外层再跨天 SUM。
-    # impressions/clicks/orders/... 是按 SKU 真实分桶的，仍走 SUM。
+    # 实测验证（shop=2 серьги женские бижутерия крупные 04-23 数据）：
+    # 4 个命中 SKU 的 frequency 完全不同（1073/831/80/61），证明 frequency 是
+    # SKU-level 字段，不是 query-level 复制 — Ozon `unique_search_users` 含义是
+    # "看到该 SKU 的搜词独立用户数"，跟 impressions(unique_view_users) 平行。
+    # 关系：frequency ≥ impressions（被检索 ≥ 被滚动看到）
+    # 所以两个字段都按 SKU 真实分桶，跨 (sku, day) SUM 是正确的。
+    # 跨 SKU 同一用户去重 Ozon 不返，无法精确还原。
     agg_sql = f"""
         SELECT query_text,
-               SUM(daily_freq) AS frequency,
-               SUM(daily_imps) AS impressions,
-               SUM(daily_clk) AS clicks,
-               SUM(daily_atc) AS add_to_cart,
-               SUM(daily_ord) AS orders,
-               SUM(daily_rev) AS revenue,
-               AVG(daily_pos) AS median_position,
-               MAX(daily_skus) AS sku_count
-        FROM (
-            SELECT query_text, stat_date,
-                   MAX(frequency) AS daily_freq,
-                   SUM(impressions) AS daily_imps,
-                   SUM(clicks) AS daily_clk,
-                   SUM(add_to_cart) AS daily_atc,
-                   SUM(orders) AS daily_ord,
-                   SUM(revenue) AS daily_rev,
-                   AVG(median_position) AS daily_pos,
-                   COUNT(DISTINCT platform_sku_id) AS daily_skus
-            FROM product_search_queries
-            {where}
-            GROUP BY query_text, stat_date
-        ) daily
+               SUM(frequency) AS frequency,
+               SUM(impressions) AS impressions,
+               SUM(clicks) AS clicks,
+               SUM(add_to_cart) AS add_to_cart,
+               SUM(orders) AS orders,
+               SUM(revenue) AS revenue,
+               AVG(median_position) AS median_position,
+               COUNT(DISTINCT platform_sku_id) AS sku_count
+        FROM product_search_queries
+        {where}
         GROUP BY query_text
     """
     rows = db.execute(text(agg_sql), params).fetchall()
