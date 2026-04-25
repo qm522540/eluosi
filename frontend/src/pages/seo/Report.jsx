@@ -9,6 +9,7 @@ import {
 } from '@ant-design/icons'
 import { getShops } from '@/api/shops'
 import { getGeneratedTitles, applyGeneratedTitle } from '@/api/seo'
+import { copyText } from '@/utils/clipboard'
 import RoiReportTab from './components/RoiReportTab'
 
 const { Title, Text, Paragraph } = Typography
@@ -69,12 +70,9 @@ const Report = () => {
   useEffect(() => { fetchData() }, [fetchData])
 
   const handleCopy = async (text) => {
-    try {
-      await navigator.clipboard.writeText(text)
-      message.success('已复制')
-    } catch {
-      message.error('复制失败，请手动选中复制')
-    }
+    const ok = await copyText(text)
+    if (ok) message.success('已复制')
+    else message.error('复制失败，请手动选中复制')
   }
 
   const handleMarkApplied = useCallback((row) => {

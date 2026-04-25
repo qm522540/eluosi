@@ -6,6 +6,7 @@ import {
   CopyOutlined, ThunderboltOutlined, RobotOutlined,
 } from '@ant-design/icons'
 import { generateSeoTitle } from '@/api/seo'
+import { copyText } from '@/utils/clipboard'
 
 const { Text, Paragraph } = Typography
 
@@ -58,10 +59,10 @@ const AiTitleModal = ({
 
   const handleCopy = async () => {
     if (!result?.new_title) return
-    try {
-      await navigator.clipboard.writeText(result.new_title)
+    const ok = await copyText(result.new_title)
+    if (ok) {
       message.success('已复制到剪贴板，去商品列表「编辑商品」粘贴到标题即可')
-    } catch {
+    } else {
       message.error('复制失败，请手动选中文字复制')
     }
   }
@@ -99,7 +100,19 @@ const AiTitleModal = ({
         <Descriptions.Item label="商品">{productName || `ID ${productId}`}</Descriptions.Item>
         <Descriptions.Item label="当前俄语标题">
           {currentTitle
-            ? <Text copyable>{currentTitle}</Text>
+            ? (
+              <Space size={6}>
+                <Text>{currentTitle}</Text>
+                <CopyOutlined
+                  style={{ cursor: 'pointer', color: '#1677ff' }}
+                  onClick={async () => {
+                    const ok = await copyText(currentTitle)
+                    if (ok) message.success('已复制当前标题')
+                    else message.error('复制失败，请手动选中复制')
+                  }}
+                />
+              </Space>
+            )
             : <Text type="secondary">（空 / 未同步）</Text>}
         </Descriptions.Item>
         <Descriptions.Item label={`选中反哺词 (${selectedCandidates?.length || 0})`}>
@@ -126,12 +139,15 @@ const AiTitleModal = ({
             showIcon
             style={{ marginBottom: 12 }}
             message={(
-              <Paragraph
-                copyable={{ text: result.new_title }}
-                style={{ fontSize: 15, marginBottom: 0, lineHeight: 1.6, fontWeight: 500 }}
-              >
-                {result.new_title}
-              </Paragraph>
+              <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8 }}>
+                <Paragraph style={{ fontSize: 15, marginBottom: 0, lineHeight: 1.6, fontWeight: 500, flex: 1 }}>
+                  {result.new_title}
+                </Paragraph>
+                <CopyOutlined
+                  style={{ cursor: 'pointer', color: '#1677ff', marginTop: 4 }}
+                  onClick={handleCopy}
+                />
+              </div>
             )}
             description={result.reasoning ? (
               <Text type="secondary" style={{ fontSize: 12 }}>{result.reasoning}</Text>
