@@ -454,26 +454,37 @@ def _new_candidate(product_id: int, keyword: str) -> dict:
 
 
 def _compute_score(cand: dict) -> float:
-    """综合得分：多源命中 + 本店付费/自然 + 跨店他店指标，上限 100。
+    """综合得分：真实指标主导，多源加分仅在跨大类时给。上限 100。
 
-    本店指标权重最高（直接证据），跨店指标权重低（间接证据，是他店真实数据但
-    不一定本店复用就有效）。
+    重要修订（2026-04-25）：
+    - 旧公式 src_count × 2 把 (organic.self + organic.category) 这种"同 type
+      不同 scope"的双 entry 也按多源算，导致 0 订单 2 曝光的词凭"双 entry"
+      压过 2 订单 13 曝光的真实价值词。
+    - 新公式只把 paid/organic/cross_shop 三大 type 类别算多源，scope 不同
+      不算（self 和 category 是同一种来源的两个聚合维度，不是多源验证）。
+    - 同时提高订单/曝光/加购权重，让真实指标主导。
 
     本店：
-      - 来源数 × 2
+      - 多 type 大类加分：≥2 个 type 类才加 ×1.5/类
       - ROAS（直接加）
-      - log10(付费订单+1) × 2
-      - log10(自然曝光+1) × 1
-      - log10(自然订单+1) × 2
-      - log10(自然加购+1) × 1.5
+      - log10(付费订单+1) × 5  ← 订单是金标准
+      - log10(自然订单+1) × 5
+      - log10(自然加购+1) × 2.5  ← 加购是订单先行指标
+      - log10(自然曝光+1) × 2
 
-    跨店（取所有 cross_shop entry 的 max 指标，避免多店 entry 时被低估）：
-      - log10(跨店订单+1) × 1.5
-      - log10(跨店曝光+1) × 0.5
-      - log10(跨店加购+1) × 1
+    跨店（取所有 cross_shop entry 的 max 指标）：
+      - log10(跨店订单+1) × 3   ← 间接证据，比本店订单弱
+      - log10(跨店加购+1) × 1.5
+      - log10(跨店曝光+1) × 1
     """
     sources = cand.get("sources") or []
-    src_count = len(sources)
+    # 多源加分按 type 大类算（self/category 同 type 不算多源）
+    unique_types = {
+        s.get("type") for s in sources
+        if s.get("type") in ("paid", "organic", "cross_shop")
+    }
+    multi_type_bonus = max(0, len(unique_types) - 1) * 1.5
+
     roas = float(cand.get("paid_roas") or 0)
     paid_orders = int(cand.get("paid_orders") or 0)
     org_imp = int(cand.get("organic_impressions") or 0)
@@ -494,15 +505,15 @@ def _compute_score(cand: dict) -> float:
     )
 
     score = (
-        src_count * 2
+        multi_type_bonus
         + roas
-        + math.log10(paid_orders + 1) * 2
-        + math.log10(org_imp + 1)
-        + math.log10(org_orders + 1) * 2
-        + math.log10(org_atc + 1) * 1.5
-        + math.log10(cross_orders + 1) * 1.5
-        + math.log10(cross_freq + 1) * 0.5
-        + math.log10(cross_atc + 1) * 1.0
+        + math.log10(paid_orders + 1) * 5
+        + math.log10(org_orders + 1) * 5
+        + math.log10(org_atc + 1) * 2.5
+        + math.log10(org_imp + 1) * 2
+        + math.log10(cross_orders + 1) * 3
+        + math.log10(cross_atc + 1) * 1.5
+        + math.log10(cross_freq + 1) * 1
     )
     return round(min(score, 100.0), 2)
 
