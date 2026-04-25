@@ -1,12 +1,11 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
-  Typography, Card, Table, Button, Space, Select, Row, Col, Statistic, Tag,
-  Segmented, Spin, message, Tooltip, Alert, Input,
+  Typography, Card, Table, Button, Space, Select, Row, Col, Statistic,
+  Segmented, message, Tooltip, Alert, Input,
 } from 'antd'
 import {
-  KeyOutlined, SyncOutlined, SearchOutlined, FireOutlined, StarFilled,
-  WarningOutlined, ThunderboltOutlined, InfoCircleOutlined,
+  KeyOutlined, SyncOutlined, SearchOutlined, InfoCircleOutlined,
 } from '@ant-design/icons'
 import dayjs from 'dayjs'
 import { getShops } from '@/api/shops'
@@ -21,29 +20,12 @@ const DATE_PRESETS = [
   { label: '近30天', value: '30d' },
 ]
 
-const TAG_META = {
-  opportunity: { color: 'volcano', icon: <FireOutlined />, text: '机会词' },
-  high_convert: { color: 'gold', icon: <StarFilled />, text: '高转化' },
-  low_ctr: { color: 'orange', icon: <WarningOutlined />, text: '高曝光无点击' },
-  normal: { color: 'default', icon: null, text: '普通' },
-}
-
-const TAG_TABS = [
-  { label: '全部', value: 'all' },
-  { label: '🔥 机会词', value: 'opportunity' },
-  { label: '💎 高转化', value: 'high_convert' },
-  { label: '⚠️ 高曝光无点击', value: 'low_ctr' },
-  { label: '已投广告', value: 'invested' },
-  { label: '未投广告', value: 'uninvested' },
-]
-
 const SearchInsights = () => {
   const navigate = useNavigate()
   const [shops, setShops] = useState([])
   const [shopId, setShopId] = useState(null)
   const [shopPlatform, setShopPlatform] = useState(null)
   const [datePreset, setDatePreset] = useState('30d')
-  const [tag, setTag] = useState('all')
   const [keyword, setKeyword] = useState('')
 
   const [loading, setLoading] = useState(false)
@@ -75,7 +57,6 @@ const SearchInsights = () => {
       sort_by: 'frequency',
       sort_order: 'desc',
     }
-    if (tag !== 'all') params.tag = tag
     if (keyword.trim()) params.keyword = keyword.trim()
     setLoading(true)
     try {
@@ -87,11 +68,11 @@ const SearchInsights = () => {
     } finally {
       setLoading(false)
     }
-  }, [shopId, getDateRange, tag, keyword])
+  }, [shopId, getDateRange, keyword])
 
   useEffect(() => {
     if (shopId) fetchData()
-  }, [shopId, datePreset, tag, fetchData])
+  }, [shopId, datePreset, fetchData])
 
   const handleShopChange = (val) => {
     const s = shops.find(x => x.id === val)
@@ -127,16 +108,8 @@ const SearchInsights = () => {
   const columns = [
     {
       title: '关键词', dataIndex: 'query_text', key: 'query_text',
-      width: 280, ellipsis: true,
-      render: (v, r) => (
-        <Space size={4}>
-          <Text strong>{v}</Text>
-          {r.invested && <Tag color="blue" style={{ margin: 0 }}>已投</Tag>}
-          {!r.invested && r.tag === 'opportunity' && (
-            <Tag color="volcano" style={{ margin: 0 }}>未投🔥</Tag>
-          )}
-        </Space>
-      ),
+      width: 260, ellipsis: true,
+      render: v => <Text strong>{v}</Text>,
     },
     {
       title: <Tooltip title="搜索次数 = 用户搜该词时，你商品在搜索结果列表中出现的累计次数（WB frequency / Ozon unique_search_users）。SKU 级字段：同一个词命中你多个 SKU 会按 SKU 累计。注意：含同一用户跨 SKU 重复计数（平台无跨 SKU 去重数据）。">
@@ -175,35 +148,24 @@ const SearchInsights = () => {
     },
     {
       title: shopPlatform === 'ozon'
-        ? <Tooltip title="Ozon /v1/analytics/product-queries/details 接口不返点击数据，列固定为 — （不要误读为 0）。所以即使下单 > 0，点击也显示 — 是正常的。">
-            点击 <InfoCircleOutlined style={{ color: '#999' }} />
-          </Tooltip>
+        ? <Tooltip title="Ozon 接口不返点击数据，列固定为 —"><span>点击</span></Tooltip>
         : '点击',
-      dataIndex: 'clicks', key: 'clicks', width: 90, align: 'right',
+      dataIndex: 'clicks', key: 'clicks', width: 65, align: 'right',
       render: v => shopPlatform === 'ozon' ? <Text type="secondary">—</Text> : (v || 0),
     },
     {
       title: shopPlatform === 'ozon'
-        ? <Tooltip title="Ozon 此接口不返加购数据，列固定为 —">
-            加购 <InfoCircleOutlined style={{ color: '#999' }} />
-          </Tooltip>
+        ? <Tooltip title="Ozon 接口不返加购数据，列固定为 —"><span>加购</span></Tooltip>
         : '加购',
-      dataIndex: 'add_to_cart', key: 'add_to_cart', width: 90, align: 'right',
+      dataIndex: 'add_to_cart', key: 'add_to_cart', width: 65, align: 'right',
       render: v => shopPlatform === 'ozon' ? <Text type="secondary">—</Text> : (v || 0),
     },
-    { title: '下单', dataIndex: 'orders', key: 'orders', width: 90, align: 'right' },
+    { title: '下单', dataIndex: 'orders', key: 'orders', width: 65, align: 'right' },
     {
-      title: '销售额(₽)', dataIndex: 'revenue', key: 'revenue', width: 110, align: 'right',
+      title: '销售额(₽)', dataIndex: 'revenue', key: 'revenue', width: 105, align: 'right',
       render: v => (v || 0).toFixed(2),
     },
-    {
-      title: '标签', dataIndex: 'tag', key: 'tag', width: 140,
-      render: (v) => {
-        const meta = TAG_META[v] || TAG_META.normal
-        return <Tag color={meta.color} icon={meta.icon}>{meta.text}</Tag>
-      },
-    },
-    { title: '商品数', dataIndex: 'sku_count', key: 'sku_count', width: 80, align: 'right' },
+    { title: '商品数', dataIndex: 'sku_count', key: 'sku_count', width: 75, align: 'right' },
   ]
 
   return (
@@ -345,15 +307,8 @@ const SearchInsights = () => {
 
           <Card
             title={
-              <Segmented
-                options={TAG_TABS}
-                value={tag}
-                onChange={setTag}
-              />
-            }
-            extra={
-              <Text type="secondary" style={{ fontSize: 12 }}>
-                {totals?.date_from} ~ {totals?.date_to}
+              <Text type="secondary" style={{ fontSize: 13 }}>
+                数据范围：{totals?.date_from} ~ {totals?.date_to}
               </Text>
             }
           >
@@ -368,21 +323,20 @@ const SearchInsights = () => {
                 }
               />
             )}
-            <Spin spinning={loading}>
-              <Table
-                rowKey="query_text"
-                columns={columns}
-                dataSource={items}
-                pagination={{ pageSize: 20, showSizeChanger: true, pageSizeOptions: [20, 50, 100] }}
-                size="small"
-                scroll={{ x: 1200 }}
-                locale={{
-                  emptyText: shopId
-                    ? '暂无数据。点"同步数据"拉取最近搜索词（需要订阅）'
-                    : '请先选择店铺',
-                }}
-              />
-            </Spin>
+            <Table
+              rowKey="query_text"
+              columns={columns}
+              dataSource={items}
+              loading={loading}
+              pagination={{ pageSize: 20, showSizeChanger: true, pageSizeOptions: [20, 50, 100] }}
+              size="small"
+              scroll={{ x: 'max-content' }}
+              locale={{
+                emptyText: shopId
+                  ? '暂无数据。点"同步数据"拉取最近搜索词（需要订阅）'
+                  : '请先选择店铺',
+              }}
+            />
           </Card>
         </>
       )}

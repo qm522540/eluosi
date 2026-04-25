@@ -42,57 +42,16 @@ def _float(v):
     return float(v) if v is not None else 0.0
 
 
-def _tag_query(row: dict, avg_freq: float, avg_orders_per_freq: float, avg_clicks_per_freq: float,
-               invested_keywords: set, platform: str = None) -> tuple:
-    """返回 (tag, invested) ，tag ∈ opportunity/high_convert/low_ctr/normal
-
-    Ozon 特殊处理（platform='ozon'）：
-    - Trafareti CPC 自动广告平台不返词级广告数据 → ad_keywords 表必空 →
-      invested 永远 False → 所有高频词被错标"机会词"。
-      用"该词已下单 ≥ 1 = Trafareti 已覆盖"反推，过滤掉红海词。
-      未来开通 Ozon 关键词级广告订阅后 ad_keywords 会有数据，本逻辑可去掉。
-    - clicks 全 0（接口不返），CTR 算法分母分子都失真 → 跳过 low_ctr 标签。
-    """
-    freq = row.get("frequency") or 0
-    orders = row.get("orders") or 0
-    clicks = row.get("clicks") or row.get("impressions") or 0  # WB 无 clicks 时用 openCard 代理
-    invested = (row.get("query_text") or "").lower() in invested_keywords
-
-    ozon_already_covered = platform == "ozon" and orders >= 1
-
-    if freq >= avg_freq * 1.5 and not invested and not ozon_already_covered:
-        return "opportunity", invested
-    if freq > 0 and orders / max(freq, 1) >= avg_orders_per_freq * 2:
-        return "high_convert", invested
-    # Ozon clicks 不可信，跳过 low_ctr 判定（避免把全店每个词都打成低 CTR）
-    if platform != "ozon" and freq >= avg_freq and clicks / max(freq, 1) < avg_clicks_per_freq * 0.3:
-        return "low_ctr", invested
-    return "normal", invested
-
-
-def _load_invested_keywords(db: Session, tenant_id: int, shop_id: int) -> set:
-    """查店铺下广告活动里已投放的关键词（小写归一化），用于判断"未投"机会词"""
-    sql = """
-        SELECT LOWER(ak.keyword) AS kw
-        FROM ad_keywords ak
-        JOIN ad_groups ag ON ag.id = ak.ad_group_id
-        JOIN ad_campaigns ac ON ac.id = ag.campaign_id
-        WHERE ac.tenant_id = :tid AND ac.shop_id = :sid
-    """
-    rows = db.execute(text(sql), {"tid": tenant_id, "sid": shop_id}).fetchall()
-    return {r.kw for r in rows if r.kw}
-
-
 def list_shop(
     db: Session, tenant_id: int, shop_id: int,
     date_from: str = None, date_to: str = None,
-    tag: str = None, keyword: str = None,
+    tag: str = None, keyword: str = None,  # tag 参数保留以兼容旧调用，已不再使用
     sort_by: str = "frequency", sort_order: str = "desc",
     page: int = 1, size: int = 50,
 ) -> dict:
-    """店铺汇总：按 query_text 聚合多天 + 标签分类 + 分页
+    """店铺汇总：按 query_text 聚合多天 + 分页（不再做标签分类，前端按原始字段过滤排序）
 
-    响应：{totals, items, invested_count, uninvested_count}
+    响应：{totals, items}
     """
     date_from, date_to = _default_dates(date_from, date_to)
     params = {"tid": tenant_id, "sid": shop_id, "df": date_from, "dt": date_to}
@@ -143,32 +102,6 @@ def list_shop(
     total_clk = sum(i["clicks"] for i in items)
     total_orders = sum(i["orders"] for i in items)
     total_revenue = sum(i["revenue"] for i in items)
-    n = len(items) or 1
-    avg_freq = total_freq / n
-    avg_orders_per_freq = (total_orders / total_freq) if total_freq > 0 else 0
-    avg_clicks_per_freq = (total_clk / total_freq) if total_freq > 0 else 0
-
-    # 标签
-    invested_set = _load_invested_keywords(db, tenant_id, shop_id)
-    # 取 platform 用于 _tag_query 的平台特殊判定（Ozon Trafareti 自动广告无 ad_keywords）
-    plat_row = db.execute(text(
-        "SELECT platform FROM shops WHERE id = :sid AND tenant_id = :tid"
-    ), {"sid": shop_id, "tid": tenant_id}).fetchone()
-    platform = plat_row.platform if plat_row else None
-    for it in items:
-        t, inv = _tag_query(it, avg_freq, avg_orders_per_freq, avg_clicks_per_freq,
-                            invested_set, platform)
-        it["tag"] = t
-        it["invested"] = inv
-
-    # tag 过滤
-    if tag and tag in {"opportunity", "high_convert", "low_ctr", "normal", "invested", "uninvested"}:
-        if tag == "invested":
-            items = [i for i in items if i["invested"]]
-        elif tag == "uninvested":
-            items = [i for i in items if not i["invested"]]
-        else:
-            items = [i for i in items if i["tag"] == tag]
 
     # 排序
     allowed_sorts = {"frequency", "impressions", "clicks", "add_to_cart", "orders", "revenue"}

@@ -21,7 +21,6 @@ def shop_summary(
     shop_id: int,
     date_from: str = Query(None),
     date_to: str = Query(None),
-    tag: str = Query(None, description="opportunity/high_convert/low_ctr/normal/invested/uninvested"),
     keyword: str = Query(None),
     sort_by: str = Query("frequency"),
     sort_order: str = Query("desc"),
@@ -31,10 +30,10 @@ def shop_summary(
     tenant_id: int = Depends(get_tenant_id),
     shop=Depends(get_owned_shop),
 ):
-    """店铺维度搜索词汇总（按 query_text 聚合 + 标签分类）"""
+    """店铺维度搜索词汇总（按 query_text 聚合）"""
     result = list_shop(
         db, tenant_id, shop.id, date_from, date_to,
-        tag, keyword, sort_by, sort_order, page, size,
+        None, keyword, sort_by, sort_order, page, size,
     )
     if result.get("code") != 0:
         return error(result["code"], result.get("msg", ""))
