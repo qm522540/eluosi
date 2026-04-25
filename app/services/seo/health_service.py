@@ -22,6 +22,7 @@
 
 from __future__ import annotations
 
+import json
 from collections import defaultdict
 from typing import Optional
 
@@ -244,9 +245,10 @@ def compute_shop_health(
     page_pids = [i["product_id"] for i in page_items]
 
     # ---------- SQL 2: 当前页商品的"缺词 Top 3"（in_title=0 AND in_attrs=0）----------
+    # 取 sources 字段供分类（cross_shop 词来自他店同 sku 召回，需要拿 source_shop_name）
     if page_pids:
         miss_stmt = text("""
-            SELECT product_id, keyword, score,
+            SELECT product_id, keyword, score, sources,
                    paid_orders, paid_roas,
                    organic_impressions, organic_orders
             FROM seo_keyword_candidates
@@ -265,8 +267,36 @@ def compute_shop_health(
         for mr in miss_rows:
             if len(miss_by_pid[mr.product_id]) >= 3:
                 continue
+            srcs = mr.sources if isinstance(mr.sources, list) else (
+                json.loads(mr.sources) if mr.sources else []
+            )
+            # source_type 取主类（优先级：paid > organic > cross_shop）
+            # 让前端分色 Tag 用，但 cross_shop 词的 metric 走专属分支显示来源店名
+            has_paid = any(s.get("type") == "paid" for s in srcs)
+            has_organic = any(s.get("type") == "organic" for s in srcs)
+            has_cross = any(s.get("type") == "cross_shop" for s in srcs)
+            cross_entry = next((s for s in srcs if s.get("type") == "cross_shop"), None)
+
+            if has_paid:
+                source_type = "paid"
+            elif has_organic:
+                source_type = "organic"
+            elif has_cross:
+                source_type = "cross_shop"
+            else:
+                source_type = "unknown"
+
+            # metric: 跨店词显示来源店 + 曝光/订单；本店词按原优先级
             metric = None
-            if mr.paid_orders:
+            if source_type == "cross_shop" and cross_entry:
+                shop_name = cross_entry.get("source_shop_name") or "其他店"
+                freq = int(cross_entry.get("frequency") or 0)
+                orders = int(cross_entry.get("orders") or 0)
+                if orders > 0:
+                    metric = f"{shop_name} {freq}曝光/{orders}订单"
+                else:
+                    metric = f"{shop_name} {freq}曝光"
+            elif mr.paid_orders:
                 metric = f"付费订单 {mr.paid_orders}"
             elif mr.organic_orders:
                 metric = f"自然订单 {mr.organic_orders}"
@@ -274,9 +304,12 @@ def compute_shop_health(
                 metric = f"自然曝光 {mr.organic_impressions}"
             elif mr.paid_roas:
                 metric = f"ROAS {float(mr.paid_roas):.2f}"
+
             miss_by_pid[mr.product_id].append({
                 "keyword": mr.keyword,
                 "score": float(mr.score or 0),
+                "source_type": source_type,
+                "source_shop_name": cross_entry.get("source_shop_name") if cross_entry else None,
                 "metric": metric,
             })
 
