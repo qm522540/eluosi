@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useMemo } from 'react'
 import {
   Card, Table, Space, Segmented, Input, InputNumber, Button, Tag, Modal,
   Empty, Alert, Typography, Image, message, Select, Tooltip,
@@ -34,18 +34,35 @@ const KeywordRollupTab = ({ shops = [], shopId, onShopChange, onJumpToProduct })
   const [loading, setLoading] = useState(false)
   const [kwTranslations, setKwTranslations] = useState({})
 
+  // 多选店铺 state（内部，初始跟随父级 shopId 单店）
+  const [shopIds, setShopIds] = useState(shopId ? [shopId] : [])
+  useEffect(() => {
+    if (shopId && !shopIds.includes(shopId)) {
+      setShopIds([shopId])
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [shopId])
+
+  const shopNameMap = useMemo(() => {
+    const m = {}
+    shops.forEach(s => { m[s.id] = s.name })
+    return m
+  }, [shops])
+
   // 展开行 state: { [keyword]: { loading, items } }
   const [expanded, setExpanded] = useState({})
   const [expandedKeys, setExpandedKeys] = useState([])
 
   const fetchData = useCallback(async () => {
-    if (!shopId) return
+    if (!shopIds || shopIds.length === 0) return
     setLoading(true)
     try {
-      const res = await getKeywordRollup(shopId, {
+      const primaryShop = shopIds[0]
+      const res = await getKeywordRollup(primaryShop, {
         days, sort, keyword: keyword.trim(),
         min_orders: onlyWithOrders ? Math.max(1, minOrders) : minOrders,
         limit: 200,
+        shop_ids: shopIds.join(','),
       })
       if (res.code === 0) {
         setData(res.data)
@@ -67,14 +84,16 @@ const KeywordRollupTab = ({ shops = [], shopId, onShopChange, onJumpToProduct })
     } finally {
       setLoading(false)
     }
-  }, [shopId, days, sort, keyword, minOrders, onlyWithOrders])
+  }, [shopIds, days, sort, keyword, minOrders, onlyWithOrders])
 
   useEffect(() => { fetchData() }, [fetchData])
 
   const loadProducts = async (kw) => {
     setExpanded(prev => ({ ...prev, [kw]: { loading: true, items: [] } }))
     try {
-      const res = await getKeywordRollupProducts(shopId, { keyword: kw, days, limit: 50 })
+      const res = await getKeywordRollupProducts(shopIds[0], {
+        keyword: kw, days, limit: 50, shop_ids: shopIds.join(','),
+      })
       if (res.code === 0) {
         setExpanded(prev => ({ ...prev, [kw]: { loading: false, items: res.data?.items || [] } }))
       } else {
@@ -227,22 +246,21 @@ const KeywordRollupTab = ({ shops = [], shopId, onShopChange, onJumpToProduct })
     },
     {
       title: (
-        <Tooltip title="优先级 = 销售额 + 订单×100 + 加购×5。已下单(🔥)→待加固(⭐)→观察(👁)→无(—)。点表头按数值排序">
+        <Tooltip title="系统打分（与「按商品看」同算法）：log(订单+1)×4 + log(曝光+1) + log(加购+1)×2 + 多商品命中加分。≥8 红 / ≥5 橙 / ≥3 金 / 默认灰">
           优先级
         </Tooltip>
       ),
-      key: 'priority', align: 'center', width: 100,
-      sorter: (a, b) => {
-        const pa = (a.revenue || 0) + (a.orders || 0) * 100 + (a.add_to_cart || 0) * 5
-        const pb = (b.revenue || 0) + (b.orders || 0) * 100 + (b.add_to_cart || 0) * 5
-        return pa - pb
-      },
+      dataIndex: 'score', key: 'score', align: 'center', width: 90,
+      sorter: (a, b) => (a.score || 0) - (b.score || 0),
       defaultSortOrder: 'descend',
-      render: (_, r) => {
-        if (r.orders > 0) return <Tag color="red" style={{ margin: 0 }}>🔥 已下单</Tag>
-        if (r.add_to_cart > 0) return <Tag color="gold" style={{ margin: 0 }}>⭐ 待加固</Tag>
-        if (r.impressions > 0) return <Tag style={{ margin: 0 }}>👁 观察</Tag>
-        return <Text type="secondary">—</Text>
+      render: v => {
+        const n = Number(v || 0)
+        const color = n >= 8 ? 'red' : n >= 5 ? 'orange' : n >= 3 ? 'gold' : 'default'
+        return (
+          <Tag color={color} style={{ fontSize: 11, minWidth: 36, textAlign: 'center', margin: 0 }}>
+            {n.toFixed(1)}
+          </Tag>
+        )
       },
     },
   ]
@@ -253,6 +271,14 @@ const KeywordRollupTab = ({ shops = [], shopId, onShopChange, onJumpToProduct })
     if (!state) return null
 
     const subColumns = [
+      ...(shopIds.length > 1 ? [{
+        title: '店铺', key: 'shop_id', width: 110,
+        render: (_, r) => (
+          <Tag color="geekblue" style={{ fontSize: 11, margin: 0 }}>
+            {shopNameMap[r.shop_id] || `shop#${r.shop_id}`}
+          </Tag>
+        ),
+      }] : []),
       {
         title: '商品', key: 'product',
         render: (_, r) => (
@@ -274,6 +300,28 @@ const KeywordRollupTab = ({ shops = [], shopId, onShopChange, onJumpToProduct })
                 SKU {r.platform_sku_id || r.product_id}
               </Text>
             </Space>
+          </Space>
+        ),
+      },
+      {
+        title: (
+          <Tooltip title="覆盖：左=该词是否已在标题里；右=该词是否已在属性里。绿✓=已含/灰✗=未含。已覆盖的就不用再加进标题了">
+            覆盖
+          </Tooltip>
+        ),
+        key: 'cover', width: 80, align: 'center',
+        render: (_, r) => (
+          <Space size={6}>
+            <Tooltip title={`标题${r.in_title ? '已含' : '未含'}该词`}>
+              <span style={{ color: r.in_title ? '#52c41a' : '#d9d9d9', fontWeight: 'bold' }}>
+                {r.in_title ? '✓' : '✗'}
+              </span>
+            </Tooltip>
+            <Tooltip title={`属性${r.in_attrs ? '已含' : '未含'}该词`}>
+              <span style={{ color: r.in_attrs ? '#52c41a' : '#d9d9d9', fontWeight: 'bold' }}>
+                {r.in_attrs ? '✓' : '✗'}
+              </span>
+            </Tooltip>
           </Space>
         ),
       },
@@ -363,12 +411,22 @@ const KeywordRollupTab = ({ shops = [], shopId, onShopChange, onJumpToProduct })
       />
 
       <Space wrap style={{ marginBottom: 12 }}>
-        <Text type="secondary">店铺：</Text>
+        <Text type="secondary">店铺（可多选）：</Text>
         <Select
-          style={{ width: 200 }}
-          value={shopId}
-          onChange={v => onShopChange && onShopChange(v)}
+          mode="multiple"
+          style={{ minWidth: 280, maxWidth: 480 }}
+          value={shopIds}
+          onChange={vs => {
+            const next = vs && vs.length ? vs : (shopId ? [shopId] : [])
+            setShopIds(next)
+            // 同步父级单选（用第一个），让其他依赖父级 shopId 的逻辑（候选池切店等）跟上
+            if (next[0] && next[0] !== shopId && onShopChange) onShopChange(next[0])
+          }}
+          maxTagCount="responsive"
+          placeholder="至少选一家店铺"
           options={shops.map(s => ({ label: `${s.name} (${s.platform})`, value: s.id }))}
+          showSearch
+          optionFilterProp="label"
         />
         <Text type="secondary">窗口：</Text>
         <Segmented

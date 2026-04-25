@@ -59,18 +59,26 @@ def compute_keyword_rollup(
     keyword: str = "",
     min_orders: int = 0,
     limit: int = 100,
+    shop_ids: list = None,
 ) -> dict:
-    """按 query_text 跨商品聚合
+    """按 query_text 跨商品聚合（支持多店合并：shop_ids 优先于单店 shop）
 
     HAVING 用和 service.py organic_self_sql 一致的门槛（frequency ≥ 5 或 orders ≥ 1），
     保证和"按商品看"Tab 里出现的自然搜索词是同一个候选池。
     """
     since = _since_date(days)
 
+    # 多店模式：shop_ids 非空 → 用 IN 聚合；否则退化为单店 shop.id
+    if shop_ids:
+        sids = list({int(x) for x in shop_ids if x})
+    else:
+        sids = [shop.id]
+
     has_data = db.execute(text("""
         SELECT COUNT(*) FROM product_search_queries
-        WHERE tenant_id = :tid AND shop_id = :sid AND stat_date >= :since
-    """), {"tid": tenant_id, "sid": shop.id, "since": since}).scalar() or 0
+        WHERE tenant_id = :tid AND shop_id IN :sids AND stat_date >= :since
+    """).bindparams(bindparam("sids", expanding=True)),
+        {"tid": tenant_id, "sids": sids, "since": since}).scalar() or 0
 
     if not has_data:
         return {
@@ -110,7 +118,7 @@ def compute_keyword_rollup(
         FROM product_search_queries q
         JOIN products p ON p.id = q.product_id AND p.tenant_id = q.tenant_id
         WHERE q.tenant_id = :tid
-          AND q.shop_id = :sid
+          AND q.shop_id IN :sids
           AND q.stat_date >= :since
           AND q.product_id IS NOT NULL
           AND (p.status != 'deleted' OR p.status IS NULL)
@@ -120,10 +128,10 @@ def compute_keyword_rollup(
           {having_min_orders}
         ORDER BY {order_by}
         LIMIT :lim
-    """)
+    """).bindparams(bindparam("sids", expanding=True))
 
     params = {
-        "tid": tenant_id, "sid": shop.id,
+        "tid": tenant_id, "sids": sids,
         "since": since, "lim": limit,
     }
     if kw_like:
@@ -133,6 +141,19 @@ def compute_keyword_rollup(
 
     rows = db.execute(sql, params).fetchall()
 
+    import math
+    def _calc_score(orders, impressions, add_to_cart, product_count):
+        # 与候选池 score 同思路：log(订单+1)*2 + log(曝光+1) + log(自然订单+1)*2 + 来源数*2
+        # 店铺 TOP 没"来源数"概念，用 product_count（多商品命中视为"多源信号"）做替代
+        # ROAS 项 Ozon 没付费数据，跳过
+        score = (
+            math.log10(orders + 1) * 4
+            + math.log10(impressions + 1) * 1
+            + math.log10(add_to_cart + 1) * 2
+            + min(product_count, 10) * 0.3  # 多商品命中加分但封顶 10
+        )
+        return round(score, 1)
+
     items = [{
         "keyword":       r.keyword,
         "frequency":     int(r.frequency or 0),
@@ -141,6 +162,8 @@ def compute_keyword_rollup(
         "orders":        int(r.orders or 0),
         "revenue":       round(float(r.revenue or 0), 2),
         "product_count": int(r.product_count or 0),
+        "score":         _calc_score(int(r.orders or 0), int(r.impressions or 0),
+                                     int(r.add_to_cart or 0), int(r.product_count or 0)),
         "candidate_row_count": 0,
     } for r in rows]
 
@@ -161,7 +184,7 @@ def compute_keyword_rollup(
             FROM product_search_queries q
             JOIN products p ON p.id = q.product_id AND p.tenant_id = q.tenant_id
             WHERE q.tenant_id = :tid
-              AND q.shop_id = :sid
+              AND q.shop_id IN :sids
               AND q.stat_date >= :since
               AND q.product_id IS NOT NULL
               AND (p.status != 'deleted' OR p.status IS NULL)
@@ -170,8 +193,8 @@ def compute_keyword_rollup(
             HAVING (SUM(q.frequency) >= 5 OR SUM(q.orders) >= 1)
               {having_min_orders}
         ) t
-    """)
-    sum_params = {"tid": tenant_id, "sid": shop.id, "since": since}
+    """).bindparams(bindparam("sids", expanding=True))
+    sum_params = {"tid": tenant_id, "sids": sids, "since": since}
     if kw_like:
         sum_params["kw"] = kw_like
     if min_orders > 0:
@@ -186,11 +209,12 @@ def compute_keyword_rollup(
         cand_rows = db.execute(text("""
             SELECT LOWER(keyword) AS kw_lower, COUNT(*) AS cnt
             FROM seo_keyword_candidates
-            WHERE tenant_id = :tid AND shop_id = :sid
+            WHERE tenant_id = :tid AND shop_id IN :sids
               AND LOWER(keyword) IN :kws
             GROUP BY LOWER(keyword)
-        """).bindparams(bindparam("kws", expanding=True)), {
-            "tid": tenant_id, "sid": shop.id,
+        """).bindparams(bindparam("kws", expanding=True),
+                        bindparam("sids", expanding=True)), {
+            "tid": tenant_id, "sids": sids,
             "kws": [kw.lower() for kw in kw_list],
         }).fetchall()
         cand_map = {r.kw_lower: int(r.cnt) for r in cand_rows}
@@ -225,24 +249,36 @@ def list_rollup_products(
     keyword: str,
     days: int = 30,
     limit: int = 20,
+    shop_ids: list = None,
 ) -> dict:
-    """单关键词下钻：该词在各商品的贡献分项
+    """单关键词下钻：该词在各商品的贡献分项（支持多店）
 
     精确匹配 LOWER(query_text)，保证和店级行 SUM 能对上。
+    返回字段含 in_title / in_attrs 标识标题/属性是否已含该词。
     """
     if not keyword or not keyword.strip():
         return {"code": 10002, "msg": "keyword 不能为空"}
 
     since = _since_date(days)
 
+    if shop_ids:
+        sids = list({int(x) for x in shop_ids if x})
+    else:
+        sids = [shop.id]
+
+    kw_lower = keyword.strip().lower()
+
     sql = text("""
         SELECT
             q.product_id,
+            q.shop_id                      AS shop_id,
             ANY_VALUE(COALESCE(pl.title_ru, p.name_ru, p.name_zh, '')) AS title,
             ANY_VALUE(p.image_url)         AS image_url,
             ANY_VALUE(pl.platform_sku_id)  AS platform_sku_id,
-            ANY_VALUE(pl.rating)           AS rating,
-            ANY_VALUE(pl.review_count)     AS review_count,
+            MAX(CASE WHEN LOWER(COALESCE(pl.title_ru, p.name_ru, p.name_zh, ''))
+                          LIKE CONCAT('%', :kw_lower, '%') THEN 1 ELSE 0 END) AS in_title,
+            MAX(CASE WHEN LOWER(COALESCE(CAST(pl.variant_attrs AS CHAR), ''))
+                          LIKE CONCAT('%', :kw_lower, '%') THEN 1 ELSE 0 END) AS in_attrs,
             SUM(q.frequency)   AS frequency,
             SUM(q.impressions) AS impressions,
             SUM(q.add_to_cart) AS add_to_cart,
@@ -255,28 +291,29 @@ def list_rollup_products(
                                        AND pl.shop_id = q.shop_id
                                        AND pl.status NOT IN ('deleted', 'archived')
         WHERE q.tenant_id = :tid
-          AND q.shop_id = :sid
+          AND q.shop_id IN :sids
           AND q.stat_date >= :since
           AND q.product_id IS NOT NULL
-          AND LOWER(q.query_text) = LOWER(:kw)
+          AND LOWER(q.query_text) = :kw_lower
           AND (p.status != 'deleted' OR p.status IS NULL)
-        GROUP BY q.product_id
+        GROUP BY q.product_id, q.shop_id
         ORDER BY SUM(q.revenue) DESC, SUM(q.orders) DESC, SUM(q.impressions) DESC
         LIMIT :lim
-    """)
+    """).bindparams(bindparam("sids", expanding=True))
 
     rows = db.execute(sql, {
-        "tid": tenant_id, "sid": shop.id, "since": since,
-        "kw": keyword.strip(), "lim": limit,
+        "tid": tenant_id, "sids": sids, "since": since,
+        "kw_lower": kw_lower, "lim": limit,
     }).fetchall()
 
     items = [{
         "product_id":      int(r.product_id),
+        "shop_id":         int(r.shop_id),
         "title":           r.title or "",
         "image_url":       r.image_url or "",
         "platform_sku_id": r.platform_sku_id or "",
-        "rating":          float(r.rating) if r.rating is not None else None,
-        "review_count":    int(r.review_count or 0),
+        "in_title":        bool(r.in_title),
+        "in_attrs":        bool(r.in_attrs),
         "frequency":       int(r.frequency or 0),
         "impressions":     int(r.impressions or 0),
         "add_to_cart":     int(r.add_to_cart or 0),

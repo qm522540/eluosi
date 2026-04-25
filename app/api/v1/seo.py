@@ -8,6 +8,7 @@
 from typing import List, Optional
 from fastapi import APIRouter, Body, Depends, Query
 from pydantic import BaseModel, Field
+from sqlalchemy import bindparam, text
 from sqlalchemy.orm import Session
 
 from app.dependencies import get_db, get_tenant_id, get_owned_shop, get_current_user
@@ -313,6 +314,28 @@ def shop_keyword_tracking_skus(
     return success(result["data"])
 
 
+def _parse_shop_ids(shop_ids: str, tenant_id: int, db: Session) -> list:
+    """解析 shop_ids 逗号分隔字符串，校验都属当前 tenant；返回 list[int] 或 None。"""
+    if not shop_ids or not shop_ids.strip():
+        return None
+    try:
+        ids = [int(x) for x in shop_ids.split(",") if x.strip().isdigit()]
+    except ValueError:
+        return None
+    if not ids:
+        return None
+    valid = db.execute(
+        text("SELECT id FROM shops WHERE id IN :ids AND tenant_id = :tid").bindparams(
+            bindparam("ids", expanding=True)
+        ),
+        {"ids": ids, "tid": tenant_id},
+    ).fetchall()
+    valid_ids = {r.id for r in valid}
+    if not valid_ids:
+        return None
+    return [i for i in ids if i in valid_ids]
+
+
 @router.get("/shop/{shop_id}/keyword-rollup")
 def shop_keyword_rollup(
     shop_id: int,
@@ -321,19 +344,21 @@ def shop_keyword_rollup(
     keyword: str = Query("", description="关键词模糊筛选"),
     min_orders: int = Query(0, ge=0, description="订单数下限（过滤零单噪声）"),
     limit: int = Query(100, ge=10, le=500, description="最多返回 N 条"),
+    shop_ids: str = Query("", description="多店合并模式，逗号分隔（含路径 shop_id 也一起传）；未传则单店"),
     db: Session = Depends(get_db),
     tenant_id: int = Depends(get_tenant_id),
     shop=Depends(get_owned_shop),
 ):
-    """店级关键词聚合：每行 = 关键词，跨商品汇总（自然搜索 organic scope）
+    """店级关键词聚合：每行 = 关键词，跨商品/跨店汇总。
 
-    与 /candidates 不同，此视图按 query_text 一维聚合；
-    同一个词跨多商品的总贡献一目了然，排名靠前的是店铺摇钱树。
+    多店模式：传 shop_ids="1,2,3" 后端校验都属当前 tenant。
     """
+    sids = _parse_shop_ids(shop_ids, tenant_id, db)
     result = compute_keyword_rollup(
         db, tenant_id, shop,
         days=days, sort=sort, keyword=keyword,
         min_orders=min_orders, limit=limit,
+        shop_ids=sids,
     )
     if result.get("code") != 0:
         return error(result["code"], result.get("msg", ""))
@@ -346,14 +371,17 @@ def shop_keyword_rollup_products(
     keyword: str = Query(..., min_length=1, description="要下钻的关键词"),
     days: int = Query(30, ge=7, le=90),
     limit: int = Query(20, ge=1, le=100),
+    shop_ids: str = Query("", description="多店合并模式，逗号分隔；未传则单店"),
     db: Session = Depends(get_db),
     tenant_id: int = Depends(get_tenant_id),
     shop=Depends(get_owned_shop),
 ):
-    """单关键词下钻：看该词在各商品的贡献（缩略图 + 标题 + 曝光/加购/订单/收入）"""
+    """单关键词下钻：看该词在各商品的贡献（缩略图 + 标题 + 曝光/加购/订单/收入 + in_title/in_attrs）"""
+    sids = _parse_shop_ids(shop_ids, tenant_id, db)
     result = list_rollup_products(
         db, tenant_id, shop,
         keyword=keyword, days=days, limit=limit,
+        shop_ids=sids,
     )
     if result.get("code") != 0:
         return error(result["code"], result.get("msg", ""))
