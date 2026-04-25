@@ -262,22 +262,20 @@ const CandidatesRollupTable = ({
   // 单店刷新引擎（not_ready Alert 里 per-shop 按钮入口）
   // 只在 reason='engine_not_run' 时显示，no_source 时按钮也救不了不显示
   const handleRefreshSingle = useCallback(async (shopId) => {
+    const name = shopNameMap[shopId] || `shop#${shopId}`
     setRefreshingShop(shopId)
-    const hide = message.loading(
-      `${shopNameMap[shopId] || `shop#${shopId}`} 刷新引擎中（近 ${days} 天，10-30s）...`, 0
-    )
+    const hide = message.loading(`${name} 刷新引擎中（近 ${days} 天，10-30s）...`, 0)
     try {
+      // axios 拦截器在 code !== 0 时已 reject，到这一步必是 success
       const r = await refreshSeo(shopId, { days })
       hide()
-      if (r?.code === 0) {
-        message.success(`${shopNameMap[shopId] || `shop#${shopId}`} 已刷新：写入 ${r.data?.written || 0} 条候选`)
-      } else {
-        message.warning(`${shopNameMap[shopId] || `shop#${shopId}`} 刷新失败：${r?.msg || '未知错误'}`)
-      }
+      message.success(`${name} 已刷新：写入 ${r?.data?.written || 0} 条候选`)
       await fetchData()
     } catch (e) {
       hide()
-      message.error('网络错误：' + (e?.message || ''))
+      // 区分业务错误（拦截器 reject Error(res.msg)）vs HTTP/网络错误
+      const bizMsg = e?.response?.data?.msg || e?.message
+      message.warning(`${name} 刷新失败：${bizMsg || '未知错误'}`)
     } finally {
       setRefreshingShop(null)
     }
@@ -713,6 +711,7 @@ const CandidatesRollupTable = ({
             type="primary"
             icon={<ReloadOutlined />}
             loading={refreshingEngine}
+            disabled={refreshingShop !== null}
             onClick={handleRefreshEngine}
           >
             刷新候选池
@@ -784,7 +783,10 @@ const CandidatesRollupTable = ({
                         size="small"
                         icon={<ReloadOutlined />}
                         loading={refreshingShop === s.shop_id}
-                        disabled={refreshingShop !== null && refreshingShop !== s.shop_id}
+                        disabled={
+                          refreshingEngine
+                          || (refreshingShop !== null && refreshingShop !== s.shop_id)
+                        }
                         onClick={() => handleRefreshSingle(s.shop_id)}
                       >
                         刷新引擎
