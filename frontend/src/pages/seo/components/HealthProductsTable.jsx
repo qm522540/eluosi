@@ -1,9 +1,9 @@
 import { useState, useCallback } from 'react'
-import { Table, Tag, Space, Typography, Tooltip, Progress, Button, message } from 'antd'
-import { RobotOutlined, ThunderboltOutlined } from '@ant-design/icons'
+import { Table, Tag, Space, Typography, Tooltip, Progress, Button, message, Modal, Input } from 'antd'
+import { RobotOutlined, ThunderboltOutlined, EditOutlined } from '@ant-design/icons'
 import { useNavigate } from 'react-router-dom'
 import { getProductMissingCandidates } from '@/api/seo'
-import { translateKeywords } from '@/api/keyword_stats'
+import { translateKeywords, updateTranslation } from '@/api/keyword_stats'
 import AiTitleModal from './AiTitleModal'
 
 const { Text } = Typography
@@ -166,6 +166,34 @@ const HealthProductsTable = ({
     }
   }, [shopId, expandedData])
 
+  const handleEditTranslation = (v) => {
+    const zh = kwTranslations[v] || ''
+    Modal.confirm({
+      title: '编辑中文翻译',
+      icon: null,
+      content: (
+        <div style={{ marginTop: 12 }}>
+          <div style={{ fontSize: 12, color: '#999', marginBottom: 6 }}>俄文：{v}</div>
+          <Input id={`health-tr-input-${v}`} defaultValue={zh} placeholder="输入中文翻译" />
+          <div style={{ fontSize: 11, color: '#bbb', marginTop: 6 }}>
+            手动修改后标记为 manual，之后 AI 不会覆盖此翻译
+          </div>
+        </div>
+      ),
+      onOk: async () => {
+        const newVal = document.getElementById(`health-tr-input-${v}`)?.value?.trim()
+        if (!newVal) return
+        try {
+          await updateTranslation(v, newVal)
+          setKwTranslations(prev => ({ ...prev, [v]: newVal }))
+          message.success('翻译已更新')
+        } catch (e) {
+          message.error(e?.response?.data?.msg || '更新失败')
+        }
+      },
+    })
+  }
+
   const openAiModal = (record) => {
     const pid = record.product_id
     const selected = selectedByPid[pid] || []
@@ -204,6 +232,7 @@ const HealthProductsTable = ({
       title: '关键词', dataIndex: 'keyword', key: 'keyword',
       render: (v) => {
         const zh = kwTranslations[v]
+        const hasZh = zh && zh !== v
         const wt = WORD_TYPE_MAP[classifyWordType(v)]
         return (
           <Space direction="vertical" size={1} style={{ lineHeight: 1.2 }}>
@@ -215,9 +244,15 @@ const HealthProductsTable = ({
                 </Tag>
               )}
             </Space>
-            <Text style={{ fontSize: 11, color: zh ? '#999' : '#ccc' }}>
-              {zh || '翻译中...'}
-            </Text>
+            <Space size={4} style={{ alignItems: 'center' }}>
+              <Text style={{ fontSize: 11, color: hasZh ? '#999' : '#ccc' }}>
+                {hasZh ? zh : '翻译中...'}
+              </Text>
+              <EditOutlined
+                style={{ fontSize: 10, color: '#bbb', cursor: 'pointer' }}
+                onClick={() => handleEditTranslation(v)}
+              />
+            </Space>
           </Space>
         )
       },
