@@ -143,6 +143,7 @@ def compute_shop_health(
     main_sql = text("""
         SELECT
             p.id AS pid,
+            p.sku AS sku,
             p.name_zh,
             p.image_url,
             ANY_VALUE(pl.id) AS listing_id,
@@ -200,6 +201,7 @@ def compute_shop_health(
 
         items.append({
             "product_id": int(r.pid),
+            "sku": r.sku or "",
             "product_name": r.name_zh or "",
             "image_url": r.image_url,
             "listing_id": int(r.listing_id) if r.listing_id else None,

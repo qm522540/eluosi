@@ -190,7 +190,9 @@ const HealthProductsTable = ({
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
           <Space>
             <Text strong style={{ fontSize: 13 }}>
-              {record.product_name} · 全部缺词 {items.length} 个
+              <span style={{ color: '#1677ff' }}>{record.sku || '（无编码）'}</span>
+              <span style={{ color: '#999', fontWeight: 400, marginLeft: 8 }}>{record.product_name}</span>
+              <span style={{ marginLeft: 8 }}>· 全部缺词 {items.length} 个</span>
             </Text>
             <Text type="secondary" style={{ fontSize: 11 }}>（按推荐系数降序，前 3 即"高价值词 Top 3"）</Text>
           </Space>
@@ -234,14 +236,15 @@ const HealthProductsTable = ({
             : <div style={{ width: 40, height: 40, background: '#f5f5f5', borderRadius: 2 }} />
           }
           <div>
+            <div style={{ fontSize: 12, fontWeight: 600, color: '#1677ff' }}>
+              {r.sku || <Text type="secondary">（无编码）</Text>}
+            </div>
             <Tooltip title={r.current_title}>
-              <div style={{ maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              <div style={{ maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 11, color: '#666' }}>
                 {r.product_name || <Text type="secondary">（无名）</Text>}
               </div>
             </Tooltip>
-            <Text type="secondary" style={{ fontSize: 11 }}>
-              ID {r.product_id} · {r.platform?.toUpperCase()}
-            </Text>
+            <Text type="secondary" style={{ fontSize: 11 }}>{r.platform?.toUpperCase()}</Text>
           </div>
         </Space>
       ),
