@@ -24,10 +24,20 @@ from app.utils.logger import logger
 from app.utils.errors import ErrorCode
 
 
+_FANCY_QUOTES_TRANS = str.maketrans({
+    "“": '"', "”": '"',  # " "  Kimi 经常返中文双引号
+    "‘": "'", "’": "'",  # ' '
+    "«": '"', "»": '"',  # « »
+    "〈": '"', "〉": '"',  # 〈 〉
+    "《": '"', "》": '"',  # 《 》
+})
+
+
 async def _call_ai(prompt: str, max_tokens: int = 2000) -> Optional[list]:
-    """调用 AI 返回 JSON 数组"""
+    """调用 AI 返回 JSON 数组（含中文/全角引号兼容）"""
     settings = get_settings()
     client = KimiClient(api_key=settings.KIMI_API_KEY)
+    content = ""
     try:
         result = await client.chat(
             messages=[{"role": "user", "content": prompt}],
@@ -42,7 +52,9 @@ async def _call_ai(prompt: str, max_tokens: int = 2000) -> Optional[list]:
                 content = content.rsplit("```", 1)[0]
         if content.startswith("json"):
             content = content[4:].strip()
-        return json.loads(content)
+        # Kimi 高频返回 fancy quotes 导致 json.loads 失败,统一替换 ASCII
+        content_norm = content.translate(_FANCY_QUOTES_TRANS)
+        return json.loads(content_norm)
     except json.JSONDecodeError as e:
         logger.warning(f"AI 返回非合法 JSON: {e}, content={content[:200]}")
         return None
