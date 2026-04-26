@@ -331,6 +331,70 @@ def compute_shop_health(
         for item in page_items:
             item["missing_top_keywords"] = miss_by_pid.get(item["product_id"], [])
 
+    # ---------- SQL 3: 当前页商品的自然流量聚合（来自 product_search_queries）----------
+    # 数据源：WB Jam 订阅 / Ozon Premium 订阅。窗口固定近 30 天。
+    # 没订阅或还没同步的店该表为空，items 自然流量字段全 None。
+    if page_pids:
+        organic_stmt = text("""
+            SELECT product_id,
+                   COUNT(DISTINCT query_text) AS keyword_count,
+                   SUM(frequency)             AS searches,
+                   SUM(impressions)           AS views,
+                   SUM(clicks)                AS clicks,
+                   SUM(add_to_cart)           AS atc,
+                   SUM(orders)                AS orders,
+                   SUM(revenue)               AS revenue
+            FROM product_search_queries
+            WHERE tenant_id = :tid
+              AND shop_id = :sid
+              AND product_id IN :pids
+              AND stat_date >= CURDATE() - INTERVAL 30 DAY
+            GROUP BY product_id
+        """).bindparams(bindparam("pids", expanding=True))
+        organic_rows = db.execute(organic_stmt, {
+            "tid": tenant_id, "sid": shop_id, "pids": page_pids,
+        }).fetchall()
+        organic_by_pid = {r.product_id: r for r in organic_rows}
+
+        for item in page_items:
+            o = organic_by_pid.get(item["product_id"])
+            item["organic_traffic"] = {
+                "keyword_count": int(o.keyword_count or 0) if o else 0,
+                "searches":      int(o.searches or 0)      if o else 0,
+                "views":         int(o.views or 0)         if o else 0,
+                "clicks":        int(o.clicks or 0)        if o else 0,
+                "atc":           int(o.atc or 0)           if o else 0,
+                "orders":        int(o.orders or 0)        if o else 0,
+                "revenue":       float(o.revenue or 0)     if o else 0.0,
+                "has_data":      o is not None,
+            }
+    else:
+        for item in page_items:
+            item["organic_traffic"] = None
+
+    # ---------- SQL 4: 自然流量数据源时间窗口（店级）----------
+    # 数据为什么必须告诉用户范围：Ozon Premium 普通版只能看 30 天但 1-2 天前
+    # 有保护期；Premium Plus 全 30 天；订阅刚开通的店可能只有几天数据；
+    # WB Jam 订阅状态多样。前端必须显示真实窗口避免误导用户。
+    range_row = db.execute(text("""
+        SELECT MIN(stat_date)             AS earliest,
+               MAX(stat_date)             AS latest,
+               COUNT(DISTINCT stat_date)  AS days_with_data,
+               COUNT(*)                   AS total_rows
+        FROM product_search_queries
+        WHERE tenant_id = :tid AND shop_id = :sid
+          AND stat_date >= CURDATE() - INTERVAL 30 DAY
+    """), {"tid": tenant_id, "sid": shop_id}).first()
+
+    organic_data_range = {
+        "earliest": range_row.earliest.isoformat() if range_row and range_row.earliest else None,
+        "latest":   range_row.latest.isoformat()   if range_row and range_row.latest   else None,
+        "days_with_data": int(range_row.days_with_data or 0) if range_row else 0,
+        "window_days": 30,
+        "total_rows":  int(range_row.total_rows or 0) if range_row else 0,
+        "has_data":    bool(range_row and range_row.total_rows and range_row.total_rows > 0),
+    }
+
     # ---------- 汇总 ----------
     n_all = len(rows)
     avg_score = round(totals["sum_score"] / n_all, 1) if n_all else 0.0
@@ -338,6 +402,7 @@ def compute_shop_health(
     return {
         "code": ErrorCode.SUCCESS,
         "data": {
+            "organic_data_range": organic_data_range,
             "totals": {
                 "total": total_count,     # 过滤/筛选后
                 "all": n_all,             # 原始商品总数（未筛）

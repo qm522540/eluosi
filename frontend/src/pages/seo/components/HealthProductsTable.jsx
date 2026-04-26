@@ -475,6 +475,41 @@ const HealthProductsTable = ({
       ),
     },
     {
+      title: <Tooltip title="近 30 天该商品来自自然搜索的累计数据（数据范围以页面顶部 Banner 为准）">自然流量</Tooltip>,
+      key: 'organic',
+      width: 200,
+      render: (_, r) => {
+        const o = r.organic_traffic
+        if (!o || !o.has_data) {
+          return <Text type="secondary" style={{ fontSize: 12 }}>—</Text>
+        }
+        const fmt = (n) => Number(n || 0).toLocaleString()
+        const fmtMoney = (n) => `₽${Number(n || 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}`
+        return (
+          <div style={{ fontSize: 12, lineHeight: 1.6 }}>
+            <div>
+              <Text type="secondary">词: </Text><strong>{fmt(o.keyword_count)}</strong>
+              <Text type="secondary"> · 搜: </Text><strong>{fmt(o.searches)}</strong>
+            </div>
+            <div>
+              <Text type="secondary">曝: </Text>{fmt(o.views)}
+              <Text type="secondary"> · 加: </Text>{fmt(o.atc)}
+            </div>
+            <div>
+              <Text type="secondary">订单: </Text>
+              <strong style={{ color: o.orders > 0 ? '#3f8600' : undefined }}>{fmt(o.orders)}</strong>
+              {o.revenue > 0 && (
+                <>
+                  <Text type="secondary"> · </Text>
+                  <strong style={{ color: '#3f8600' }}>{fmtMoney(o.revenue)}</strong>
+                </>
+              )}
+            </div>
+          </div>
+        )
+      },
+    },
+    {
       title: '操作',
       key: 'action',
       width: 150,

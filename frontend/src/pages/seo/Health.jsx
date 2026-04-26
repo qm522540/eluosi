@@ -81,10 +81,35 @@ const Health = () => {
       <div style={{ marginBottom: 16 }}>
         <Title level={4} style={{ marginBottom: 4 }}>SEO 健康诊断 · 商品级 0-100 分</Title>
         <Text type="secondary">
-          评分维度：关键词覆盖率 60% + 标题长度 20% + 评分 20%。
+          评分维度：关键词覆盖率 60% + 标题长度 20% + 描述长度 20%。
           默认按分数升序 —— 最差的排在最前，点「AI 优化标题」当前页弹窗自动用 Top 3 候选词生成新标题（也可展开行精挑细选）。
         </Text>
       </div>
+
+      {data?.organic_data_range && (
+        <Alert
+          type={data.organic_data_range.has_data ? 'info' : 'warning'}
+          showIcon
+          style={{ marginBottom: 12 }}
+          message={
+            data.organic_data_range.has_data ? (
+              <span>
+                📊 自然流量数据范围：
+                <strong style={{ margin: '0 4px' }}>
+                  {data.organic_data_range.earliest} ~ {data.organic_data_range.latest}
+                </strong>
+                （实际有 <strong>{data.organic_data_range.days_with_data}</strong> 天数据 / 最近 30 天窗口，
+                共 {data.organic_data_range.total_rows.toLocaleString()} 条搜索词记录）
+              </span>
+            ) : (
+              <span>
+                ⚠️ 自然流量数据为空 —— 该店铺可能未开通订阅（WB Jam / Ozon Premium），
+                或订阅刚开通数据还未同步。下方"自然流量"列将全部显示 —
+              </span>
+            )
+          }
+        />
+      )}
 
       <Card>
         <HealthFilterBar
