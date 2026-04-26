@@ -61,17 +61,23 @@ def product_detail(
 async def shop_refresh(
     shop_id: int,
     days: int = Query(7, ge=1, le=30),
+    force: bool = Query(False, description="强制重拉（默认会跳过当日已有快照）"),
     db: Session = Depends(get_db),
     tenant_id: int = Depends(get_tenant_id),
     shop=Depends(get_owned_shop),
 ):
     """手动触发同步（按 shop_id 单店铺，规则 4）
 
+    幂等保护（2026-04-26）：
+    - 默认行为：当日 stat_date 已有快照 → 直接 skip，返回 reason='snapshot_already_exists'
+    - 并发保护：Redis SETNX 锁，连点多次只跑第一次，其余 reason='another_refresh_running'
+    - 强制重拉：传 ?force=true，跳过快照预检（仍受锁约束）
+
     返回：
     - 0 成功，data.synced_queries 写入行数
     - 93001 店铺未开通 Jam/Premium 订阅，前端给友好提示
     """
-    result = await refresh_shop(db, tenant_id, shop, days)
+    result = await refresh_shop(db, tenant_id, shop, days, force=force)
     if result.get("code") != 0:
         return error(result["code"], result.get("msg", ""))
     return success(result["data"])

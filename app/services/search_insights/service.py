@@ -265,13 +265,39 @@ def _upsert_rows(db: Session, tenant_id: int, shop_id: int, platform: str,
     return count
 
 
+REFRESH_LOCK_TTL = 600  # 单店同步进行中锁 TTL（秒），覆盖 WB 单店 ~3min 实测峰值
+
+
+def _refresh_lock_key(shop_id: int) -> str:
+    return f"search_insights:refresh_lock:shop_{shop_id}"
+
+
+def _snapshot_exists(db: Session, tenant_id: int, shop_id: int, stat_date: str) -> int:
+    """查目标 stat_date 是否已有该 shop 的写入。返回行数。
+
+    幂等预检用：避免连点同步时浪费 API 配额。
+    """
+    row = db.execute(text("""
+        SELECT COUNT(*) AS cnt FROM product_search_queries
+        WHERE tenant_id = :tid AND shop_id = :sid AND stat_date = :sd
+    """), {"tid": tenant_id, "sid": shop_id, "sd": stat_date}).fetchone()
+    return int(row.cnt or 0) if row else 0
+
+
 async def refresh_shop(
-    db: Session, tenant_id: int, shop, days: int = 7,
+    db: Session, tenant_id: int, shop, days: int = 7, force: bool = False,
 ) -> dict:
     """手动触发：按 shop 拉近 N 天搜索词数据 → 写入 product_search_queries
 
     规则 4：必须按 shop_id 单店铺触发；shop 由路由层 get_owned_shop 校验属租户。
     未开通订阅时返回 93001，调用方前端显示友好提示。
+
+    幂等保护（2026-04-26 修复重复打 API 问题）：
+    1. Redis SETNX in-progress 锁：连点 3 次只跑第 1 次，后续返回 skipped
+    2. 增量预检：目标 stat_date (today-2) 已有数据则 skip（force=True 跳过此检查）
+    3. 注意：WB/Ozon API 都只返 period 聚合值（不返每天明细），所以
+       stat_date = "窗口结束日 today-2"，是一份"截至此日的 N 天聚合快照"
+       — 同窗口重跑由 ON DUPLICATE KEY UPDATE 覆盖；跨天会产生新 stat_date 行
     """
     if shop.platform not in ("wb", "ozon"):
         return {"code": ErrorCode.PARAM_ERROR, "msg": "该平台暂不支持搜索词洞察"}
@@ -281,199 +307,254 @@ async def refresh_shop(
     date_from = (today - timedelta(days=days + 1)).isoformat()
     date_to = (today - timedelta(days=2)).isoformat()
 
-    # 拉取租户+店铺下的 listing（带 product_id 映射）
-    # 规则 1 纵深：pl + p 双表都带 tenant_id
-    listings_sql = text("""
-        SELECT pl.platform_sku_id AS psk, pl.product_id AS pid
-        FROM platform_listings pl
-        JOIN products p ON p.id = pl.product_id
-        WHERE pl.tenant_id = :tid AND pl.shop_id = :sid AND pl.platform = :plat
-          AND p.tenant_id = :tid AND pl.platform_sku_id IS NOT NULL
-          AND (p.status NOT IN ('deleted') OR p.status IS NULL)
-    """)
-    listings = db.execute(listings_sql, {
-        "sid": shop.id, "plat": shop.platform, "tid": tenant_id,
-    }).fetchall()
-    if not listings:
-        return {"code": 0, "data": {"shop_id": shop.id, "synced_queries": 0,
-                                    "msg": "店铺下无商品，跳过"}}
+    # —— 幂等保护 1：In-progress 锁（防连点 3 次并发烧 quota）——
+    redis_client = None
+    lock_key = _refresh_lock_key(shop.id)
+    try:
+        redis_client = _get_redis_client()
+        # SETNX：仅当 key 不存在时设置，TTL 防 worker crash 死锁
+        acquired = redis_client.set(lock_key, "1", nx=True, ex=REFRESH_LOCK_TTL)
+        if not acquired:
+            ttl = redis_client.ttl(lock_key) or REFRESH_LOCK_TTL
+            logger.info(f"refresh_shop shop={shop.id} 已有同步进行中，跳过（剩余 {ttl}s）")
+            return {
+                "code": 0,
+                "data": {
+                    "shop_id": shop.id, "synced_queries": 0,
+                    "skipped": True, "reason": "another_refresh_running",
+                    "lock_ttl_seconds": int(ttl),
+                    "msg": f"另一个同步任务正在运行中，约 {ttl}s 后可重试",
+                },
+            }
+    except Exception as e:
+        logger.warning(f"refresh_shop redis lock 获取失败 shop={shop.id}: {e}")
+        redis_client = None  # 降级：Redis 不可用时不阻塞业务
 
-    total_rows = 0
-    errors = []
-
-    if shop.platform == "wb":
-        import asyncio
-        # WB seller quota 熔断 pre-check（2026-04-23 晚老林 review 驱动）：
-        # quota 是 per-seller-per-endpoint-group 共享池，写端点烧光读端点也 429。
-        # 2026-04-24 ab895eb 后 key 主走 seller_{uuid}（同 seller 多 shop 共享冷却），
-        # 历史 shop_{id} key 仅作 fallback。两个 key 任一命中就 skip。
-        try:
-            r = _get_redis_client()
-            cooldown = 0
-            seller_id = (getattr(shop, "platform_seller_id", None) or "").strip() or None
-            if seller_id:
-                ttl_seller = r.ttl(quota_circuit_key_for_seller(seller_id))
-                if ttl_seller and ttl_seller > 0:
-                    cooldown = ttl_seller
-            if not cooldown:
-                ttl_shop = r.ttl(quota_circuit_key_for_shop(shop.id))
-                if ttl_shop and ttl_shop > 0:
-                    cooldown = ttl_shop
-        except Exception as e:
-            logger.warning(f"WB quota circuit pre-check Redis err: {e}")
-            cooldown = 0
-        if cooldown and cooldown > 0:
+    # —— 幂等保护 2：增量预检（目标 stat_date 已有快照则 skip）——
+    if not force:
+        existing = _snapshot_exists(db, tenant_id, shop.id, date_to)
+        if existing > 0:
+            if redis_client:
+                try:
+                    redis_client.delete(lock_key)
+                except Exception:
+                    pass
             logger.info(
-                f"WB seller quota cooldown shop={shop.id} ttl={cooldown}s, skip refresh"
+                f"refresh_shop shop={shop.id} stat_date={date_to} 已有 {existing} 行，"
+                f"force=False 跳过 API 调用"
             )
             return {
                 "code": 0,
                 "data": {
                     "shop_id": shop.id, "synced_queries": 0,
-                    "skipped": True, "reason": "wb_seller_quota_cooldown",
-                    "cooldown_seconds": int(cooldown),
-                    "msg": f"WB seller quota 冷却中，约 {cooldown}s 后自动恢复",
+                    "skipped": True, "reason": "snapshot_already_exists",
+                    "existing_rows": existing, "stat_date": date_to,
+                    "msg": f"{date_to} 快照已存在（{existing} 行），如需强制重拉传 force=true",
                 },
             }
 
-        # WB search-texts 端点实测限流严格（估 3-5 rpm），批量 nmIds 降低调用次数
-        # 2026-04-23：WB 对单次 nmIds 数量上限未文档化，保守取 20
-        WB_BATCH_SIZE = 20          # 单次调用 nmIds 个数上限
-        WB_BATCH_PAUSE_S = 20       # 批间 sleep 秒，抵御 429
-        # 2026-04-23 实战：WB 触发 "global limiter per seller" 后整个任务周期挡死，
-        # 连续 3 批全空 = quota 耗尽，early exit 避免 30 批 × 20s = 10min 空跑
-        EMPTY_BATCH_ABORT = 3
+    # —— 主流程 try/finally：保证 lock 在所有 return 路径都释放 ——
+    try:
+        # 拉取租户+店铺下的 listing（带 product_id 映射）
+        # 规则 1 纵深：pl + p 双表都带 tenant_id
+        listings_sql = text("""
+            SELECT pl.platform_sku_id AS psk, pl.product_id AS pid
+            FROM platform_listings pl
+            JOIN products p ON p.id = pl.product_id
+            WHERE pl.tenant_id = :tid AND pl.shop_id = :sid AND pl.platform = :plat
+              AND p.tenant_id = :tid AND pl.platform_sku_id IS NOT NULL
+              AND (p.status NOT IN ('deleted') OR p.status IS NULL)
+        """)
+        listings = db.execute(listings_sql, {
+            "sid": shop.id, "plat": shop.platform, "tid": tenant_id,
+        }).fetchall()
+        if not listings:
+            return {"code": 0, "data": {"shop_id": shop.id, "synced_queries": 0,
+                                        "msg": "店铺下无商品，跳过"}}
 
-        nm_to_pid = {}
-        for l in listings:
-            if str(l.psk).isdigit():
-                nm_to_pid[int(l.psk)] = l.pid
-        all_nm_ids = list(nm_to_pid.keys())
-        batches_total = (len(all_nm_ids) + WB_BATCH_SIZE - 1) // WB_BATCH_SIZE
+        total_rows = 0
+        errors = []
 
-        consecutive_empty = 0
-        wb = WBClient(shop_id=shop.id, api_key=shop.api_key)
-        try:
-            for bi in range(batches_total):
-                batch = all_nm_ids[bi * WB_BATCH_SIZE : (bi + 1) * WB_BATCH_SIZE]
-                if bi > 0:
-                    await asyncio.sleep(WB_BATCH_PAUSE_S)
-                try:
-                    items = await wb.fetch_product_search_texts(
-                        nm_ids=batch, date_from=date_from, date_to=date_to,
-                    )
-                except SubscriptionRequiredError as e:
-                    return {
-                        "code": ErrorCode.SEARCH_INSIGHTS_SUBSCRIPTION_REQUIRED,
-                        "msg": f"WB 店铺未开通 Jam 订阅：{e.detail[:80]}",
-                    }
-                except WBSellerQuotaExhausted as e:
-                    # 跑到一半被上游端点（AI 调价/PATCH bids）触发熔断 → 立即 break，
-                    # 不要 continue 再 sleep 20s 重试 N 批白烧。
-                    logger.info(
-                        f"WB quota tripped mid-refresh shop={shop.id} batch={bi+1}/{batches_total}: {e}"
-                    )
-                    errors.append({"type": "quota", "quota_exhausted": True,
-                                   "at_batch": bi + 1, "reason": str(e)[:200]})
-                    break
-                except Exception as e:
-                    errors.append({"type": "batch_error",
-                                   "batch": batch[:3], "error": str(e)[:200]})
-                    logger.warning(f"WB fetch_product_search_texts batch={len(batch)} 失败: {e}")
-                    continue
-                if not items:
-                    consecutive_empty += 1
-                    if consecutive_empty >= EMPTY_BATCH_ABORT:
-                        logger.warning(
-                            f"WB 连续 {EMPTY_BATCH_ABORT} 批返回空（疑似 global limiter 触发 quota 耗尽），"
-                            f"已完成 {bi + 1}/{batches_total} 批，early exit 节省时间"
+        if shop.platform == "wb":
+            import asyncio
+            # WB seller quota 熔断 pre-check（2026-04-23 晚老林 review 驱动）：
+            # quota 是 per-seller-per-endpoint-group 共享池，写端点烧光读端点也 429。
+            # 2026-04-24 ab895eb 后 key 主走 seller_{uuid}（同 seller 多 shop 共享冷却），
+            # 历史 shop_{id} key 仅作 fallback。两个 key 任一命中就 skip。
+            try:
+                r = _get_redis_client()
+                cooldown = 0
+                seller_id = (getattr(shop, "platform_seller_id", None) or "").strip() or None
+                if seller_id:
+                    ttl_seller = r.ttl(quota_circuit_key_for_seller(seller_id))
+                    if ttl_seller and ttl_seller > 0:
+                        cooldown = ttl_seller
+                if not cooldown:
+                    ttl_shop = r.ttl(quota_circuit_key_for_shop(shop.id))
+                    if ttl_shop and ttl_shop > 0:
+                        cooldown = ttl_shop
+            except Exception as e:
+                logger.warning(f"WB quota circuit pre-check Redis err: {e}")
+                cooldown = 0
+            if cooldown and cooldown > 0:
+                logger.info(
+                    f"WB seller quota cooldown shop={shop.id} ttl={cooldown}s, skip refresh"
+                )
+                return {
+                    "code": 0,
+                    "data": {
+                        "shop_id": shop.id, "synced_queries": 0,
+                        "skipped": True, "reason": "wb_seller_quota_cooldown",
+                        "cooldown_seconds": int(cooldown),
+                        "msg": f"WB seller quota 冷却中，约 {cooldown}s 后自动恢复",
+                    },
+                }
+
+            # WB search-texts 端点实测限流严格（估 3-5 rpm），批量 nmIds 降低调用次数
+            # 2026-04-23：WB 对单次 nmIds 数量上限未文档化，保守取 20
+            WB_BATCH_SIZE = 20          # 单次调用 nmIds 个数上限
+            WB_BATCH_PAUSE_S = 20       # 批间 sleep 秒，抵御 429
+            # 2026-04-23 实战：WB 触发 "global limiter per seller" 后整个任务周期挡死，
+            # 连续 3 批全空 = quota 耗尽，early exit 避免 30 批 × 20s = 10min 空跑
+            EMPTY_BATCH_ABORT = 3
+
+            nm_to_pid = {}
+            for l in listings:
+                if str(l.psk).isdigit():
+                    nm_to_pid[int(l.psk)] = l.pid
+            all_nm_ids = list(nm_to_pid.keys())
+            batches_total = (len(all_nm_ids) + WB_BATCH_SIZE - 1) // WB_BATCH_SIZE
+
+            consecutive_empty = 0
+            wb = WBClient(shop_id=shop.id, api_key=shop.api_key)
+            try:
+                for bi in range(batches_total):
+                    batch = all_nm_ids[bi * WB_BATCH_SIZE : (bi + 1) * WB_BATCH_SIZE]
+                    if bi > 0:
+                        await asyncio.sleep(WB_BATCH_PAUSE_S)
+                    try:
+                        items = await wb.fetch_product_search_texts(
+                            nm_ids=batch, date_from=date_from, date_to=date_to,
                         )
-                        errors.append({"type": "early_exit", "early_exit": True,
-                                       "reason": f"{EMPTY_BATCH_ABORT} 批连续空（WB 限流/quota）"})
+                    except SubscriptionRequiredError as e:
+                        return {
+                            "code": ErrorCode.SEARCH_INSIGHTS_SUBSCRIPTION_REQUIRED,
+                            "msg": f"WB 店铺未开通 Jam 订阅：{e.detail[:80]}",
+                        }
+                    except WBSellerQuotaExhausted as e:
+                        # 跑到一半被上游端点（AI 调价/PATCH bids）触发熔断 → 立即 break，
+                        # 不要 continue 再 sleep 20s 重试 N 批白烧。
+                        logger.info(
+                            f"WB quota tripped mid-refresh shop={shop.id} batch={bi+1}/{batches_total}: {e}"
+                        )
+                        errors.append({"type": "quota", "quota_exhausted": True,
+                                       "at_batch": bi + 1, "reason": str(e)[:200]})
                         break
-                else:
-                    consecutive_empty = 0
-                # items 每条含 nm_id → 按 nm_id 分组 upsert
-                grouped = {}
-                for it in items or []:
-                    nm = it.get("nm_id")
-                    if nm is None:
+                    except Exception as e:
+                        errors.append({"type": "batch_error",
+                                       "batch": batch[:3], "error": str(e)[:200]})
+                        logger.warning(f"WB fetch_product_search_texts batch={len(batch)} 失败: {e}")
                         continue
-                    grouped.setdefault(int(nm), []).append(it)
-                for nm_id, rows in grouped.items():
-                    pid = nm_to_pid.get(nm_id)
-                    total_rows += _upsert_rows(
-                        db, tenant_id, shop.id, "wb",
-                        str(nm_id), pid, date_to, rows,
-                    )
-        finally:
-            await wb.close()
+                    if not items:
+                        consecutive_empty += 1
+                        if consecutive_empty >= EMPTY_BATCH_ABORT:
+                            logger.warning(
+                                f"WB 连续 {EMPTY_BATCH_ABORT} 批返回空（疑似 global limiter 触发 quota 耗尽），"
+                                f"已完成 {bi + 1}/{batches_total} 批，early exit 节省时间"
+                            )
+                            errors.append({"type": "early_exit", "early_exit": True,
+                                           "reason": f"{EMPTY_BATCH_ABORT} 批连续空（WB 限流/quota）"})
+                            break
+                    else:
+                        consecutive_empty = 0
+                    # items 每条含 nm_id → 按 nm_id 分组 upsert
+                    grouped = {}
+                    for it in items or []:
+                        nm = it.get("nm_id")
+                        if nm is None:
+                            continue
+                        grouped.setdefault(int(nm), []).append(it)
+                    for nm_id, rows in grouped.items():
+                        pid = nm_to_pid.get(nm_id)
+                        total_rows += _upsert_rows(
+                            db, tenant_id, shop.id, "wb",
+                            str(nm_id), pid, date_to, rows,
+                        )
+            finally:
+                await wb.close()
 
-    elif shop.platform == "ozon":
-        oz = OzonClient(shop_id=shop.id, api_key=shop.api_key,
-                        client_id=getattr(shop, "client_id", None))
-        try:
-            # 正向映射：传入的 sku (=platform_sku_id) → product_id
-            sku_to_pid = {str(l.psk): l.pid for l in listings if l.psk}
-            all_skus = list(sku_to_pid.keys())
+        elif shop.platform == "ozon":
+            oz = OzonClient(shop_id=shop.id, api_key=shop.api_key,
+                            client_id=getattr(shop, "client_id", None))
+            try:
+                # 正向映射：传入的 sku (=platform_sku_id) → product_id
+                sku_to_pid = {str(l.psk): l.pid for l in listings if l.psk}
+                all_skus = list(sku_to_pid.keys())
 
-            # 反查兜底：Ozon 返回的 sku 可能是"平台全局 SKU"，与 platform_sku_id /
-            # platform_product_id 都不一定相等。补一张全 platform_* 字段映射表。
-            fallback_sql = text("""
-                SELECT pl.platform_sku_id AS psk, pl.platform_product_id AS ppd,
-                       pl.product_id AS pid
-                FROM platform_listings pl
-                WHERE pl.shop_id = :sid AND pl.platform = 'ozon'
-                  AND pl.tenant_id = :tid
-            """)
-            fallback_rows = db.execute(
-                fallback_sql, {"sid": shop.id, "tid": tenant_id}
-            ).fetchall()
-            pid_lookup = {}
-            for r in fallback_rows:
-                if r.psk:
-                    pid_lookup[str(r.psk)] = r.pid
-                if r.ppd:
-                    pid_lookup.setdefault(str(r.ppd), r.pid)
+                # 反查兜底：Ozon 返回的 sku 可能是"平台全局 SKU"，与 platform_sku_id /
+                # platform_product_id 都不一定相等。补一张全 platform_* 字段映射表。
+                fallback_sql = text("""
+                    SELECT pl.platform_sku_id AS psk, pl.platform_product_id AS ppd,
+                           pl.product_id AS pid
+                    FROM platform_listings pl
+                    WHERE pl.shop_id = :sid AND pl.platform = 'ozon'
+                      AND pl.tenant_id = :tid
+                """)
+                fallback_rows = db.execute(
+                    fallback_sql, {"sid": shop.id, "tid": tenant_id}
+                ).fetchall()
+                pid_lookup = {}
+                for r in fallback_rows:
+                    if r.psk:
+                        pid_lookup[str(r.psk)] = r.pid
+                    if r.ppd:
+                        pid_lookup.setdefault(str(r.ppd), r.pid)
 
-            for i in range(0, len(all_skus), 50):
-                batch = all_skus[i:i + 50]
-                try:
-                    items = await oz.fetch_product_queries_details(
-                        skus=batch, date_from=date_from, date_to=date_to,
-                    )
-                except SubscriptionRequiredError as e:
-                    return {
-                        "code": ErrorCode.SEARCH_INSIGHTS_SUBSCRIPTION_REQUIRED,
-                        "msg": f"Ozon 店铺未开通 Premium 订阅：{e.detail[:80]}",
-                    }
-                except Exception as e:
-                    errors.append({"type": "batch_error",
-                                   "skus": batch[:5], "error": str(e)[:200]})
-                    logger.warning(f"Ozon fetch_product_queries_details batch={len(batch)} 失败: {e}")
-                    continue
-                # 按 sku 分组写入；product_id 反查不到就留 NULL（不阻塞写入）
-                grouped = {}
-                for it in items or []:
-                    grouped.setdefault(it.get("sku"), []).append(it)
-                for sku, rows in grouped.items():
-                    sku_str = str(sku)
-                    pid = sku_to_pid.get(sku_str) or pid_lookup.get(sku_str)
-                    total_rows += _upsert_rows(
-                        db, tenant_id, shop.id, "ozon",
-                        sku_str, pid, date_to,
-                        [{"text": r.get("query"), **r} for r in rows],
-                    )
-        finally:
-            await oz.close()
+                for i in range(0, len(all_skus), 50):
+                    batch = all_skus[i:i + 50]
+                    try:
+                        items = await oz.fetch_product_queries_details(
+                            skus=batch, date_from=date_from, date_to=date_to,
+                        )
+                    except SubscriptionRequiredError as e:
+                        return {
+                            "code": ErrorCode.SEARCH_INSIGHTS_SUBSCRIPTION_REQUIRED,
+                            "msg": f"Ozon 店铺未开通 Premium 订阅：{e.detail[:80]}",
+                        }
+                    except Exception as e:
+                        errors.append({"type": "batch_error",
+                                       "skus": batch[:5], "error": str(e)[:200]})
+                        logger.warning(f"Ozon fetch_product_queries_details batch={len(batch)} 失败: {e}")
+                        continue
+                    # 按 sku 分组写入；product_id 反查不到就留 NULL（不阻塞写入）
+                    grouped = {}
+                    for it in items or []:
+                        grouped.setdefault(it.get("sku"), []).append(it)
+                    for sku, rows in grouped.items():
+                        sku_str = str(sku)
+                        pid = sku_to_pid.get(sku_str) or pid_lookup.get(sku_str)
+                        total_rows += _upsert_rows(
+                            db, tenant_id, shop.id, "ozon",
+                            sku_str, pid, date_to,
+                            [{"text": r.get("query"), **r} for r in rows],
+                        )
+            finally:
+                await oz.close()
 
-    return {
-        "code": 0,
-        "data": {
-            "shop_id": shop.id,
-            "platform": shop.platform,
-            "synced_queries": total_rows,
-            "date_range": f"{date_from} ~ {date_to}",
-            "errors": errors or None,
-        },
-    }
+        return {
+            "code": 0,
+            "data": {
+                "shop_id": shop.id,
+                "platform": shop.platform,
+                "synced_queries": total_rows,
+                "date_range": f"{date_from} ~ {date_to}",
+                "errors": errors or None,
+            },
+        }
+    finally:
+        # —— 释放 in-progress 锁（无论成功/失败/异常都要释放）——
+        if redis_client:
+            try:
+                redis_client.delete(lock_key)
+            except Exception as e:
+                logger.warning(f"refresh_shop 释放锁失败 shop={shop.id}: {e}")
