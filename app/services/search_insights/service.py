@@ -388,7 +388,6 @@ async def refresh_shop(
         errors = []
 
         if shop.platform == "wb":
-            import asyncio
             # WB seller quota 熔断 pre-check（2026-04-23 晚老林 review 驱动）：
             # quota 是 per-seller-per-endpoint-group 共享池，写端点烧光读端点也 429。
             # 2026-04-24 ab895eb 后 key 主走 seller_{uuid}（同 seller 多 shop 共享冷却），
