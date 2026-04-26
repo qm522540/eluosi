@@ -49,26 +49,51 @@ def list_shop(
     sort_by: str = "frequency", sort_order: str = "desc",
     page: int = 1, size: int = 50,
 ) -> dict:
-    """店铺汇总：按 query_text 聚合多天 + 分页（不再做标签分类，前端按原始字段过滤排序）
+    """店铺汇总：按 query_text 聚合 + 分页
 
-    响应：{totals, items}
+    2026-04-26 修复重复膨胀 bug：
+    WB/Ozon API 只返"整段窗口的聚合值"（不返每天明细），所以每条 stat_date
+    装的是"截至该日的 7 天聚合"。每天 beat 跑一次会产生 stat_date 各异但
+    时间窗口大量重叠的多份快照，跨日 SUM 会被 N 倍放大。
+    修复：先取范围内最新一份 stat_date，仅在那个快照内 SUM（仍要跨 SKU SUM
+    汇总同一 query_text 命中多 SKU 的曝光）。
     """
     date_from, date_to = _default_dates(date_from, date_to)
-    params = {"tid": tenant_id, "sid": shop_id, "df": date_from, "dt": date_to}
 
-    where = """WHERE tenant_id = :tid AND shop_id = :sid
-               AND stat_date BETWEEN :df AND :dt"""
+    # —— 第 1 步：找范围内最新可用快照 stat_date ——
+    latest_row = db.execute(text("""
+        SELECT MAX(stat_date) AS sd FROM product_search_queries
+        WHERE tenant_id = :tid AND shop_id = :sid
+          AND stat_date BETWEEN :df AND :dt
+    """), {"tid": tenant_id, "sid": shop_id, "df": date_from, "dt": date_to}).fetchone()
+    latest_sd = latest_row.sd if latest_row else None
+
+    if not latest_sd:
+        return {
+            "code": 0,
+            "data": {
+                "totals": {
+                    "query_count": 0, "frequency": 0, "clicks": 0,
+                    "orders": 0, "revenue": 0.0,
+                    "date_from": date_from, "date_to": date_to,
+                    "snapshot_date": None,
+                },
+                "items": [], "total": 0, "page": page, "size": size,
+            },
+        }
+
+    snapshot_date = latest_sd.isoformat() if hasattr(latest_sd, "isoformat") else str(latest_sd)
+    params = {"tid": tenant_id, "sid": shop_id, "sd": latest_sd}
+
+    where = "WHERE tenant_id = :tid AND shop_id = :sid AND stat_date = :sd"
     if keyword:
         where += " AND query_text LIKE :kw"
         params["kw"] = f"%{keyword}%"
 
-    # 聚合
+    # —— 第 2 步：仅在最新快照内按 query_text 聚合（跨 SKU 仍 SUM）——
     # 实测验证（shop=2 серьги женские бижутерия крупные 04-23 数据）：
     # 4 个命中 SKU 的 frequency 完全不同（1073/831/80/61），证明 frequency 是
-    # SKU-level 字段，不是 query-level 复制 — Ozon `unique_search_users` 含义是
-    # "看到该 SKU 的搜词独立用户数"，跟 impressions(unique_view_users) 平行。
-    # 关系：frequency ≥ impressions（被检索 ≥ 被滚动看到）
-    # 所以两个字段都按 SKU 真实分桶，跨 (sku, day) SUM 是正确的。
+    # SKU-level 字段，跨 SKU SUM 正确（同一查询打到不同 SKU 的曝光相加）。
     # 跨 SKU 同一用户去重 Ozon 不返，无法精确还原。
     agg_sql = f"""
         SELECT query_text,
@@ -97,18 +122,15 @@ def list_shop(
         "sku_count": int(r.sku_count or 0),
     } for r in rows]
 
-    # 总览
     total_freq = sum(i["frequency"] for i in items)
     total_clk = sum(i["clicks"] for i in items)
     total_orders = sum(i["orders"] for i in items)
     total_revenue = sum(i["revenue"] for i in items)
 
-    # 排序
     allowed_sorts = {"frequency", "impressions", "clicks", "add_to_cart", "orders", "revenue"}
     sort_col = sort_by if sort_by in allowed_sorts else "frequency"
     items.sort(key=lambda x: x.get(sort_col, 0), reverse=(sort_order == "desc"))
 
-    # 分页
     total = len(items)
     start = (page - 1) * size
     paged = items[start:start + size]
@@ -124,6 +146,7 @@ def list_shop(
                 "revenue": round(total_revenue, 2),
                 "date_from": date_from,
                 "date_to": date_to,
+                "snapshot_date": snapshot_date,
             },
             "items": paged,
             "total": total,
@@ -155,6 +178,31 @@ def list_by_product(
     if not row:
         return {"code": ErrorCode.PRODUCT_NOT_FOUND, "msg": "商品不存在或无访问权限"}
 
+    # —— 与 list_shop 同思路：取范围内最新快照，避免跨日聚合膨胀 ——
+    latest_row = db.execute(text("""
+        SELECT MAX(q.stat_date) AS sd
+        FROM product_search_queries q
+        JOIN products p ON p.id = q.product_id
+                       AND p.tenant_id = q.tenant_id
+                       AND p.shop_id = q.shop_id
+        WHERE q.tenant_id = :tid AND q.product_id = :pid
+          AND q.stat_date BETWEEN :df AND :dt
+    """), {"tid": tenant_id, "pid": product_id, "df": date_from, "dt": date_to}).fetchone()
+    latest_sd = latest_row.sd if latest_row else None
+
+    if not latest_sd:
+        return {
+            "code": 0,
+            "data": {
+                "product_id": product_id,
+                "date_from": date_from, "date_to": date_to,
+                "snapshot_date": None,
+                "items": [], "page": page, "size": size,
+            },
+        }
+
+    snapshot_date = latest_sd.isoformat() if hasattr(latest_sd, "isoformat") else str(latest_sd)
+
     agg_sql = """
         SELECT q.query_text,
                SUM(q.frequency) AS frequency,
@@ -169,14 +217,13 @@ def list_by_product(
                        AND p.tenant_id = q.tenant_id
                        AND p.shop_id = q.shop_id
         WHERE q.tenant_id = :tid AND q.product_id = :pid
-          AND q.stat_date BETWEEN :df AND :dt
+          AND q.stat_date = :sd
         GROUP BY q.query_text
         ORDER BY frequency DESC
         LIMIT :size OFFSET :offset
     """
     rows = db.execute(text(agg_sql), {
-        "tid": tenant_id, "pid": product_id,
-        "df": date_from, "dt": date_to,
+        "tid": tenant_id, "pid": product_id, "sd": latest_sd,
         "size": size, "offset": (page - 1) * size,
     }).fetchall()
 
@@ -197,6 +244,7 @@ def list_by_product(
             "product_id": product_id,
             "date_from": date_from,
             "date_to": date_to,
+            "snapshot_date": snapshot_date,
             "items": items,
             "page": page,
             "size": size,
