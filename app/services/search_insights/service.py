@@ -579,13 +579,18 @@ async def refresh_shop(
                 synced_per_day = {}
                 for d in missing_dates:
                     d_str = d.isoformat()
+                    # Ozon API 要 RFC3339 24h 跨度，date_from=date_to=YYYY-MM-DD 会
+                    # 被 OzonClient 转成 T00:00:00Z ~ T00:00:00Z（0 秒跨度）API 返空
+                    # 所以这里显式传 24h 跨度
+                    df_iso = f"{d_str}T00:00:00Z"
+                    dt_iso = f"{d_str}T23:59:59Z"
                     day_total = 0
                     # 每天的所有 SKU 分批 50 调 API
                     for i in range(0, len(all_skus), 50):
                         batch = all_skus[i:i + 50]
                         try:
                             items = await oz.fetch_product_queries_details(
-                                skus=batch, date_from=d_str, date_to=d_str,
+                                skus=batch, date_from=df_iso, date_to=dt_iso,
                             )
                         except SubscriptionRequiredError as e:
                             return {
