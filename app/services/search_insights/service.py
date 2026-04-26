@@ -499,7 +499,10 @@ async def refresh_shop(
             # 实测 Ozon /v1/analytics/product-queries/details 支持 1 天窗口，
             # 每个 stat_date 装的是"那一天的真实数字"（非 N 天聚合），
             # 跨日 SUM 等于真实 N 天总量，list_shop 可任意 days 切换不膨胀。
-            end_date = today - timedelta(days=2)
+            # end_date = today-3：实测普通 Premium 看不到 today-2 那天的数据
+            # （403 "available starting from premium subscription" 实为订阅级别
+            # 保护期，需 Premium Plus 才能看 1-2 天前的数据）。多留 1 天 buffer。
+            end_date = today - timedelta(days=3)
             start_date = end_date - timedelta(days=days - 1)
 
             # 1. 查 DB 已有的 stat_date
@@ -577,6 +580,8 @@ async def refresh_shop(
                         pid_lookup.setdefault(str(r.ppd), r.pid)
 
                 synced_per_day = {}
+                # 第一天 403 = 真没订阅，立即报错；中途 403 = Ozon 按天保护期，跳过该天继续
+                first_day = True
                 for d in missing_dates:
                     d_str = d.isoformat()
                     # Ozon API 要 RFC3339 24h 跨度，date_from=date_to=YYYY-MM-DD 会
@@ -585,6 +590,7 @@ async def refresh_shop(
                     df_iso = f"{d_str}T00:00:00Z"
                     dt_iso = f"{d_str}T23:59:59Z"
                     day_total = 0
+                    day_blocked = False
                     # 每天的所有 SKU 分批 50 调 API
                     for i in range(0, len(all_skus), 50):
                         batch = all_skus[i:i + 50]
@@ -593,10 +599,19 @@ async def refresh_shop(
                                 skus=batch, date_from=df_iso, date_to=dt_iso,
                             )
                         except SubscriptionRequiredError as e:
-                            return {
-                                "code": ErrorCode.SEARCH_INSIGHTS_SUBSCRIPTION_REQUIRED,
-                                "msg": f"Ozon 店铺未开通 Premium 订阅：{e.detail[:80]}",
-                            }
+                            # 第一天就 403：基本可以判定整店没订阅（或所有窗口都过保护期）
+                            if first_day:
+                                return {
+                                    "code": ErrorCode.SEARCH_INSIGHTS_SUBSCRIPTION_REQUIRED,
+                                    "msg": f"Ozon 店铺未开通 Premium 订阅：{e.detail[:80]}",
+                                }
+                            # 中途某天 403 = Ozon 订阅级别保护期（普通 Premium 看不到 1-2 天前
+                            # 数据，要 Premium Plus）。跳过该天，记 errors，继续别的天。
+                            errors.append({"type": "day_blocked_premium_plus",
+                                           "date": d_str, "reason": "需 Premium Plus 才能看该日数据"})
+                            logger.warning(f"shop={shop.id} date={d_str} Premium 保护期 403,跳过该天")
+                            day_blocked = True
+                            break
                         except Exception as e:
                             errors.append({"type": "batch_error", "date": d_str,
                                            "skus": batch[:5], "error": str(e)[:200]})
@@ -617,6 +632,8 @@ async def refresh_shop(
                             )
                     synced_per_day[d_str] = day_total
                     total_rows += day_total
+                    # 跑过第一天 → 后续 SubscriptionRequiredError 视为单天保护期
+                    first_day = False
                     # 友好限速：每天间隔 0.5s
                     await asyncio.sleep(0.5)
                 logger.info(f"shop={shop.id} 按天写入完成 per_day={synced_per_day}")
