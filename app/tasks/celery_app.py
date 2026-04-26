@@ -33,6 +33,7 @@ celery_app.conf.update(
         "app.tasks.ozon_product_queries_task",
         "app.tasks.wb_search_texts_task",
         "app.tasks.cluster_oracle_sync",
+        "app.tasks.seo_engine_task",
     ],
 )
 
@@ -88,6 +89,13 @@ celery_app.conf.beat_schedule = {
     "ozon-product-queries-daily": {
         "task": "app.tasks.ozon_product_queries_task.sync_ozon_product_queries",
         "schedule": crontab(hour=2, minute=30),
+    },
+    # SEO 候选池引擎每日刷新（MSK 05:00，错开 Ozon 02:30 + WB 04:00 之后）
+    # 纯本地 SQL,不调外部 API,无 quota 消耗;让候选池跟最新 psq + ad_stats 同步,
+    # 修跨店召回时间错配问题(用户已踩 3 次)。单店 ~1.5s 全店 < 30s。
+    "seo-engine-daily": {
+        "task": "app.tasks.seo_engine_task.refresh_all_shops_candidates",
+        "schedule": crontab(hour=5, minute=0),
     },
     # WB SKU × 搜索词同步（搜索词洞察，MSK 04:00 触发，需 Jam 订阅）
     # Celery timezone=Europe/Moscow → crontab(hour=X) 按 MSK 直解 = MSK X:00
