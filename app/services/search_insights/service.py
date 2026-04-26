@@ -10,6 +10,7 @@
   normal         —— 其他
 """
 
+import asyncio
 from datetime import date, timedelta
 from decimal import Decimal
 from typing import Optional
@@ -49,52 +50,25 @@ def list_shop(
     sort_by: str = "frequency", sort_order: str = "desc",
     page: int = 1, size: int = 50,
 ) -> dict:
-    """店铺汇总：按 query_text 聚合 + 分页
+    """店铺汇总：按 query_text 跨 (sku, day) 聚合 + 分页
 
-    2026-04-26 修复重复膨胀 bug：
-    WB/Ozon API 只返"整段窗口的聚合值"（不返每天明细），所以每条 stat_date
-    装的是"截至该日的 7 天聚合"。每天 beat 跑一次会产生 stat_date 各异但
-    时间窗口大量重叠的多份快照，跨日 SUM 会被 N 倍放大。
-    修复：先取范围内最新一份 stat_date，仅在那个快照内 SUM（仍要跨 SKU SUM
-    汇总同一 query_text 命中多 SKU 的曝光）。
+    2026-04-26 重构后语义：
+    - Ozon: 每条 stat_date 是 1 天真实数据（refresh_shop 按天补缺失），
+      跨日 SUM 等于真实 N 天总量
+    - WB: 仍为 N 天聚合（API 限流没法按天拉），跨日 SUM 会有重叠偏差，
+      但 WB quota 静默期暂无新数据，偏差有限。WB quota 恢复后再迁移。
+    前端 `date_from / date_to` 决定回看几天，默认 30 天。
     """
     date_from, date_to = _default_dates(date_from, date_to)
+    params = {"tid": tenant_id, "sid": shop_id, "df": date_from, "dt": date_to}
 
-    # —— 第 1 步：找范围内最新可用快照 stat_date ——
-    latest_row = db.execute(text("""
-        SELECT MAX(stat_date) AS sd FROM product_search_queries
-        WHERE tenant_id = :tid AND shop_id = :sid
-          AND stat_date BETWEEN :df AND :dt
-    """), {"tid": tenant_id, "sid": shop_id, "df": date_from, "dt": date_to}).fetchone()
-    latest_sd = latest_row.sd if latest_row else None
-
-    if not latest_sd:
-        return {
-            "code": 0,
-            "data": {
-                "totals": {
-                    "query_count": 0, "frequency": 0, "clicks": 0,
-                    "orders": 0, "revenue": 0.0,
-                    "date_from": date_from, "date_to": date_to,
-                    "snapshot_date": None,
-                },
-                "items": [], "total": 0, "page": page, "size": size,
-            },
-        }
-
-    snapshot_date = latest_sd.isoformat() if hasattr(latest_sd, "isoformat") else str(latest_sd)
-    params = {"tid": tenant_id, "sid": shop_id, "sd": latest_sd}
-
-    where = "WHERE tenant_id = :tid AND shop_id = :sid AND stat_date = :sd"
+    where = """WHERE tenant_id = :tid AND shop_id = :sid
+               AND stat_date BETWEEN :df AND :dt"""
     if keyword:
         where += " AND query_text LIKE :kw"
         params["kw"] = f"%{keyword}%"
 
-    # —— 第 2 步：仅在最新快照内按 query_text 聚合（跨 SKU 仍 SUM）——
-    # 实测验证（shop=2 серьги женские бижутерия крупные 04-23 数据）：
-    # 4 个命中 SKU 的 frequency 完全不同（1073/831/80/61），证明 frequency 是
-    # SKU-level 字段，跨 SKU SUM 正确（同一查询打到不同 SKU 的曝光相加）。
-    # 跨 SKU 同一用户去重 Ozon 不返，无法精确还原。
+    # 跨 (sku, day) SUM：同一 query_text 命中多 SKU、多天的总和
     agg_sql = f"""
         SELECT query_text,
                SUM(frequency) AS frequency,
@@ -104,7 +78,8 @@ def list_shop(
                SUM(orders) AS orders,
                SUM(revenue) AS revenue,
                AVG(median_position) AS median_position,
-               COUNT(DISTINCT platform_sku_id) AS sku_count
+               COUNT(DISTINCT platform_sku_id) AS sku_count,
+               COUNT(DISTINCT stat_date) AS day_count
         FROM product_search_queries
         {where}
         GROUP BY query_text
@@ -120,12 +95,22 @@ def list_shop(
         "revenue": _float(r.revenue),
         "median_position": _float(r.median_position) or None,
         "sku_count": int(r.sku_count or 0),
+        "day_count": int(r.day_count or 0),
     } for r in rows]
 
     total_freq = sum(i["frequency"] for i in items)
     total_clk = sum(i["clicks"] for i in items)
     total_orders = sum(i["orders"] for i in items)
     total_revenue = sum(i["revenue"] for i in items)
+
+    # 查范围内实际覆盖的天数（用于前端展示"数据覆盖 N 天 / N 天"）
+    cover_row = db.execute(text("""
+        SELECT COUNT(DISTINCT stat_date) AS days_covered,
+               MIN(stat_date) AS first_day, MAX(stat_date) AS last_day
+        FROM product_search_queries
+        WHERE tenant_id = :tid AND shop_id = :sid
+          AND stat_date BETWEEN :df AND :dt
+    """), {"tid": tenant_id, "sid": shop_id, "df": date_from, "dt": date_to}).fetchone()
 
     allowed_sorts = {"frequency", "impressions", "clicks", "add_to_cart", "orders", "revenue"}
     sort_col = sort_by if sort_by in allowed_sorts else "frequency"
@@ -146,7 +131,9 @@ def list_shop(
                 "revenue": round(total_revenue, 2),
                 "date_from": date_from,
                 "date_to": date_to,
-                "snapshot_date": snapshot_date,
+                "days_covered": int(cover_row.days_covered or 0) if cover_row else 0,
+                "first_day": str(cover_row.first_day) if cover_row and cover_row.first_day else None,
+                "last_day": str(cover_row.last_day) if cover_row and cover_row.last_day else None,
             },
             "items": paged,
             "total": total,
@@ -178,31 +165,7 @@ def list_by_product(
     if not row:
         return {"code": ErrorCode.PRODUCT_NOT_FOUND, "msg": "商品不存在或无访问权限"}
 
-    # —— 与 list_shop 同思路：取范围内最新快照，避免跨日聚合膨胀 ——
-    latest_row = db.execute(text("""
-        SELECT MAX(q.stat_date) AS sd
-        FROM product_search_queries q
-        JOIN products p ON p.id = q.product_id
-                       AND p.tenant_id = q.tenant_id
-                       AND p.shop_id = q.shop_id
-        WHERE q.tenant_id = :tid AND q.product_id = :pid
-          AND q.stat_date BETWEEN :df AND :dt
-    """), {"tid": tenant_id, "pid": product_id, "df": date_from, "dt": date_to}).fetchone()
-    latest_sd = latest_row.sd if latest_row else None
-
-    if not latest_sd:
-        return {
-            "code": 0,
-            "data": {
-                "product_id": product_id,
-                "date_from": date_from, "date_to": date_to,
-                "snapshot_date": None,
-                "items": [], "page": page, "size": size,
-            },
-        }
-
-    snapshot_date = latest_sd.isoformat() if hasattr(latest_sd, "isoformat") else str(latest_sd)
-
+    # 跨日 SUM（refresh_shop 按天补缺失模式后，每条 stat_date 是 1 天真实数据）
     agg_sql = """
         SELECT q.query_text,
                SUM(q.frequency) AS frequency,
@@ -217,13 +180,14 @@ def list_by_product(
                        AND p.tenant_id = q.tenant_id
                        AND p.shop_id = q.shop_id
         WHERE q.tenant_id = :tid AND q.product_id = :pid
-          AND q.stat_date = :sd
+          AND q.stat_date BETWEEN :df AND :dt
         GROUP BY q.query_text
         ORDER BY frequency DESC
         LIMIT :size OFFSET :offset
     """
     rows = db.execute(text(agg_sql), {
-        "tid": tenant_id, "pid": product_id, "sd": latest_sd,
+        "tid": tenant_id, "pid": product_id,
+        "df": date_from, "dt": date_to,
         "size": size, "offset": (page - 1) * size,
     }).fetchall()
 
@@ -244,7 +208,6 @@ def list_by_product(
             "product_id": product_id,
             "date_from": date_from,
             "date_to": date_to,
-            "snapshot_date": snapshot_date,
             "items": items,
             "page": page,
             "size": size,
@@ -378,8 +341,10 @@ async def refresh_shop(
         logger.warning(f"refresh_shop redis lock 获取失败 shop={shop.id}: {e}")
         redis_client = None  # 降级：Redis 不可用时不阻塞业务
 
-    # —— 幂等保护 2：增量预检（目标 stat_date 已有快照则 skip）——
-    if not force:
+    # —— 幂等保护 2：增量预检（仅 WB；Ozon 走分支内"按天补缺失"检查）——
+    # WB 仍是"days=7 一次性 stat_date=date_to"聚合模式，date_to 已有 = 整批已拉过
+    # Ozon 是按天写入，date_to 已有 ≠ 全窗口已有，预检会漏写其他缺失天，所以跳过
+    if not force and shop.platform == "wb":
         existing = _snapshot_exists(db, tenant_id, shop.id, date_to)
         if existing > 0:
             if redis_client:
@@ -388,8 +353,7 @@ async def refresh_shop(
                 except Exception:
                     pass
             logger.info(
-                f"refresh_shop shop={shop.id} stat_date={date_to} 已有 {existing} 行，"
-                f"force=False 跳过 API 调用"
+                f"refresh_shop WB shop={shop.id} stat_date={date_to} 已有 {existing} 行，跳过"
             )
             return {
                 "code": 0,
@@ -532,6 +496,62 @@ async def refresh_shop(
                 await wb.close()
 
         elif shop.platform == "ozon":
+            # —— 2026-04-26 重构：按天补缺失模式（days=1 拉每个缺失日）——
+            # 实测 Ozon /v1/analytics/product-queries/details 支持 1 天窗口，
+            # 每个 stat_date 装的是"那一天的真实数字"（非 N 天聚合），
+            # 跨日 SUM 等于真实 N 天总量，list_shop 可任意 days 切换不膨胀。
+            end_date = today - timedelta(days=2)
+            start_date = end_date - timedelta(days=days - 1)
+
+            # 1. 查 DB 已有的 stat_date
+            existing_rows = db.execute(text("""
+                SELECT DISTINCT stat_date FROM product_search_queries
+                WHERE tenant_id = :tid AND shop_id = :sid AND platform = 'ozon'
+                  AND stat_date BETWEEN :sd AND :ed
+            """), {"tid": tenant_id, "sid": shop.id,
+                   "sd": start_date, "ed": end_date}).fetchall()
+            existing_dates = {r.stat_date for r in existing_rows}
+
+            # 2. 计算缺失天列表
+            missing_dates = []
+            d = start_date
+            while d <= end_date:
+                if d not in existing_dates:
+                    missing_dates.append(d)
+                d += timedelta(days=1)
+
+            # 3. force=True：清掉窗口内已有，全部重拉；否则只补缺失天
+            if force and existing_dates:
+                db.execute(text("""
+                    DELETE FROM product_search_queries
+                    WHERE tenant_id = :tid AND shop_id = :sid AND platform = 'ozon'
+                      AND stat_date BETWEEN :sd AND :ed
+                """), {"tid": tenant_id, "sid": shop.id,
+                       "sd": start_date, "ed": end_date})
+                db.commit()
+                missing_dates = []
+                d = start_date
+                while d <= end_date:
+                    missing_dates.append(d)
+                    d += timedelta(days=1)
+                logger.info(f"force=True shop={shop.id} 已清窗口内 {len(existing_dates)} 天数据准备重拉")
+
+            if not missing_dates:
+                return {
+                    "code": 0,
+                    "data": {
+                        "shop_id": shop.id, "synced_queries": 0,
+                        "skipped": True, "reason": "no_missing_dates",
+                        "existing_dates": [str(x) for x in sorted(existing_dates)],
+                        "msg": f"[{start_date}, {end_date}] 范围内 {len(existing_dates)} 天已有数据，无缺失",
+                    },
+                }
+
+            logger.info(
+                f"shop={shop.id} 按天补齐 missing={len(missing_dates)} 天 "
+                f"(已有 {len(existing_dates)} 天) 范围[{start_date}, {end_date}]"
+            )
+
             oz = OzonClient(shop_id=shop.id, api_key=shop.api_key,
                             client_id=getattr(shop, "client_id", None))
             try:
@@ -539,8 +559,7 @@ async def refresh_shop(
                 sku_to_pid = {str(l.psk): l.pid for l in listings if l.psk}
                 all_skus = list(sku_to_pid.keys())
 
-                # 反查兜底：Ozon 返回的 sku 可能是"平台全局 SKU"，与 platform_sku_id /
-                # platform_product_id 都不一定相等。补一张全 platform_* 字段映射表。
+                # 反查兜底：Ozon 返回的 sku 可能是"平台全局 SKU"
                 fallback_sql = text("""
                     SELECT pl.platform_sku_id AS psk, pl.platform_product_id AS ppd,
                            pl.product_id AS pid
@@ -558,34 +577,45 @@ async def refresh_shop(
                     if r.ppd:
                         pid_lookup.setdefault(str(r.ppd), r.pid)
 
-                for i in range(0, len(all_skus), 50):
-                    batch = all_skus[i:i + 50]
-                    try:
-                        items = await oz.fetch_product_queries_details(
-                            skus=batch, date_from=date_from, date_to=date_to,
-                        )
-                    except SubscriptionRequiredError as e:
-                        return {
-                            "code": ErrorCode.SEARCH_INSIGHTS_SUBSCRIPTION_REQUIRED,
-                            "msg": f"Ozon 店铺未开通 Premium 订阅：{e.detail[:80]}",
-                        }
-                    except Exception as e:
-                        errors.append({"type": "batch_error",
-                                       "skus": batch[:5], "error": str(e)[:200]})
-                        logger.warning(f"Ozon fetch_product_queries_details batch={len(batch)} 失败: {e}")
-                        continue
-                    # 按 sku 分组写入；product_id 反查不到就留 NULL（不阻塞写入）
-                    grouped = {}
-                    for it in items or []:
-                        grouped.setdefault(it.get("sku"), []).append(it)
-                    for sku, rows in grouped.items():
-                        sku_str = str(sku)
-                        pid = sku_to_pid.get(sku_str) or pid_lookup.get(sku_str)
-                        total_rows += _upsert_rows(
-                            db, tenant_id, shop.id, "ozon",
-                            sku_str, pid, date_to,
-                            [{"text": r.get("query"), **r} for r in rows],
-                        )
+                synced_per_day = {}
+                for d in missing_dates:
+                    d_str = d.isoformat()
+                    day_total = 0
+                    # 每天的所有 SKU 分批 50 调 API
+                    for i in range(0, len(all_skus), 50):
+                        batch = all_skus[i:i + 50]
+                        try:
+                            items = await oz.fetch_product_queries_details(
+                                skus=batch, date_from=d_str, date_to=d_str,
+                            )
+                        except SubscriptionRequiredError as e:
+                            return {
+                                "code": ErrorCode.SEARCH_INSIGHTS_SUBSCRIPTION_REQUIRED,
+                                "msg": f"Ozon 店铺未开通 Premium 订阅：{e.detail[:80]}",
+                            }
+                        except Exception as e:
+                            errors.append({"type": "batch_error", "date": d_str,
+                                           "skus": batch[:5], "error": str(e)[:200]})
+                            logger.warning(
+                                f"Ozon batch shop={shop.id} date={d_str} batch={len(batch)} 失败: {e}"
+                            )
+                            continue
+                        grouped = {}
+                        for it in items or []:
+                            grouped.setdefault(it.get("sku"), []).append(it)
+                        for sku, rows in grouped.items():
+                            sku_str = str(sku)
+                            pid = sku_to_pid.get(sku_str) or pid_lookup.get(sku_str)
+                            day_total += _upsert_rows(
+                                db, tenant_id, shop.id, "ozon",
+                                sku_str, pid, d_str,
+                                [{"text": r.get("query"), **r} for r in rows],
+                            )
+                    synced_per_day[d_str] = day_total
+                    total_rows += day_total
+                    # 友好限速：每天间隔 0.5s
+                    await asyncio.sleep(0.5)
+                logger.info(f"shop={shop.id} 按天写入完成 per_day={synced_per_day}")
             finally:
                 await oz.close()
 
