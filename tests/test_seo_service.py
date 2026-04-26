@@ -3,8 +3,8 @@
 04-20 老张写。填 tests/test_seo.py 只测 API 层、service 0 覆盖的欠账。
 
 覆盖：
-- health_service._score_coverage / _score_title_length / _score_rating
-- health_service._finalize_score（动态重分权 —— Ozon 无 rating 的核心机制）
+- health_service._score_coverage / _score_title_length / _score_description_length
+- health_service._finalize_score（动态重分权 —— 候选池为空时的核心机制）
 - health_service._classify
 - health_service.compute_shop_health（mock DB，测 score_range/sort/分页/缺词合并）
 - service._new_candidate / _compute_score
@@ -166,51 +166,56 @@ class TestScoreTitleLength:
 
 
 # ============================================================
-# 3. health_service._score_rating
+# 3. health_service._score_description_length
 # ============================================================
 
-class TestScoreRating:
+class TestScoreDescriptionLength:
 
-    def test_none_is_insufficient(self):
-        """Ozon API 不返 rating → None → data_insufficient → 权重重分"""
-        score, detail = hs._score_rating(None)
+    def test_none_description(self):
+        score, detail = hs._score_description_length(None)
         assert score == 0.0
-        assert detail["data_insufficient"] is True
-        assert detail["rating"] is None
+        assert detail["length"] == 0
+        assert "空" in detail["hint"]
 
-    def test_zero_rating(self):
-        score, detail = hs._score_rating(0)
+    def test_empty_description(self):
+        score, _ = hs._score_description_length("")
         assert score == 0.0
-        assert "新品" in detail["hint"]
-        assert detail.get("data_insufficient", False) is False
 
-    def test_perfect_rating(self):
-        score, detail = hs._score_rating(5)
+    def test_too_short(self):
+        score, detail = hs._score_description_length("a" * 50)
+        assert score == 0.0
+        assert detail["length"] == 50
+        assert "过短" in detail["hint"]
+
+    def test_short_increasing(self):
+        # 200: (200-100)/200*20 = 10.0
+        score, detail = hs._score_description_length("a" * 200)
+        assert score == 10.0
+        assert "偏短" in detail["hint"]
+
+    def test_ideal_min(self):
+        score, detail = hs._score_description_length("a" * 300)
         assert score == 20.0
-        assert "好评" in detail["hint"]
+        assert "理想" in detail["hint"]
 
-    def test_mid_rating(self):
-        # 3.5 / 5 * 20 = 14.0
-        score, detail = hs._score_rating(3.5)
-        assert score == 14.0
-        assert "中评" in detail["hint"]
-
-    def test_bad_rating(self):
-        # 2 / 5 * 20 = 8
-        score, detail = hs._score_rating(2)
-        assert score == 8.0
-        assert "差评" in detail["hint"]
-
-    def test_clamp_over_5(self):
-        # 某些源可能返 >5，应该被截成 5
-        score, _ = hs._score_rating(6)
+    def test_ideal_mid(self):
+        score, _ = hs._score_description_length("a" * 1000)
         assert score == 20.0
 
-    def test_clamp_negative(self):
-        # 负值走 "<=0" 分支
-        score, detail = hs._score_rating(-1)
+    def test_ideal_max(self):
+        score, _ = hs._score_description_length("a" * 2000)
+        assert score == 20.0
+
+    def test_long_decay(self):
+        # 2500: 20 - (2500-2000)/1000*10 = 15.0
+        score, detail = hs._score_description_length("a" * 2500)
+        assert score == 15.0
+        assert "偏长" in detail["hint"]
+
+    def test_over_3000_violation(self):
+        score, detail = hs._score_description_length("a" * 3100)
         assert score == 0.0
-        assert detail["rating"] == 0
+        assert "超长" in detail["hint"]
 
 
 # ============================================================
@@ -372,11 +377,11 @@ class TestComputeScore:
 class TestComputeShopHealth:
 
     @staticmethod
-    def _make_main_row(pid, *, title_ru="a" * 100, rating=4.0,
-                       total=10, covered=5, platform="wb"):
+    def _make_main_row(pid, *, title_ru="a" * 100, description_ru="a" * 1000,
+                       rating=4.0, total=10, covered=5, platform="wb"):
         return _row(
-            pid=pid, name_zh=f"商品{pid}", image_url=None,
-            listing_id=pid * 10, title_ru=title_ru,
+            pid=pid, sku=f"SKU-{pid}", name_zh=f"商品{pid}", image_url=None,
+            listing_id=pid * 10, title_ru=title_ru, description_ru=description_ru,
             rating=rating, review_count=10, platform=platform,
             total_candidates=total, covered=covered,
         )
@@ -385,9 +390,11 @@ class TestComputeShopHealth:
         """两个商品一个好一个差，totals 正确 + 排序 score_asc 差的在前"""
         db = _fake_db(
             _FakeResult([
-                self._make_main_row(1, title_ru="a" * 120, rating=4.5,
+                self._make_main_row(1, title_ru="a" * 120,
+                                    description_ru="a" * 1000,
                                     total=10, covered=8),   # 高分
-                self._make_main_row(2, title_ru="a" * 10, rating=1.0,
+                self._make_main_row(2, title_ru="a" * 10,
+                                    description_ru="a" * 50,
                                     total=10, covered=1),   # 低分
             ]),
             _FakeResult([]),  # miss_rows（Top 3 缺词），无数据
@@ -400,12 +407,13 @@ class TestComputeShopHealth:
         assert data["items"][1]["product_id"] == 1
         assert data["totals"]["all"] == 2
 
-    def test_ozon_rating_none_reweight(self):
-        """Ozon 商品 rating=None → _finalize_score 把权重重分"""
+    def test_full_score_all_dimensions(self):
+        """所有维度满分 → 总分 100，dimensions 含 description_length"""
         db = _fake_db(
             _FakeResult([
-                # 覆盖满 + 标题满 + rating=None → 应该 = 100 分
-                self._make_main_row(1, title_ru="a" * 120, rating=None,
+                # 覆盖满 + 标题满 + 描述满 → 100 分
+                self._make_main_row(1, title_ru="a" * 120,
+                                    description_ru="a" * 1000,
                                     total=10, covered=10, platform="ozon"),
             ]),
             _FakeResult([]),
@@ -414,14 +422,17 @@ class TestComputeShopHealth:
         items = result["data"]["items"]
         assert items[0]["score"] == 100.0
         assert items[0]["grade"] == "good"
-        assert items[0]["dimensions"]["rating"]["data_insufficient"] is True
+        assert items[0]["dimensions"]["description_length"]["score"] == 20.0
+        assert "rating" not in items[0]["dimensions"]
 
     def test_score_range_filter_poor(self):
         db = _fake_db(
             _FakeResult([
-                self._make_main_row(1, title_ru="a" * 5, rating=0.5,
+                self._make_main_row(1, title_ru="a" * 5,
+                                    description_ru="",
                                     total=10, covered=0),   # poor
-                self._make_main_row(2, title_ru="a" * 120, rating=5,
+                self._make_main_row(2, title_ru="a" * 120,
+                                    description_ru="a" * 1000,
                                     total=10, covered=10),  # good
             ]),
             _FakeResult([]),
@@ -484,12 +495,14 @@ class TestComputeShopHealth:
     def test_keyword_filter(self):
         db = _fake_db(
             _FakeResult([
-                _row(pid=1, name_zh="银项链", image_url=None,
+                _row(pid=1, sku="SKU-1", name_zh="银项链", image_url=None,
                      listing_id=10, title_ru="серебряное колье",
+                     description_ru="a" * 500,
                      rating=4.0, review_count=5, platform="wb",
                      total_candidates=10, covered=5),
-                _row(pid=2, name_zh="耳环套装", image_url=None,
+                _row(pid=2, sku="SKU-2", name_zh="耳环套装", image_url=None,
                      listing_id=20, title_ru="серьги комплект",
+                     description_ru="a" * 500,
                      rating=4.0, review_count=5, platform="wb",
                      total_candidates=10, covered=5),
             ]),

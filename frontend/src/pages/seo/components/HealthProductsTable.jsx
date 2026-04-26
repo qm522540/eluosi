@@ -424,7 +424,7 @@ const HealthProductsTable = ({
         <div>
           <DimensionBar label="候选词覆盖" detail={r.dimensions.coverage} />
           <DimensionBar label="标题长度" detail={r.dimensions.title_length} />
-          <DimensionBar label="商品评分" detail={r.dimensions.rating} />
+          <DimensionBar label="描述长度" detail={r.dimensions.description_length} />
         </div>
       ),
     },

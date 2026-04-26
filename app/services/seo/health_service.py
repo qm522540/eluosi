@@ -5,11 +5,11 @@
 评分维度（一期 MVP）：
 - 关键词覆盖率 60%：候选池 in_title OR in_attrs 的比例 × 60
 - 标题长度 20%：30-180 字符满分，< 30 扣 0，180-200 扣 15，> 200 违规
-- 评分 20%：listing.rating / 5 × 20
+- 描述长度 20%：100-300 0→20 递增、300-2000 满分、2000-3000 衰减、> 3000 违规
 
 数据源：
 - products                核心信息
-- platform_listings       标题 / rating
+- platform_listings       标题 / 描述
 - seo_keyword_candidates  候选池（必须先跑引擎才有数据）
 
 规则合规：
@@ -71,25 +71,34 @@ def _score_title_length(title: Optional[str]) -> tuple[float, dict]:
     return 0.0, {"weight": 20, "length": n, "hint": f"标题超长（{n} > 200），违反平台规则"}
 
 
-def _score_rating(rating: Optional[float]) -> tuple[float, dict]:
-    """评分得分，上限 20（若维度无数据会在 _finalize_score 被重分权）。
+def _score_description_length(description: Optional[str]) -> tuple[float, dict]:
+    """俄语商品描述长度得分，上限 20。
 
-    Ozon Seller API /v3/product/info/list 不返 rating 字段，Ozon 商品此维度
-    会标 data_insufficient=True，由 _finalize_score 把权重重分配到其他维度。
-    WB listing.rating 同步正常，走 1-5 打分路径。
+    < 100:        0（描述过短或为空，几乎无 SEO 价值）
+    100-300:     0→20 递增
+    300-2000:    满分 20
+    2000-3000:   20→10 衰减（接近平台上限）
+    > 3000:      0（违规，Ozon ~6000 / WB ~5000，统一保守取 3000）
+
+    商家可控字段，与"AI 优化描述"按钮形成行动闭环。
     """
-    if rating is None:
+    if not description:
         return 0.0, {
-            "weight": 20, "rating": None,
-            "data_insufficient": True,
-            "hint": "该平台 API 不返回评分（已从评分中豁免，权重已重分配到其他维度）",
+            "weight": 20, "length": 0,
+            "hint": "描述为空，建议用「AI 优化描述」生成",
         }
-    if rating <= 0:
-        return 0.0, {"weight": 20, "rating": 0, "hint": "0 分或无评价（可能是新品）"}
-    r = max(0.0, min(5.0, float(rating)))
-    sc = round(r / 5 * 20, 1)
-    hint = "好评" if r >= 4 else ("中评" if r >= 3 else "差评需处理")
-    return sc, {"weight": 20, "rating": round(r, 2), "hint": hint}
+    n = len(description)
+    if n < 100:
+        return 0.0, {"weight": 20, "length": n, "hint": f"描述过短（{n} < 100）几乎无 SEO 价值"}
+    if n < 300:
+        sc = (n - 100) / 200 * 20
+        return round(sc, 1), {"weight": 20, "length": n, "hint": f"描述偏短（{n} / 建议 300-2000）"}
+    if n <= 2000:
+        return 20.0, {"weight": 20, "length": n, "hint": "描述长度理想"}
+    if n <= 3000:
+        sc = 20 - (n - 2000) / 1000 * 10
+        return round(sc, 1), {"weight": 20, "length": n, "hint": f"描述偏长（{n} / 接近平台上限）"}
+    return 0.0, {"weight": 20, "length": n, "hint": f"描述超长（{n} > 3000），违反平台规则"}
 
 
 def _finalize_score(dims: list[dict]) -> float:
@@ -190,12 +199,12 @@ def compute_shop_health(
 
         cov_score, cov_detail = _score_coverage(total_cand, covered)
         tit_score, tit_detail = _score_title_length(r.title_ru)
-        rat_score, rat_detail = _score_rating(r.rating)
+        desc_score, desc_detail = _score_description_length(r.description_ru)
 
         dims_for_final = [
             {"score": cov_score, **cov_detail},
             {"score": tit_score, **tit_detail},
-            {"score": rat_score, **rat_detail},
+            {"score": desc_score, **desc_detail},
         ]
         total_score = _finalize_score(dims_for_final)
         grade = _classify(total_score)
@@ -220,7 +229,7 @@ def compute_shop_health(
             "dimensions": {
                 "coverage": {"score": cov_score, **cov_detail},
                 "title_length": {"score": tit_score, **tit_detail},
-                "rating": {"score": rat_score, **rat_detail},
+                "description_length": {"score": desc_score, **desc_detail},
             },
             "missing_top_keywords": [],   # Step 2 填充
         })

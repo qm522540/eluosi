@@ -132,6 +132,12 @@ const AiDescriptionModal = ({
         </Button>,
       ]}
     >
+      <Alert
+        type="info"
+        showIcon
+        style={{ marginBottom: 12 }}
+        message="描述启用后，健康诊断的「描述长度」维度会同步上涨（300-2000 字符为满分区间）"
+      />
       <Descriptions size="small" column={1} bordered style={{ marginBottom: 12 }}>
         <Descriptions.Item label="商品">{productName || `ID ${productId}`}</Descriptions.Item>
         <Descriptions.Item label="当前俄语标题">
