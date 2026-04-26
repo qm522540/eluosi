@@ -122,6 +122,8 @@ const HealthProductsTable = ({
   const [titleLoading, setTitleLoading] = useState({})    // pid -> bool
   // 翻译缓存（俄→中），全局 dict 跨 pid 共享，命中 L2 ru_zh_dict 瞬间返
   const [kwTranslations, setKwTranslations] = useState({})
+  // 每个词的翻译状态：'pending' 调中 / 'done' 成功 / 'failed' 失败（含 zh===原词的兜底）
+  const [kwTranslateStatus, setKwTranslateStatus] = useState({})
 
   // AiTitleModal 控制
   const [aiModal, setAiModal] = useState({
@@ -191,13 +193,40 @@ const HealthProductsTable = ({
         const items = res.data.items || []
         setExpandedData(prev => ({ ...prev, [pid]: items }))
         // 异步批量翻译缺词（命中 L2 ru_zh_dict 缓存瞬返；新词走 Kimi 后写回 DB）
+        // 拆批 30 个一组：避免单次批量过大 Kimi 60s 超时整批挂掉
         const kws = items.map(it => it.keyword).filter(Boolean)
+          .filter(k => !(k in kwTranslations))  // 已翻译过的跳过
         if (kws.length > 0) {
-          translateKeywords(kws).then(r => {
-            if (r.code === 0) {
-              setKwTranslations(prev => ({ ...prev, ...(r.data || {}) }))
-            }
-          }).catch(() => {})
+          // 标 pending
+          setKwTranslateStatus(prev => {
+            const next = { ...prev }
+            kws.forEach(k => { next[k] = 'pending' })
+            return next
+          })
+          const BATCH = 30
+          for (let i = 0; i < kws.length; i += BATCH) {
+            const batch = kws.slice(i, i + BATCH)
+            translateKeywords(batch).then(r => {
+              const data = r?.data || {}
+              setKwTranslations(prev => ({ ...prev, ...data }))
+              setKwTranslateStatus(prev => {
+                const next = { ...prev }
+                batch.forEach(k => {
+                  const zh = data[k]
+                  // zh 空 / 等于原词都视为翻译失败（Kimi 兜底返原词）
+                  next[k] = zh && zh !== k ? 'done' : 'failed'
+                })
+                return next
+              })
+            }).catch(err => {
+              console.error('批量翻译失败:', err)
+              setKwTranslateStatus(prev => {
+                const next = { ...prev }
+                batch.forEach(k => { next[k] = 'failed' })
+                return next
+              })
+            })
+          }
         }
       } else {
         message.error(res.msg || '拉取失败')
@@ -208,6 +237,23 @@ const HealthProductsTable = ({
       setExpandedLoading(prev => ({ ...prev, [pid]: false }))
     }
   }, [shopId, expandedData])
+
+  const retryTranslate = (kw) => {
+    setKwTranslateStatus(prev => ({ ...prev, [kw]: 'pending' }))
+    translateKeywords([kw]).then(r => {
+      const data = r?.data || {}
+      setKwTranslations(prev => ({ ...prev, ...data }))
+      const zh = data[kw]
+      setKwTranslateStatus(prev => ({
+        ...prev,
+        [kw]: zh && zh !== kw ? 'done' : 'failed',
+      }))
+    }).catch(err => {
+      console.error('单词重试翻译失败:', err)
+      message.warning(`翻译失败：${kw}`)
+      setKwTranslateStatus(prev => ({ ...prev, [kw]: 'failed' }))
+    })
+  }
 
   const handleEditTranslation = (v) => {
     const zh = kwTranslations[v] || ''
@@ -229,6 +275,7 @@ const HealthProductsTable = ({
         try {
           await updateTranslation(v, newVal)
           setKwTranslations(prev => ({ ...prev, [v]: newVal }))
+          setKwTranslateStatus(prev => ({ ...prev, [v]: 'done' }))
           message.success('翻译已更新')
         } catch (e) {
           message.error(e?.response?.data?.msg || '更新失败')
@@ -276,7 +323,26 @@ const HealthProductsTable = ({
       render: (v) => {
         const zh = kwTranslations[v]
         const hasZh = zh && zh !== v
+        const status = kwTranslateStatus[v]   // pending / done / failed / undefined
         const wt = WORD_TYPE_MAP[classifyWordType(v)]
+        // 显示文案：成功 → 中文翻译；失败 → "未翻译 ↻"可点重试；调中 → "翻译中..."；未调过 → "—"
+        let zhDisplay
+        if (hasZh) {
+          zhDisplay = <Text style={{ fontSize: 11, color: '#999' }}>{zh}</Text>
+        } else if (status === 'failed') {
+          zhDisplay = (
+            <Tooltip title="翻译失败（Kimi API 错误或词典无收录），点 ↻ 重试单条">
+              <Text style={{ fontSize: 11, color: '#ff7875', cursor: 'pointer' }}
+                    onClick={() => retryTranslate(v)}>
+                未翻译 ↻
+              </Text>
+            </Tooltip>
+          )
+        } else if (status === 'pending') {
+          zhDisplay = <Text style={{ fontSize: 11, color: '#ccc' }}>翻译中...</Text>
+        } else {
+          zhDisplay = <Text style={{ fontSize: 11, color: '#ccc' }}>—</Text>
+        }
         return (
           <Space direction="vertical" size={1} style={{ lineHeight: 1.2 }}>
             <Space size={4} style={{ alignItems: 'center' }}>
@@ -288,9 +354,7 @@ const HealthProductsTable = ({
               )}
             </Space>
             <Space size={4} style={{ alignItems: 'center' }}>
-              <Text style={{ fontSize: 11, color: hasZh ? '#999' : '#ccc' }}>
-                {hasZh ? zh : '翻译中...'}
-              </Text>
+              {zhDisplay}
               <EditOutlined
                 style={{ fontSize: 10, color: '#bbb', cursor: 'pointer' }}
                 onClick={() => handleEditTranslation(v)}
