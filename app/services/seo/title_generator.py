@@ -42,6 +42,7 @@ SYSTEM_PROMPT = """你是俄罗斯跨境电商（WB / Ozon / Yandex）SEO 标题
 4. 全部小写，不用标点符号（电商平台 SEO 惯例），短语之间用单个空格分隔
 5. 不编造原标题没有的属性（比如原品没说"防水"，不要加"водостойкий"）
 6. **绝对不能丢失**"必须保留的高价值词"列表里的词（这些词已在原标题出现且带来过真实订单/曝光，丢了会直接降流量）
+7. **绝对不能输出中文 / 拼音 / 日文 / 韩文 等非俄/英字符**。即使输入的属性 value 里带中文（可能是卖家在平台后台填错了型号名 / 颜色等），也要**忽略**那段中文，不要原样塞进标题。例如属性"型号: 环形"或"颜色: 米色"——禁止把"环形""米色"这类汉字写进 new_title。
 
 【位置规则 —— 决定搜索权重】
 平台搜索权重从标题开头向后递减，按"权重梯度"排词：
@@ -70,6 +71,22 @@ PLATFORM_HINT = {
     "ozon": "【当前平台】Ozon —— 前 60-80 字符是搜索主战场，可多放相关词；品牌建议放末尾（是独立属性）；标题 120-180 字符。",
     "yandex": "【当前平台】Yandex Market —— 参考通用规则，标题偏紧凑，品牌放末尾。",
 }
+
+
+# 检测字符串是否含中文字符 (CJK 统一汉字 + 兼容汉字)
+_CJK_RE = re.compile(r"[一-鿿㐀-䶿]")
+
+def _has_cjk(s: str) -> bool:
+    return bool(_CJK_RE.search(s or ""))
+
+
+def _strip_cjk(s: str) -> str:
+    """把中文字符全去掉 + 清理多余空格。"""
+    if not s:
+        return s
+    cleaned = _CJK_RE.sub("", s)
+    cleaned = re.sub(r"\s{2,}", " ", cleaned).strip()
+    return cleaned
 
 
 def _build_user_prompt(
@@ -111,12 +128,35 @@ def _build_user_prompt(
         lines.append(f"类目：{category_name}")
     if include_current_title:
         lines.append(f"当前俄语标题：{current_title_ru or '（空）'}")
+    # 属性: 按字段渲染并过滤含中文 value 的属性 (例如卖家在 Ozon 后台填了中文型号名 "环形",
+    # 直接 dump 给 AI 会让 AI 把中文塞进俄语标题)
     if variant_attrs:
-        attrs_str = json.dumps(variant_attrs, ensure_ascii=False) if isinstance(variant_attrs, (dict, list)) else str(variant_attrs)
-        # 属性可能很长，截断 400 字符避免烧 token
-        if len(attrs_str) > 400:
-            attrs_str = attrs_str[:400] + "...(截断)"
-        lines.append(f"属性：{attrs_str}")
+        attr_lines = []
+        if isinstance(variant_attrs, list):
+            for a in variant_attrs:
+                if not isinstance(a, dict):
+                    continue
+                value_ru = (a.get("value_ru") or "").strip()
+                name_ru = (a.get("name_ru") or "").strip()
+                # 过滤: value 含中文/含拼音(英文连字+全小写也疑似)→ skip
+                if not value_ru or _has_cjk(value_ru):
+                    continue
+                # 长字段不喂 (富文本等)
+                if len(value_ru) > 200:
+                    continue
+                if name_ru:
+                    attr_lines.append(f"- {name_ru}: {value_ru}")
+                else:
+                    attr_lines.append(f"- 属性 #{a.get('id', '?')}: {value_ru}")
+            attrs_str = "\n".join(attr_lines)
+        else:
+            # 兜底: 旧 dict / str 格式直接 dump (强行不 wb 平台进来)
+            attrs_str = json.dumps(variant_attrs, ensure_ascii=False) if isinstance(variant_attrs, dict) else str(variant_attrs)
+        if len(attrs_str) > 800:
+            attrs_str = attrs_str[:800] + "...(截断)"
+        if attrs_str:
+            lines.append("【商品属性(只展示俄语 value, 中文已过滤)】")
+            lines.append(attrs_str)
 
     if preserve_keywords:
         lines.append("")
@@ -460,6 +500,15 @@ async def generate_title(
     if not parsed["new_title"]:
         return {"code": ErrorCode.SEO_TITLE_GENERATE_FAILED,
                 "msg": "AI 返回为空或解析失败"}
+
+    # post-check: AI 输出含中文字符 → 自动剥离 (兜底防御, system_prompt 已禁但偶尔不听)
+    if _has_cjk(parsed["new_title"]):
+        original_with_cjk = parsed["new_title"]
+        parsed["new_title"] = _strip_cjk(parsed["new_title"])
+        logger.warning(
+            f"SEO title 输出含中文已自动剥离 product={product_id} "
+            f"原: {original_with_cjk!r} → 净: {parsed['new_title']!r}"
+        )
 
     # ---------- 4. 持久化到 seo_generated_contents ----------
     gen = SeoGeneratedContent(
