@@ -45,6 +45,10 @@ SYSTEM_PROMPT = """你是俄罗斯跨境电商（WB / Ozon / Yandex）SEO 标题
 7. **绝对不能输出中文 / 拼音 / 日文 / 韩文 等非俄/英字符**。即使输入的属性 value 里带中文（可能是卖家在平台后台填错了型号名 / 颜色等），也要**忽略**那段中文，不要原样塞进标题。例如属性"型号: 环形"或"颜色: 米色"——禁止把"环形""米色"这类汉字写进 new_title。
 8. **严格去重 (重要)**：候选词列表里经常出现"同义词组词序排列组合"（如 `серьги женские медицинский сплав` + `серьги медицинский сплав женские` + `женские серьги медицинский` — 这 3 个对你来说是**同一个词组**,只是词序不同）。在新标题里**同一组同义词只能出现一次**，要把它们融合成一份连贯的俄语短语，不要复读 3 次。判断标准：去掉空格后字符集相同 / 词根重复 → 当成一个。
 9. **禁用任何标点 (重要)**：不允许 `,` `.` `;` `:` `!` `?` `-` `/` `|` 等任何标点。短语之间**只用单个空格**分隔。如果你想分隔多组关键词，**用空格不用逗号**。这是 WB / Ozon SEO 硬规则，加标点会被搜索算法降权。
+10. **禁止跨品类窜词 (重要)**：商品已经定位到某个子品类（耳环/戒指/项链/胸针/手链 等），**不要在标题里加其他品类的主词**。例如：
+    - 商品是耳环 (`серьги`) → 禁止加 `кольцо`/`кольца`(戒指)/`колье`/`кулон`(项链)/`брошь`(胸针)/`браслет`(手链)
+    - 商品是戒指 (`кольцо`) → 禁止加 `серьги`/`колье`/`брошь` 等
+    即使候选词或属性里有相关词，也不要加。如果不确定，**只用本品类的词**。
 
 【位置规则 —— 决定搜索权重】
 平台搜索权重从标题开头向后递减，按"权重梯度"排词：
@@ -101,6 +105,32 @@ def _clean_punctuation(s: str) -> str:
     cleaned = _PUNCT_RE.sub(" ", s)
     cleaned = re.sub(r"\s{2,}", " ", cleaned).strip()
     return cleaned
+
+
+def _strip_cross_category_tokens(s: str, current_cat_key: Optional[str]) -> tuple[str, list]:
+    """删除标题里跨品类的 token (本类目=耳环时,删 кольцо/колье 等)。
+
+    返 (cleaned, removed_tokens) — removed_tokens 用于 log 警告。
+    """
+    if not s or not current_cat_key:
+        return s, []
+    tokens = s.split()
+    kept = []
+    removed = []
+    for t in tokens:
+        t_low = t.lower()
+        is_cross = False
+        for other_key, other_roots in CATEGORY_PRIMARY_ROOTS.items():
+            if other_key == current_cat_key:
+                continue
+            if any(r in t_low for r in other_roots):
+                is_cross = True
+                break
+        if is_cross:
+            removed.append(t)
+        else:
+            kept.append(t)
+    return " ".join(kept), removed
 
 
 def _dedupe_tokens(s: str) -> str:
@@ -588,18 +618,21 @@ async def generate_title(
         return {"code": ErrorCode.SEO_TITLE_GENERATE_FAILED,
                 "msg": "AI 返回为空或解析失败"}
 
-    # post-check: 中文剥离 → 标点剥离 → token 去重 (system_prompt 已禁但 AI 偶尔不听)
+    # post-check: 中文剥离 → 标点剥离 → 跨品类剥离 → token 去重
     raw_ai_title = parsed["new_title"]
-    if _has_cjk(raw_ai_title):
-        parsed["new_title"] = _strip_cjk(parsed["new_title"])
-    parsed["new_title"] = _clean_punctuation(parsed["new_title"])
-    deduped = _dedupe_tokens(parsed["new_title"])
-    if deduped != parsed["new_title"] or raw_ai_title != parsed["new_title"]:
+    cat_key = _detect_category_key(prod_row.platform_category_name)
+    cleaned = parsed["new_title"]
+    if _has_cjk(cleaned):
+        cleaned = _strip_cjk(cleaned)
+    cleaned = _clean_punctuation(cleaned)
+    cleaned, removed_cross = _strip_cross_category_tokens(cleaned, cat_key)
+    cleaned = _dedupe_tokens(cleaned)
+    if cleaned != raw_ai_title:
         logger.warning(
-            f"SEO title post-check: AI 输出已被清洗 product={product_id} "
-            f"原: {raw_ai_title!r} → 净: {deduped!r}"
+            f"SEO title post-check: AI 输出已被清洗 product={product_id} cat={cat_key} "
+            f"跨品类剥离={removed_cross} 原: {raw_ai_title!r} → 净: {cleaned!r}"
         )
-    parsed["new_title"] = deduped
+    parsed["new_title"] = cleaned
 
     # ---------- 4. 持久化到 seo_generated_contents ----------
     gen = SeoGeneratedContent(
@@ -612,6 +645,17 @@ async def generate_title(
             "candidate_ids": [c["id"] for c in candidates],
             "keywords": parsed["included_keywords"] or [c["keyword"] for c in candidates],
             "reasoning": parsed["reasoning"],
+            "extra_category_keywords": list(extra_category_keywords or []),
+            "manual_keywords": list(manual_keywords or []),
+            "include_current_title": include_current_title,
+            "category_key_detected": cat_key,
+            "cross_removed_by_post_check": removed_cross,
+            "raw_ai_title": raw_ai_title,
+            "prompt_dump": {
+                "system_prompt": SYSTEM_PROMPT,
+                "user_prompt": user_prompt,
+                "user_prompt_chars": len(user_prompt),
+            },
         },
         ai_model=ai_result["model"],
         ai_decision_id=ai_result["decision_id"],
