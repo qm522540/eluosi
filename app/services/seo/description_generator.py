@@ -82,49 +82,81 @@ PLATFORM_HINT = {
 }
 
 
+# Ozon 属性黑名单 (默认 _collect 时就过滤掉, 不在 preview / prompt 里出现)
+# 这些字段对 AI 写描述没用, 还会撑爆 prompt
+OZON_ATTR_BLACKLIST = {
+    4191,   # 描述 (HTML, 跟 description_ru 重复)
+    11254,  # rich_content_json (富文本楼层 JSON, 主要是图片 URL)
+    21837,  # Ozon.Видео: 名称
+    22968,  # Ozon.Видео: ссылка
+    9024,   # Код продавца (内部 SKU 编号, 如 OZON-E0170)
+    4180,   # Название товара (商品名, 跟 title 重复)
+    10097,  # 颜色名称 (卖家常填成商品名, 不是真颜色)
+}
+
+# 上下文字段顺序 (preview 和 prompt 都按这个顺序展示)
+CONTEXT_FIELD_KEYS = [
+    "brand_philosophy",
+    "name_zh",
+    "name_ru",
+    "brand",
+    "category",
+    "title_ru",
+    "description_ru",
+]
+
+CONTEXT_FIELD_LABELS = {
+    "brand_philosophy": "店铺品牌理念",
+    "name_zh": "中文名",
+    "name_ru": "俄语名",
+    "brand": "品牌",
+    "category": "类目路径",
+    "title_ru": "当前俄语标题",
+    "description_ru": "当前俄语描述",
+}
+
+
 def _build_user_prompt(
     *,
     platform: Optional[str],
-    name_zh: str,
-    name_ru: Optional[str],
-    brand: Optional[str],
-    category_name: Optional[str],
-    current_title_ru: Optional[str],
-    current_description_ru: Optional[str],
-    variant_attrs: Any,
-    all_candidates: list[dict],
-    preserve_keywords: Optional[list[str]] = None,
-    brand_philosophy: Optional[str] = None,
+    context_fields: list[dict],
+    attrs: list[dict],
+    category_top_keywords: list[dict],
+    product_top_keywords: list[dict],
 ) -> str:
-    """拼用户侧 prompt。候选词按 score 降序传入，限 50 个。"""
+    """拼 user prompt。所有 4 段已是过滤后的最终数据 (excluded 在外面应用过)。
+
+    context_fields: [{key, label, value}, ...] (value 已 strip, 空值已剔除)
+    attrs: [{id, name_ru, name_zh, value_ru}, ...]
+    category_top_keywords: [{keyword, total_orders, total_impressions, max_score, product_count}]
+    product_top_keywords: [{keyword, score, organic_impressions, organic_orders, paid_orders}]
+    """
     lines = []
     hint = PLATFORM_HINT.get((platform or "").lower())
     if hint:
         lines.append(hint)
         lines.append("")
 
-    # 品牌理念优先放最前 — 让整段描述贯穿这个调性
-    if brand_philosophy and brand_philosophy.strip():
+    # 上下文字段 (品牌理念排最前以便贯穿描述风格)
+    bp = next((f for f in context_fields if f["key"] == "brand_philosophy"), None)
+    if bp:
         lines.append("【店铺品牌理念（请贯穿到描述风格里,但不要直接照抄整段)】")
-        lines.append(brand_philosophy.strip())
+        lines.append(bp["value"])
         lines.append("")
 
-    lines.extend([
-        "【当前商品信息】",
-        f"中文名：{name_zh}",
-    ])
-    if name_ru:
-        lines.append(f"俄语名：{name_ru}")
-    if brand:
-        lines.append(f"品牌：{brand}")
-    if category_name:
-        lines.append(f"类目：{category_name}")
-    lines.append(f"当前俄语标题：{current_title_ru or '（空）'}")
+    info_lines = []
+    for key in ["name_zh", "name_ru", "brand", "category", "title_ru"]:
+        f = next((f for f in context_fields if f["key"] == key), None)
+        if f:
+            info_lines.append(f"{f['label']}：{f['value']}")
+    if info_lines:
+        lines.append("【当前商品信息】")
+        lines.extend(info_lines)
 
-    # 当前描述（如有）— 描述特有的"渐进改写"信号
-    if current_description_ru:
-        # 描述可能很长，截断 800 字符（比标题的 400 阈值更宽）
-        cur_desc = current_description_ru
+    # 当前描述 (描述特有的"渐进改写"信号)
+    desc = next((f for f in context_fields if f["key"] == "description_ru"), None)
+    if desc:
+        cur_desc = desc["value"]
         if len(cur_desc) > 800:
             cur_desc = cur_desc[:800] + "...(截断)"
         lines.append("")
@@ -134,82 +166,262 @@ def _build_user_prompt(
         lines.append("")
         lines.append("【当前俄语描述】（空，从零写）")
 
-    # 商品属性 — 渲染成"俄语名 (中文): 值"列表, 比裸 JSON 省 token 也更易读
-    # 同步代码现已存 [{id, name_ru, name_zh, value_ru}, ...] 结构 (Ozon /v4/info/attributes)
-    # 过滤无用属性: 富文本/HTML 描述/视频/卖家编码 等占字符不带卖点信息的字段
-    OZON_ATTR_BLACKLIST = {
-        4191,   # 描述 (HTML, 跟 description_ru 重复)
-        11254,  # rich_content_json (富文本楼层 JSON, 主要是图片 URL)
-        21837,  # Ozon.Видео: 名称
-        22968,  # Ozon.Видео: ссылка
-        9024,   # Код продавца (内部 SKU 编号, 如 OZON-E0170)
-        4180,   # Название товара (商品名, 跟 title 重复)
-        10097,  # 颜色名称 (卖家常填成商品名, 不是真颜色)
-    }
-    if variant_attrs:
+    # 商品属性 — 渲染成"俄语名 (中文): 值"列表, 比裸 JSON 省 token
+    if attrs:
         attr_lines = []
-        if isinstance(variant_attrs, list):
-            title_norm = (current_title_ru or "").strip().lower()
-            for a in variant_attrs:
-                if not isinstance(a, dict):
-                    continue
-                attr_id = a.get("id")
-                if attr_id in OZON_ATTR_BLACKLIST:
-                    continue
-                name_ru = (a.get("name_ru") or "").strip()
-                name_zh = (a.get("name_zh") or "").strip()
-                value_ru = (a.get("value_ru") or "").strip()
-                if not value_ru:
-                    continue
-                # 兜底: 单个 value > 500 字符的多半是富文本/长 JSON, 跳过
-                if len(value_ru) > 500:
-                    continue
-                # 去重: value 跟 title 一摸一样, 没有信息量
-                if title_norm and value_ru.lower() == title_norm:
-                    continue
-                if name_ru and name_zh and name_ru != name_zh:
-                    attr_lines.append(f"- {name_ru} ({name_zh}): {value_ru}")
-                elif name_ru:
-                    attr_lines.append(f"- {name_ru}: {value_ru}")
-                else:
-                    attr_lines.append(f"- 属性 #{attr_id or '?'}: {value_ru}")
-            attrs_str = "\n".join(attr_lines)
-        else:
-            # 兜底: 老格式 dict / 字符串, 走原 JSON dump 路径
-            attrs_str = json.dumps(variant_attrs, ensure_ascii=False) if isinstance(variant_attrs, dict) else str(variant_attrs)
-        if len(attrs_str) > 2000:
-            attrs_str = attrs_str[:2000] + "...(截断)"
-        if attrs_str:
+        for a in attrs:
+            name_ru = (a.get("name_ru") or "").strip()
+            name_zh = (a.get("name_zh") or "").strip()
+            value_ru = (a.get("value_ru") or "").strip()
+            if not value_ru:
+                continue
+            if name_ru and name_zh and name_ru != name_zh:
+                attr_lines.append(f"- {name_ru} ({name_zh}): {value_ru}")
+            elif name_ru:
+                attr_lines.append(f"- {name_ru}: {value_ru}")
+            else:
+                attr_lines.append(f"- 属性 #{a.get('id', '?')}: {value_ru}")
+        if attr_lines:
             lines.append("")
-            lines.append(f"【商品属性（用于自然融入描述，不要罗列；务必基于这些真实属性写卖点，不要编造）】\n{attrs_str}")
+            lines.append(f"【商品属性（用于自然融入描述，不要罗列；务必基于这些真实属性写卖点，不要编造）】")
+            lines.extend(attr_lines)
 
-    # 必须保留的高价值词
-    if preserve_keywords:
+    # 该类目热门关键词 (跨商品聚合, Top 30)
+    if category_top_keywords:
         lines.append("")
-        lines.append(f"【必须保留的高价值词（共 {len(preserve_keywords)} 个，已在原标题/原描述出现且带过真实订单/曝光，绝对不能丢）】")
-        for kw in preserve_keywords:
-            lines.append(f"- {kw}")
+        lines.append(f"【同类目热门关键词（共 {len(category_top_keywords)} 个，按订单+曝光降序，跨商品聚合 — 优先融入这些）】")
+        for i, k in enumerate(category_top_keywords, 1):
+            metric_parts = []
+            if k.get("total_orders"):
+                metric_parts.append(f"总订单 {int(k['total_orders'])}")
+            if k.get("total_impressions"):
+                metric_parts.append(f"总曝光 {int(k['total_impressions'])}")
+            if k.get("product_count"):
+                metric_parts.append(f"覆盖 {int(k['product_count'])} 个商品")
+            metric = f"（{' / '.join(metric_parts)}）" if metric_parts else ""
+            lines.append(f"{i}. {k['keyword']} {metric}")
 
-    # 全部候选词（按 score desc 限 50 个）
-    lines.append("")
-    lines.append(f"【可用反哺关键词（共 {len(all_candidates)} 个，按推荐系数降序，优先融入前 20-30 个高分词）】")
-    for i, c in enumerate(all_candidates, 1):
-        metric_parts = []
-        if c.get("paid_orders"):
-            metric_parts.append(f"付费订单 {c['paid_orders']}")
-        if c.get("paid_roas"):
-            metric_parts.append(f"ROAS {float(c['paid_roas']):.2f}")
-        if c.get("organic_impressions"):
-            metric_parts.append(f"自然曝光 {c['organic_impressions']}")
-        if c.get("organic_orders"):
-            metric_parts.append(f"自然订单 {c['organic_orders']}")
-        metric = f"（{' / '.join(metric_parts)}）" if metric_parts else ""
-        score_part = f"score={c['score']:.1f}" if c.get("score") else ""
-        lines.append(f"{i}. {c['keyword']} {score_part} {metric}")
+    # 本商品热门关键词 (单 product, Top 10)
+    if product_top_keywords:
+        lines.append("")
+        lines.append(f"【本商品热门关键词（共 {len(product_top_keywords)} 个，按本商品订单+曝光降序）】")
+        for i, k in enumerate(product_top_keywords, 1):
+            metric_parts = []
+            if k.get("paid_orders"):
+                metric_parts.append(f"付费订单 {int(k['paid_orders'])}")
+            if k.get("organic_orders"):
+                metric_parts.append(f"自然订单 {int(k['organic_orders'])}")
+            if k.get("organic_impressions"):
+                metric_parts.append(f"自然曝光 {int(k['organic_impressions'])}")
+            metric = f"（{' / '.join(metric_parts)}）" if metric_parts else ""
+            score_part = f"score={float(k['score']):.1f}" if k.get("score") is not None else ""
+            lines.append(f"{i}. {k['keyword']} {score_part} {metric}")
 
     lines.append("")
     lines.append("请按上述约束生成新俄语商品描述，返回 JSON。")
     return "\n".join(lines)
+
+
+# ==================== 数据收集 (preview + generate 共用) ====================
+
+def _collect_inputs(
+    db: Session, tenant_id: int, shop, product_id: int,
+    *,
+    brand_philosophy_override: Any = None,
+) -> dict:
+    """收集所有要喂给 AI 的字段 (全集, 未应用 excluded)。
+
+    preview API 直接返回这个; generate 主入口在此基础上应用 excluded 过滤。
+    brand_philosophy_override: None=用 shops 表现值; 其它(包括 "")=用此值
+
+    Returns: {
+        "ok": bool, "code"/"msg" (失败时),
+        "platform_listing_id": ..., "platform": "ozon"/"wb",
+        "context_fields": [{key, label, value}],
+        "attrs": [{id, name_ru, name_zh, value_ru}],
+        "category_top_keywords": [...30],
+        "product_top_keywords": [...10],
+    }
+    """
+    shop_id = shop.id
+
+    prod_row = db.execute(text("""
+        SELECT
+            p.id AS pid,
+            p.name_zh, p.name_ru, p.brand, p.local_category_id,
+            pl.id AS listing_id, pl.title_ru, pl.description_ru,
+            pl.variant_attrs, pl.platform_category_name
+        FROM products p
+        LEFT JOIN platform_listings pl
+            ON pl.product_id = p.id AND pl.tenant_id = p.tenant_id
+            AND pl.shop_id = p.shop_id AND pl.status NOT IN ('deleted', 'archived')
+        WHERE p.id = :pid AND p.tenant_id = :tid AND p.shop_id = :sid
+        ORDER BY pl.id ASC LIMIT 1
+    """), {"pid": product_id, "tid": tenant_id, "sid": shop_id}).first()
+
+    if not prod_row or not prod_row.listing_id:
+        return {"ok": False, "code": ErrorCode.SEO_PRODUCT_NOT_FOUND,
+                "msg": "该商品在当前店铺找不到 listing"}
+
+    # 1. 上下文字段 — 全集
+    if brand_philosophy_override is None:
+        philosophy = getattr(shop, "brand_philosophy", None)
+    else:
+        philosophy = (brand_philosophy_override or "").strip() or None
+
+    context_fields = []
+    raw_ctx = {
+        "brand_philosophy": philosophy,
+        "name_zh": prod_row.name_zh,
+        "name_ru": prod_row.name_ru,
+        "brand": prod_row.brand,
+        "category": prod_row.platform_category_name,
+        "title_ru": prod_row.title_ru,
+        "description_ru": prod_row.description_ru,
+    }
+    for key in CONTEXT_FIELD_KEYS:
+        v = raw_ctx.get(key)
+        if v is None or (isinstance(v, str) and not v.strip()):
+            continue
+        context_fields.append({
+            "key": key,
+            "label": CONTEXT_FIELD_LABELS[key],
+            "value": v.strip() if isinstance(v, str) else str(v),
+        })
+
+    # 2. 属性 — 全集 (已过黑名单 + 长字段 + title 重复)
+    title_norm = (prod_row.title_ru or "").strip().lower()
+    attrs_raw = prod_row.variant_attrs or []
+    if isinstance(attrs_raw, str):
+        try:
+            attrs_raw = json.loads(attrs_raw)
+        except (json.JSONDecodeError, TypeError):
+            attrs_raw = []
+    attrs = []
+    for a in (attrs_raw or []):
+        if not isinstance(a, dict):
+            continue
+        attr_id = a.get("id")
+        if attr_id in OZON_ATTR_BLACKLIST:
+            continue
+        value_ru = (a.get("value_ru") or "").strip()
+        if not value_ru or len(value_ru) > 500:
+            continue
+        if title_norm and value_ru.lower() == title_norm:
+            continue
+        attrs.append({
+            "id": attr_id,
+            "name_ru": (a.get("name_ru") or "").strip(),
+            "name_zh": (a.get("name_zh") or "").strip(),
+            "value_ru": value_ru,
+        })
+
+    # 3. 类目热门关键词 — 跨商品聚合 Top 30
+    category_top_keywords = _fetch_category_top_keywords(
+        db, tenant_id, prod_row.local_category_id, limit=30,
+    ) if prod_row.local_category_id else []
+
+    # 4. 本商品热门关键词 — Top 10
+    product_top_keywords = _fetch_product_top_keywords(
+        db, tenant_id, shop_id, product_id, limit=10,
+    )
+
+    return {
+        "ok": True,
+        "platform_listing_id": prod_row.listing_id,
+        "platform": getattr(shop, "platform", None),
+        "context_fields": context_fields,
+        "attrs": attrs,
+        "category_top_keywords": category_top_keywords,
+        "product_top_keywords": product_top_keywords,
+        # 给 generate_description 持久化用的原始字段 (不受 excluded 影响)
+        "_raw_description_ru": prod_row.description_ru or "",
+    }
+
+
+def _fetch_category_top_keywords(
+    db: Session, tenant_id: int, local_category_id: int, limit: int = 30,
+) -> list[dict]:
+    """同 local_category_id 下所有商品聚合, 按总订单+总曝光降序, Top N。
+
+    口径: 跨店铺跨商品 (本租户内)。
+    过滤: 总订单>0 OR 总曝光>=10 — 把噪声过掉。
+    """
+    if not local_category_id:
+        return []
+    rows = db.execute(text("""
+        SELECT
+            c.keyword,
+            SUM(COALESCE(c.organic_orders, 0) + COALESCE(c.paid_orders, 0)) AS total_orders,
+            SUM(COALESCE(c.organic_impressions, 0)) AS total_impressions,
+            MAX(c.score) AS max_score,
+            COUNT(DISTINCT c.product_id) AS product_count
+        FROM seo_keyword_candidates c
+        INNER JOIN products p ON p.id = c.product_id AND p.tenant_id = c.tenant_id
+        WHERE c.tenant_id = :tid
+          AND p.local_category_id = :cat
+          AND c.status = 'pending'
+        GROUP BY c.keyword
+        HAVING total_orders > 0 OR total_impressions >= 10
+        ORDER BY total_orders DESC, total_impressions DESC, max_score DESC
+        LIMIT :lim
+    """), {"tid": tenant_id, "cat": local_category_id, "lim": limit}).fetchall()
+    return [
+        {
+            "keyword": r.keyword,
+            "total_orders": int(r.total_orders or 0),
+            "total_impressions": int(r.total_impressions or 0),
+            "max_score": float(r.max_score or 0),
+            "product_count": int(r.product_count or 0),
+        }
+        for r in rows
+    ]
+
+
+def _fetch_product_top_keywords(
+    db: Session, tenant_id: int, shop_id: int, product_id: int, limit: int = 10,
+) -> list[dict]:
+    """本商品热门关键词 — 仅看本 product_id, 按订单优先+曝光次之降序 Top N。"""
+    rows = db.execute(text("""
+        SELECT keyword, score, organic_impressions, organic_orders, paid_orders
+        FROM seo_keyword_candidates
+        WHERE tenant_id = :tid AND shop_id = :sid AND product_id = :pid AND status = 'pending'
+        ORDER BY (
+            COALESCE(organic_orders, 0) * 5 +
+            COALESCE(paid_orders, 0) * 5 +
+            COALESCE(organic_impressions, 0) * 1
+        ) DESC, score DESC
+        LIMIT :lim
+    """), {"tid": tenant_id, "sid": shop_id, "pid": product_id, "lim": limit}).fetchall()
+    return [
+        {
+            "keyword": r.keyword,
+            "score": float(r.score or 0),
+            "organic_impressions": int(r.organic_impressions or 0),
+            "organic_orders": int(r.organic_orders or 0),
+            "paid_orders": int(r.paid_orders or 0),
+        }
+        for r in rows
+    ]
+
+
+def preview_description_inputs(
+    db: Session, tenant_id: int, shop, product_id: int,
+) -> dict:
+    """前端 AiDescriptionModal 打开时调, 返回 4 个分组的全集数据让用户勾选。"""
+    inputs = _collect_inputs(db, tenant_id, shop, product_id)
+    if not inputs.get("ok"):
+        return {"code": inputs.get("code"), "msg": inputs.get("msg")}
+    return {
+        "code": 0,
+        "data": {
+            "platform": inputs["platform"],
+            "context_fields": inputs["context_fields"],
+            "attrs": inputs["attrs"],
+            "category_top_keywords": inputs["category_top_keywords"],
+            "product_top_keywords": inputs["product_top_keywords"],
+        },
+    }
 
 
 # ==================== AI 返回解析 ====================
@@ -251,143 +463,75 @@ async def generate_description(
     shop,
     product_id: int,
     user_id: Optional[int] = None,
-    max_candidates: int = 50,
     brand_philosophy: Optional[str] = None,
+    excluded_context_keys: Optional[list[str]] = None,
+    excluded_attr_ids: Optional[list[int]] = None,
+    excluded_keywords: Optional[list[str]] = None,
 ) -> dict:
-    """为某商品生成 AI 商品描述（不让用户预选词，后端自取全量缺词 Top N）。
+    """为某商品生成 AI 商品描述。前端勾选哪些喂 AI, excluded_* 传被勾掉的项。
 
     Returns:
         成功：{"code": 0, "data": {new_description, reasoning, included_keywords,
-                                    structure, ai_model, decision_id,
-                                    generated_content_id, tokens, duration_ms,
-                                    original_description, listing_id}}
+                                    structure, ai_model, decision_id, ...}}
         失败：{"code": ErrorCode.xxx, "msg": "..."}
     """
     shop_id = shop.id
 
-    # ---------- 1. 查商品 + listing ----------
-    prod_row = db.execute(text("""
-        SELECT
-            p.id AS pid,
-            p.name_zh, p.name_ru, p.brand, p.local_category_id,
-            pl.id AS listing_id,
-            pl.title_ru,
-            pl.description_ru,
-            pl.variant_attrs,
-            pl.platform_category_name
-        FROM products p
-        LEFT JOIN platform_listings pl
-            ON pl.product_id = p.id
-            AND pl.tenant_id = p.tenant_id
-            AND pl.shop_id = p.shop_id
-            AND pl.status NOT IN ('deleted', 'archived')
-        WHERE p.id = :pid
-          AND p.tenant_id = :tid
-          AND p.shop_id = :sid
-        ORDER BY pl.id ASC
-        LIMIT 1
-    """), {"pid": product_id, "tid": tenant_id, "sid": shop_id}).first()
-
-    if not prod_row or not prod_row.listing_id:
-        return {"code": ErrorCode.SEO_PRODUCT_NOT_FOUND,
-                "msg": "该商品在当前店铺找不到 listing，请先同步商品或确认店铺归属"}
-
-    # ---------- 2. 拉全部缺词候选（按 score desc 限 max_candidates 个）----------
-    cand_rows = db.execute(text("""
-        SELECT id, keyword, score,
-               paid_roas, paid_orders, paid_spend, paid_revenue,
-               organic_impressions, organic_orders
-        FROM seo_keyword_candidates
-        WHERE tenant_id = :tid
-          AND shop_id = :sid
-          AND product_id = :pid
-          AND status = 'pending'
-          AND in_title = 0
-          AND in_attrs = 0
-        ORDER BY score DESC
-        LIMIT :lim
-    """), {"tid": tenant_id, "sid": shop_id, "pid": product_id, "lim": max_candidates}).fetchall()
-
-    if not cand_rows:
-        return {"code": ErrorCode.SEO_CANDIDATE_NOT_FOUND,
-                "msg": "该商品暂无可用候选词，请先在 SEO 优化建议页跑「刷新引擎」生成候选池"}
-
-    all_candidates = [
-        {
-            "id": r.id,
-            "keyword": r.keyword,
-            "score": float(r.score or 0),
-            "paid_roas": float(r.paid_roas) if r.paid_roas is not None else None,
-            "paid_orders": int(r.paid_orders) if r.paid_orders is not None else None,
-            "organic_impressions": int(r.organic_impressions) if r.organic_impressions is not None else None,
-            "organic_orders": int(r.organic_orders) if r.organic_orders is not None else None,
-        }
-        for r in cand_rows
-    ]
-
-    # ---------- 3. 查"必须保留高价值词"（在原标题/描述里出现且带订单/曝光）----------
-    # 注意 in_title=1 OR in_attrs=1 都算（描述里没有 in_description 字段，先不查描述里的词）
-    preserve_rows = db.execute(text("""
-        SELECT keyword
-        FROM seo_keyword_candidates
-        WHERE tenant_id = :tid
-          AND shop_id = :sid
-          AND product_id = :pid
-          AND (in_title = 1 OR in_attrs = 1)
-          AND (COALESCE(paid_orders, 0) > 0
-               OR COALESCE(organic_orders, 0) > 0
-               OR COALESCE(organic_impressions, 0) >= 20)
-        ORDER BY (COALESCE(paid_orders,0) + COALESCE(organic_orders,0)) DESC,
-                 score DESC
-        LIMIT 15
-    """), {"tid": tenant_id, "sid": shop_id, "pid": product_id}).fetchall()
-    preserve_keywords = [r.keyword for r in preserve_rows]
-
-    # ---------- 4. 处理品牌理念: 传入则保存到 shops 表(空字符串=清空), 不传则用现值 ----------
-    # brand_philosophy=None 表示前端未触发更新, 用 shops 表当前值
-    # brand_philosophy="" 表示用户清空了, 写 NULL
-    # brand_philosophy="非空" 表示更新, 同时保存到 shops 表
-    final_philosophy: Optional[str] = None
-    if brand_philosophy is None:
-        # 不传 → 用 shops 表现值
-        final_philosophy = getattr(shop, "brand_philosophy", None)
-    else:
-        # 传了(空或非空)都执行 update
+    # 1. 处理品牌理念 (传入则保存到 shops 表)
+    if brand_philosophy is not None:
         new_val = (brand_philosophy or "").strip() or None
         db.execute(
             text("UPDATE shops SET brand_philosophy = :bp WHERE id = :sid AND tenant_id = :tid"),
             {"bp": new_val, "sid": shop_id, "tid": tenant_id},
         )
         db.commit()
+        # 同步到内存对象, 让 _collect 能拿到最新值
+        try:
+            shop.brand_philosophy = new_val
+        except Exception:
+            pass
         final_philosophy = new_val
+    else:
+        final_philosophy = getattr(shop, "brand_philosophy", None)
 
-    # ---------- 5. 拼 prompt & 调 GLM ----------
+    # 2. 收集全集 (内部已应用黑名单 + 长字段过滤 + title 重复去重)
+    inputs = _collect_inputs(db, tenant_id, shop, product_id)
+    if not inputs.get("ok"):
+        return {"code": inputs.get("code"), "msg": inputs.get("msg")}
+
+    # 3. 应用前端 excluded 过滤
+    excl_keys = set(excluded_context_keys or [])
+    excl_attr = set(int(x) for x in (excluded_attr_ids or []))
+    excl_kw = set((excluded_keywords or []))
+
+    context_fields = [f for f in inputs["context_fields"] if f["key"] not in excl_keys]
+    attrs = [a for a in inputs["attrs"] if a.get("id") not in excl_attr]
+    cat_kws = [k for k in inputs["category_top_keywords"] if k["keyword"] not in excl_kw]
+    prod_kws = [k for k in inputs["product_top_keywords"] if k["keyword"] not in excl_kw]
+
+    # product_top_keywords 是本商品已有订单/曝光的高价值词, 视为"必须保留"清单
+    preserve_keywords = [k["keyword"] for k in prod_kws if (
+        (k.get("paid_orders") or 0) > 0
+        or (k.get("organic_orders") or 0) > 0
+        or (k.get("organic_impressions") or 0) >= 20
+    )]
+
+    # 4. 拼 prompt
     user_prompt = _build_user_prompt(
-        platform=getattr(shop, "platform", None),
-        name_zh=prod_row.name_zh or "",
-        name_ru=prod_row.name_ru,
-        brand=prod_row.brand,
-        category_name=prod_row.platform_category_name,
-        current_title_ru=prod_row.title_ru,
-        current_description_ru=prod_row.description_ru,
-        variant_attrs=prod_row.variant_attrs,
-        all_candidates=all_candidates,
-        preserve_keywords=preserve_keywords,
-        brand_philosophy=final_philosophy,
+        platform=inputs["platform"],
+        context_fields=context_fields,
+        attrs=attrs,
+        category_top_keywords=cat_kws,
+        product_top_keywords=prod_kws,
     )
 
     logger.info(
         f"SEO description generate: tenant={tenant_id} shop={shop_id} product={product_id} "
-        f"candidates={len(all_candidates)} preserve={len(preserve_keywords)} "
-        f"prompt_chars={len(user_prompt)} has_current_desc={bool(prod_row.description_ru)}"
-    )
-    logger.info(
-        "SEO description SYSTEM_PROMPT >>>\n%s\n<<< SYSTEM_PROMPT END",
-        SYSTEM_PROMPT,
-    )
-    logger.info(
-        "SEO description USER_PROMPT (tenant=%s shop=%s product=%s) >>>\n%s\n<<< USER_PROMPT END",
-        tenant_id, shop_id, product_id, user_prompt,
+        f"ctx={len(context_fields)}/{len(inputs['context_fields'])} "
+        f"attrs={len(attrs)}/{len(inputs['attrs'])} "
+        f"cat_kw={len(cat_kws)}/{len(inputs['category_top_keywords'])} "
+        f"prod_kw={len(prod_kws)}/{len(inputs['product_top_keywords'])} "
+        f"prompt_chars={len(user_prompt)}"
     )
 
     try:
@@ -412,19 +556,25 @@ async def generate_description(
         return {"code": ErrorCode.SEO_TITLE_GENERATE_FAILED,
                 "msg": "AI 返回为空或解析失败"}
 
-    # ---------- 5. 持久化到 seo_generated_contents（content_type='description'）----------
+    # 5. 持久化到 seo_generated_contents
     gen = SeoGeneratedContent(
         tenant_id=tenant_id,
-        listing_id=prod_row.listing_id,
+        listing_id=inputs["platform_listing_id"],
         content_type="description",
-        original_text=prod_row.description_ru or "",
+        original_text=inputs["_raw_description_ru"],
         generated_text=parsed["new_description"],
         keywords_used={
-            "candidate_ids": [c["id"] for c in all_candidates],
-            "keywords": parsed["included_keywords"],
+            "category_top_keywords": [k["keyword"] for k in cat_kws],
+            "product_top_keywords": [k["keyword"] for k in prod_kws],
+            "ai_included_keywords": parsed["included_keywords"],
             "reasoning": parsed["reasoning"],
             "structure": parsed["structure"],
             "preserve_keywords": preserve_keywords,
+            "excluded": {
+                "context_keys": list(excl_keys),
+                "attr_ids": list(excl_attr),
+                "keywords": list(excl_kw),
+            },
         },
         ai_model=ai_result["model"],
         ai_decision_id=ai_result["decision_id"],
@@ -457,9 +607,9 @@ async def generate_description(
             "generated_content_id": gen.id,
             "tokens": ai_result["tokens"],
             "duration_ms": ai_result["duration_ms"],
-            "original_description": prod_row.description_ru or "",
+            "original_description": inputs["_raw_description_ru"],
             "char_count": len(parsed["new_description"]),
-            "listing_id": prod_row.listing_id,
+            "listing_id": inputs["platform_listing_id"],
             "brand_philosophy": final_philosophy or "",  # 返给前端,确保 modal 同步
         },
     }

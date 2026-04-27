@@ -19,7 +19,9 @@ from app.services.seo.service import (
 )
 from app.services.seo.title_generator import generate_title
 from app.services.seo.health_service import compute_shop_health, list_missing_candidates_for_product
-from app.services.seo.description_generator import generate_description
+from app.services.seo.description_generator import (
+    generate_description, preview_description_inputs,
+)
 from app.services.seo.generated_history import list_generated_titles, mark_title_applied
 from app.services.seo.keyword_tracking_service import compute_keyword_tracking, list_query_top_skus
 from app.services.seo.roi_report_service import compute_roi_report
@@ -51,11 +53,18 @@ class GenerateTitleBody(BaseModel):
 
 class GenerateDescriptionBody(BaseModel):
     product_id: int = Field(..., gt=0, description="products.id")
-    max_candidates: int = Field(50, ge=10, le=80,
-                                description="后端取候选词全集的上限（按 score desc）")
     brand_philosophy: Optional[str] = Field(
         None, max_length=500,
         description="品牌理念,店铺级共享。None=不更新用现值,空串=清空,非空=保存到 shops 表+拼 prompt"
+    )
+    excluded_context_keys: Optional[List[str]] = Field(
+        None, description="勾掉的上下文字段 key (brand_philosophy/name_zh/name_ru/brand/category/title_ru/description_ru)"
+    )
+    excluded_attr_ids: Optional[List[int]] = Field(
+        None, description="勾掉的属性 attr_id 列表"
+    )
+    excluded_keywords: Optional[List[str]] = Field(
+        None, description="勾掉的关键词 (类目热门词 / 本商品热门词共用)"
     )
 
 
@@ -519,6 +528,26 @@ def get_brand_philosophy(
     return success({"brand_philosophy": shop.brand_philosophy or ""})
 
 
+@router.get("/shop/{shop_id}/generate-description/preview")
+def preview_generate_description(
+    shop_id: int,
+    product_id: int = Query(..., gt=0),
+    db: Session = Depends(get_db),
+    tenant_id: int = Depends(get_tenant_id),
+    shop=Depends(get_owned_shop),
+):
+    """前端 AiDescriptionModal 打开时调, 返回 4 个分组的全集让用户勾选:
+    - context_fields: 上下文字段 (品牌理念/中文名/俄语名/品牌/类目/标题/描述)
+    - attrs: 商品属性 (黑名单已过滤)
+    - category_top_keywords: 同类目热门关键词 Top 30
+    - product_top_keywords: 本商品热门关键词 Top 10
+    """
+    result = preview_description_inputs(db, tenant_id, shop, product_id)
+    if result.get("code") != 0:
+        return error(result["code"], result.get("msg", ""))
+    return success(result["data"])
+
+
 @router.post("/shop/{shop_id}/generate-description")
 async def generate_description_for_product(
     shop_id: int,
@@ -530,10 +559,7 @@ async def generate_description_for_product(
 ):
     """AI 生成商品俄语描述（走 GLM）。
 
-    与 generate-title 不同：
-    - 不让用户预选候选词，后端自取全量缺词（按 score desc 限 max_candidates 个）
-    - 长度 800-2000 字符，段落分隔，纯营销文案 + SEO 自然融入
-    - 若 listing.description_ru 已有内容，走"渐进改写"模式保留卖点
+    新版接收 excluded_* 列表 (前端勾掉的项), 服务端在全集基础上过滤后拼 prompt。
     生成内容入库 seo_generated_contents 表 content_type='description'。
     """
     user_id = getattr(current_user, "id", None)
@@ -541,8 +567,10 @@ async def generate_description_for_product(
         db, tenant_id, shop,
         product_id=body.product_id,
         user_id=user_id,
-        max_candidates=body.max_candidates,
         brand_philosophy=body.brand_philosophy,
+        excluded_context_keys=body.excluded_context_keys,
+        excluded_attr_ids=body.excluded_attr_ids,
+        excluded_keywords=body.excluded_keywords,
     )
     if result.get("code") != 0:
         return error(result["code"], result.get("msg", ""))
