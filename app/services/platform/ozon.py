@@ -719,6 +719,50 @@ class OzonClient(BasePlatformClient):
             logger.error(f"Ozon 拉取商品详情失败，shop_id={self.shop_id}: {e}")
             raise
 
+    async def fetch_product_description(self, product_id) -> Optional[str]:
+        """拉单个商品描述。
+
+        API: POST /v1/product/info/description
+        body: {"product_id": <int>}
+        response: {"result": {"id": ..., "offer_id": ..., "name": ..., "description": "..."}}
+
+        Ozon 的 v3/product/info/list 不返 description, 必须走这个单独接口。
+        失败返 None (上层兜底,不影响主流程)。
+        """
+        if not product_id:
+            return None
+        try:
+            url = f"{OZON_SELLER_API}/v1/product/info/description"
+            result = await self._request("POST", url, json={"product_id": int(product_id)})
+            res = (result or {}).get("result") or {}
+            desc = res.get("description")
+            return desc if desc else None
+        except Exception as e:
+            logger.warning(f"Ozon 拉描述失败 shop={self.shop_id} pid={product_id}: {e}")
+            return None
+
+    async def fetch_product_descriptions_batch(
+        self, product_ids: list, concurrency: int = 30,
+    ) -> dict:
+        """并发拉一批商品描述,返回 {product_id: description_str}。
+
+        concurrency 控制 Ozon API 并发上限,默认 30。850 商品 ~30s 跑完。
+        部分失败不抛,返 dict 中缺失对应 pid 即可。
+        """
+        if not product_ids:
+            return {}
+        sem = asyncio.Semaphore(concurrency)
+        results: dict = {}
+
+        async def _one(pid):
+            async with sem:
+                desc = await self.fetch_product_description(pid)
+                if desc:
+                    results[int(pid)] = desc
+
+        await asyncio.gather(*[_one(p) for p in product_ids], return_exceptions=True)
+        return results
+
     # ==================== 订单 ====================
 
     async def fetch_orders(self, date_from: str, date_to: str) -> list:

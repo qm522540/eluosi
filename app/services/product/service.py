@@ -728,15 +728,18 @@ def _sync_ozon_products(db: Session, shop, tenant_id: int) -> dict:
                 it["product_id"]: (it.get("has_fbo_stocks") or it.get("has_fbs_stocks"))
                 for it in all_items
             }
-            # 并行：info 拉详情 + 分类树（名称反查）+ 佣金
+            # 并行：info 拉详情 + 分类树（名称反查）+ 佣金 + 描述
+            # 描述要单独拉 v1/product/info/description (v3/list 不返 description)
             info_task = asyncio.gather(*[
                 client.fetch_product_info(product_ids[i:i + 500])
                 for i in range(0, len(product_ids), 500)
             ])
             tree_task = client.fetch_category_tree()
             commission_task = client.fetch_commissions(product_ids)
-            info_chunks, tree, commissions = await asyncio.gather(
-                info_task, tree_task, commission_task, return_exceptions=True,
+            desc_task = client.fetch_product_descriptions_batch(product_ids, concurrency=30)
+            info_chunks, tree, commissions, descriptions = await asyncio.gather(
+                info_task, tree_task, commission_task, desc_task,
+                return_exceptions=True,
             )
             if isinstance(info_chunks, Exception):
                 raise info_chunks
@@ -746,14 +749,17 @@ def _sync_ozon_products(db: Session, shop, tenant_id: int) -> dict:
             if isinstance(commissions, Exception):
                 logger.warning(f"Ozon 佣金拉取失败 shop={shop.id}: {commissions}")
                 commissions = {}
+            if isinstance(descriptions, Exception):
+                logger.warning(f"Ozon 描述批量拉取失败 shop={shop.id}: {descriptions}")
+                descriptions = {}
             infos = [it for chunk in info_chunks for it in chunk]
-            return infos, archived_map, stock_map, tree, commissions
+            return infos, archived_map, stock_map, tree, commissions, descriptions
         finally:
             await client.close()
 
     loop = asyncio.new_event_loop()
     try:
-        infos, archived_map, stock_map, tree, commission_map = loop.run_until_complete(_fetch_all())
+        infos, archived_map, stock_map, tree, commission_map, desc_map = loop.run_until_complete(_fetch_all())
     finally:
         loop.close()
 
@@ -820,8 +826,11 @@ def _sync_ozon_products(db: Session, shop, tenant_id: int) -> dict:
         ozon_commission = None
         if isinstance(commission_map, dict) and pid:
             ozon_commission = commission_map.get(int(pid))
+        # 描述 (v1/product/info/description 单独接口拉的)
+        ozon_description = desc_map.get(int(pid)) if isinstance(desc_map, dict) else None
         data = {
             "title_ru": title,
+            "description_ru": ozon_description,
             "price": old_price or price,
             "discount_price": price if (old_price and price and old_price != price) else None,
             "barcode": barcode,
