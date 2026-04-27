@@ -77,9 +77,36 @@ const ScoreBig = ({ score, grade }) => {
 }
 
 const DimensionBar = ({ label, detail }) => {
+  // coverage 维度有 self_total + category_top_total, 拼一个详细 tooltip
+  const isCoverage = detail.self_total !== undefined || detail.category_top_total !== undefined
+  let tooltip = detail.hint || ''
+  if (isCoverage && !detail.data_insufficient) {
+    tooltip = (
+      <div style={{ fontSize: 12, lineHeight: 1.7 }}>
+        <div><strong>候选词覆盖率算分</strong></div>
+        <div style={{ marginTop: 4 }}>
+          覆盖池(去重) = <strong>{detail.total}</strong> 个词
+          <div style={{ paddingLeft: 12, color: '#ddd' }}>
+            ├ 本商品候选词: {detail.self_total} 个 (本商品自然搜索 / 付费 / 跨店同款带过的词)<br />
+            └ 跨店本类目热门 Top 30: {detail.category_top_total} 个 (按订单+曝光)
+          </div>
+        </div>
+        <div style={{ marginTop: 4 }}>
+          已命中 = <strong>{detail.covered}</strong> 个 (本商品候选 in_title|in_attrs ∪ 类目热门词在标题/属性出现)
+        </div>
+        <div style={{ marginTop: 4 }}>
+          得分 = {detail.covered} / {detail.total} × 60 = <strong>{detail.score}</strong> 分
+        </div>
+        <div style={{ marginTop: 6, color: '#ffd591' }}>
+          💡 想提分: 把上面缺的词融入标题或属性 (可点 AI 优化标题)
+        </div>
+      </div>
+    )
+  }
+
   if (detail.data_insufficient) {
     return (
-      <Tooltip title={detail.hint || '该维度无可用数据，已从评分中豁免'}>
+      <Tooltip title={tooltip || '该维度无可用数据，已从评分中豁免'}>
         <div style={{ marginBottom: 2 }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, color: '#999' }}>
             <span>{label}</span>
@@ -93,8 +120,8 @@ const DimensionBar = ({ label, detail }) => {
   const pct = Math.round((detail.score / detail.weight) * 100)
   const color = pct >= 70 ? '#52c41a' : (pct >= 40 ? '#faad14' : '#ff4d4f')
   return (
-    <Tooltip title={detail.hint || ''}>
-      <div style={{ marginBottom: 2 }}>
+    <Tooltip title={tooltip} overlayStyle={{ maxWidth: 460 }}>
+      <div style={{ marginBottom: 2, cursor: tooltip ? 'help' : 'default' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, color: '#666' }}>
           <span>{label}</span>
           <span>{detail.score} / {detail.weight}</span>
