@@ -89,6 +89,51 @@ def _strip_cjk(s: str) -> str:
     return cleaned
 
 
+# 首饰常见子类目主词词根 (匹配用 startswith 兼容俄语变格)
+# 用于检测"跨品类"热门词:本类目=耳环,热门词出现 кольцо/колье 等其他类目主词
+CATEGORY_PRIMARY_ROOTS = {
+    "серьги":   ["серьг", "сереж", "серг", "клипс", "моносерьг", "конго"],
+    "кольцо":   ["кольц", "ring"],
+    "колье":    ["колье", "кулон", "подвеск", "ожерель", "цепочк", "чокер"],
+    "брошь":    ["брошь", "брош", "брошк"],
+    "браслет":  ["браслет"],
+    "заколка":  ["заколк", "ободок", "резинк"],
+    "шарик":    ["шар", "шарик", "воздушн"],
+}
+
+
+def _detect_category_key(category_name: Optional[str]) -> Optional[str]:
+    """从 platform_category_name (如 "Галантерея / Бижутерные / Серьги") 末段
+    推出本类目 key (如 "серьги"), 用于跨品类判断。
+    """
+    if not category_name:
+        return None
+    leaf = category_name.split("/")[-1].strip().lower()
+    for key in CATEGORY_PRIMARY_ROOTS.keys():
+        if key in leaf:
+            return key
+    return None
+
+
+def _is_cross_category(keyword: str, current_cat_key: Optional[str]) -> bool:
+    """判断关键词是否含其他类目主词 → 默认不打勾让用户决定。
+
+    规则: 只要词里含任何"非本类目"的主词, 就标记跨品类。
+    例如本类目=耳环时, "серьги кольца медицинский сплав" 含 кольц(戒指) → 跨
+    "серьги жемчуг" 不含其他类目主词 → 不跨
+    本类目无法识别 → 不判断 (返 False)
+    """
+    if not current_cat_key or not keyword:
+        return False
+    kw_low = keyword.lower()
+    for other_key, other_roots in CATEGORY_PRIMARY_ROOTS.items():
+        if other_key == current_cat_key:
+            continue
+        if any(r in kw_low for r in other_roots):
+            return True
+    return False
+
+
 def _build_user_prompt(
     *,
     platform: Optional[str],
@@ -223,9 +268,10 @@ async def preview_title_inputs(
 
     shop_id = shop.id
 
-    # 1. 商品基础 (要 platform_category_extra_id 才能聚合同 type_id)
+    # 1. 商品基础 (要 platform_category_extra_id 才能聚合同 type_id; 要 platform_category_name 推本类目 key)
     prod_row = db.execute(text("""
         SELECT pl.platform_category_extra_id, pl.platform_category_id,
+               pl.platform_category_name,
                p.local_category_id
         FROM products p
         LEFT JOIN platform_listings pl
@@ -274,6 +320,11 @@ async def preview_title_inputs(
         local_category_id=prod_row.local_category_id,
         limit=5,
     )
+
+    # 跨品类标记: 例如本类目=耳环 (Серьги), 热门词里有 кольцо/колье/брошь 等 → 标 looks_cross_category
+    cat_key = _detect_category_key(prod_row.platform_category_name)
+    for k in category_top_keywords:
+        k["looks_cross_category"] = _is_cross_category(k.get("keyword", ""), cat_key)
 
     # 4. 批量翻译
     all_keywords = list({k["keyword"] for k in candidates + category_top_keywords if k.get("keyword")})
