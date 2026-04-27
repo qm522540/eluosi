@@ -85,20 +85,22 @@ const DimensionBar = ({ label, detail }) => {
       <div style={{ fontSize: 12, lineHeight: 1.7 }}>
         <div><strong>候选词覆盖率算分</strong></div>
         <div style={{ marginTop: 4 }}>
-          覆盖池(去重) = <strong>{detail.total}</strong> 个词
-          <div style={{ paddingLeft: 12, color: '#ddd' }}>
-            ├ 本商品候选词: {detail.self_total} 个 (本商品自然搜索 / 付费 / 跨店同款带过的词)<br />
-            └ 跨店本类目热门 Top 30: {detail.category_top_total} 个 (按订单+曝光)
-          </div>
+          本商品候选词 = <strong>{detail.total}</strong> 个 (自然搜索 / 付费 / 跨店同款带过的词)
         </div>
         <div style={{ marginTop: 4 }}>
-          已命中 = <strong>{detail.covered}</strong> 个 (本商品候选 in_title|in_attrs ∪ 类目热门词在标题/属性出现)
+          已命中 = <strong>{detail.covered}</strong> 个 (in_title=1 或 in_attrs=1)
         </div>
         <div style={{ marginTop: 4 }}>
           得分 = {detail.covered} / {detail.total} × 60 = <strong>{detail.score}</strong> 分
         </div>
+        {detail.category_top_total > 0 && (
+          <div style={{ marginTop: 6, paddingTop: 6, borderTop: '1px dashed #555' }}>
+            📌 参考 (不扣分): 跨店本类目热门 Top {detail.category_top_total} 个，
+            标题/属性命中 <strong>{detail.category_top_covered || 0}</strong> 个
+          </div>
+        )}
         <div style={{ marginTop: 6, color: '#ffd591' }}>
-          💡 想提分: 把上面缺的词融入标题或属性 (可点 AI 优化标题)
+          💡 想提分: 把"缺词 Top 3"列里的词融入标题或属性 (可点 AI 优化标题)
         </div>
       </div>
     )

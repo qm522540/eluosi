@@ -34,20 +34,29 @@ from app.utils.errors import ErrorCode
 
 # ==================== 评分函数 ====================
 
-def _score_coverage(total: int, covered: int,
-                    self_total: int = 0, cat_total: int = 0) -> tuple[float, dict]:
+def _score_coverage(self_total: int, self_covered: int,
+                    cat_total: int = 0, cat_covered: int = 0) -> tuple[float, dict]:
     """候选词覆盖率得分，上限 60。
 
-    覆盖池 = 本商品候选词 ∪ 类目热门 Top 30 (去重后总数)
-    命中 = 本商品候选词 in_title|in_attrs + 类目热门词在 title/attrs 字符串里出现
-    self_total / cat_total 用于 detail 展示，不参与算分。
+    评分口径：**只算本商品自己的候选词**（与右侧"缺词 Top 3"列表完全一致）。
+    类目热门 Top 30 仅作 reference 显示在 detail，不参与扣分 —
+      多词短语很难在 30-50 字符标题里子串命中，硬扣会冤枉短标题商品。
+    self_total=0 → data_insufficient=True 走豁免，总分按剩余维度重分权。
     """
-    if total == 0:
-        return 0.0, {"weight": 60, "covered": 0, "total": 0, "data_insufficient": True}
-    rate = covered / total
+    if self_total == 0:
+        return 0.0, {
+            "weight": 60, "covered": 0, "total": 0,
+            "self_total": 0, "category_top_total": cat_total,
+            "category_top_covered": cat_covered,
+            "data_insufficient": True,
+            "hint": "本商品暂无自然搜索/付费候选词，类目热门作参考"
+                    + (f"（命中 {cat_covered}/{cat_total}）" if cat_total else ""),
+        }
+    rate = self_covered / self_total
     return round(rate * 60, 1), {
-        "weight": 60, "covered": covered, "total": total,
+        "weight": 60, "covered": self_covered, "total": self_total,
         "self_total": self_total, "category_top_total": cat_total,
+        "category_top_covered": cat_covered,
         "rate_pct": round(rate * 100, 1),
         "data_insufficient": False,
     }
@@ -55,20 +64,20 @@ def _score_coverage(total: int, covered: int,
 
 def _score_title_length(title: Optional[str]) -> tuple[float, dict]:
     """俄语标题长度得分，上限 20。
-    < 30:         0（过短）
-    30-50:       递增
-    50-180:      满分 20
-    180-200:     扣到 15（接近平台上限）
-    > 200:       0（违规）
     空/None:      0
+    < 20:         0（极短）
+    20-50:       8→20 平滑递增（避免 30 字符正好踩边界 = 0）
+    50-180:      满分 20
+    180-200:     20→15
+    > 200:       0（违规）
     """
     if not title:
         return 0.0, {"weight": 20, "length": 0, "hint": "标题为空，请先同步商品或手动填写"}
     n = len(title)
-    if n < 30:
-        return 0.0, {"weight": 20, "length": n, "hint": "标题过短（< 30 字符），可融合反哺词扩展"}
+    if n < 20:
+        return 0.0, {"weight": 20, "length": n, "hint": f"标题过短（{n} < 20 字符），融合反哺词扩展"}
     if n <= 50:
-        sc = (n - 30) / 20 * 20
+        sc = 8 + (n - 20) / 30 * 12
         return round(sc, 1), {"weight": 20, "length": n, "hint": f"标题偏短（{n} / 建议 50-180）"}
     if n <= 180:
         return 20.0, {"weight": 20, "length": n, "hint": "标题长度理想"}
@@ -201,7 +210,6 @@ def compute_shop_health(
     type_ids = {str(r.type_id) for r in rows if r.type_id}
     cat_top_by_type: dict = {}     # {type_id_str: set(keyword)}
     if type_ids:
-        from sqlalchemy import bindparam
         agg_stmt = text("""
             SELECT pl.platform_category_extra_id AS type_id, c.keyword,
                    SUM(COALESCE(c.organic_orders,0)+COALESCE(c.paid_orders,0)) AS total_orders,
@@ -259,17 +267,16 @@ def compute_shop_health(
                 attrs_low = str(r.variant_attrs).lower()
         cat_in_text = {kw for kw in cat_top if kw.lower() in title_low or kw.lower() in attrs_low}
 
-        # 4. union: total = 本商品 ∪ 类目 Top 30 (去重) ; covered 同样去重
-        total_kws = self_kws | cat_top
-        covered_kws = self_covered | cat_in_text
-        total_cand = len(total_kws)
-        covered = len(covered_kws)
-
+        # 4. 评分只用 self,类目热门作 reference (不进 total 不扣分)
         cov_score, cov_detail = _score_coverage(
-            total_cand, covered,
             self_total=len(self_kws),
+            self_covered=len(self_covered),
             cat_total=len(cat_top),
+            cat_covered=len(cat_in_text),
         )
+        # 兼容字段(旧前端展示用):
+        total_cand = len(self_kws)
+        covered = len(self_covered)
         tit_score, tit_detail = _score_title_length(r.title_ru)
         desc_score, desc_detail = _score_description_length(r.description_ru)
 
