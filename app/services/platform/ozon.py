@@ -764,18 +764,15 @@ class OzonClient(BasePlatformClient):
         return results
 
     async def update_product_name(self, offer_id: str, new_name: str) -> dict:
-        """改商品名(标题), 走 /v1/product/import 异步任务。
+        """改商品名(标题), 走 /v1/product/attributes/update 异步任务。
 
-        Ozon 没有"只改 name"的轻接口, /v1/product/import 接受 items 数组,
-        每个 item 必填 offer_id + attributes 数组, 我们只传 attribute_id=4180
-        (Название товара) 把名字覆盖即可, 其它字段不动。
-
-        返回 {task_id} 或 {error}。task_id 可后续用 /v1/product/import/info 查状态。
-        Ozon 服务端通常 1-5 分钟把改动推到前台。
+        body 只传 offer_id + attributes 数组, attribute_id=4180 是 "Название товара"。
+        其它属性不动。返回 {task_id} 或 {error}。
+        task_id 可用 /v1/product/import/info 查状态, 1-5 分钟生效。
         """
         if not offer_id or not new_name:
             return {"error": "offer_id 或 new_name 为空"}
-        url = f"{OZON_SELLER_API}/v1/product/import"
+        url = f"{OZON_SELLER_API}/v1/product/attributes/update"
         # attribute_id=4180 是 "Название товара" (商品名)
         body = {
             "items": [{
