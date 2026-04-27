@@ -53,6 +53,10 @@ class GenerateDescriptionBody(BaseModel):
     product_id: int = Field(..., gt=0, description="products.id")
     max_candidates: int = Field(50, ge=10, le=80,
                                 description="后端取候选词全集的上限（按 score desc）")
+    brand_philosophy: Optional[str] = Field(
+        None, max_length=500,
+        description="品牌理念,店铺级共享。None=不更新用现值,空串=清空,非空=保存到 shops 表+拼 prompt"
+    )
 
 
 @router.get("/shop/{shop_id}/champion-keywords")
@@ -506,6 +510,15 @@ async def generate_title_for_product(
     return success(result["data"])
 
 
+@router.get("/shop/{shop_id}/brand-philosophy")
+def get_brand_philosophy(
+    shop_id: int,
+    shop=Depends(get_owned_shop),
+):
+    """拉店铺品牌理念,AiDescriptionModal 打开时预填文本框用。"""
+    return success({"brand_philosophy": shop.brand_philosophy or ""})
+
+
 @router.post("/shop/{shop_id}/generate-description")
 async def generate_description_for_product(
     shop_id: int,
@@ -529,6 +542,7 @@ async def generate_description_for_product(
         product_id=body.product_id,
         user_id=user_id,
         max_candidates=body.max_candidates,
+        brand_philosophy=body.brand_philosophy,
     )
     if result.get("code") != 0:
         return error(result["code"], result.get("msg", ""))

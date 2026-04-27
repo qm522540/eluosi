@@ -94,12 +94,19 @@ def _build_user_prompt(
     variant_attrs: Any,
     all_candidates: list[dict],
     preserve_keywords: Optional[list[str]] = None,
+    brand_philosophy: Optional[str] = None,
 ) -> str:
     """拼用户侧 prompt。候选词按 score 降序传入，限 50 个。"""
     lines = []
     hint = PLATFORM_HINT.get((platform or "").lower())
     if hint:
         lines.append(hint)
+        lines.append("")
+
+    # 品牌理念优先放最前 — 让整段描述贯穿这个调性
+    if brand_philosophy and brand_philosophy.strip():
+        lines.append("【店铺品牌理念（请贯穿到描述风格里,但不要直接照抄整段)】")
+        lines.append(brand_philosophy.strip())
         lines.append("")
 
     lines.extend([
@@ -204,6 +211,7 @@ async def generate_description(
     product_id: int,
     user_id: Optional[int] = None,
     max_candidates: int = 50,
+    brand_philosophy: Optional[str] = None,
 ) -> dict:
     """为某商品生成 AI 商品描述（不让用户预选词，后端自取全量缺词 Top N）。
 
@@ -294,7 +302,25 @@ async def generate_description(
     """), {"tid": tenant_id, "sid": shop_id, "pid": product_id}).fetchall()
     preserve_keywords = [r.keyword for r in preserve_rows]
 
-    # ---------- 4. 拼 prompt & 调 GLM ----------
+    # ---------- 4. 处理品牌理念: 传入则保存到 shops 表(空字符串=清空), 不传则用现值 ----------
+    # brand_philosophy=None 表示前端未触发更新, 用 shops 表当前值
+    # brand_philosophy="" 表示用户清空了, 写 NULL
+    # brand_philosophy="非空" 表示更新, 同时保存到 shops 表
+    final_philosophy: Optional[str] = None
+    if brand_philosophy is None:
+        # 不传 → 用 shops 表现值
+        final_philosophy = getattr(shop, "brand_philosophy", None)
+    else:
+        # 传了(空或非空)都执行 update
+        new_val = (brand_philosophy or "").strip() or None
+        db.execute(
+            text("UPDATE shops SET brand_philosophy = :bp WHERE id = :sid AND tenant_id = :tid"),
+            {"bp": new_val, "sid": shop_id, "tid": tenant_id},
+        )
+        db.commit()
+        final_philosophy = new_val
+
+    # ---------- 5. 拼 prompt & 调 GLM ----------
     user_prompt = _build_user_prompt(
         platform=getattr(shop, "platform", None),
         name_zh=prod_row.name_zh or "",
@@ -306,6 +332,7 @@ async def generate_description(
         variant_attrs=prod_row.variant_attrs,
         all_candidates=all_candidates,
         preserve_keywords=preserve_keywords,
+        brand_philosophy=final_philosophy,
     )
 
     logger.info(
@@ -384,5 +411,6 @@ async def generate_description(
             "original_description": prod_row.description_ru or "",
             "char_count": len(parsed["new_description"]),
             "listing_id": prod_row.listing_id,
+            "brand_philosophy": final_philosophy or "",  # 返给前端,确保 modal 同步
         },
     }

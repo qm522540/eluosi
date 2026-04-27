@@ -38,13 +38,24 @@ export function generateSeoTitle(shopId, productId, candidateIds) {
   )
 }
 
-/** AI 生成商品俄语描述（走 GLM，5-15 秒）— 后端自取候选词全集，不需要前端勾选 */
-export function generateSeoDescription(shopId, productId, maxCandidates = 50) {
+/** AI 生成商品俄语描述（走 GLM，5-15 秒）— 后端自取候选词全集，不需要前端勾选
+ * brandPhilosophy: undefined/null=不更新用现值, ""=清空, 非空=保存到 shops 表+拼 prompt
+ */
+export function generateSeoDescription(shopId, productId, maxCandidates = 50, brandPhilosophy) {
+  const body = { product_id: productId, max_candidates: maxCandidates }
+  if (brandPhilosophy !== undefined && brandPhilosophy !== null) {
+    body.brand_philosophy = brandPhilosophy
+  }
   return request.post(
     `${BASE}/shop/${shopId}/generate-description`,
-    { product_id: productId, max_candidates: maxCandidates },
+    body,
     { timeout: 60000 },
   )
+}
+
+/** 拉店铺品牌理念 (AiDescriptionModal 打开时预填) */
+export function getShopBrandPhilosophy(shopId) {
+  return request.get(`${BASE}/shop/${shopId}/brand-philosophy`)
 }
 
 /** 店铺 SEO 健康分诊断 + Top 缺词 */

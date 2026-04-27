@@ -1,11 +1,11 @@
 import { useState, useEffect } from 'react'
 import {
-  Modal, Button, Typography, Space, Tag, Alert, Descriptions, Spin, message,
+  Modal, Button, Typography, Space, Tag, Alert, Descriptions, Spin, message, Input,
 } from 'antd'
 import {
-  CopyOutlined, ThunderboltOutlined, RobotOutlined, CheckCircleOutlined,
+  CopyOutlined, ThunderboltOutlined, RobotOutlined, CheckCircleOutlined, ClearOutlined,
 } from '@ant-design/icons'
-import { generateSeoDescription, applyGeneratedTitle } from '@/api/seo'
+import { generateSeoDescription, applyGeneratedTitle, getShopBrandPhilosophy } from '@/api/seo'
 import { copyText } from '@/utils/clipboard'
 
 const { Text, Paragraph } = Typography
@@ -24,18 +24,41 @@ const AiDescriptionModal = ({
 }) => {
   const [loading, setLoading] = useState(false)
   const [result, setResult] = useState(null)
+  // 品牌理念 (店铺级共享): undefined=未拉取, ''=店铺没设, 非空=店铺已设
+  const [brandPhilosophy, setBrandPhilosophy] = useState('')
+  const [philosophyLoading, setPhilosophyLoading] = useState(false)
+  // 标记用户是否动过文本框 (没动 → 不传 brand_philosophy 走"用现值"分支)
+  const [philosophyDirty, setPhilosophyDirty] = useState(false)
 
   useEffect(() => {
     if (open) setResult(null)
   }, [open, productId])
 
+  // 切换店铺时拉品牌理念预填
+  useEffect(() => {
+    if (!open || !shopId) return
+    setPhilosophyLoading(true)
+    setPhilosophyDirty(false)
+    getShopBrandPhilosophy(shopId)
+      .then(r => setBrandPhilosophy(r?.data?.brand_philosophy || ''))
+      .catch(() => setBrandPhilosophy(''))
+      .finally(() => setPhilosophyLoading(false))
+  }, [open, shopId])
+
   const handleGenerate = async () => {
     if (!shopId || !productId) return
     setLoading(true)
     try {
-      const r = await generateSeoDescription(shopId, productId, 50)
+      // 用户动过文本框就传当前值(空串=清空,非空=保存),没动则不传
+      const bp = philosophyDirty ? brandPhilosophy : undefined
+      const r = await generateSeoDescription(shopId, productId, 50, bp)
       if (r?.code === 0) {
         setResult(r.data)
+        // 后端返新值同步给 state (确保 modal 一致)
+        if (r.data?.brand_philosophy !== undefined) {
+          setBrandPhilosophy(r.data.brand_philosophy)
+          setPhilosophyDirty(false)
+        }
       } else {
         message.error(r?.msg || '生成失败')
       }
@@ -44,6 +67,12 @@ const AiDescriptionModal = ({
     } finally {
       setLoading(false)
     }
+  }
+
+  const handleClearPhilosophy = () => {
+    setBrandPhilosophy('')
+    setPhilosophyDirty(true)
+    message.info('已清空,点「开始生成」后该店铺品牌理念会被删除')
   }
 
   const handleCopy = async () => {
@@ -138,6 +167,48 @@ const AiDescriptionModal = ({
         style={{ marginBottom: 12 }}
         message="描述启用后，健康诊断的「描述长度」维度会同步上涨（300-2000 字符为满分区间）"
       />
+
+      {/* 品牌理念 (店铺级共享): 用户编辑后点生成时一起保存 */}
+      <div style={{ marginBottom: 12, padding: '10px 12px', background: '#fafafa', borderRadius: 4, border: '1px dashed #d9d9d9' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+          <Text strong style={{ fontSize: 12 }}>
+            🎯 店铺品牌理念
+            <Text type="secondary" style={{ fontSize: 11, fontWeight: 'normal', marginLeft: 6 }}>
+              (店铺级,同店所有商品共享;为空时不传给 AI)
+            </Text>
+          </Text>
+          {brandPhilosophy && (
+            <Button
+              size="small"
+              type="text"
+              danger
+              icon={<ClearOutlined />}
+              onClick={handleClearPhilosophy}
+            >
+              清空
+            </Button>
+          )}
+        </div>
+        <Input.TextArea
+          value={brandPhilosophy}
+          onChange={(e) => {
+            setBrandPhilosophy(e.target.value)
+            setPhilosophyDirty(true)
+          }}
+          placeholder={philosophyLoading ? '加载中...' : '例如:专注极简北欧风首饰,女性日常通勤百搭,材质天然环保'}
+          maxLength={500}
+          showCount
+          rows={2}
+          disabled={philosophyLoading}
+          style={{ fontSize: 12 }}
+        />
+        {philosophyDirty && (
+          <Text type="warning" style={{ fontSize: 11 }}>
+            ⚠ 已修改,点「开始生成」后会自动保存到该店铺
+          </Text>
+        )}
+      </div>
+
       <Descriptions size="small" column={1} bordered style={{ marginBottom: 12 }}>
         <Descriptions.Item label="商品">{productName || `ID ${productId}`}</Descriptions.Item>
         <Descriptions.Item label="当前俄语标题">
@@ -171,6 +242,7 @@ const AiDescriptionModal = ({
             <Text strong style={{ fontSize: 12 }}>📋 商品上下文（从 DB 抓取，空字段不会喂）</Text>
             <ul style={{ margin: '2px 0 6px 18px', paddingLeft: 0 }}>
               <li>平台风格规则（WB 紧凑 800-1200 字 / Ozon 长结构化 1200-2000 字）</li>
+              <li>店铺品牌理念（如已填写,贯穿描述风格）</li>
               <li>商品中文名 + 俄语名 + 品牌</li>
               <li><Text strong>类目路径</Text>（如 "Дом и сад / Товары для праздников / Шарик"）</li>
               <li>当前俄语标题 + 当前俄语描述（如有 → 走「渐进改写」保留卖点）</li>
