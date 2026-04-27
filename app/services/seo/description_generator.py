@@ -340,6 +340,14 @@ async def generate_description(
         f"candidates={len(all_candidates)} preserve={len(preserve_keywords)} "
         f"prompt_chars={len(user_prompt)} has_current_desc={bool(prod_row.description_ru)}"
     )
+    logger.info(
+        "SEO description SYSTEM_PROMPT >>>\n%s\n<<< SYSTEM_PROMPT END",
+        SYSTEM_PROMPT,
+    )
+    logger.info(
+        "SEO description USER_PROMPT (tenant=%s shop=%s product=%s) >>>\n%s\n<<< USER_PROMPT END",
+        tenant_id, shop_id, product_id, user_prompt,
+    )
 
     try:
         ai_result = await ai_router.execute(
