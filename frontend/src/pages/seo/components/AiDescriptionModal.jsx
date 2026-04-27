@@ -259,42 +259,7 @@ const AiDescriptionModal = ({
         </div>
       ) : preview ? (
         <>
-          {/* === 1. 店铺品牌理念 (单独, 因为可编辑文本) === */}
-          <div style={{ marginBottom: 12, padding: '10px 12px', background: '#fafafa', borderRadius: 4, border: '1px solid #e8e8e8' }}>
-            <Space style={{ marginBottom: 6 }}>
-              <Checkbox
-                checked={selectedContextKeys.has('brand_philosophy')}
-                onChange={toggleSet(selectedContextKeys, setSelectedContextKeys).bind(null, 'brand_philosophy')}
-              >
-                <Text strong style={{ fontSize: 12 }}>🎯 店铺品牌理念</Text>
-              </Checkbox>
-              <Text type="secondary" style={{ fontSize: 11 }}>
-                (店铺级共享, 同店所有商品共用; 勾掉即不喂 AI)
-              </Text>
-              {brandPhilosophy && (
-                <Button size="small" type="text" danger icon={<ClearOutlined />}
-                        onClick={handleClearPhilosophy} style={{ fontSize: 11 }}>
-                  清空
-                </Button>
-              )}
-            </Space>
-            <Input.TextArea
-              value={brandPhilosophy}
-              onChange={(e) => { setBrandPhilosophy(e.target.value); setPhilosophyDirty(true) }}
-              placeholder="例如:专注极简北欧风首饰,女性日常通勤百搭,材质天然环保"
-              maxLength={500}
-              showCount
-              rows={2}
-              style={{ fontSize: 12 }}
-            />
-            {philosophyDirty && (
-              <Text type="warning" style={{ fontSize: 11 }}>
-                ⚠ 已修改, 点「开始生成」后会自动保存到该店铺
-              </Text>
-            )}
-          </div>
-
-          {/* === 2. 上下文字段 (除品牌理念外) === */}
+          {/* === 1. 上下文字段 (除品牌理念外) === */}
           {ctxFields.length > 0 && (
             <div style={{ marginBottom: 12, padding: '10px 12px', border: '1px solid #e8e8e8', borderRadius: 4 }}>
               <div style={{ marginBottom: 6 }}>
@@ -390,7 +355,7 @@ const AiDescriptionModal = ({
             </div>
           )}
 
-          {/* === 5. 本商品热门关键词 (横排) === */}
+          {/* === 4. 本商品热门关键词 (横排) === */}
           {(preview.product_top_keywords || []).length > 0 && (
             <div style={{ marginBottom: 12, padding: '10px 12px', border: '1px solid #e8e8e8', borderRadius: 4 }}>
               <Space style={{ marginBottom: 6 }}>
@@ -435,6 +400,41 @@ const AiDescriptionModal = ({
               </Space>
             </div>
           )}
+
+          {/* === 5. 自定义输入 (店铺级共享, 自由文本) === */}
+          <div style={{ marginBottom: 12, padding: '10px 12px', background: '#fff7e6', borderRadius: 4, border: '1px solid #ffd591' }}>
+            <Space style={{ marginBottom: 6 }}>
+              <Checkbox
+                checked={selectedContextKeys.has('brand_philosophy')}
+                onChange={toggleSet(selectedContextKeys, setSelectedContextKeys).bind(null, 'brand_philosophy')}
+              >
+                <Text strong style={{ fontSize: 12 }}>✏️ 自定义输入</Text>
+              </Checkbox>
+              <Text type="secondary" style={{ fontSize: 11 }}>
+                (店铺级共享, 同店所有商品共用; 文本框可改, 想给 AI 加什么调性/风格/卖点取舍指令都行; 勾掉即不喂 AI)
+              </Text>
+              {brandPhilosophy && (
+                <Button size="small" type="text" danger icon={<ClearOutlined />}
+                        onClick={handleClearPhilosophy} style={{ fontSize: 11 }}>
+                  清空
+                </Button>
+              )}
+            </Space>
+            <Input.TextArea
+              value={brandPhilosophy}
+              onChange={(e) => { setBrandPhilosophy(e.target.value); setPhilosophyDirty(true) }}
+              placeholder="例如:专注极简北欧风首饰,女性日常通勤百搭,材质天然环保 / 描述要有节日仪式感 / 文案少用感叹号"
+              maxLength={500}
+              showCount
+              rows={2}
+              style={{ fontSize: 12 }}
+            />
+            {philosophyDirty && (
+              <Text type="warning" style={{ fontSize: 11 }}>
+                ⚠ 已修改, 点「开始生成」后会自动保存到该店铺
+              </Text>
+            )}
+          </div>
         </>
       ) : (
         <Alert type="warning" message="预览数据加载失败,无法选择字段" />
