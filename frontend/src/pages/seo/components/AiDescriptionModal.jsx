@@ -1,22 +1,28 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import {
-  Modal, Button, Typography, Space, Tag, Alert, Descriptions, Spin, message, Input,
+  Modal, Button, Typography, Space, Tag, Alert, Descriptions, Spin, message,
+  Input, Checkbox, Tooltip, Divider,
 } from 'antd'
 import {
   CopyOutlined, ThunderboltOutlined, RobotOutlined, CheckCircleOutlined, ClearOutlined,
 } from '@ant-design/icons'
-import { generateSeoDescription, applyGeneratedTitle, getShopBrandPhilosophy } from '@/api/seo'
+import {
+  generateSeoDescription, applyGeneratedTitle, getShopBrandPhilosophy,
+  previewSeoDescriptionInputs,
+} from '@/api/seo'
 import { copyText } from '@/utils/clipboard'
 
 const { Text, Paragraph } = Typography
 
 /**
- * AI 商品描述生成 Modal
+ * AI 商品描述生成 Modal — 用户可勾选哪些字段/属性/关键词喂给 AI。
  *
- * 与 AiTitleModal 不同：
- * - 不让用户勾选候选词（后端自取全量缺词 Top 50）
- * - 展示长描述（多段，800-2000 字符）
- * - "启用新描述"调同一个 applyGeneratedTitle API（后端不查 content_type）
+ * 默认全选, 取消勾选的项在生成时不传给后端 (走 excluded_* 参数)。
+ * 4 个分组:
+ *   1. 上下文字段 (品牌理念/中文名/俄语名/品牌/类目/标题/描述)
+ *   2. 商品属性 (Ozon 黑名单已过滤后的全集)
+ *   3. 同类目热门关键词 Top 30 (跨商品聚合)
+ *   4. 本商品热门关键词 Top 10
  */
 const AiDescriptionModal = ({
   open, onClose,
@@ -24,37 +30,112 @@ const AiDescriptionModal = ({
 }) => {
   const [loading, setLoading] = useState(false)
   const [result, setResult] = useState(null)
-  // 品牌理念 (店铺级共享): undefined=未拉取, ''=店铺没设, 非空=店铺已设
+
+  // preview 数据 (全集)
+  const [preview, setPreview] = useState(null)
+  const [previewLoading, setPreviewLoading] = useState(false)
+
+  // 用户勾选状态 (默认全选)
+  const [selectedContextKeys, setSelectedContextKeys] = useState(new Set())
+  const [selectedAttrIds, setSelectedAttrIds] = useState(new Set())
+  const [selectedKeywords, setSelectedKeywords] = useState(new Set())
+
+  // 品牌理念 (店铺级共享, 文本框可编辑)
   const [brandPhilosophy, setBrandPhilosophy] = useState('')
-  const [philosophyLoading, setPhilosophyLoading] = useState(false)
-  // 标记用户是否动过文本框 (没动 → 不传 brand_philosophy 走"用现值"分支)
   const [philosophyDirty, setPhilosophyDirty] = useState(false)
 
   useEffect(() => {
     if (open) setResult(null)
   }, [open, productId])
 
-  // 切换店铺时拉品牌理念预填
+  // 打开时:并发拉品牌理念 + preview 数据
   useEffect(() => {
-    if (!open || !shopId) return
-    setPhilosophyLoading(true)
+    if (!open || !shopId || !productId) return
+    setPreviewLoading(true)
     setPhilosophyDirty(false)
-    getShopBrandPhilosophy(shopId)
-      .then(r => setBrandPhilosophy(r?.data?.brand_philosophy || ''))
-      .catch(() => setBrandPhilosophy(''))
-      .finally(() => setPhilosophyLoading(false))
-  }, [open, shopId])
+
+    Promise.all([
+      getShopBrandPhilosophy(shopId).catch(() => ({ data: { brand_philosophy: '' } })),
+      previewSeoDescriptionInputs(shopId, productId).catch((e) => {
+        message.error(e?.response?.data?.msg || '加载预览数据失败')
+        return null
+      }),
+    ]).then(([bpRes, prevRes]) => {
+      setBrandPhilosophy(bpRes?.data?.brand_philosophy || '')
+      if (prevRes?.data) {
+        setPreview(prevRes.data)
+        // 默认全选
+        setSelectedContextKeys(new Set((prevRes.data.context_fields || []).map(f => f.key)))
+        setSelectedAttrIds(new Set((prevRes.data.attrs || []).map(a => a.id)))
+        const allKws = [
+          ...(prevRes.data.category_top_keywords || []).map(k => k.keyword),
+          ...(prevRes.data.product_top_keywords || []).map(k => k.keyword),
+        ]
+        setSelectedKeywords(new Set(allKws))
+      }
+    }).finally(() => setPreviewLoading(false))
+  }, [open, shopId, productId])
+
+  // 计算最终要传后端的 excluded
+  const excluded = useMemo(() => {
+    if (!preview) return { contextKeys: [], attrIds: [], keywords: [] }
+    const allCtxKeys = (preview.context_fields || []).map(f => f.key)
+    const allAttrIds = (preview.attrs || []).map(a => a.id)
+    const allKws = [
+      ...(preview.category_top_keywords || []).map(k => k.keyword),
+      ...(preview.product_top_keywords || []).map(k => k.keyword),
+    ]
+    return {
+      contextKeys: allCtxKeys.filter(k => !selectedContextKeys.has(k)),
+      attrIds: allAttrIds.filter(id => !selectedAttrIds.has(id)),
+      keywords: allKws.filter(k => !selectedKeywords.has(k)),
+    }
+  }, [preview, selectedContextKeys, selectedAttrIds, selectedKeywords])
+
+  // 帮手:切换 Set 里的项
+  const toggleSet = (set, setter) => (val) => {
+    const next = new Set(set)
+    if (next.has(val)) next.delete(val); else next.add(val)
+    setter(next)
+  }
+
+  // 全选/反选
+  const toggleAllAttrs = () => {
+    if (selectedAttrIds.size === (preview?.attrs || []).length) {
+      setSelectedAttrIds(new Set())
+    } else {
+      setSelectedAttrIds(new Set((preview?.attrs || []).map(a => a.id)))
+    }
+  }
+  const toggleAllCatKws = () => {
+    const list = (preview?.category_top_keywords || []).map(k => k.keyword)
+    const allSelected = list.every(k => selectedKeywords.has(k))
+    const next = new Set(selectedKeywords)
+    if (allSelected) list.forEach(k => next.delete(k))
+    else list.forEach(k => next.add(k))
+    setSelectedKeywords(next)
+  }
+  const toggleAllProdKws = () => {
+    const list = (preview?.product_top_keywords || []).map(k => k.keyword)
+    const allSelected = list.every(k => selectedKeywords.has(k))
+    const next = new Set(selectedKeywords)
+    if (allSelected) list.forEach(k => next.delete(k))
+    else list.forEach(k => next.add(k))
+    setSelectedKeywords(next)
+  }
 
   const handleGenerate = async () => {
     if (!shopId || !productId) return
     setLoading(true)
     try {
-      // 用户动过文本框就传当前值(空串=清空,非空=保存),没动则不传
+      // 用户动过文本框就传当前值, 没动则不传 (后端用 shops 表现值)
       const bp = philosophyDirty ? brandPhilosophy : undefined
-      const r = await generateSeoDescription(shopId, productId, 50, bp)
+      const r = await generateSeoDescription(shopId, productId, {
+        brandPhilosophy: bp,
+        excluded,
+      })
       if (r?.code === 0) {
         setResult(r.data)
-        // 后端返新值同步给 state (确保 modal 一致)
         if (r.data?.brand_philosophy !== undefined) {
           setBrandPhilosophy(r.data.brand_philosophy)
           setPhilosophyDirty(false)
@@ -125,12 +206,15 @@ const AiDescriptionModal = ({
     })
   }
 
+  // 上下文字段中, 品牌理念走单独的 TextArea 渲染, 其余字段一行一个 checkbox
+  const ctxFields = (preview?.context_fields || []).filter(f => f.key !== 'brand_philosophy')
+
   return (
     <Modal
       open={open}
       onCancel={onClose}
       title={<Space><RobotOutlined /><span>AI 生成商品描述</span></Space>}
-      width={840}
+      width={900}
       destroyOnClose
       footer={result ? [
         <Button key="close" onClick={onClose}>关闭</Button>,
@@ -156,6 +240,7 @@ const AiDescriptionModal = ({
           icon={<ThunderboltOutlined />}
           onClick={handleGenerate}
           loading={loading}
+          disabled={previewLoading}
         >
           开始生成（约 5-15 秒）
         </Button>,
@@ -165,110 +250,181 @@ const AiDescriptionModal = ({
         type="info"
         showIcon
         style={{ marginBottom: 12 }}
-        message="描述启用后，健康诊断的「描述长度」维度会同步上涨（300-2000 字符为满分区间）"
+        message="勾选哪些数据喂给 AI ─ 默认全选, 去掉勾就不传给 AI。生成后描述启用, 健康诊断「描述长度」维度会同步上涨。"
       />
 
-      <Descriptions size="small" column={1} bordered style={{ marginBottom: 12 }}>
-        <Descriptions.Item label="商品">{productName || `ID ${productId}`}</Descriptions.Item>
-        <Descriptions.Item label="当前俄语标题">
-          {currentTitle
-            ? <Text>{currentTitle}</Text>
-            : <Text type="secondary">（空 / 未同步）</Text>}
-        </Descriptions.Item>
-        <Descriptions.Item label="当前俄语描述">
-          {currentDescription
-            ? (
-              <div>
-                <Paragraph
-                  ellipsis={{ rows: 3, expandable: true, symbol: '展开' }}
-                  style={{ marginBottom: 0, fontSize: 12, color: '#666' }}
-                >
-                  {currentDescription}
-                </Paragraph>
-                <Text type="secondary" style={{ fontSize: 11 }}>
-                  共 {currentDescription.length} 字符 · AI 将走「渐进改写」保留卖点
-                </Text>
-              </div>
-            )
-            : (
-              <Text type="secondary">
-                （空）AI 将从零写描述
+      {previewLoading ? (
+        <div style={{ textAlign: 'center', padding: 40 }}>
+          <Spin tip="加载预览数据..." />
+        </div>
+      ) : preview ? (
+        <>
+          {/* === 1. 店铺品牌理念 (单独, 因为可编辑文本) === */}
+          <div style={{ marginBottom: 12, padding: '10px 12px', background: '#fafafa', borderRadius: 4, border: '1px solid #e8e8e8' }}>
+            <Space style={{ marginBottom: 6 }}>
+              <Checkbox
+                checked={selectedContextKeys.has('brand_philosophy')}
+                onChange={toggleSet(selectedContextKeys, setSelectedContextKeys).bind(null, 'brand_philosophy')}
+              >
+                <Text strong style={{ fontSize: 12 }}>🎯 店铺品牌理念</Text>
+              </Checkbox>
+              <Text type="secondary" style={{ fontSize: 11 }}>
+                (店铺级共享, 同店所有商品共用; 勾掉即不喂 AI)
               </Text>
-            )}
-        </Descriptions.Item>
-        <Descriptions.Item label="喂给 GLM 的内容">
-          <div style={{ fontSize: 12, lineHeight: 1.7 }}>
-            <Text strong style={{ fontSize: 12 }}>📋 商品上下文（从 DB 抓取，空字段不会喂）</Text>
-            <ul style={{ margin: '2px 0 6px 18px', paddingLeft: 0 }}>
-              <li>平台风格规则（WB 紧凑 800-1200 字 / Ozon 长结构化 1200-2000 字）</li>
-              <li>店铺品牌理念（如已填写,贯穿描述风格）</li>
-              <li>商品中文名 + 俄语名 + 品牌</li>
-              <li><Text strong>类目路径</Text>（如 "Дом и сад / Товары для праздников / Шарик"）</li>
-              <li>当前俄语标题 + 当前俄语描述（如有 → 走「渐进改写」保留卖点）</li>
-              <li><Text strong>商品属性 variant_attrs</Text>（JSON 截断 1500 字符内，自然融入正文）</li>
-            </ul>
-            <Text strong style={{ fontSize: 12 }}>🔑 关键词</Text>
-            <ul style={{ margin: '2px 0 6px 18px', paddingLeft: 0 }}>
-              <li>缺词候选池 Top 50（按 score 降序，附 ROAS / 付费订单 / 自然订单 / 自然曝光 指标）</li>
-              <li>必须保留的高价值词（标题/属性里已有 + 带订单或曝光≥20，最多 15 个）</li>
-            </ul>
-            <Text strong style={{ fontSize: 12 }}>📐 写死规则（system_prompt）</Text>
-            <ul style={{ margin: '2px 0 0 18px', paddingLeft: 0 }}>
-              <li>描述长度 800-2000 字符 / 段落分隔 / 标点正常使用</li>
-              <li>关键词自然融入禁止堆砌、同义词换着用避免重复</li>
-              <li><Text type="warning" strong>不能编造原数据没有的属性</Text>（如原品没说防水，AI 不能加 водостойкий）</li>
-            </ul>
-            <Text type="secondary" style={{ fontSize: 11, display: 'block', marginTop: 6 }}>
-              GLM 优先融入前 20-30 个高分候选词；低分长尾词若不契合可不融入。DB 里 NULL 的字段（比如品牌空、属性空）整段不会出现在 prompt 里。
-            </Text>
-          </div>
-        </Descriptions.Item>
-        <Descriptions.Item
-          label={(
-            <div>
-              <div>🎯 店铺品牌理念</div>
-              <div style={{ fontSize: 11, color: '#999', fontWeight: 'normal', marginTop: 2 }}>
-                店铺级共享<br/>同店所有商品共用<br/>为空时不传给 AI
-              </div>
-            </div>
-          )}
-        >
-          <div>
-            <Input.TextArea
-              value={brandPhilosophy}
-              onChange={(e) => {
-                setBrandPhilosophy(e.target.value)
-                setPhilosophyDirty(true)
-              }}
-              placeholder={philosophyLoading ? '加载中...' : '例如:专注极简北欧风首饰,女性日常通勤百搭,材质天然环保'}
-              maxLength={500}
-              showCount
-              rows={2}
-              disabled={philosophyLoading}
-              style={{ fontSize: 12 }}
-            />
-            <div style={{ marginTop: 4, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              {philosophyDirty ? (
-                <Text type="warning" style={{ fontSize: 11 }}>
-                  ⚠ 已修改,点「开始生成」后会自动保存到该店铺
-                </Text>
-              ) : <span />}
               {brandPhilosophy && (
-                <Button
-                  size="small"
-                  type="text"
-                  danger
-                  icon={<ClearOutlined />}
-                  onClick={handleClearPhilosophy}
-                  style={{ fontSize: 11 }}
-                >
+                <Button size="small" type="text" danger icon={<ClearOutlined />}
+                        onClick={handleClearPhilosophy} style={{ fontSize: 11 }}>
                   清空
                 </Button>
               )}
-            </div>
+            </Space>
+            <Input.TextArea
+              value={brandPhilosophy}
+              onChange={(e) => { setBrandPhilosophy(e.target.value); setPhilosophyDirty(true) }}
+              placeholder="例如:专注极简北欧风首饰,女性日常通勤百搭,材质天然环保"
+              maxLength={500}
+              showCount
+              rows={2}
+              style={{ fontSize: 12 }}
+            />
+            {philosophyDirty && (
+              <Text type="warning" style={{ fontSize: 11 }}>
+                ⚠ 已修改, 点「开始生成」后会自动保存到该店铺
+              </Text>
+            )}
           </div>
-        </Descriptions.Item>
-      </Descriptions>
+
+          {/* === 2. 上下文字段 (除品牌理念外) === */}
+          {ctxFields.length > 0 && (
+            <div style={{ marginBottom: 12, padding: '10px 12px', border: '1px solid #e8e8e8', borderRadius: 4 }}>
+              <div style={{ marginBottom: 6 }}>
+                <Text strong style={{ fontSize: 12 }}>📋 商品上下文 ({ctxFields.length} 项)</Text>
+              </div>
+              {ctxFields.map(f => (
+                <div key={f.key} style={{ marginBottom: 4 }}>
+                  <Checkbox
+                    checked={selectedContextKeys.has(f.key)}
+                    onChange={toggleSet(selectedContextKeys, setSelectedContextKeys).bind(null, f.key)}
+                  >
+                    <Text strong style={{ fontSize: 12 }}>{f.label}: </Text>
+                    <Text style={{ fontSize: 12, color: '#666' }}>
+                      {f.value.length > 120 ? f.value.slice(0, 120) + '…' : f.value}
+                    </Text>
+                  </Checkbox>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* === 3. 商品属性 (横排) === */}
+          {(preview.attrs || []).length > 0 && (
+            <div style={{ marginBottom: 12, padding: '10px 12px', border: '1px solid #e8e8e8', borderRadius: 4 }}>
+              <Space style={{ marginBottom: 6 }}>
+                <Text strong style={{ fontSize: 12 }}>
+                  🏷️ 商品属性 ({selectedAttrIds.size} / {preview.attrs.length})
+                </Text>
+                <Button size="small" type="link" onClick={toggleAllAttrs} style={{ fontSize: 11, padding: 0 }}>
+                  {selectedAttrIds.size === preview.attrs.length ? '全不选' : '全选'}
+                </Button>
+              </Space>
+              <Space size={[6, 6]} wrap>
+                {preview.attrs.map(a => {
+                  const label = `${a.name_zh || a.name_ru || `#${a.id}`}: ${a.value_ru}`
+                  const short = label.length > 40 ? label.slice(0, 40) + '…' : label
+                  return (
+                    <Checkbox
+                      key={a.id}
+                      checked={selectedAttrIds.has(a.id)}
+                      onChange={toggleSet(selectedAttrIds, setSelectedAttrIds).bind(null, a.id)}
+                    >
+                      <Tooltip title={label}>
+                        <span style={{ fontSize: 11 }}>{short}</span>
+                      </Tooltip>
+                    </Checkbox>
+                  )
+                })}
+              </Space>
+            </div>
+          )}
+
+          {/* === 4. 同类目热门关键词 (横排) === */}
+          {(preview.category_top_keywords || []).length > 0 && (
+            <div style={{ marginBottom: 12, padding: '10px 12px', border: '1px solid #e8e8e8', borderRadius: 4 }}>
+              <Space style={{ marginBottom: 6 }}>
+                <Text strong style={{ fontSize: 12 }}>
+                  🔥 同类目热门关键词 (
+                  {preview.category_top_keywords.filter(k => selectedKeywords.has(k.keyword)).length}
+                  {' / '}
+                  {preview.category_top_keywords.length})
+                </Text>
+                <Text type="secondary" style={{ fontSize: 11 }}>跨商品聚合, 按订单+曝光降序</Text>
+                <Button size="small" type="link" onClick={toggleAllCatKws} style={{ fontSize: 11, padding: 0 }}>
+                  {preview.category_top_keywords.every(k => selectedKeywords.has(k.keyword)) ? '全不选' : '全选'}
+                </Button>
+              </Space>
+              <Space size={[6, 6]} wrap>
+                {preview.category_top_keywords.map(k => (
+                  <Checkbox
+                    key={'cat-' + k.keyword}
+                    checked={selectedKeywords.has(k.keyword)}
+                    onChange={toggleSet(selectedKeywords, setSelectedKeywords).bind(null, k.keyword)}
+                  >
+                    <Tooltip title={`总订单 ${k.total_orders} / 总曝光 ${k.total_impressions} / 覆盖 ${k.product_count} 商品`}>
+                      <span style={{ fontSize: 11 }}>
+                        {k.keyword}
+                        <Text type="secondary" style={{ fontSize: 10, marginLeft: 4 }}>
+                          ({k.total_orders}单/{k.total_impressions}曝)
+                        </Text>
+                      </span>
+                    </Tooltip>
+                  </Checkbox>
+                ))}
+              </Space>
+            </div>
+          )}
+
+          {/* === 5. 本商品热门关键词 (横排) === */}
+          {(preview.product_top_keywords || []).length > 0 && (
+            <div style={{ marginBottom: 12, padding: '10px 12px', border: '1px solid #e8e8e8', borderRadius: 4 }}>
+              <Space style={{ marginBottom: 6 }}>
+                <Text strong style={{ fontSize: 12 }}>
+                  ⭐ 本商品热门关键词 (
+                  {preview.product_top_keywords.filter(k => selectedKeywords.has(k.keyword)).length}
+                  {' / '}
+                  {preview.product_top_keywords.length})
+                </Text>
+                <Text type="secondary" style={{ fontSize: 11 }}>本商品订单+曝光降序</Text>
+                <Button size="small" type="link" onClick={toggleAllProdKws} style={{ fontSize: 11, padding: 0 }}>
+                  {preview.product_top_keywords.every(k => selectedKeywords.has(k.keyword)) ? '全不选' : '全选'}
+                </Button>
+              </Space>
+              <Space size={[6, 6]} wrap>
+                {preview.product_top_keywords.map(k => {
+                  const orders = (k.organic_orders || 0) + (k.paid_orders || 0)
+                  return (
+                    <Checkbox
+                      key={'prod-' + k.keyword}
+                      checked={selectedKeywords.has(k.keyword)}
+                      onChange={toggleSet(selectedKeywords, setSelectedKeywords).bind(null, k.keyword)}
+                    >
+                      <Tooltip title={`score ${k.score?.toFixed?.(1) || '-'} / 自然曝光 ${k.organic_impressions} / 订单 ${orders}`}>
+                        <span style={{ fontSize: 11 }}>
+                          {k.keyword}
+                          <Text type="secondary" style={{ fontSize: 10, marginLeft: 4 }}>
+                            ({k.organic_impressions}曝/{orders}单)
+                          </Text>
+                        </span>
+                      </Tooltip>
+                    </Checkbox>
+                  )
+                })}
+              </Space>
+            </div>
+          )}
+        </>
+      ) : (
+        <Alert type="warning" message="预览数据加载失败,无法选择字段" />
+      )}
 
       {loading && (
         <div style={{ textAlign: 'center', padding: '40px 0' }}>
@@ -281,6 +437,7 @@ const AiDescriptionModal = ({
 
       {!loading && result && (
         <>
+          <Divider style={{ margin: '12px 0' }} />
           <Alert
             type="success"
             showIcon
@@ -352,7 +509,7 @@ const AiDescriptionModal = ({
               style={{ marginBottom: 8 }}
               message={
                 <Text style={{ fontSize: 12 }}>
-                  已识别 <strong>{result.preserved_keywords.length}</strong> 个原标题/属性里的高价值词（带订单或曝光 ≥ 20），AI 已被要求保留：
+                  本商品高价值词 <strong>{result.preserved_keywords.length}</strong> 个 (带过订单/曝光≥20), AI 已被要求保留：
                 </Text>
               }
               description={

@@ -38,19 +38,31 @@ export function generateSeoTitle(shopId, productId, candidateIds) {
   )
 }
 
-/** AI 生成商品俄语描述（走 GLM，5-15 秒）— 后端自取候选词全集，不需要前端勾选
+/** AI 生成商品俄语描述（走 GLM，5-15 秒）
  * brandPhilosophy: undefined/null=不更新用现值, ""=清空, 非空=保存到 shops 表+拼 prompt
+ * excluded: { contextKeys: [], attrIds: [], keywords: [] } — 用户在弹窗里勾掉的项, 不喂 AI
  */
-export function generateSeoDescription(shopId, productId, maxCandidates = 50, brandPhilosophy) {
-  const body = { product_id: productId, max_candidates: maxCandidates }
+export function generateSeoDescription(shopId, productId, opts = {}) {
+  const { brandPhilosophy, excluded } = opts
+  const body = { product_id: productId }
   if (brandPhilosophy !== undefined && brandPhilosophy !== null) {
     body.brand_philosophy = brandPhilosophy
   }
+  if (excluded?.contextKeys?.length) body.excluded_context_keys = excluded.contextKeys
+  if (excluded?.attrIds?.length) body.excluded_attr_ids = excluded.attrIds
+  if (excluded?.keywords?.length) body.excluded_keywords = excluded.keywords
   return request.post(
     `${BASE}/shop/${shopId}/generate-description`,
     body,
     { timeout: 60000 },
   )
+}
+
+/** 拉 AI 描述生成的预览数据 (4 段全集让用户勾选) */
+export function previewSeoDescriptionInputs(shopId, productId) {
+  return request.get(`${BASE}/shop/${shopId}/generate-description/preview`, {
+    params: { product_id: productId },
+  })
 }
 
 /** 拉店铺品牌理念 (AiDescriptionModal 打开时预填) */
