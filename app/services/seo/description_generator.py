@@ -636,7 +636,7 @@ async def generate_description(
         return {"code": ErrorCode.SEO_TITLE_GENERATE_FAILED,
                 "msg": "AI 返回为空或解析失败"}
 
-    # 5. 持久化到 seo_generated_contents
+    # 5. 持久化到 seo_generated_contents (含完整 prompt 审计, 方便复盘 AI 当时收到了什么)
     gen = SeoGeneratedContent(
         tenant_id=tenant_id,
         listing_id=inputs["platform_listing_id"],
@@ -654,6 +654,11 @@ async def generate_description(
                 "context_keys": list(excl_keys),
                 "attr_ids": list(excl_attr),
                 "keywords": list(excl_kw),
+            },
+            "prompt_dump": {
+                "system_prompt": SYSTEM_PROMPT,
+                "user_prompt": user_prompt,
+                "user_prompt_chars": len(user_prompt),
             },
         },
         ai_model=ai_result["model"],
