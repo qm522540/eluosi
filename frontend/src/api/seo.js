@@ -31,10 +31,14 @@ export function batchIgnoreCandidates(shopId, ids) {
 
 /** AI 融合候选词生成新俄语标题（走 GLM，可能 5-30 秒）
  * extraCategoryKeywords: 跨店本类目热门词 (用户在弹窗勾选的 keyword 字符串)
+ * opts.includeCurrentTitle: 是否把当前俄语标题喂给 AI (默认 true)
+ * opts.manualKeywords: 用户手动输入关键词数组 (最多 3 个)
  */
-export function generateSeoTitle(shopId, productId, candidateIds, extraCategoryKeywords = null) {
+export function generateSeoTitle(shopId, productId, candidateIds, extraCategoryKeywords = null, opts = {}) {
   const body = { product_id: productId, candidate_ids: candidateIds }
   if (extraCategoryKeywords?.length) body.extra_category_keywords = extraCategoryKeywords
+  if (opts.includeCurrentTitle === false) body.include_current_title = false
+  if (opts.manualKeywords?.length) body.manual_keywords = opts.manualKeywords
   return request.post(
     `${BASE}/shop/${shopId}/generate-title`,
     body,

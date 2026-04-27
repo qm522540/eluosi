@@ -47,10 +47,17 @@ class RefreshBody(BaseModel):
 
 class GenerateTitleBody(BaseModel):
     product_id: int = Field(..., gt=0, description="products.id")
-    candidate_ids: List[int] = Field(..., min_length=1, max_length=30,
+    candidate_ids: List[int] = Field(default_factory=list, max_length=30,
                                      description="要融合的候选词 id (本商品候选池里的)，最多 30 个")
     extra_category_keywords: Optional[List[str]] = Field(
         None, description="跨店本类目热门词 (用户在弹窗里勾选的 keyword 字符串)，最多 10 个"
+    )
+    include_current_title: bool = Field(
+        True, description="是否把当前俄语标题喂给 AI 做融合改写; False=完全从零拼",
+    )
+    manual_keywords: Optional[List[str]] = Field(
+        None, max_length=3,
+        description="用户手动输入关键词 (例如竞品热门词系统里没的)，最多 3 个，最高优先级",
     )
 
 
@@ -543,6 +550,8 @@ async def generate_title_for_product(
         candidate_ids=body.candidate_ids,
         user_id=user_id,
         extra_category_keywords=body.extra_category_keywords,
+        include_current_title=body.include_current_title,
+        manual_keywords=body.manual_keywords,
     )
     if result.get("code") != 0:
         return error(result["code"], result.get("msg", ""))

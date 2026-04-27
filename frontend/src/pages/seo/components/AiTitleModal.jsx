@@ -1,7 +1,7 @@
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect } from 'react'
 import {
   Modal, Button, Typography, Space, Tag, Alert, Descriptions, Spin, message,
-  Checkbox, Tooltip,
+  Checkbox, Tooltip, Input,
 } from 'antd'
 import {
   CopyOutlined, ThunderboltOutlined, RobotOutlined, CheckCircleOutlined,
@@ -42,24 +42,36 @@ const AiTitleModal = ({
   // 用户勾选 (默认全选)
   const [selectedCandidateIds, setSelectedCandidateIds] = useState(new Set())
   const [selectedCategoryKeywords, setSelectedCategoryKeywords] = useState(new Set())
+  // 当前俄语标题是否喂给 AI (默认 true)
+  const [includeCurrentTitle, setIncludeCurrentTitle] = useState(true)
+  // 用户手动输入关键词 3 个
+  const [manualKeywords, setManualKeywords] = useState(['', '', ''])
 
   // 每次重新打开清空上一次结果
   useEffect(() => {
     if (open) setResult(null)
   }, [open, productId])
 
-  // 打开时拉 preview
+  // 打开时拉 preview + 重置可编辑状态
   useEffect(() => {
     if (!open || !shopId || !productId) return
     const ids = (selectedCandidates || []).map(c => c.id)
     setPreviewLoading(true)
+    setIncludeCurrentTitle(true)
+    setManualKeywords(['', '', ''])
     previewSeoTitleInputs(shopId, productId, ids)
       .then(r => {
         if (r?.data) {
           setPreview(r.data)
-          // 默认全选
+          // 反哺词默认全选
+          const candKws = new Set((r.data.candidates || []).map(c => c.keyword))
           setSelectedCandidateIds(new Set((r.data.candidates || []).map(c => c.id)))
-          setSelectedCategoryKeywords(new Set((r.data.category_top_keywords || []).map(k => k.keyword)))
+          // 跨店类目词:跟反哺词重复的默认不勾(仍显示在 UI)
+          setSelectedCategoryKeywords(new Set(
+            (r.data.category_top_keywords || [])
+              .filter(k => !candKws.has(k.keyword))
+              .map(k => k.keyword),
+          ))
         }
       })
       .catch(e => message.error(e?.response?.data?.msg || '加载预览数据失败'))
@@ -74,15 +86,19 @@ const AiTitleModal = ({
 
   const handleGenerate = async () => {
     if (!shopId || !productId) return
-    if (selectedCandidateIds.size === 0 && selectedCategoryKeywords.size === 0) {
-      message.warning('至少选一个反哺词或跨店类目热门词')
+    const cleanedManual = manualKeywords.map(k => k.trim()).filter(Boolean)
+    if (selectedCandidateIds.size === 0 && selectedCategoryKeywords.size === 0 && cleanedManual.length === 0) {
+      message.warning('至少选一个反哺词 / 跨店类目词 / 或填一个手动输入词')
       return
     }
     setLoading(true)
     try {
       const ids = Array.from(selectedCandidateIds)
       const extraKws = Array.from(selectedCategoryKeywords)
-      const res = await generateSeoTitle(shopId, productId, ids, extraKws)
+      const res = await generateSeoTitle(shopId, productId, ids, extraKws, {
+        includeCurrentTitle,
+        manualKeywords: cleanedManual,
+      })
       if (res.code === 0) {
         setResult(res.data)
       } else {
@@ -203,11 +219,21 @@ const AiTitleModal = ({
       />
 
       <Descriptions size="small" column={1} bordered style={{ marginBottom: 12 }}>
-        <Descriptions.Item label="当前俄语标题">
+        <Descriptions.Item
+          label={(
+            <Space size={6}>
+              <Checkbox
+                checked={includeCurrentTitle}
+                onChange={(e) => setIncludeCurrentTitle(e.target.checked)}
+              />
+              <span>当前俄语标题</span>
+            </Space>
+          )}
+        >
           {currentTitle
             ? (
               <Space size={6}>
-                <Text>{currentTitle}</Text>
+                <Text style={{ color: includeCurrentTitle ? '#222' : '#bbb' }}>{currentTitle}</Text>
                 <CopyOutlined
                   style={{ cursor: 'pointer', color: '#1677ff' }}
                   onClick={async () => {
@@ -216,6 +242,11 @@ const AiTitleModal = ({
                     else message.error('复制失败，请手动选中复制')
                   }}
                 />
+                {!includeCurrentTitle && (
+                  <Text type="warning" style={{ fontSize: 11 }}>
+                    (已去勾, AI 不会参考原标题, 完全从零拼新标题)
+                  </Text>
+                )}
               </Space>
             )
             : <Text type="secondary">（空 / 未同步）</Text>}
@@ -315,6 +346,34 @@ const AiTitleModal = ({
               </Space>
             </div>
           )}
+
+          {/* 手动输入关键词 (最多 3 个) */}
+          <div style={{ marginBottom: 12, padding: '10px 12px', background: '#fff7e6', border: '1px solid #ffd591', borderRadius: 4 }}>
+            <Space style={{ marginBottom: 6 }}>
+              <Text strong style={{ fontSize: 12 }}>✏️ 手动输入关键词</Text>
+              <Text type="secondary" style={{ fontSize: 11 }}>
+                看到竞品热门词系统里没的, 可以手填 (最多 3 个; 这里输入的词最高优先级喂 AI)
+              </Text>
+            </Space>
+            <Space size={6} wrap>
+              {manualKeywords.map((kw, idx) => (
+                <Input
+                  key={'manual-' + idx}
+                  value={kw}
+                  onChange={(e) => {
+                    const next = [...manualKeywords]
+                    next[idx] = e.target.value
+                    setManualKeywords(next)
+                  }}
+                  placeholder={`关键词 ${idx + 1} (俄语)`}
+                  maxLength={50}
+                  size="small"
+                  style={{ width: 240, fontSize: 12 }}
+                  allowClear
+                />
+              ))}
+            </Space>
+          </div>
         </>
       ) : null}
 

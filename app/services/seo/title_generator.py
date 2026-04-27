@@ -84,8 +84,16 @@ def _build_user_prompt(
     candidates: list[dict],
     preserve_keywords: Optional[list[str]] = None,
     category_top_keywords: Optional[list[dict]] = None,
+    include_current_title: bool = True,
+    manual_keywords: Optional[list[str]] = None,
 ) -> str:
-    """拼用户侧 prompt。candidates 是用户选中的反哺词, category_top_keywords 是跨店本类目热门词。"""
+    """拼用户侧 prompt。
+
+    candidates: 用户在表格里勾选的反哺词
+    category_top_keywords: 跨店本类目热门词
+    include_current_title: False=不喂当前标题给 AI (从零拼新标题)
+    manual_keywords: 用户手动输入的关键词 (例如看到竞品热门词在系统里没有)
+    """
     lines = []
     hint = PLATFORM_HINT.get((platform or "").lower())
     if hint:
@@ -101,7 +109,8 @@ def _build_user_prompt(
         lines.append(f"品牌：{brand}")
     if category_name:
         lines.append(f"类目：{category_name}")
-    lines.append(f"当前俄语标题：{current_title_ru or '（空）'}")
+    if include_current_title:
+        lines.append(f"当前俄语标题：{current_title_ru or '（空）'}")
     if variant_attrs:
         attrs_str = json.dumps(variant_attrs, ensure_ascii=False) if isinstance(variant_attrs, (dict, list)) else str(variant_attrs)
         # 属性可能很长，截断 400 字符避免烧 token
@@ -144,6 +153,15 @@ def _build_user_prompt(
                 metric_parts.append(f"覆盖 {int(k['product_count'])} 个商品")
             metric = f"（{' / '.join(metric_parts)}）" if metric_parts else ""
             lines.append(f"{i}. {k['keyword']} {metric}")
+
+    if manual_keywords:
+        # 去重已经在前端做了, 这里也做一道 (空、纯空格)
+        manual_clean = [k.strip() for k in manual_keywords if k and k.strip()]
+        if manual_clean:
+            lines.append("")
+            lines.append(f"【用户手动输入关键词（共 {len(manual_clean)} 个，最高优先级 — 这是用户根据竞品/经验手填的词，请尽量融入）】")
+            for i, k in enumerate(manual_clean, 1):
+                lines.append(f"{i}. {k}")
 
     lines.append("")
     lines.append("请按上述约束生成新俄语标题，返回 JSON。")
@@ -280,6 +298,8 @@ async def generate_title(
     candidate_ids: list[int],
     user_id: Optional[int] = None,
     extra_category_keywords: Optional[list[str]] = None,
+    include_current_title: bool = True,
+    manual_keywords: Optional[list[str]] = None,
 ) -> dict:
     """为某商品基于候选词生成 AI 融合新标题。
 
@@ -319,43 +339,43 @@ async def generate_title(
                 "msg": "该商品在当前店铺找不到 listing，请先同步商品或确认店铺归属"}
 
     # ---------- 2. 查选中的候选词（tenant + shop + product 三重约束，防越权）----------
-    if not candidate_ids:
+    # candidate_ids 可空 (用户可能只用跨店类目词 / 手动输入词)
+    candidates: list[dict] = []
+    if candidate_ids:
+        cand_stmt = text("""
+            SELECT id, keyword, score,
+                   paid_roas, paid_orders, paid_spend, paid_revenue,
+                   organic_impressions, organic_orders
+            FROM seo_keyword_candidates
+            WHERE tenant_id = :tid
+              AND shop_id = :sid
+              AND product_id = :pid
+              AND id IN :ids
+            ORDER BY score DESC
+        """).bindparams(bindparam("ids", expanding=True))
+        cand_rows = db.execute(cand_stmt, {
+            "tid": tenant_id, "sid": shop_id, "pid": product_id,
+            "ids": list(candidate_ids),
+        }).fetchall()
+        candidates = [
+            {
+                "id": r.id, "keyword": r.keyword,
+                "score": float(r.score or 0),
+                "paid_roas": float(r.paid_roas) if r.paid_roas is not None else None,
+                "paid_orders": int(r.paid_orders) if r.paid_orders is not None else None,
+                "organic_impressions": int(r.organic_impressions) if r.organic_impressions is not None else None,
+                "organic_orders": int(r.organic_orders) if r.organic_orders is not None else None,
+            }
+            for r in cand_rows
+        ]
+
+    # 至少要有一个 keyword 来源 (反哺 / 类目 / 手动) 才能生成
+    has_extra = bool(extra_category_keywords) or bool(manual_keywords and any(
+        k and k.strip() for k in manual_keywords
+    ))
+    if not candidates and not has_extra:
         return {"code": ErrorCode.SEO_CANDIDATE_NOT_FOUND,
-                "msg": "candidate_ids 不能为空"}
-
-    cand_stmt = text("""
-        SELECT id, keyword, score,
-               paid_roas, paid_orders, paid_spend, paid_revenue,
-               organic_impressions, organic_orders
-        FROM seo_keyword_candidates
-        WHERE tenant_id = :tid
-          AND shop_id = :sid
-          AND product_id = :pid
-          AND id IN :ids
-        ORDER BY score DESC
-    """).bindparams(bindparam("ids", expanding=True))
-
-    cand_rows = db.execute(cand_stmt, {
-        "tid": tenant_id, "sid": shop_id, "pid": product_id,
-        "ids": list(candidate_ids),
-    }).fetchall()
-
-    if not cand_rows:
-        return {"code": ErrorCode.SEO_CANDIDATE_NOT_FOUND,
-                "msg": "选中的候选词在该商品下不存在（可能被其他人处理过或 id 非法）"}
-
-    candidates = [
-        {
-            "id": r.id,
-            "keyword": r.keyword,
-            "score": float(r.score or 0),
-            "paid_roas": float(r.paid_roas) if r.paid_roas is not None else None,
-            "paid_orders": int(r.paid_orders) if r.paid_orders is not None else None,
-            "organic_impressions": int(r.organic_impressions) if r.organic_impressions is not None else None,
-            "organic_orders": int(r.organic_orders) if r.organic_orders is not None else None,
-        }
-        for r in cand_rows
-    ]
+                "msg": "至少要选一个反哺词 / 跨店类目词 / 手动输入词才能生成"}
 
     # ---------- 2.5 查已在当前标题里的"高价值保留词"（防止 AI 换新词时丢失已验证的高转化词）----------
     preserve_rows = db.execute(text("""
@@ -409,6 +429,8 @@ async def generate_title(
         candidates=candidates,
         preserve_keywords=preserve_keywords,
         category_top_keywords=category_top_keywords,
+        include_current_title=include_current_title,
+        manual_keywords=manual_keywords,
     )
 
     logger.info(
