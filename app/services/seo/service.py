@@ -141,12 +141,25 @@ def analyze_paid_to_organic(
             continue
         key = (r.product_id, kw)
         cand = candidates.setdefault(key, _new_candidate(r.product_id, kw))
+        freq = int(r.frequency or 0)
+        imps = int(r.impressions or 0)
+        atc = int(r.add_to_cart or 0)
+        orders = int(r.orders or 0)
         already = any(
             s["type"] == "organic" and s["scope"] == "self" for s in cand["sources"]
         )
         if not already:
-            cand["sources"].append({"type": "organic", "scope": "self"})
-        cand["organic_impressions"] = int(r.impressions or 0) or int(r.frequency or 0)
+            # 把搜索量/曝光/加购/订单 都附在 sources entry,前端展示能取到
+            # (与 cross_shop entry 字段结构一致,前端统一逻辑)
+            cand["sources"].append({
+                "type": "organic", "scope": "self",
+                "frequency": freq, "impressions": imps,
+                "add_to_cart": atc, "orders": orders,
+            })
+        # 顶层字段保留兼容旧代码; organic_impressions 现在严格用真 impressions
+        # (之前 imps OR freq fallback 是历史 bug, 早期 Ozon 没 impressions 时拿 freq 顶替,
+        # 现在 Ozon Premium 后 impressions 是真实值, 不再 fallback)
+        cand["organic_impressions"] = imps
         cand["organic_add_to_cart"] = int(r.add_to_cart or 0)
         cand["organic_orders"] = int(r.orders or 0)
         # 若 paid 未填，用 organic title/attrs 做覆盖判断兜底

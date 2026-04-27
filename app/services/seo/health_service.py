@@ -301,22 +301,39 @@ def compute_shop_health(
             else:
                 source_type = "unknown"
 
-            # metric: 跨店词显示来源店 + 曝光/订单；本店词按原优先级
+            # metric 文案统一规则: "搜:N · 曝:M [· 订单:K]"
+            # 跨店词前缀来源店名"<店名> 搜:N · 曝:M"
+            # 数字优先从 sources entry 拿 (新逻辑),fallback 顶层字段 (兼容旧候选词)
             metric = None
+            organic_self_entry = next(
+                (s for s in srcs if s.get("type") == "organic" and s.get("scope") == "self"),
+                None,
+            )
             if source_type == "cross_shop" and cross_entry:
                 shop_name = cross_entry.get("source_shop_name") or "其他店"
                 freq = int(cross_entry.get("frequency") or 0)
+                imps = int(cross_entry.get("impressions") or 0)
                 orders = int(cross_entry.get("orders") or 0)
+                parts = [f"搜:{freq}", f"曝:{imps}"]
                 if orders > 0:
-                    metric = f"{shop_name} {freq}曝光/{orders}订单"
-                else:
-                    metric = f"{shop_name} {freq}曝光"
+                    parts.append(f"订单:{orders}")
+                metric = f"{shop_name} " + " · ".join(parts)
+            elif source_type == "organic" and organic_self_entry:
+                freq = int(organic_self_entry.get("frequency") or 0)
+                imps = int(organic_self_entry.get("impressions") or 0)
+                orders = int(organic_self_entry.get("orders") or mr.organic_orders or 0)
+                parts = [f"搜:{freq}", f"曝:{imps}"]
+                if orders > 0:
+                    parts.append(f"订单:{orders}")
+                metric = " · ".join(parts)
+            elif mr.organic_impressions or mr.organic_orders:
+                # 兼容旧候选词 (sources entry 没附数字),只能取顶层
+                parts = [f"曝:{int(mr.organic_impressions or 0)}"]
+                if mr.organic_orders:
+                    parts.append(f"订单:{mr.organic_orders}")
+                metric = " · ".join(parts)
             elif mr.paid_orders:
                 metric = f"付费订单 {mr.paid_orders}"
-            elif mr.organic_orders:
-                metric = f"自然订单 {mr.organic_orders}"
-            elif mr.organic_impressions:
-                metric = f"自然曝光 {mr.organic_impressions}"
             elif mr.paid_roas:
                 metric = f"ROAS {float(mr.paid_roas):.2f}"
 
@@ -457,6 +474,10 @@ def list_missing_candidates_for_product(
         has_paid = any(s.get("type") == "paid" for s in srcs)
         has_organic = any(s.get("type") == "organic" for s in srcs)
         cross_entry = next((s for s in srcs if s.get("type") == "cross_shop"), None)
+        organic_self_entry = next(
+            (s for s in srcs if s.get("type") == "organic" and s.get("scope") == "self"),
+            None,
+        )
 
         if has_paid:
             source_type = "paid"
@@ -466,6 +487,18 @@ def list_missing_candidates_for_product(
             source_type = "cross_shop"
         else:
             source_type = "unknown"
+
+        # 本店 organic 的搜索量/曝光/订单/加购:
+        # 优先从 sources entry 取(新逻辑分别存了 frequency 和 impressions),
+        # fallback 顶层字段(兼容旧候选词,只有 organic_impressions 顶层)
+        org_freq = (
+            int(organic_self_entry.get("frequency") or 0) if organic_self_entry
+            else None
+        )
+        org_imps = (
+            int(organic_self_entry.get("impressions") or 0) if organic_self_entry
+            else (int(r.organic_impressions) if r.organic_impressions is not None else None)
+        )
 
         items.append({
             "candidate_id": int(r.candidate_id),
@@ -478,7 +511,8 @@ def list_missing_candidates_for_product(
             "paid_revenue": float(r.paid_revenue) if r.paid_revenue is not None else None,
             "paid_roas": float(r.paid_roas) if r.paid_roas is not None else None,
             "organic_orders": int(r.organic_orders) if r.organic_orders is not None else None,
-            "organic_impressions": int(r.organic_impressions) if r.organic_impressions is not None else None,
+            "organic_frequency": org_freq,        # 本店搜索量(新增,旧候选 None)
+            "organic_impressions": org_imps,      # 本店曝光
             "organic_add_to_cart": int(r.organic_add_to_cart) if r.organic_add_to_cart is not None else None,
             # 跨店指标（cross_shop 来源时填，他店真实数据）
             "cross_shop_name": cross_entry.get("source_shop_name") if cross_entry else None,

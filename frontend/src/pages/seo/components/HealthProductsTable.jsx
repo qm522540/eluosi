@@ -400,9 +400,18 @@ const HealthProductsTable = ({
         : <Text type="secondary" style={{ fontSize: 11 }}>本店</Text>,
     },
     {
-      title: '曝光', key: 'impr', width: 90, align: 'right',
+      title: <Tooltip title="用户搜该词的总次数 (frequency)">搜索量</Tooltip>,
+      key: 'freq', width: 90, align: 'right',
       render: (_, r) => {
-        const v = r.cross_frequency ?? r.organic_impressions
+        const v = r.cross_frequency ?? r.organic_frequency
+        return v != null ? <Text style={{ fontSize: 12 }}>{v.toLocaleString()}</Text> : <Text type="secondary">-</Text>
+      },
+    },
+    {
+      title: <Tooltip title="商品卡片真正被滚动看到的次数 (impressions),恒 ≤ 搜索量">曝光</Tooltip>,
+      key: 'impr', width: 90, align: 'right',
+      render: (_, r) => {
+        const v = r.cross_impressions ?? r.organic_impressions
         return v != null ? <Text style={{ fontSize: 12 }}>{v.toLocaleString()}</Text> : <Text type="secondary">-</Text>
       },
     },
