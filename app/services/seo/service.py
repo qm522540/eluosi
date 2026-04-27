@@ -313,10 +313,16 @@ def _compute_score(cand: dict) -> float:
       - log10(自然加购+1) × 2.5  ← 加购是订单先行指标
       - log10(自然曝光+1) × 2
 
-    跨店（取所有 cross_shop entry 的 max 指标）：
-      - log10(跨店订单+1) × 3   ← 间接证据，比本店订单弱
+    跨店（取所有 cross_shop entry 的 max 指标 — 字段对齐本店 organic）：
+      - log10(跨店订单+1) × 3      ← 间接证据,比本店订单弱
       - log10(跨店加购+1) × 1.5
-      - log10(跨店曝光+1) × 1
+      - log10(跨店曝光+1) × 1.5    ← 用 impressions 与本店统一,比本店稍低
+
+    2026-04-27 修跨店本店字段错位 bug: 之前跨店用 frequency × 1,本店用
+    impressions × 2,同关键词跨店/本店推荐系数不一致(WB-Pt.Gril 看 2.51,
+    Ozon-Pt.Gril 看 2.92)。frequency(用户搜索次数)是市场容量指标,但商品
+    可能根本没在该词下被翻到,不直接代表流量价值。统一用 impressions(真实
+    被看到的次数)更能反映"该词给该商品带来多少流量"。
     """
     sources = cand.get("sources") or []
     # 多源加分按 type 大类算 (paid/organic/cross_shop 三类)
@@ -336,8 +342,8 @@ def _compute_score(cand: dict) -> float:
         (int(s.get("orders", 0) or 0) for s in sources if s.get("type") == "cross_shop"),
         default=0,
     )
-    cross_freq = max(
-        (int(s.get("frequency", 0) or 0) for s in sources if s.get("type") == "cross_shop"),
+    cross_imps = max(
+        (int(s.get("impressions", 0) or 0) for s in sources if s.get("type") == "cross_shop"),
         default=0,
     )
     cross_atc = max(
@@ -354,7 +360,7 @@ def _compute_score(cand: dict) -> float:
         + math.log10(org_imp + 1) * 2
         + math.log10(cross_orders + 1) * 3
         + math.log10(cross_atc + 1) * 1.5
-        + math.log10(cross_freq + 1) * 1
+        + math.log10(cross_imps + 1) * 1.5
     )
     return round(min(score, 100.0), 2)
 
