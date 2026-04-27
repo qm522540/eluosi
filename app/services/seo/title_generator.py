@@ -43,6 +43,8 @@ SYSTEM_PROMPT = """你是俄罗斯跨境电商（WB / Ozon / Yandex）SEO 标题
 5. 不编造原标题没有的属性（比如原品没说"防水"，不要加"водостойкий"）
 6. **绝对不能丢失**"必须保留的高价值词"列表里的词（这些词已在原标题出现且带来过真实订单/曝光，丢了会直接降流量）
 7. **绝对不能输出中文 / 拼音 / 日文 / 韩文 等非俄/英字符**。即使输入的属性 value 里带中文（可能是卖家在平台后台填错了型号名 / 颜色等），也要**忽略**那段中文，不要原样塞进标题。例如属性"型号: 环形"或"颜色: 米色"——禁止把"环形""米色"这类汉字写进 new_title。
+8. **严格去重 (重要)**：候选词列表里经常出现"同义词组词序排列组合"（如 `серьги женские медицинский сплав` + `серьги медицинский сплав женские` + `женские серьги медицинский` — 这 3 个对你来说是**同一个词组**,只是词序不同）。在新标题里**同一组同义词只能出现一次**，要把它们融合成一份连贯的俄语短语，不要复读 3 次。判断标准：去掉空格后字符集相同 / 词根重复 → 当成一个。
+9. **禁用任何标点 (重要)**：不允许 `,` `.` `;` `:` `!` `?` `-` `/` `|` 等任何标点。短语之间**只用单个空格**分隔。如果你想分隔多组关键词，**用空格不用逗号**。这是 WB / Ozon SEO 硬规则，加标点会被搜索算法降权。
 
 【位置规则 —— 决定搜索权重】
 平台搜索权重从标题开头向后递减，按"权重梯度"排词：
@@ -87,6 +89,40 @@ def _strip_cjk(s: str) -> str:
     cleaned = _CJK_RE.sub("", s)
     cleaned = re.sub(r"\s{2,}", " ", cleaned).strip()
     return cleaned
+
+
+# 标题不允许的标点 (electronic 商务 SEO 惯例)
+_PUNCT_RE = re.compile(r"[,，.。;；:：!！?？/|\\\"'`~()（）\[\]【】]")
+
+def _clean_punctuation(s: str) -> str:
+    """删除标题里的标点, 多空格合并为单空格。"""
+    if not s:
+        return s
+    cleaned = _PUNCT_RE.sub(" ", s)
+    cleaned = re.sub(r"\s{2,}", " ", cleaned).strip()
+    return cleaned
+
+
+def _dedupe_tokens(s: str) -> str:
+    """全局去重 token (保留首次出现)。例如:
+    "серьги женские серьги медицинский серьги" → "серьги женские медицинский"
+    """
+    if not s:
+        return s
+    tokens = s.split()
+    seen = set()
+    kept = []
+    for t in tokens:
+        key = t.lower()
+        # 单字符 / 太短的不去重 (避免误删 "и" "с" 等连接词)
+        if len(key) <= 2:
+            kept.append(t)
+            continue
+        if key in seen:
+            continue
+        seen.add(key)
+        kept.append(t)
+    return " ".join(kept)
 
 
 # 首饰常见子类目主词词根 (匹配用 startswith 兼容俄语变格)
@@ -552,14 +588,18 @@ async def generate_title(
         return {"code": ErrorCode.SEO_TITLE_GENERATE_FAILED,
                 "msg": "AI 返回为空或解析失败"}
 
-    # post-check: AI 输出含中文字符 → 自动剥离 (兜底防御, system_prompt 已禁但偶尔不听)
-    if _has_cjk(parsed["new_title"]):
-        original_with_cjk = parsed["new_title"]
+    # post-check: 中文剥离 → 标点剥离 → token 去重 (system_prompt 已禁但 AI 偶尔不听)
+    raw_ai_title = parsed["new_title"]
+    if _has_cjk(raw_ai_title):
         parsed["new_title"] = _strip_cjk(parsed["new_title"])
+    parsed["new_title"] = _clean_punctuation(parsed["new_title"])
+    deduped = _dedupe_tokens(parsed["new_title"])
+    if deduped != parsed["new_title"] or raw_ai_title != parsed["new_title"]:
         logger.warning(
-            f"SEO title 输出含中文已自动剥离 product={product_id} "
-            f"原: {original_with_cjk!r} → 净: {parsed['new_title']!r}"
+            f"SEO title post-check: AI 输出已被清洗 product={product_id} "
+            f"原: {raw_ai_title!r} → 净: {deduped!r}"
         )
+    parsed["new_title"] = deduped
 
     # ---------- 4. 持久化到 seo_generated_contents ----------
     gen = SeoGeneratedContent(
