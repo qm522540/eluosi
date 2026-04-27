@@ -12,6 +12,7 @@ class Shop(BaseMixin, Base):
 
     tenant_id: Mapped[int] = mapped_column(BigInteger, nullable=False, index=True)
     name: Mapped[str] = mapped_column(String(100), nullable=False)
+    brand_philosophy: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
     platform: Mapped[str] = mapped_column(
         Enum("wb", "ozon", "yandex", name="platform_type"), nullable=False
     )
