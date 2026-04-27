@@ -219,8 +219,8 @@ async def mark_title_applied(
     db.commit()
 
     # 3. 调平台 API 写回 (失败不回滚本地)
-    platform_result: dict = {"status": "skipped", "msg": "本期仅支持 Ozon 标题写回"}
-    if row.platform == "ozon" and row.content_type == "title" and offer_id:
+    platform_result: dict = {"status": "skipped", "msg": "未知平台/未支持的内容类型"}
+    if row.platform == "ozon" and offer_id and row.content_type in ("title", "description"):
         try:
             from app.services.platform.ozon import OzonClient
             client = OzonClient(
@@ -229,7 +229,10 @@ async def mark_title_applied(
                 perf_client_secret=getattr(shop, "perf_client_secret", None) or "",
             )
             try:
-                api_res = await client.update_product_name(offer_id, new_text)
+                if row.content_type == "title":
+                    api_res = await client.update_product_name(offer_id, new_text)
+                else:
+                    api_res = await client.update_product_description(offer_id, new_text)
             finally:
                 await client.close()
             if api_res.get("task_id"):
@@ -244,12 +247,12 @@ async def mark_title_applied(
                     "msg": api_res.get("error", "未知错误"),
                 }
         except Exception as e:
-            logger.error(f"启用新标题平台 API 写回失败 generated_id={generated_id}: {e}")
+            logger.error(f"启用 {row.content_type} 平台写回失败 generated_id={generated_id}: {e}")
             platform_result = {"status": "failed", "msg": f"{type(e).__name__}: {str(e)[:120]}"}
     elif row.platform == "wb":
         platform_result = {
             "status": "skipped",
-            "msg": "WB 平台 API 写回暂未实现, 请手动到 WB 后台粘贴新标题",
+            "msg": f"WB 平台 API 写回{row.content_type}暂未实现, 请手动到 WB 后台粘贴",
         }
 
     return {"code": ErrorCode.SUCCESS,

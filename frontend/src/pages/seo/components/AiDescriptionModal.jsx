@@ -166,22 +166,23 @@ const AiDescriptionModal = ({
   const handleApply = () => {
     if (!result?.generated_content_id) return
     Modal.confirm({
-      title: '确认启用新描述？',
-      width: 580,
+      title: '确认启用新描述?',
+      width: 600,
       icon: <CheckCircleOutlined style={{ color: '#52c41a' }} />,
       content: (
         <div style={{ fontSize: 13, lineHeight: 1.7 }}>
           <div style={{ marginBottom: 12 }}>
-            <Text type="secondary">将启用 {result.char_count} 字符的新描述（共融入 {result.included_keywords?.length || 0} 个候选词）。</Text>
+            <Text type="secondary">将启用 {result.char_count} 字符的新描述 (融入 {result.included_keywords?.length || 0} 个候选词)。</Text>
           </div>
           <div style={{ background: '#fffbe6', padding: '8px 10px', borderRadius: 4, border: '1px solid #ffe58f' }}>
-            <div style={{ marginBottom: 4 }}><strong>启用后系统会做：</strong></div>
+            <div style={{ marginBottom: 4 }}><strong>启用后系统会做:</strong></div>
             <div style={{ paddingLeft: 12 }}>
-              ✓ 标记此描述为「已应用」<br/>
-              ✓ 以本时间点为基线追踪 ROI（改前 / 改后曝光、订单、ROAS 对比）
+              ✓ 改本地数据库描述为新描述 (健康诊断等页面立即同步)<br/>
+              ✓ 调用 <strong>Ozon API</strong> 把平台后台商品描述也改成新描述 (1-5 分钟生效)<br/>
+              ✓ 标记此描述为「已应用」, 以本时间点为基线追踪 ROI 对比
             </div>
             <div style={{ marginTop: 8, color: '#d46b08' }}>
-              ⚠ 本期暂不自动写回到 WB / Ozon 商品后台，请你<strong>手动</strong>到平台后台「编辑商品」粘贴新描述让平台真正生效
+              ⚠ <strong>WB 平台</strong>暂不支持 API 写回, 请手动到 WB 后台粘贴新描述
             </div>
           </div>
         </div>
@@ -192,10 +193,17 @@ const AiDescriptionModal = ({
         try {
           const r = await applyGeneratedTitle(shopId, result.generated_content_id)
           if (r?.code === 0) {
-            message.success('已启用，ROI 基线已建立。请到平台后台粘贴新描述让平台生效。')
+            const wb = r.data?.platform_writeback
+            if (wb?.status === 'submitted') {
+              message.success(`已启用并提交 Ozon 写回 (task_id=${wb.task_id}), 1-5 分钟生效`, 6)
+            } else if (wb?.status === 'failed') {
+              message.warning(`本地描述已改, 但 Ozon API 写回失败: ${wb.msg} — 请手动到 Ozon 后台改`, 8)
+            } else {
+              message.success(`已启用 (本地已改). ${wb?.msg || ''}`, 5)
+            }
             onClose && onClose()
           } else {
-            message.warning(`启用失败：${r?.msg || '未知错误'}`)
+            message.warning(`启用失败: ${r?.msg || '未知错误'}`)
             return Promise.reject()
           }
         } catch (e) {

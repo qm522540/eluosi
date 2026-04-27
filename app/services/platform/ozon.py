@@ -763,36 +763,50 @@ class OzonClient(BasePlatformClient):
         await asyncio.gather(*[_one(p) for p in product_ids], return_exceptions=True)
         return results
 
-    async def update_product_name(self, offer_id: str, new_name: str) -> dict:
-        """改商品名(标题), 走 /v1/product/attributes/update 异步任务。
+    async def update_product_attribute(self, offer_id: str, attr_id: int, value: str,
+                                        max_chars: int = 500) -> dict:
+        """通用: 改 Ozon 商品某个属性, 走 /v1/product/attributes/update 异步任务。
 
-        body 只传 offer_id + attributes 数组, attribute_id=4180 是 "Название товара"。
-        其它属性不动。返回 {task_id} 或 {error}。
-        task_id 可用 /v1/product/import/info 查状态, 1-5 分钟生效。
+        attr_id 常用:
+          4180 = Название товара (商品名/标题)
+          4191 = Описание (描述, 接受 HTML 或纯文本)
+
+        返回 {task_id} 或 {error}, task_id 1-5 分钟生效。
         """
-        if not offer_id or not new_name:
-            return {"error": "offer_id 或 new_name 为空"}
+        if not offer_id or not value:
+            return {"error": "offer_id 或 value 为空"}
         url = f"{OZON_SELLER_API}/v1/product/attributes/update"
-        # attribute_id=4180 是 "Название товара" (商品名)
         body = {
             "items": [{
                 "offer_id": str(offer_id),
                 "attributes": [{
-                    "id": 4180,
-                    "values": [{"value": new_name[:500]}],
+                    "id": int(attr_id),
+                    "values": [{"value": value[:max_chars]}],
                 }],
             }],
         }
         try:
             result = await self._request("POST", url, json=body)
-            task_id = (result or {}).get("result", {}).get("task_id")
+            # Ozon 的 task_id 在顶层, 不在 result.result 里
+            task_id = (result or {}).get("task_id")
+            if not task_id:
+                # 兼容某些场景 task_id 在 result.result.task_id
+                task_id = ((result or {}).get("result") or {}).get("task_id")
             if task_id:
-                logger.info(f"Ozon 改商品名 task_id={task_id} offer={offer_id}")
+                logger.info(f"Ozon 改属性 attr={attr_id} task_id={task_id} offer={offer_id}")
                 return {"task_id": task_id}
-            return {"error": "Ozon 未返 task_id", "raw": result}
+            return {"error": "Ozon 未返 task_id", "raw": str(result)[:300]}
         except Exception as e:
-            logger.error(f"Ozon 改商品名失败 offer={offer_id}: {e}")
+            logger.error(f"Ozon 改属性 attr={attr_id} 失败 offer={offer_id}: {e}")
             return {"error": f"{type(e).__name__}: {str(e)[:120]}"}
+
+    async def update_product_name(self, offer_id: str, new_name: str) -> dict:
+        """改商品名 (attr_id=4180), 长度 max 500。"""
+        return await self.update_product_attribute(offer_id, 4180, new_name, max_chars=500)
+
+    async def update_product_description(self, offer_id: str, new_desc: str) -> dict:
+        """改商品描述 (attr_id=4191), 长度 max 6000。"""
+        return await self.update_product_attribute(offer_id, 4191, new_desc, max_chars=6000)
 
     async def fetch_product_attributes_batch(
         self, product_ids: list, batch_size: int = 100,
