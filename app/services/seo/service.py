@@ -2,11 +2,13 @@
 
 源接入状态：
 - 源 A  paid self     本商品付费词    依赖 ad_keywords + ad_stats（WB/Ozon 当前都缺数据）
-- 源 A' paid category 同类目付费聚合  同上
 - 源 B  organic self  本商品自然搜索词 依赖 product_search_queries（Ozon Premium 通后有数据）
-- 源 B' organic category 同类目自然词  同上
-- 源 C  Wordstat 搜索引擎趋势         三期 Yandex OAuth 通后接
 - 源 D  cross_shop self 跨店同 SKU 验证词 同 tenant 同 sku 跨 shop psq 召回（严阈值）
+
+2026-04-27 砍掉 paid.category / organic.category（同类目扩散）：
+原逻辑把全店同类目的高频词无脑塞到每个商品上,导致 Pt.Gril 374 个商品 Top3
+缺词全是同样的"耳环"词(因为店内 organic 集中耳环类),项链商品也被推耳环词。
+正确语义:候选词应该只来自该商品自身真实的 paid/organic/cross_shop 数据。
 
 核心函数：
 - analyze_paid_to_organic: 刷引擎，扫近 N 天 → upsert 候选池
@@ -32,10 +34,11 @@ def analyze_paid_to_organic(
     db: Session, tenant_id: int, shop,
     days: int = 30, roas_threshold: float = 2.0, min_orders: int = 1,
 ) -> dict:
-    """付费词反哺引擎：两维度聚合 → 候选词池 upsert。
+    """付费词反哺引擎：候选词池 upsert (仅商品自身真实数据 + 跨店同 SKU 召回)。
 
-    scope='self' 本商品自己的付费词（Source A）
-    scope='category' 同 local_category_id 其他商品 ≥3 个共享的词（Source C1-a）
+    scope='self' 本商品自己的真实数据 (paid.self / organic.self / cross_shop.self)
+    2026-04-27 砍掉 scope='category' (同类目扩散),原逻辑把全店词无脑扩散到每商品,
+    导致项链商品被推耳环词。正确语义是只用商品自身的真实搜索/广告/订单数据。
 
     规则 1：所有 SQL 带 tenant_id；upsert SET tenant_id。
     规则 4：shop 由路由层 get_owned_shop 校验属当前租户。
@@ -99,97 +102,6 @@ def analyze_paid_to_organic(
         cand["_attrs"] = r.attrs or ""
         cand["_cat_id"] = r.cat_id
 
-    # ===== Step B: 类目维聚合 —— 哪些 (cat, keyword) 在 ≥3 个商品上都有转化 =====
-    cat_sql = text("""
-        SELECT
-            kw.keyword AS keyword,
-            p.local_category_id AS cat_id,
-            COUNT(DISTINCT p.id) AS shared_products,
-            SUM(s.orders) AS orders,
-            SUM(s.spend) AS spend,
-            SUM(s.revenue) AS revenue
-        FROM ad_keywords kw
-        JOIN ad_groups g ON g.id = kw.ad_group_id AND g.tenant_id = kw.tenant_id
-        JOIN ad_campaigns c ON c.id = g.campaign_id AND c.tenant_id = kw.tenant_id
-        JOIN platform_listings pl ON pl.id = g.listing_id AND pl.tenant_id = kw.tenant_id
-        JOIN products p ON p.id = pl.product_id AND p.tenant_id = kw.tenant_id
-        LEFT JOIN ad_stats s ON s.keyword_id = kw.id
-                             AND s.tenant_id = kw.tenant_id
-                             AND s.stat_date >= :since
-        WHERE kw.tenant_id = :tid
-          AND c.shop_id = :sid
-          AND kw.is_negative = 0
-          AND p.local_category_id IS NOT NULL
-          AND (p.status != 'deleted' OR p.status IS NULL)
-        GROUP BY kw.keyword, p.local_category_id
-        HAVING COUNT(DISTINCT p.id) >= 3
-           AND SUM(s.orders) >= :min_orders
-           AND SUM(s.spend) > 0
-           AND (SUM(s.revenue) / SUM(s.spend)) >= :roas_th
-    """)
-    cat_rows = db.execute(cat_sql, {
-        "tid": tenant_id, "sid": shop.id, "since": since,
-        "min_orders": min_orders, "roas_th": float(roas_threshold),
-    }).fetchall()
-
-    cat_kw_map = {}  # cat_id -> [(kw_lower, orders, spend, revenue), ...]
-    for r in cat_rows:
-        kw = (r.keyword or "").strip().lower()
-        if not kw:
-            continue
-        cat_kw_map.setdefault(r.cat_id, []).append(
-            (kw, int(r.orders or 0), float(r.spend or 0), float(r.revenue or 0))
-        )
-
-    # ===== Step C: 把类目维词扩散到同类目所有商品 =====
-    # P0-2 修 2026-04-19：同商品可能有多个 platform_listings（variant 变体 /
-    # 已归档），不过滤 + 不聚合会出笛卡尔积。后续 Step D dict 去重时 _title/
-    # _attrs 被随机覆盖，覆盖判断不稳。修法：过滤死 listings + GROUP BY p.id
-    # + ANY_VALUE 取 title/attrs 其一（同商品的 variants title 基本一致）。
-    if cat_kw_map:
-        prod_sql = text("""
-            SELECT
-                p.id AS product_id,
-                ANY_VALUE(p.local_category_id) AS cat_id,
-                ANY_VALUE(COALESCE(pl.title_ru, '')) AS title,
-                ANY_VALUE(COALESCE(CAST(pl.variant_attrs AS CHAR), '')) AS attrs
-            FROM products p
-            JOIN platform_listings pl ON pl.product_id = p.id
-                                       AND pl.tenant_id = p.tenant_id
-            WHERE p.tenant_id = :tid
-              AND pl.shop_id = :sid
-              AND pl.status NOT IN ('deleted', 'archived')
-              AND p.local_category_id IN :cat_ids
-              AND (p.status != 'deleted' OR p.status IS NULL)
-            GROUP BY p.id
-        """).bindparams(bindparam("cat_ids", expanding=True))
-
-        prod_rows = db.execute(prod_sql, {
-            "tid": tenant_id, "sid": shop.id,
-            "cat_ids": list(cat_kw_map.keys()),
-        }).fetchall()
-
-        for pr in prod_rows:
-            for kw, orders, spend, revenue in cat_kw_map.get(pr.cat_id, []):
-                key = (pr.product_id, kw)
-                cand = candidates.setdefault(key, _new_candidate(pr.product_id, kw))
-                already_cat = any(
-                    s["type"] == "paid" and s["scope"] == "category"
-                    for s in cand["sources"]
-                )
-                if not already_cat:
-                    cand["sources"].append({"type": "paid", "scope": "category"})
-                # 类目指标不覆盖更强的商品维信号，仅在 self 未命中时填
-                if cand.get("paid_roas") is None:
-                    roas = (revenue / spend) if spend else 0.0
-                    cand["paid_roas"] = round(roas, 2)
-                    cand["paid_orders"] = orders
-                    cand["paid_spend"] = round(spend, 2)
-                    cand["paid_revenue"] = round(revenue, 2)
-                cand["_title"] = pr.title or ""
-                cand["_attrs"] = pr.attrs or ""
-                cand["_cat_id"] = pr.cat_id
-
     # ===== Step E: 自然搜索词 (源 B self) 从 product_search_queries 聚合 =====
     # 门槛：近 N 天 frequency ≥ 5 或 orders ≥ 1。降低 scale 过滤 —— 这是 SEO 机会词
     # 的直接信号（用户实际搜到你商品），比 ROAS 门槛更直接。
@@ -242,86 +154,6 @@ def analyze_paid_to_organic(
             cand["_title"] = r.title or ""
             cand["_attrs"] = r.attrs or ""
             cand["_cat_id"] = r.cat_id
-
-    # ===== Step F: 自然搜索词 (源 B' category) 同类目 ≥2 商品共享 =====
-    organic_cat_sql = text("""
-        SELECT
-            q.query_text AS keyword,
-            p.local_category_id AS cat_id,
-            COUNT(DISTINCT p.id) AS shared_products,
-            SUM(q.frequency) AS frequency,
-            SUM(q.impressions) AS impressions,
-            SUM(q.add_to_cart) AS add_to_cart,
-            SUM(q.orders) AS orders,
-            SUM(q.revenue) AS revenue
-        FROM product_search_queries q
-        JOIN products p ON p.id = q.product_id AND p.tenant_id = q.tenant_id
-        WHERE q.tenant_id = :tid
-          AND q.shop_id = :sid
-          AND q.stat_date >= :since
-          AND q.product_id IS NOT NULL
-          AND p.local_category_id IS NOT NULL
-          AND (p.status != 'deleted' OR p.status IS NULL)
-        GROUP BY q.query_text, p.local_category_id
-        HAVING COUNT(DISTINCT p.id) >= 2
-           AND (SUM(q.frequency) >= 10 OR SUM(q.orders) >= 1)
-    """)
-    org_cat_rows = db.execute(organic_cat_sql, {
-        "tid": tenant_id, "sid": shop.id, "since": since,
-    }).fetchall()
-
-    org_cat_kw_map = {}
-    for r in org_cat_rows:
-        kw = (r.keyword or "").strip().lower()
-        if not kw:
-            continue
-        org_cat_kw_map.setdefault(r.cat_id, []).append(
-            (kw, int(r.frequency or 0), int(r.impressions or 0),
-             int(r.add_to_cart or 0), int(r.orders or 0))
-        )
-
-    # 把 organic 类目词扩散到同类目全部商品
-    if org_cat_kw_map:
-        prod_cat_sql = text("""
-            SELECT
-                p.id AS product_id,
-                ANY_VALUE(p.local_category_id) AS cat_id,
-                ANY_VALUE(COALESCE(pl.title_ru, '')) AS title,
-                ANY_VALUE(COALESCE(CAST(pl.variant_attrs AS CHAR), '')) AS attrs
-            FROM products p
-            JOIN platform_listings pl ON pl.product_id = p.id
-                                       AND pl.tenant_id = p.tenant_id
-            WHERE p.tenant_id = :tid
-              AND pl.shop_id = :sid
-              AND pl.status NOT IN ('deleted', 'archived')
-              AND p.local_category_id IN :cat_ids
-              AND (p.status != 'deleted' OR p.status IS NULL)
-            GROUP BY p.id
-        """).bindparams(bindparam("cat_ids", expanding=True))
-        prod_cat_rows = db.execute(prod_cat_sql, {
-            "tid": tenant_id, "sid": shop.id,
-            "cat_ids": list(org_cat_kw_map.keys()),
-        }).fetchall()
-
-        for pr in prod_cat_rows:
-            for kw, freq, imp, atc, orders in org_cat_kw_map.get(pr.cat_id, []):
-                key = (pr.product_id, kw)
-                cand = candidates.setdefault(key, _new_candidate(pr.product_id, kw))
-                already = any(
-                    s["type"] == "organic" and s["scope"] == "category"
-                    for s in cand["sources"]
-                )
-                if not already:
-                    cand["sources"].append({"type": "organic", "scope": "category"})
-                # 类目指标不覆盖更强的 self 信号，仅在 self 未命中时填
-                if cand.get("organic_orders") is None:
-                    cand["organic_impressions"] = imp or freq
-                    cand["organic_add_to_cart"] = atc
-                    cand["organic_orders"] = orders
-                if not cand.get("_title"):
-                    cand["_title"] = pr.title or ""
-                    cand["_attrs"] = pr.attrs or ""
-                    cand["_cat_id"] = pr.cat_id
 
     # ===== Step G: 跨店同 SKU 召回 (源 D cross_shop self) =====
     # 业务模型：products.sku 是用户自定义的本地编码，跨店相同 = 同一商品。
@@ -456,13 +288,9 @@ def _new_candidate(product_id: int, keyword: str) -> dict:
 def _compute_score(cand: dict) -> float:
     """综合得分：真实指标主导，多源加分仅在跨大类时给。上限 100。
 
-    重要修订（2026-04-25）：
-    - 旧公式 src_count × 2 把 (organic.self + organic.category) 这种"同 type
-      不同 scope"的双 entry 也按多源算，导致 0 订单 2 曝光的词凭"双 entry"
-      压过 2 订单 13 曝光的真实价值词。
-    - 新公式只把 paid/organic/cross_shop 三大 type 类别算多源，scope 不同
-      不算（self 和 category 是同一种来源的两个聚合维度，不是多源验证）。
-    - 同时提高订单/曝光/加购权重，让真实指标主导。
+    2026-04-27 砍 scope='category' 后,sources 里只剩 self / cross_shop scope。
+    multi_type_bonus 仍按 type 大类算 (paid/organic/cross_shop 三类),
+    一个词同时被本商品付费 + 自然搜过 + 跨店同款验证过 → 加 3 分,强信号。
 
     本店：
       - 多 type 大类加分：≥2 个 type 类才加 ×1.5/类
@@ -478,7 +306,7 @@ def _compute_score(cand: dict) -> float:
       - log10(跨店曝光+1) × 1
     """
     sources = cand.get("sources") or []
-    # 多源加分按 type 大类算（self/category 同 type 不算多源）
+    # 多源加分按 type 大类算 (paid/organic/cross_shop 三类)
     unique_types = {
         s.get("type") for s in sources
         if s.get("type") in ("paid", "organic", "cross_shop")
@@ -589,9 +417,8 @@ def list_candidates(
     source_filter:
       - all            全部
       - paid_self      只来自商品维付费
-      - paid_category  只来自类目维付费
       - organic_self   只来自自然搜索（本商品）
-      - organic_category 只来自自然搜索（同类目）
+      - cross_shop     只来自跨店同 SKU 召回
       - with_orders    只看带真实订单的（强证据，paid_orders OR organic_orders > 0)
 
     product_id: 可选，只返回指定商品的候选（Health → Optimize 闭环用）
@@ -614,12 +441,10 @@ def list_candidates(
         params["kw_like"] = f"%{keyword.strip().lower()}%"
     if source_filter == "paid_self":
         where_parts.append("JSON_CONTAINS(c.sources, JSON_OBJECT('type','paid','scope','self'))")
-    elif source_filter == "paid_category":
-        where_parts.append("JSON_CONTAINS(c.sources, JSON_OBJECT('type','paid','scope','category'))")
     elif source_filter == "organic_self":
         where_parts.append("JSON_CONTAINS(c.sources, JSON_OBJECT('type','organic','scope','self'))")
-    elif source_filter == "organic_category":
-        where_parts.append("JSON_CONTAINS(c.sources, JSON_OBJECT('type','organic','scope','category'))")
+    elif source_filter == "cross_shop":
+        where_parts.append("JSON_CONTAINS(c.sources, JSON_OBJECT('type','cross_shop','scope','self'))")
     elif source_filter == "with_orders":
         where_parts.append("(COALESCE(c.paid_orders,0) > 0 OR COALESCE(c.organic_orders,0) > 0)")
     if hide_covered:
