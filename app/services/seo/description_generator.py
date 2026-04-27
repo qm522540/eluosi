@@ -249,7 +249,8 @@ def _collect_inputs(
             p.name_zh, p.name_ru, p.brand, p.local_category_id,
             lc.name AS local_category_name,
             pl.id AS listing_id, pl.title_ru, pl.description_ru,
-            pl.variant_attrs, pl.platform_category_name
+            pl.variant_attrs, pl.platform_category_name,
+            pl.platform_category_id, pl.platform_category_extra_id
         FROM products p
         LEFT JOIN platform_listings pl
             ON pl.product_id = p.id AND pl.tenant_id = p.tenant_id
@@ -325,9 +326,16 @@ def _collect_inputs(
         })
 
     # 3. 类目热门关键词 — 跨商品聚合 Top 20
+    # 优先按平台子类目 (Ozon type_id) 聚合, 同子类目商品才有真正可比关键词
+    # 本地类目通常太宽 (例如全店 356 饰品都归 "时尚饰品" id=4, 但其中混了 270 耳环 + 23 项链 + 26 戒指)
+    # 没有 type_id (WB 商品) 时回退到 platform_category_id, 再回退到 local_category_id
     category_top_keywords = _fetch_category_top_keywords(
-        db, tenant_id, prod_row.local_category_id, limit=20,
-    ) if prod_row.local_category_id else []
+        db, tenant_id,
+        platform_category_extra_id=prod_row.platform_category_extra_id,
+        platform_category_id=prod_row.platform_category_id,
+        local_category_id=prod_row.local_category_id,
+        limit=20,
+    )
 
     # 4. 本商品热门关键词 — Top 10
     product_top_keywords = _fetch_product_top_keywords(
@@ -348,16 +356,53 @@ def _collect_inputs(
 
 
 def _fetch_category_top_keywords(
-    db: Session, tenant_id: int, local_category_id: int, limit: int = 30,
+    db: Session, tenant_id: int,
+    *,
+    platform_category_extra_id: Optional[str] = None,
+    platform_category_id: Optional[str] = None,
+    local_category_id: Optional[int] = None,
+    limit: int = 20,
 ) -> list[dict]:
-    """同 local_category_id 下所有商品聚合, 按总订单+总曝光降序, Top N。
+    """同子类目所有商品聚合关键词, 按订单+曝光降序 Top N。
+
+    优先级:
+    1. platform_category_extra_id (Ozon type_id, 三级最细) — 真正同款类目商品
+    2. platform_category_id (二级 description_category_id) — 略宽
+    3. local_category_id — 兜底, 通常太宽 (本地类目可能整个饰品都一类)
 
     口径: 跨店铺跨商品 (本租户内)。
     过滤: 总订单>0 OR 总曝光>=10 — 把噪声过掉。
     """
-    if not local_category_id:
+    # 选最精确的可用维度
+    if platform_category_extra_id:
+        join_cond = "pl.platform_category_extra_id = :cat"
+        cat_val: Any = str(platform_category_extra_id)
+    elif platform_category_id:
+        join_cond = "pl.platform_category_id = :cat"
+        cat_val = str(platform_category_id)
+    elif local_category_id:
+        # 本地类目兜底 — 走 products 表
+        rows = db.execute(text("""
+            SELECT
+                c.keyword,
+                SUM(COALESCE(c.organic_orders, 0) + COALESCE(c.paid_orders, 0)) AS total_orders,
+                SUM(COALESCE(c.organic_impressions, 0)) AS total_impressions,
+                MAX(c.score) AS max_score,
+                COUNT(DISTINCT c.product_id) AS product_count
+            FROM seo_keyword_candidates c
+            INNER JOIN products p ON p.id = c.product_id AND p.tenant_id = c.tenant_id
+            WHERE c.tenant_id = :tid AND p.local_category_id = :cat AND c.status = 'pending'
+            GROUP BY c.keyword
+            HAVING total_orders > 0 OR total_impressions >= 10
+            ORDER BY total_orders DESC, total_impressions DESC, max_score DESC
+            LIMIT :lim
+        """), {"tid": tenant_id, "cat": local_category_id, "lim": limit}).fetchall()
+        return _format_kw_rows(rows)
+    else:
         return []
-    rows = db.execute(text("""
+
+    # 走 platform_listings 表 (按 type_id 或 desc_cat_id 聚合)
+    rows = db.execute(text(f"""
         SELECT
             c.keyword,
             SUM(COALESCE(c.organic_orders, 0) + COALESCE(c.paid_orders, 0)) AS total_orders,
@@ -365,15 +410,21 @@ def _fetch_category_top_keywords(
             MAX(c.score) AS max_score,
             COUNT(DISTINCT c.product_id) AS product_count
         FROM seo_keyword_candidates c
-        INNER JOIN products p ON p.id = c.product_id AND p.tenant_id = c.tenant_id
-        WHERE c.tenant_id = :tid
-          AND p.local_category_id = :cat
-          AND c.status = 'pending'
+        INNER JOIN platform_listings pl
+            ON pl.product_id = c.product_id
+            AND pl.tenant_id = c.tenant_id
+            AND pl.shop_id = c.shop_id
+            AND pl.status NOT IN ('deleted', 'archived')
+        WHERE c.tenant_id = :tid AND {join_cond} AND c.status = 'pending'
         GROUP BY c.keyword
         HAVING total_orders > 0 OR total_impressions >= 10
         ORDER BY total_orders DESC, total_impressions DESC, max_score DESC
         LIMIT :lim
-    """), {"tid": tenant_id, "cat": local_category_id, "lim": limit}).fetchall()
+    """), {"tid": tenant_id, "cat": cat_val, "lim": limit}).fetchall()
+    return _format_kw_rows(rows)
+
+
+def _format_kw_rows(rows) -> list[dict]:
     return [
         {
             "keyword": r.keyword,
