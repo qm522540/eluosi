@@ -480,9 +480,31 @@ const HealthProductsTable = ({
             <Text strong style={{ fontSize: 13 }}>
               <span>{record.product_name}</span>
               <span style={{ color: '#1677ff', fontWeight: 600, marginLeft: 8 }}>{record.sku || '（无编码）'}</span>
-              <span style={{ color: '#666', fontWeight: 400, marginLeft: 8 }}>· 全部缺词 {items.length} 个</span>
+              <Tooltip
+                title={(
+                  <div style={{ fontSize: 12, lineHeight: 1.7 }}>
+                    <div><strong>这 {items.length} 个词哪来的</strong></div>
+                    <div style={{ marginTop: 4 }}>
+                      本商品 30 天内通过这些俄语词被用户搜中过(且这些词还没出现在标题/属性里),来源:
+                    </div>
+                    <div style={{ paddingLeft: 12, marginTop: 2 }}>
+                      • <strong>自然搜索</strong>:用户搜该词进了本商品 (WB search-texts / Ozon GetProductQueries)<br/>
+                      • <strong>付费广告</strong>:本商品广告投了该词,有花费/订单数据<br/>
+                      • <strong>跨店同款</strong>:同 SKU 在其它店对该词被搜中(同款理论上能用)
+                    </div>
+                    <div style={{ marginTop: 4, color: '#ffd591' }}>
+                      推荐系数 = 综合订单 + 曝光 + 来源加权,降序排列, 前 3 即"高价值词 Top 3"
+                    </div>
+                  </div>
+                )}
+                overlayStyle={{ maxWidth: 460 }}
+              >
+                <span style={{ color: '#666', fontWeight: 400, marginLeft: 8, cursor: 'help', borderBottom: '1px dotted #999' }}>
+                  · 自然搜索/付费/跨店反哺出 {items.length} 个本商品缺词
+                </span>
+              </Tooltip>
             </Text>
-            <Text type="secondary" style={{ fontSize: 11 }}>（按推荐系数降序，前 3 即"高价值词 Top 3"）</Text>
+            <Text type="secondary" style={{ fontSize: 11 }}>(按推荐系数降序, 前 3 即"高价值词 Top 3")</Text>
           </Space>
           <Button
             type="primary"
