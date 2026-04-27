@@ -351,8 +351,11 @@ const AiTitleModal = ({
           <div style={{ marginBottom: 12, padding: '10px 12px', background: '#fff7e6', border: '1px solid #ffd591', borderRadius: 4 }}>
             <Space style={{ marginBottom: 6 }}>
               <Text strong style={{ fontSize: 12 }}>✏️ 手动输入关键词</Text>
+              <Text type="warning" style={{ fontSize: 11, fontWeight: 500 }}>
+                必须俄语
+              </Text>
               <Text type="secondary" style={{ fontSize: 11 }}>
-                看到竞品热门词系统里没的, 可以手填 (最多 3 个; 这里输入的词最高优先级喂 AI)
+                看到竞品热门词系统里没的, 可以手填 (最多 3 个; 中文 / 拼音不会被 AI 识别融入)
               </Text>
             </Space>
             <Space size={6} wrap>
@@ -365,10 +368,10 @@ const AiTitleModal = ({
                     next[idx] = e.target.value
                     setManualKeywords(next)
                   }}
-                  placeholder={`关键词 ${idx + 1} (俄语)`}
+                  placeholder={`俄语关键词 ${idx + 1} (例: серьги жемчуг)`}
                   maxLength={50}
                   size="small"
-                  style={{ width: 240, fontSize: 12 }}
+                  style={{ width: 280, fontSize: 12 }}
                   allowClear
                 />
               ))}
