@@ -177,7 +177,49 @@ const HealthProductsTable = ({
     })
   }
 
-  // 行展开：拉单商品全部缺词
+  // 嵌套表当前页(每个商品独立) - 用于按页增量翻译
+  const [expandedPageByPid, setExpandedPageByPid] = useState({})  // pid -> currentPage
+  const NESTED_PAGE_SIZE = 20
+
+  // 翻译指定关键词列表(已翻过/已 pending 的自动跳过)
+  // 复用给"展开默认翻第 1 页"和"翻页时翻新页"两个场景
+  const translateBatch = useCallback((kws) => {
+    if (!kws || !kws.length) return
+    // 用最新 state 过滤(setState 回调形式拿不到 state,这里用闭包当快照)
+    const fresh = kws.filter(k => !(k in kwTranslations) && kwTranslateStatus[k] !== 'pending')
+    if (!fresh.length) return
+    setKwTranslateStatus(prev => {
+      const next = { ...prev }
+      fresh.forEach(k => { next[k] = 'pending' })
+      return next
+    })
+    const BATCH = 30
+    for (let i = 0; i < fresh.length; i += BATCH) {
+      const batch = fresh.slice(i, i + BATCH)
+      translateKeywords(batch).then(r => {
+        const data = r?.data || {}
+        setKwTranslations(prev => ({ ...prev, ...data }))
+        setKwTranslateStatus(prev => {
+          const next = { ...prev }
+          batch.forEach(k => {
+            const zh = data[k]
+            // zh 空 / 等于原词都视为翻译失败(Kimi 兜底返原词)
+            next[k] = zh && zh !== k ? 'done' : 'failed'
+          })
+          return next
+        })
+      }).catch(err => {
+        console.error('批量翻译失败:', err)
+        setKwTranslateStatus(prev => {
+          const next = { ...prev }
+          batch.forEach(k => { next[k] = 'failed' })
+          return next
+        })
+      })
+    }
+  }, [kwTranslations, kwTranslateStatus])
+
+  // 行展开:拉单商品全部缺词,只翻译第 1 页可见 20 词(其余页翻页时按需翻)
   const onExpand = useCallback(async (expanded, record) => {
     const pid = record.product_id
     if (!expanded) {
@@ -185,49 +227,25 @@ const HealthProductsTable = ({
       return
     }
     setExpandedKeys(prev => [...prev, pid])
-    if (expandedData[pid]) return  // 已经拉过，不重复
+    setExpandedPageByPid(prev => ({ ...prev, [pid]: 1 }))  // 重置到第 1 页
+    if (expandedData[pid]) {
+      // 已拉过 items,但回到第 1 页可能要补翻第 1 页(若之前翻过会被去重)
+      const firstPage = (expandedData[pid] || []).slice(0, NESTED_PAGE_SIZE)
+        .map(it => it.keyword).filter(Boolean)
+      translateBatch(firstPage)
+      return
+    }
     setExpandedLoading(prev => ({ ...prev, [pid]: true }))
     try {
       const res = await getProductMissingCandidates(shopId, pid)
       if (res.code === 0) {
         const items = res.data.items || []
         setExpandedData(prev => ({ ...prev, [pid]: items }))
-        // 异步批量翻译缺词（命中 L2 ru_zh_dict 缓存瞬返；新词走 Kimi 后写回 DB）
-        // 拆批 30 个一组：避免单次批量过大 Kimi 60s 超时整批挂掉
-        const kws = items.map(it => it.keyword).filter(Boolean)
-          .filter(k => !(k in kwTranslations))  // 已翻译过的跳过
-        if (kws.length > 0) {
-          // 标 pending
-          setKwTranslateStatus(prev => {
-            const next = { ...prev }
-            kws.forEach(k => { next[k] = 'pending' })
-            return next
-          })
-          const BATCH = 30
-          for (let i = 0; i < kws.length; i += BATCH) {
-            const batch = kws.slice(i, i + BATCH)
-            translateKeywords(batch).then(r => {
-              const data = r?.data || {}
-              setKwTranslations(prev => ({ ...prev, ...data }))
-              setKwTranslateStatus(prev => {
-                const next = { ...prev }
-                batch.forEach(k => {
-                  const zh = data[k]
-                  // zh 空 / 等于原词都视为翻译失败（Kimi 兜底返原词）
-                  next[k] = zh && zh !== k ? 'done' : 'failed'
-                })
-                return next
-              })
-            }).catch(err => {
-              console.error('批量翻译失败:', err)
-              setKwTranslateStatus(prev => {
-                const next = { ...prev }
-                batch.forEach(k => { next[k] = 'failed' })
-                return next
-              })
-            })
-          }
-        }
+        // 仅翻第 1 页可见 20 词 — 其余页翻页时增量触发
+        // 商品缺词最多 2660 个,一次性翻全部会让 Kimi 队列堵 7-10 分钟
+        const firstPage = items.slice(0, NESTED_PAGE_SIZE)
+          .map(it => it.keyword).filter(Boolean)
+        translateBatch(firstPage)
       } else {
         message.error(res.msg || '拉取失败')
       }
@@ -236,7 +254,18 @@ const HealthProductsTable = ({
     } finally {
       setExpandedLoading(prev => ({ ...prev, [pid]: false }))
     }
-  }, [shopId, expandedData])
+  }, [shopId, expandedData, translateBatch])
+
+  // 嵌套表翻页:翻译新页 20 词
+  const onNestedPageChange = useCallback((pid, pagination) => {
+    const newPage = pagination?.current || 1
+    setExpandedPageByPid(prev => ({ ...prev, [pid]: newPage }))
+    const items = expandedData[pid] || []
+    const start = (newPage - 1) * NESTED_PAGE_SIZE
+    const pageKws = items.slice(start, start + NESTED_PAGE_SIZE)
+      .map(it => it.keyword).filter(Boolean)
+    translateBatch(pageKws)
+  }, [expandedData, translateBatch])
 
   const retryTranslate = (kw) => {
     setKwTranslateStatus(prev => ({ ...prev, [kw]: 'pending' }))
@@ -435,7 +464,13 @@ const HealthProductsTable = ({
           loading={isLoading}
           dataSource={items}
           columns={expandedColumns}
-          pagination={items.length > 20 ? { pageSize: 20, size: 'small' } : false}
+          pagination={items.length > NESTED_PAGE_SIZE ? {
+            pageSize: NESTED_PAGE_SIZE,
+            current: expandedPageByPid[pid] || 1,
+            size: 'small',
+            showTotal: (t) => `共 ${t} 词 · 翻译按页加载`,
+          } : false}
+          onChange={(pagination) => onNestedPageChange(pid, pagination)}
           rowSelection={{
             selectedRowKeys: selectedKeys,
             onChange: (_keys, rows) => {
