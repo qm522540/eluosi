@@ -737,8 +737,9 @@ def _sync_ozon_products(db: Session, shop, tenant_id: int) -> dict:
             tree_task = client.fetch_category_tree()
             commission_task = client.fetch_commissions(product_ids)
             desc_task = client.fetch_product_descriptions_batch(product_ids, concurrency=30)
-            info_chunks, tree, commissions, descriptions = await asyncio.gather(
-                info_task, tree_task, commission_task, desc_task,
+            attrs_task = client.fetch_product_attributes_batch(product_ids, batch_size=100)
+            info_chunks, tree, commissions, descriptions, attributes = await asyncio.gather(
+                info_task, tree_task, commission_task, desc_task, attrs_task,
                 return_exceptions=True,
             )
             if isinstance(info_chunks, Exception):
@@ -752,20 +753,40 @@ def _sync_ozon_products(db: Session, shop, tenant_id: int) -> dict:
             if isinstance(descriptions, Exception):
                 logger.warning(f"Ozon 描述批量拉取失败 shop={shop.id}: {descriptions}")
                 descriptions = {}
+            if isinstance(attributes, Exception):
+                logger.warning(f"Ozon 属性批量拉取失败 shop={shop.id}: {attributes}")
+                attributes = {}
             infos = [it for chunk in info_chunks for it in chunk]
-            return infos, archived_map, stock_map, tree, commissions, descriptions
+            return infos, archived_map, stock_map, tree, commissions, descriptions, attributes
         finally:
             await client.close()
 
     loop = asyncio.new_event_loop()
     try:
-        infos, archived_map, stock_map, tree, commission_map, desc_map = loop.run_until_complete(_fetch_all())
+        infos, archived_map, stock_map, tree, commission_map, desc_map, attrs_map = loop.run_until_complete(_fetch_all())
     finally:
         loop.close()
 
     cat_name_map = _flatten_ozon_category_tree(tree)  # {(desc_cat_id, type_id): name}
 
     cat_map = _load_platform_category_map(db, tenant_id, "ozon")  # description_category_id → local_category_id
+
+    # 一次性载入 attribute_mappings, attr_id 反查属性名 (俄/中)
+    # 部分 attr_id 不在映射表 → 留空, AI 仍能从 value 推断
+    from app.models.category import AttributeMapping
+    attr_name_rows = db.query(
+        AttributeMapping.platform_attr_id,
+        AttributeMapping.platform_attr_name,
+        AttributeMapping.local_attr_name,
+    ).filter(
+        AttributeMapping.tenant_id == tenant_id,
+        AttributeMapping.platform == "ozon",
+    ).all()
+    attr_name_map = {
+        str(r.platform_attr_id): {"ru": r.platform_attr_name or "", "zh": r.local_attr_name or ""}
+        for r in attr_name_rows
+    }
+
     synced = created = updated = 0
     for p in infos:
         pid = p.get("id") or p.get("product_id")
@@ -828,9 +849,38 @@ def _sync_ozon_products(db: Session, shop, tenant_id: int) -> dict:
             ozon_commission = commission_map.get(int(pid))
         # 描述 (v1/product/info/description 单独接口拉的)
         ozon_description = desc_map.get(int(pid)) if isinstance(desc_map, dict) else None
+        # 属性 (v4/product/info/attributes 批量拉的) — 拼成 [{id, name_ru, name_zh, value_ru}, ...]
+        # AI 描述生成靠这字段拼 prompt; 没映射的 attr_id 留 name 空, AI 从 value 推
+        ozon_raw_attrs = attrs_map.get(int(pid)) if isinstance(attrs_map, dict) else None
+        ozon_variant_attrs = None
+        if ozon_raw_attrs:
+            tmp = []
+            for a in ozon_raw_attrs:
+                attr_id = a.get("id")
+                if not attr_id:
+                    continue
+                vals = a.get("values") or []
+                val_parts = []
+                for v in vals:
+                    if isinstance(v, dict):
+                        vv = v.get("value")
+                        if vv:
+                            val_parts.append(str(vv))
+                value_ru = " | ".join(val_parts)[:500]
+                if not value_ru:
+                    continue
+                name_info = attr_name_map.get(str(attr_id), {})
+                tmp.append({
+                    "id": int(attr_id),
+                    "name_ru": name_info.get("ru", ""),
+                    "name_zh": name_info.get("zh", ""),
+                    "value_ru": value_ru,
+                })
+            ozon_variant_attrs = tmp if tmp else None
         data = {
             "title_ru": title,
             "description_ru": ozon_description,
+            "variant_attrs": ozon_variant_attrs,
             "price": old_price or price,
             "discount_price": price if (old_price and price and old_price != price) else None,
             "barcode": barcode,

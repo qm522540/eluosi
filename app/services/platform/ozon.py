@@ -763,6 +763,52 @@ class OzonClient(BasePlatformClient):
         await asyncio.gather(*[_one(p) for p in product_ids], return_exceptions=True)
         return results
 
+    async def fetch_product_attributes_batch(
+        self, product_ids: list, batch_size: int = 100,
+    ) -> dict:
+        """批量拉商品属性,返回 {product_id: [{id, values:[{value}]}, ...]}。
+
+        API: POST /v4/product/info/attributes
+        body: {"filter": {"product_id": [...], "visibility": "ALL"}, "limit": 100, "last_id": ""}
+        每次最多 1000 product_id,但属性大时返回包很大,按 100 一批稳。
+
+        部分失败 (网络 / 单批 5xx) 不抛,继续其余批次。
+        AI 描述生成靠这字段,所以对接调用方应在 sync 时调一次。
+        """
+        if not product_ids:
+            return {}
+        url = f"{OZON_SELLER_API}/v4/product/info/attributes"
+        results: dict = {}
+        for i in range(0, len(product_ids), batch_size):
+            chunk = [str(p) for p in product_ids[i:i + batch_size]]
+            try:
+                # 大商品 (~100 个 attr_id) 单批 100 商品 ~5MB,limit 给足,last_id 走分页
+                last_id = ""
+                for _ in range(20):  # 最多 20 页 (单批理论上 1 页就够)
+                    body = {
+                        "filter": {"product_id": chunk, "visibility": "ALL"},
+                        "limit": 1000,
+                        "last_id": last_id,
+                    }
+                    resp = await self._request("POST", url, json=body)
+                    items = (resp or {}).get("result") or []
+                    for it in items:
+                        pid = it.get("id") or it.get("product_id")
+                        if not pid:
+                            continue
+                        attrs = it.get("attributes") or []
+                        if attrs:
+                            results[int(pid)] = attrs
+                    next_id = (resp or {}).get("last_id") or ""
+                    if not next_id or next_id == last_id:
+                        break
+                    last_id = next_id
+            except Exception as e:
+                logger.warning(
+                    f"Ozon 属性批量拉取失败 shop={self.shop_id} batch[{i}:{i+batch_size}]: {e}"
+                )
+        return results
+
     # ==================== 订单 ====================
 
     async def fetch_orders(self, date_from: str, date_to: str) -> list:
