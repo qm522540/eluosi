@@ -136,29 +136,49 @@ def _build_user_prompt(
 
     # 商品属性 — 渲染成"俄语名 (中文): 值"列表, 比裸 JSON 省 token 也更易读
     # 同步代码现已存 [{id, name_ru, name_zh, value_ru}, ...] 结构 (Ozon /v4/info/attributes)
+    # 过滤无用属性: 富文本/HTML 描述/视频/卖家编码 等占字符不带卖点信息的字段
+    OZON_ATTR_BLACKLIST = {
+        4191,   # 描述 (HTML, 跟 description_ru 重复)
+        11254,  # rich_content_json (富文本楼层 JSON, 主要是图片 URL)
+        21837,  # Ozon.Видео: 名称
+        22968,  # Ozon.Видео: ссылка
+        9024,   # Код продавца (内部 SKU 编号, 如 OZON-E0170)
+        4180,   # Название товара (商品名, 跟 title 重复)
+        10097,  # 颜色名称 (卖家常填成商品名, 不是真颜色)
+    }
     if variant_attrs:
         attr_lines = []
         if isinstance(variant_attrs, list):
+            title_norm = (current_title_ru or "").strip().lower()
             for a in variant_attrs:
                 if not isinstance(a, dict):
+                    continue
+                attr_id = a.get("id")
+                if attr_id in OZON_ATTR_BLACKLIST:
                     continue
                 name_ru = (a.get("name_ru") or "").strip()
                 name_zh = (a.get("name_zh") or "").strip()
                 value_ru = (a.get("value_ru") or "").strip()
                 if not value_ru:
                     continue
+                # 兜底: 单个 value > 500 字符的多半是富文本/长 JSON, 跳过
+                if len(value_ru) > 500:
+                    continue
+                # 去重: value 跟 title 一摸一样, 没有信息量
+                if title_norm and value_ru.lower() == title_norm:
+                    continue
                 if name_ru and name_zh and name_ru != name_zh:
                     attr_lines.append(f"- {name_ru} ({name_zh}): {value_ru}")
                 elif name_ru:
                     attr_lines.append(f"- {name_ru}: {value_ru}")
                 else:
-                    attr_lines.append(f"- 属性 #{a.get('id', '?')}: {value_ru}")
+                    attr_lines.append(f"- 属性 #{attr_id or '?'}: {value_ru}")
             attrs_str = "\n".join(attr_lines)
         else:
             # 兜底: 老格式 dict / 字符串, 走原 JSON dump 路径
             attrs_str = json.dumps(variant_attrs, ensure_ascii=False) if isinstance(variant_attrs, dict) else str(variant_attrs)
-        if len(attrs_str) > 1500:
-            attrs_str = attrs_str[:1500] + "...(截断)"
+        if len(attrs_str) > 2000:
+            attrs_str = attrs_str[:2000] + "...(截断)"
         if attrs_str:
             lines.append("")
             lines.append(f"【商品属性（用于自然融入描述，不要罗列；务必基于这些真实属性写卖点，不要编造）】\n{attrs_str}")
