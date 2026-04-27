@@ -195,8 +195,14 @@ const AiTitleModal = ({
         </Button>,
       ]}
     >
+      <Alert
+        type="info"
+        showIcon
+        style={{ marginBottom: 12 }}
+        message="勾选哪些数据喂给 AI ─ 默认全选, 去掉勾就不传给 AI。AI 会基于「当前俄语标题」做融合改写。"
+      />
+
       <Descriptions size="small" column={1} bordered style={{ marginBottom: 12 }}>
-        <Descriptions.Item label="商品">{productName || `ID ${productId}`}</Descriptions.Item>
         <Descriptions.Item label="当前俄语标题">
           {currentTitle
             ? (
