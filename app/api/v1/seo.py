@@ -252,7 +252,7 @@ def list_generated(
 
 
 @router.post("/shop/{shop_id}/generated-titles/{generated_id}/apply")
-def apply_generated(
+async def apply_generated(
     shop_id: int,
     generated_id: int,
     db: Session = Depends(get_db),
@@ -260,9 +260,13 @@ def apply_generated(
     shop=Depends(get_owned_shop),
     current_user=Depends(get_current_user),
 ):
-    """用户手动确认"已复制并改到商品"，标 applied_at + approved_by。"""
+    """启用 AI 生成内容: 改本地 DB title_ru/description_ru + 调平台 API 写回 + 标 applied。
+
+    返回 data 含 platform_writeback: {status: submitted/failed/skipped, task_id?, msg}
+    前端据此告诉用户平台是否同步成功。
+    """
     user_id = getattr(current_user, "id", None)
-    result = mark_title_applied(db, tenant_id, shop, generated_id, user_id)
+    result = await mark_title_applied(db, tenant_id, shop, generated_id, user_id)
     if result.get("code") != 0:
         return error(result["code"], result.get("msg", ""))
     return success(result["data"])

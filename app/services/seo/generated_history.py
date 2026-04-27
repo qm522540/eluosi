@@ -139,24 +139,33 @@ def list_generated_titles(
     }
 
 
-def mark_title_applied(
+async def mark_title_applied(
     db: Session,
     tenant_id: int,
     shop,
     generated_id: int,
     user_id: Optional[int] = None,
 ) -> dict:
-    """标记"已复制并应用到商品"——用户手动确认已改，建立后续 ROI 对比基线。
+    """启用新标题: 改本地 DB title_ru + 调平台 API 写回 + 标 applied 建 ROI 基线。
 
-    一期只改 approval_status = 'applied' + 写 applied_at + approved_by。
-    不碰 platform_listings.title_ru（三期才做真正的平台 API 写回）。
+    流程:
+      1. 拉 generated 记录 + 对应 listing 的 platform_product_id, offer_id, content_type
+      2. 改本地 platform_listings.title_ru (description 走 description_ru)
+      3. 标 seo_generated_contents.approval_status='applied' + applied_at
+      4. 调平台 API 写回:
+         - Ozon: /v1/product/import 异步任务, 返 task_id, 1-5 分钟生效
+         - WB: 暂不支持 (下一步加, 用户暂时手动到平台改)
+      5. 平台 API 失败不回滚本地 (本地已应用, 用户可看到; 失败信息回传前端提示)
     """
     from datetime import datetime, timezone
 
     row = db.execute(text("""
-        SELECT g.id, g.approval_status
+        SELECT g.id, g.approval_status, g.content_type, g.generated_text,
+               pl.id AS listing_id, pl.platform, pl.platform_product_id,
+               pl.title_ru AS old_title, pl.description_ru AS old_desc
         FROM seo_generated_contents g
         JOIN platform_listings pl ON pl.id = g.listing_id
+        LEFT JOIN platform_listings pl2 ON pl2.id = g.listing_id
         WHERE g.id = :gid
           AND g.tenant_id = :tid
           AND pl.shop_id = :sid
@@ -170,9 +179,36 @@ def mark_title_applied(
     if row.approval_status == "applied":
         return {"code": ErrorCode.SUCCESS,
                 "data": {"id": generated_id, "approval_status": "applied",
-                         "msg": "已是 applied 状态，无变更"}}
+                         "msg": "已是 applied 状态,无变更"}}
+
+    new_text = row.generated_text or ""
+    if not new_text:
+        return {"code": ErrorCode.SUCCESS,
+                "data": {"id": generated_id, "msg": "生成内容为空,跳过"}}
+
+    # 取 offer_id (Ozon 改商品需要 offer_id 而非 product_id)
+    offer_row = db.execute(text("""
+        SELECT p.sku FROM platform_listings pl
+        JOIN products p ON p.id = pl.product_id
+        WHERE pl.id = :lid LIMIT 1
+    """), {"lid": row.listing_id}).first()
+    offer_id = (offer_row.sku if offer_row else None) or row.platform_product_id
 
     now_utc = datetime.now(timezone.utc)
+
+    # 1. 改本地 listing 字段 (title 或 description)
+    if row.content_type == "title":
+        db.execute(text("""
+            UPDATE platform_listings SET title_ru = :v, updated_at = :now
+            WHERE id = :lid AND tenant_id = :tid
+        """), {"v": new_text[:500], "now": now_utc, "lid": row.listing_id, "tid": tenant_id})
+    elif row.content_type == "description":
+        db.execute(text("""
+            UPDATE platform_listings SET description_ru = :v, updated_at = :now
+            WHERE id = :lid AND tenant_id = :tid
+        """), {"v": new_text, "now": now_utc, "lid": row.listing_id, "tid": tenant_id})
+
+    # 2. 标 applied
     db.execute(text("""
         UPDATE seo_generated_contents
         SET approval_status = 'applied',
@@ -182,6 +218,45 @@ def mark_title_applied(
     """), {"gid": generated_id, "tid": tenant_id, "uid": user_id, "now": now_utc})
     db.commit()
 
+    # 3. 调平台 API 写回 (失败不回滚本地)
+    platform_result: dict = {"status": "skipped", "msg": "本期仅支持 Ozon 标题写回"}
+    if row.platform == "ozon" and row.content_type == "title" and offer_id:
+        try:
+            from app.services.platform.ozon import OzonClient
+            client = OzonClient(
+                shop_id=shop.id, api_key=shop.api_key, client_id=shop.client_id,
+                perf_client_id=getattr(shop, "perf_client_id", None) or "",
+                perf_client_secret=getattr(shop, "perf_client_secret", None) or "",
+            )
+            try:
+                api_res = await client.update_product_name(offer_id, new_text)
+            finally:
+                await client.close()
+            if api_res.get("task_id"):
+                platform_result = {
+                    "status": "submitted",
+                    "task_id": api_res["task_id"],
+                    "msg": f"已提交 Ozon, task_id={api_res['task_id']}, 1-5 分钟生效",
+                }
+            else:
+                platform_result = {
+                    "status": "failed",
+                    "msg": api_res.get("error", "未知错误"),
+                }
+        except Exception as e:
+            logger.error(f"启用新标题平台 API 写回失败 generated_id={generated_id}: {e}")
+            platform_result = {"status": "failed", "msg": f"{type(e).__name__}: {str(e)[:120]}"}
+    elif row.platform == "wb":
+        platform_result = {
+            "status": "skipped",
+            "msg": "WB 平台 API 写回暂未实现, 请手动到 WB 后台粘贴新标题",
+        }
+
     return {"code": ErrorCode.SUCCESS,
-            "data": {"id": generated_id, "approval_status": "applied",
-                     "applied_at": now_utc.isoformat()}}
+            "data": {
+                "id": generated_id,
+                "approval_status": "applied",
+                "applied_at": now_utc.isoformat(),
+                "local_updated": True,
+                "platform_writeback": platform_result,
+            }}
