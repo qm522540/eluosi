@@ -214,7 +214,7 @@ const AiDescriptionModal = ({
       open={open}
       onCancel={onClose}
       title={<Space><RobotOutlined /><span>AI 生成商品描述</span></Space>}
-      width={900}
+      width={1200}
       destroyOnClose
       footer={result ? [
         <Button key="close" onClick={onClose}>关闭</Button>,
@@ -370,11 +370,18 @@ const AiDescriptionModal = ({
                     onChange={toggleSet(selectedKeywords, setSelectedKeywords).bind(null, k.keyword)}
                   >
                     <Tooltip title={`总订单 ${k.total_orders} / 总曝光 ${k.total_impressions} / 覆盖 ${k.product_count} 商品`}>
-                      <span style={{ fontSize: 11 }}>
-                        {k.keyword}
-                        <Text type="secondary" style={{ fontSize: 10, marginLeft: 4 }}>
-                          ({k.total_orders}单/{k.total_impressions}曝)
-                        </Text>
+                      <span style={{ fontSize: 11, display: 'inline-block', lineHeight: 1.3 }}>
+                        <div>
+                          {k.keyword}
+                          <Text type="secondary" style={{ fontSize: 10, marginLeft: 4 }}>
+                            ({k.total_orders}单/{k.total_impressions}曝)
+                          </Text>
+                        </div>
+                        {k.keyword_zh && k.keyword_zh !== k.keyword && (
+                          <div style={{ fontSize: 10, color: '#1677ff' }}>
+                            {k.keyword_zh}
+                          </div>
+                        )}
                       </span>
                     </Tooltip>
                   </Checkbox>
@@ -408,11 +415,18 @@ const AiDescriptionModal = ({
                       onChange={toggleSet(selectedKeywords, setSelectedKeywords).bind(null, k.keyword)}
                     >
                       <Tooltip title={`score ${k.score?.toFixed?.(1) || '-'} / 自然曝光 ${k.organic_impressions} / 订单 ${orders}`}>
-                        <span style={{ fontSize: 11 }}>
-                          {k.keyword}
-                          <Text type="secondary" style={{ fontSize: 10, marginLeft: 4 }}>
-                            ({k.organic_impressions}曝/{orders}单)
-                          </Text>
+                        <span style={{ fontSize: 11, display: 'inline-block', lineHeight: 1.3 }}>
+                          <div>
+                            {k.keyword}
+                            <Text type="secondary" style={{ fontSize: 10, marginLeft: 4 }}>
+                              ({k.organic_impressions}曝/{orders}单)
+                            </Text>
+                          </div>
+                          {k.keyword_zh && k.keyword_zh !== k.keyword && (
+                            <div style={{ fontSize: 10, color: '#1677ff' }}>
+                              {k.keyword_zh}
+                            </div>
+                          )}
                         </span>
                       </Tooltip>
                     </Checkbox>

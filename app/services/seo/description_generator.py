@@ -97,7 +97,6 @@ OZON_ATTR_BLACKLIST = {
 # 上下文字段顺序 (preview 和 prompt 都按这个顺序展示)
 CONTEXT_FIELD_KEYS = [
     "brand_philosophy",
-    "name_zh",
     "name_ru",
     "brand",
     "category",
@@ -107,10 +106,9 @@ CONTEXT_FIELD_KEYS = [
 
 CONTEXT_FIELD_LABELS = {
     "brand_philosophy": "店铺品牌理念",
-    "name_zh": "中文名",
     "name_ru": "俄语名",
     "brand": "品牌",
-    "category": "类目路径",
+    "category": "类目",
     "title_ru": "当前俄语标题",
     "description_ru": "当前俄语描述",
 }
@@ -249,12 +247,15 @@ def _collect_inputs(
         SELECT
             p.id AS pid,
             p.name_zh, p.name_ru, p.brand, p.local_category_id,
+            lc.name AS local_category_name,
             pl.id AS listing_id, pl.title_ru, pl.description_ru,
             pl.variant_attrs, pl.platform_category_name
         FROM products p
         LEFT JOIN platform_listings pl
             ON pl.product_id = p.id AND pl.tenant_id = p.tenant_id
             AND pl.shop_id = p.shop_id AND pl.status NOT IN ('deleted', 'archived')
+        LEFT JOIN local_categories lc
+            ON lc.id = p.local_category_id AND lc.tenant_id = p.tenant_id
         WHERE p.id = :pid AND p.tenant_id = :tid AND p.shop_id = :sid
         ORDER BY pl.id ASC LIMIT 1
     """), {"pid": product_id, "tid": tenant_id, "sid": shop_id}).first()
@@ -269,13 +270,20 @@ def _collect_inputs(
     else:
         philosophy = (brand_philosophy_override or "").strip() or None
 
+    # 类目: 中文 + 俄文 全路径, 让 AI 同时知道本地行业语言 + 平台类目
+    cat_parts = []
+    if prod_row.local_category_name:
+        cat_parts.append(prod_row.local_category_name)
+    if prod_row.platform_category_name:
+        cat_parts.append(prod_row.platform_category_name)
+    category_value = " — ".join(cat_parts) if cat_parts else None
+
     context_fields = []
     raw_ctx = {
         "brand_philosophy": philosophy,
-        "name_zh": prod_row.name_zh,
         "name_ru": prod_row.name_ru,
         "brand": prod_row.brand,
-        "category": prod_row.platform_category_name,
+        "category": category_value,
         "title_ru": prod_row.title_ru,
         "description_ru": prod_row.description_ru,
     }
@@ -316,9 +324,9 @@ def _collect_inputs(
             "value_ru": value_ru,
         })
 
-    # 3. 类目热门关键词 — 跨商品聚合 Top 30
+    # 3. 类目热门关键词 — 跨商品聚合 Top 20
     category_top_keywords = _fetch_category_top_keywords(
-        db, tenant_id, prod_row.local_category_id, limit=30,
+        db, tenant_id, prod_row.local_category_id, limit=20,
     ) if prod_row.local_category_id else []
 
     # 4. 本商品热门关键词 — Top 10
@@ -405,21 +413,42 @@ def _fetch_product_top_keywords(
     ]
 
 
-def preview_description_inputs(
+async def preview_description_inputs(
     db: Session, tenant_id: int, shop, product_id: int,
 ) -> dict:
-    """前端 AiDescriptionModal 打开时调, 返回 4 个分组的全集数据让用户勾选。"""
+    """前端 AiDescriptionModal 打开时调, 返回 4 个分组的全集数据让用户勾选。
+
+    关键词附带 keyword_zh (走 ru_zh_dict 缓存优先, 缺失再调 Kimi)。
+    """
     inputs = _collect_inputs(db, tenant_id, shop, product_id)
     if not inputs.get("ok"):
         return {"code": inputs.get("code"), "msg": inputs.get("msg")}
+
+    # 给类目+本商品热门词批量翻译 (L1 process / L2 ru_zh_dict / L3 Kimi)
+    cat_kws = inputs["category_top_keywords"]
+    prod_kws = inputs["product_top_keywords"]
+    all_keywords = list({k["keyword"] for k in cat_kws + prod_kws if k.get("keyword")})
+    translations: dict = {}
+    if all_keywords:
+        try:
+            from app.services.translation.ru_zh import translate_batch
+            translations = await translate_batch(db, all_keywords, field_type="keyword")
+        except Exception as e:
+            logger.warning(f"SEO preview 翻译批量失败 product={product_id}: {e}")
+
+    for k in cat_kws:
+        k["keyword_zh"] = translations.get(k["keyword"], "")
+    for k in prod_kws:
+        k["keyword_zh"] = translations.get(k["keyword"], "")
+
     return {
         "code": 0,
         "data": {
             "platform": inputs["platform"],
             "context_fields": inputs["context_fields"],
             "attrs": inputs["attrs"],
-            "category_top_keywords": inputs["category_top_keywords"],
-            "product_top_keywords": inputs["product_top_keywords"],
+            "category_top_keywords": cat_kws,
+            "product_top_keywords": prod_kws,
         },
     }
 

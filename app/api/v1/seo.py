@@ -529,7 +529,7 @@ def get_brand_philosophy(
 
 
 @router.get("/shop/{shop_id}/generate-description/preview")
-def preview_generate_description(
+async def preview_generate_description(
     shop_id: int,
     product_id: int = Query(..., gt=0),
     db: Session = Depends(get_db),
@@ -537,12 +537,12 @@ def preview_generate_description(
     shop=Depends(get_owned_shop),
 ):
     """前端 AiDescriptionModal 打开时调, 返回 4 个分组的全集让用户勾选:
-    - context_fields: 上下文字段 (品牌理念/中文名/俄语名/品牌/类目/标题/描述)
+    - context_fields: 上下文字段 (品牌理念/俄语名/品牌/类目/标题/描述)
     - attrs: 商品属性 (黑名单已过滤)
-    - category_top_keywords: 同类目热门关键词 Top 30
-    - product_top_keywords: 本商品热门关键词 Top 10
+    - category_top_keywords: 同类目热门关键词 Top 20 (带中文翻译)
+    - product_top_keywords: 本商品热门关键词 Top 10 (带中文翻译)
     """
-    result = preview_description_inputs(db, tenant_id, shop, product_id)
+    result = await preview_description_inputs(db, tenant_id, shop, product_id)
     if result.get("code") != 0:
         return error(result["code"], result.get("msg", ""))
     return success(result["data"])
