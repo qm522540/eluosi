@@ -83,8 +83,9 @@ def _build_user_prompt(
     variant_attrs: Any,
     candidates: list[dict],
     preserve_keywords: Optional[list[str]] = None,
+    category_top_keywords: Optional[list[dict]] = None,
 ) -> str:
-    """拼用户侧 prompt。候选词按 score 降序传入。"""
+    """拼用户侧 prompt。candidates 是用户选中的反哺词, category_top_keywords 是跨店本类目热门词。"""
     lines = []
     hint = PLATFORM_HINT.get((platform or "").lower())
     if hint:
@@ -114,24 +115,129 @@ def _build_user_prompt(
         for kw in preserve_keywords:
             lines.append(f"- {kw}")
 
-    lines.append("")
-    lines.append(f"【用户选中要融合的反哺关键词（共 {len(candidates)} 个，按重要性排序）】")
-    for i, c in enumerate(candidates, 1):
-        metric_parts = []
-        if c.get("paid_orders"):
-            metric_parts.append(f"付费订单 {c['paid_orders']}")
-        if c.get("paid_roas"):
-            metric_parts.append(f"ROAS {float(c['paid_roas']):.2f}")
-        if c.get("organic_impressions"):
-            metric_parts.append(f"自然曝光 {c['organic_impressions']}")
-        if c.get("organic_orders"):
-            metric_parts.append(f"自然订单 {c['organic_orders']}")
-        metric = f"（{' / '.join(metric_parts)}）" if metric_parts else ""
-        lines.append(f"{i}. {c['keyword']} {metric}")
+    if candidates:
+        lines.append("")
+        lines.append(f"【用户选中要融合的反哺关键词（共 {len(candidates)} 个，按重要性排序）】")
+        for i, c in enumerate(candidates, 1):
+            metric_parts = []
+            if c.get("paid_orders"):
+                metric_parts.append(f"付费订单 {c['paid_orders']}")
+            if c.get("paid_roas"):
+                metric_parts.append(f"ROAS {float(c['paid_roas']):.2f}")
+            if c.get("organic_impressions"):
+                metric_parts.append(f"自然曝光 {c['organic_impressions']}")
+            if c.get("organic_orders"):
+                metric_parts.append(f"自然订单 {c['organic_orders']}")
+            metric = f"（{' / '.join(metric_parts)}）" if metric_parts else ""
+            lines.append(f"{i}. {c['keyword']} {metric}")
+
+    if category_top_keywords:
+        lines.append("")
+        lines.append(f"【跨店铺本类目热门关键词（共 {len(category_top_keywords)} 个，跨商品聚合按订单+曝光降序，可参考融入但优先级低于上面用户选中词）】")
+        for i, k in enumerate(category_top_keywords, 1):
+            metric_parts = []
+            if k.get("total_orders"):
+                metric_parts.append(f"总订单 {int(k['total_orders'])}")
+            if k.get("total_impressions"):
+                metric_parts.append(f"总曝光 {int(k['total_impressions'])}")
+            if k.get("product_count"):
+                metric_parts.append(f"覆盖 {int(k['product_count'])} 个商品")
+            metric = f"（{' / '.join(metric_parts)}）" if metric_parts else ""
+            lines.append(f"{i}. {k['keyword']} {metric}")
 
     lines.append("")
     lines.append("请按上述约束生成新俄语标题，返回 JSON。")
     return "\n".join(lines)
+
+
+# ==================== Preview API (前端弹窗打开时拉) ====================
+
+async def preview_title_inputs(
+    db: Session, tenant_id: int, shop, product_id: int,
+    candidate_ids: list[int],
+) -> dict:
+    """前端 AiTitleModal 打开时调,返回:
+    - candidates: 用户传过来的 ids 对应的反哺词全集 (含 keyword_zh 翻译)
+    - category_top_keywords: 跨店本类目热门 Top 5 (含 keyword_zh 翻译)
+    """
+    from app.services.seo.description_generator import _fetch_category_top_keywords
+    from app.services.translation.ru_zh import translate_batch
+
+    shop_id = shop.id
+
+    # 1. 商品基础 (要 platform_category_extra_id 才能聚合同 type_id)
+    prod_row = db.execute(text("""
+        SELECT pl.platform_category_extra_id, pl.platform_category_id,
+               p.local_category_id
+        FROM products p
+        LEFT JOIN platform_listings pl
+            ON pl.product_id = p.id AND pl.tenant_id = p.tenant_id
+            AND pl.shop_id = p.shop_id AND pl.status NOT IN ('deleted', 'archived')
+        WHERE p.id = :pid AND p.tenant_id = :tid AND p.shop_id = :sid
+        ORDER BY pl.id ASC LIMIT 1
+    """), {"pid": product_id, "tid": tenant_id, "sid": shop_id}).first()
+
+    if not prod_row:
+        return {"code": ErrorCode.SEO_PRODUCT_NOT_FOUND, "msg": "商品不在当前店铺"}
+
+    # 2. 反哺词全量(用户勾选的)
+    cand_rows = []
+    if candidate_ids:
+        cand_stmt = text("""
+            SELECT id, keyword, score, paid_roas, paid_orders,
+                   organic_impressions, organic_orders
+            FROM seo_keyword_candidates
+            WHERE tenant_id = :tid AND shop_id = :sid AND product_id = :pid
+              AND id IN :ids
+            ORDER BY score DESC
+        """).bindparams(bindparam("ids", expanding=True))
+        cand_rows = db.execute(cand_stmt, {
+            "tid": tenant_id, "sid": shop_id, "pid": product_id,
+            "ids": list(candidate_ids),
+        }).fetchall()
+
+    candidates = [
+        {
+            "id": r.id, "keyword": r.keyword,
+            "score": float(r.score or 0),
+            "paid_orders": int(r.paid_orders or 0) if r.paid_orders is not None else 0,
+            "paid_roas": float(r.paid_roas) if r.paid_roas is not None else None,
+            "organic_impressions": int(r.organic_impressions or 0),
+            "organic_orders": int(r.organic_orders or 0),
+        }
+        for r in cand_rows
+    ]
+
+    # 3. 跨店本类目热门 Top 5
+    category_top_keywords = _fetch_category_top_keywords(
+        db, tenant_id,
+        platform_category_extra_id=prod_row.platform_category_extra_id,
+        platform_category_id=prod_row.platform_category_id,
+        local_category_id=prod_row.local_category_id,
+        limit=5,
+    )
+
+    # 4. 批量翻译
+    all_keywords = list({k["keyword"] for k in candidates + category_top_keywords if k.get("keyword")})
+    translations: dict = {}
+    if all_keywords:
+        try:
+            translations = await translate_batch(db, all_keywords, field_type="keyword")
+        except Exception as e:
+            logger.warning(f"SEO title preview 翻译失败 product={product_id}: {e}")
+
+    for k in candidates:
+        k["keyword_zh"] = translations.get(k["keyword"], "")
+    for k in category_top_keywords:
+        k["keyword_zh"] = translations.get(k["keyword"], "")
+
+    return {
+        "code": 0,
+        "data": {
+            "candidates": candidates,
+            "category_top_keywords": category_top_keywords,
+        },
+    }
 
 
 # ==================== AI 返回解析 ====================
@@ -173,6 +279,7 @@ async def generate_title(
     product_id: int,
     candidate_ids: list[int],
     user_id: Optional[int] = None,
+    extra_category_keywords: Optional[list[str]] = None,
 ) -> dict:
     """为某商品基于候选词生成 AI 融合新标题。
 
@@ -267,6 +374,29 @@ async def generate_title(
     """), {"tid": tenant_id, "sid": shop_id, "pid": product_id}).fetchall()
     preserve_keywords = [r.keyword for r in preserve_rows]
 
+    # ---------- 2.6 跨店本类目热门词 (用户勾选过的, 按 keyword 字符串过滤) ----------
+    category_top_keywords: list = []
+    if extra_category_keywords:
+        from app.services.seo.description_generator import _fetch_category_top_keywords
+        # 拉商品的 platform_category_extra_id (type_id) 用于聚合
+        cat_row = db.execute(text("""
+            SELECT pl.platform_category_extra_id, pl.platform_category_id
+            FROM platform_listings pl
+            WHERE pl.tenant_id=:tid AND pl.shop_id=:sid AND pl.product_id=:pid
+              AND pl.status NOT IN ('deleted', 'archived')
+            ORDER BY pl.id ASC LIMIT 1
+        """), {"tid": tenant_id, "sid": shop_id, "pid": product_id}).first()
+        if cat_row:
+            all_cat_kws = _fetch_category_top_keywords(
+                db, tenant_id,
+                platform_category_extra_id=cat_row.platform_category_extra_id,
+                platform_category_id=cat_row.platform_category_id,
+                local_category_id=prod_row.local_category_id,
+                limit=20,  # 取多一点防 preview 时是 5 现在改 10 等差异
+            )
+            wanted = set(extra_category_keywords)
+            category_top_keywords = [k for k in all_cat_kws if k["keyword"] in wanted]
+
     # ---------- 3. 拼 prompt & 调 AI（GLM）----------
     user_prompt = _build_user_prompt(
         platform=getattr(shop, "platform", None),
@@ -278,6 +408,7 @@ async def generate_title(
         variant_attrs=prod_row.variant_attrs,
         candidates=candidates,
         preserve_keywords=preserve_keywords,
+        category_top_keywords=category_top_keywords,
     )
 
     logger.info(

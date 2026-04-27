@@ -100,7 +100,6 @@ OZON_ATTR_BLACKLIST = {
 # 上下文字段顺序 (preview 和 prompt 都按这个顺序展示)
 CONTEXT_FIELD_KEYS = [
     "brand_philosophy",
-    "name_ru",
     "brand",
     "category",
     "title_ru",
@@ -109,7 +108,6 @@ CONTEXT_FIELD_KEYS = [
 
 CONTEXT_FIELD_LABELS = {
     "brand_philosophy": "店铺品牌理念",
-    "name_ru": "俄语名",
     "brand": "品牌",
     "category": "类目",
     "title_ru": "当前俄语标题",
@@ -282,10 +280,10 @@ def _collect_inputs(
         cat_parts.append(prod_row.platform_category_name)
     category_value = " — ".join(cat_parts) if cat_parts else None
 
+    # 不传 name_ru: Ozon 同步 name = title, 重复; WB 也通常没必要单独喂
     context_fields = []
     raw_ctx = {
         "brand_philosophy": philosophy,
-        "name_ru": prod_row.name_ru,
         "brand": prod_row.brand,
         "category": category_value,
         "title_ru": prod_row.title_ru,

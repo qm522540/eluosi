@@ -17,7 +17,7 @@ from app.services.seo.service import (
     adopt_candidate, ignore_candidates,
     list_champion_keywords,
 )
-from app.services.seo.title_generator import generate_title
+from app.services.seo.title_generator import generate_title, preview_title_inputs
 from app.services.seo.health_service import compute_shop_health, list_missing_candidates_for_product
 from app.services.seo.description_generator import (
     generate_description, preview_description_inputs,
@@ -48,7 +48,15 @@ class RefreshBody(BaseModel):
 class GenerateTitleBody(BaseModel):
     product_id: int = Field(..., gt=0, description="products.id")
     candidate_ids: List[int] = Field(..., min_length=1, max_length=30,
-                                     description="要融合的候选词 id，最多 30 个")
+                                     description="要融合的候选词 id (本商品候选池里的)，最多 30 个")
+    extra_category_keywords: Optional[List[str]] = Field(
+        None, description="跨店本类目热门词 (用户在弹窗里勾选的 keyword 字符串)，最多 10 个"
+    )
+
+
+class TitlePreviewBody(BaseModel):
+    product_id: int = Field(..., gt=0)
+    candidate_ids: List[int] = Field(default_factory=list, max_length=30)
 
 
 class GenerateDescriptionBody(BaseModel):
@@ -493,6 +501,26 @@ def shop_candidates_rollup_cross_shop_evidence(
     return success(result["data"])
 
 
+@router.post("/shop/{shop_id}/generate-title/preview")
+async def preview_generate_title(
+    shop_id: int,
+    body: TitlePreviewBody,
+    db: Session = Depends(get_db),
+    tenant_id: int = Depends(get_tenant_id),
+    shop=Depends(get_owned_shop),
+):
+    """AiTitleModal 打开时调,返回:
+    - candidates: 用户传过来的反哺词全集 (含俄→中翻译)
+    - category_top_keywords: 跨店本类目热门词 Top 5 (含俄→中翻译)
+    """
+    result = await preview_title_inputs(
+        db, tenant_id, shop, body.product_id, body.candidate_ids,
+    )
+    if result.get("code") != 0:
+        return error(result["code"], result.get("msg", ""))
+    return success(result["data"])
+
+
 @router.post("/shop/{shop_id}/generate-title")
 async def generate_title_for_product(
     shop_id: int,
@@ -504,7 +532,8 @@ async def generate_title_for_product(
 ):
     """AI 融合候选词生成商品新俄语标题（走 GLM）。
 
-    入参 product_id + candidate_ids，service 会三重校验 (tenant/shop/product)。
+    入参 product_id + candidate_ids + 可选 extra_category_keywords，
+    service 会三重校验 (tenant/shop/product)。
     生成内容入库 seo_generated_contents 表，可后续 approve 写回商品（三期）。
     """
     user_id = getattr(current_user, "id", None)
@@ -513,6 +542,7 @@ async def generate_title_for_product(
         product_id=body.product_id,
         candidate_ids=body.candidate_ids,
         user_id=user_id,
+        extra_category_keywords=body.extra_category_keywords,
     )
     if result.get("code") != 0:
         return error(result["code"], result.get("msg", ""))
