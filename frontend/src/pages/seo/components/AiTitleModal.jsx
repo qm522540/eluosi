@@ -1,11 +1,12 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import {
   Modal, Button, Typography, Space, Tag, Alert, Descriptions, Spin, message,
+  Checkbox, Tooltip,
 } from 'antd'
 import {
   CopyOutlined, ThunderboltOutlined, RobotOutlined, CheckCircleOutlined,
 } from '@ant-design/icons'
-import { generateSeoTitle, applyGeneratedTitle } from '@/api/seo'
+import { generateSeoTitle, applyGeneratedTitle, previewSeoTitleInputs } from '@/api/seo'
 import { copyText } from '@/utils/clipboard'
 
 const { Text, Paragraph } = Typography
@@ -34,17 +35,54 @@ const AiTitleModal = ({
   const [loading, setLoading] = useState(false)
   const [result, setResult] = useState(null)
 
+  // preview 数据 (反哺词带翻译 + 跨店本类目 Top 5)
+  const [preview, setPreview] = useState(null)
+  const [previewLoading, setPreviewLoading] = useState(false)
+
+  // 用户勾选 (默认全选)
+  const [selectedCandidateIds, setSelectedCandidateIds] = useState(new Set())
+  const [selectedCategoryKeywords, setSelectedCategoryKeywords] = useState(new Set())
+
   // 每次重新打开清空上一次结果
   useEffect(() => {
     if (open) setResult(null)
   }, [open, productId])
 
+  // 打开时拉 preview
+  useEffect(() => {
+    if (!open || !shopId || !productId) return
+    const ids = (selectedCandidates || []).map(c => c.id)
+    setPreviewLoading(true)
+    previewSeoTitleInputs(shopId, productId, ids)
+      .then(r => {
+        if (r?.data) {
+          setPreview(r.data)
+          // 默认全选
+          setSelectedCandidateIds(new Set((r.data.candidates || []).map(c => c.id)))
+          setSelectedCategoryKeywords(new Set((r.data.category_top_keywords || []).map(k => k.keyword)))
+        }
+      })
+      .catch(e => message.error(e?.response?.data?.msg || '加载预览数据失败'))
+      .finally(() => setPreviewLoading(false))
+  }, [open, shopId, productId, selectedCandidates])
+
+  const toggleSet = (set, setter) => (val) => {
+    const next = new Set(set)
+    if (next.has(val)) next.delete(val); else next.add(val)
+    setter(next)
+  }
+
   const handleGenerate = async () => {
-    if (!shopId || !productId || !selectedCandidates?.length) return
+    if (!shopId || !productId) return
+    if (selectedCandidateIds.size === 0 && selectedCategoryKeywords.size === 0) {
+      message.warning('至少选一个反哺词或跨店类目热门词')
+      return
+    }
     setLoading(true)
     try {
-      const ids = selectedCandidates.map(c => c.id)
-      const res = await generateSeoTitle(shopId, productId, ids)
+      const ids = Array.from(selectedCandidateIds)
+      const extraKws = Array.from(selectedCategoryKeywords)
+      const res = await generateSeoTitle(shopId, productId, ids, extraKws)
       if (res.code === 0) {
         setResult(res.data)
       } else {
@@ -125,7 +163,7 @@ const AiTitleModal = ({
       open={open}
       onCancel={onClose}
       title={<Space><RobotOutlined /><span>AI 融合关键词生成新标题</span></Space>}
-      width={720}
+      width={1100}
       destroyOnClose
       footer={result ? [
         <Button key="close" onClick={onClose}>关闭</Button>,
@@ -151,7 +189,7 @@ const AiTitleModal = ({
           icon={<ThunderboltOutlined />}
           onClick={handleGenerate}
           loading={loading}
-          disabled={!selectedCandidates?.length}
+          disabled={previewLoading || (selectedCandidateIds.size === 0 && selectedCategoryKeywords.size === 0)}
         >
           开始生成（约 5-15 秒）
         </Button>,
@@ -176,15 +214,103 @@ const AiTitleModal = ({
             )
             : <Text type="secondary">（空 / 未同步）</Text>}
         </Descriptions.Item>
-        <Descriptions.Item label={`选中反哺词 (${selectedCandidates?.length || 0})`}>
-          <Space size={4} wrap>
-            {(selectedCandidates || []).slice(0, 30).map(c => (
-              <Tag key={c.id} color="blue">{c.keyword}</Tag>
-            ))}
-            {selectedCandidates?.length > 30 && <Text type="secondary">…还有 {selectedCandidates.length - 30} 个</Text>}
-          </Space>
-        </Descriptions.Item>
       </Descriptions>
+
+      {previewLoading ? (
+        <div style={{ textAlign: 'center', padding: 24 }}>
+          <Spin tip="加载预览数据..." />
+        </div>
+      ) : preview ? (
+        <>
+          {/* 选中反哺词 (带翻译, 复选框默认全选) */}
+          {(preview.candidates || []).length > 0 && (
+            <div style={{ marginBottom: 12, padding: '10px 12px', border: '1px solid #e8e8e8', borderRadius: 4 }}>
+              <Space style={{ marginBottom: 6 }}>
+                <Text strong style={{ fontSize: 12 }}>
+                  💡 选中反哺词 ({selectedCandidateIds.size} / {preview.candidates.length})
+                </Text>
+                <Text type="secondary" style={{ fontSize: 11 }}>用户在表格里勾选的本商品候选词</Text>
+                <Button size="small" type="link" style={{ fontSize: 11, padding: 0 }}
+                  onClick={() => {
+                    if (selectedCandidateIds.size === preview.candidates.length) setSelectedCandidateIds(new Set())
+                    else setSelectedCandidateIds(new Set(preview.candidates.map(c => c.id)))
+                  }}>
+                  {selectedCandidateIds.size === preview.candidates.length ? '全不选' : '全选'}
+                </Button>
+              </Space>
+              <Space size={[6, 6]} wrap>
+                {preview.candidates.map(c => {
+                  const orders = (c.organic_orders || 0) + (c.paid_orders || 0)
+                  return (
+                    <Checkbox
+                      key={'cand-' + c.id}
+                      checked={selectedCandidateIds.has(c.id)}
+                      onChange={toggleSet(selectedCandidateIds, setSelectedCandidateIds).bind(null, c.id)}
+                    >
+                      <Tooltip title={`score ${c.score?.toFixed?.(1) || '-'} / 自然曝光 ${c.organic_impressions} / 订单 ${orders}`}>
+                        <span style={{ fontSize: 11, display: 'inline-block', lineHeight: 1.3 }}>
+                          <div>
+                            {c.keyword}
+                            <Text type="secondary" style={{ fontSize: 10, marginLeft: 4 }}>
+                              ({c.organic_impressions}曝/{orders}单)
+                            </Text>
+                          </div>
+                          {c.keyword_zh && c.keyword_zh !== c.keyword && (
+                            <div style={{ fontSize: 10, color: '#1677ff' }}>{c.keyword_zh}</div>
+                          )}
+                        </span>
+                      </Tooltip>
+                    </Checkbox>
+                  )
+                })}
+              </Space>
+            </div>
+          )}
+
+          {/* 跨店本类目热门词 Top 5 */}
+          {(preview.category_top_keywords || []).length > 0 && (
+            <div style={{ marginBottom: 12, padding: '10px 12px', background: '#fafffa', border: '1px solid #b7eb8f', borderRadius: 4 }}>
+              <Space style={{ marginBottom: 6 }}>
+                <Text strong style={{ fontSize: 12 }}>
+                  🔥 跨店本类目热门关键词 ({selectedCategoryKeywords.size} / {preview.category_top_keywords.length})
+                </Text>
+                <Text type="secondary" style={{ fontSize: 11 }}>同子类目跨店聚合, 按订单+曝光降序 Top 5</Text>
+                <Button size="small" type="link" style={{ fontSize: 11, padding: 0 }}
+                  onClick={() => {
+                    const all = preview.category_top_keywords.map(k => k.keyword)
+                    if (all.every(k => selectedCategoryKeywords.has(k))) setSelectedCategoryKeywords(new Set())
+                    else setSelectedCategoryKeywords(new Set(all))
+                  }}>
+                  {preview.category_top_keywords.every(k => selectedCategoryKeywords.has(k.keyword)) ? '全不选' : '全选'}
+                </Button>
+              </Space>
+              <Space size={[6, 6]} wrap>
+                {preview.category_top_keywords.map(k => (
+                  <Checkbox
+                    key={'cat-' + k.keyword}
+                    checked={selectedCategoryKeywords.has(k.keyword)}
+                    onChange={toggleSet(selectedCategoryKeywords, setSelectedCategoryKeywords).bind(null, k.keyword)}
+                  >
+                    <Tooltip title={`总订单 ${k.total_orders} / 总曝光 ${k.total_impressions} / 覆盖 ${k.product_count} 商品`}>
+                      <span style={{ fontSize: 11, display: 'inline-block', lineHeight: 1.3 }}>
+                        <div>
+                          {k.keyword}
+                          <Text type="secondary" style={{ fontSize: 10, marginLeft: 4 }}>
+                            ({k.total_orders}单/{k.total_impressions}曝)
+                          </Text>
+                        </div>
+                        {k.keyword_zh && k.keyword_zh !== k.keyword && (
+                          <div style={{ fontSize: 10, color: '#1677ff' }}>{k.keyword_zh}</div>
+                        )}
+                      </span>
+                    </Tooltip>
+                  </Checkbox>
+                ))}
+              </Space>
+            </div>
+          )}
+        </>
+      ) : null}
 
       {loading && (
         <div style={{ textAlign: 'center', padding: '40px 0' }}>

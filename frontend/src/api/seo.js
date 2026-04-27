@@ -29,12 +29,24 @@ export function batchIgnoreCandidates(shopId, ids) {
   return request.post(`${BASE}/shop/${shopId}/candidates/batch-ignore`, { ids })
 }
 
-/** AI 融合候选词生成新俄语标题（走 GLM，可能 5-30 秒） */
-export function generateSeoTitle(shopId, productId, candidateIds) {
+/** AI 融合候选词生成新俄语标题（走 GLM，可能 5-30 秒）
+ * extraCategoryKeywords: 跨店本类目热门词 (用户在弹窗勾选的 keyword 字符串)
+ */
+export function generateSeoTitle(shopId, productId, candidateIds, extraCategoryKeywords = null) {
+  const body = { product_id: productId, candidate_ids: candidateIds }
+  if (extraCategoryKeywords?.length) body.extra_category_keywords = extraCategoryKeywords
   return request.post(
     `${BASE}/shop/${shopId}/generate-title`,
-    { product_id: productId, candidate_ids: candidateIds },
+    body,
     { timeout: 60000 },
+  )
+}
+
+/** AiTitleModal 打开时拉:反哺词翻译 + 跨店本类目热门词 Top 5 (带翻译) */
+export function previewSeoTitleInputs(shopId, productId, candidateIds = []) {
+  return request.post(
+    `${BASE}/shop/${shopId}/generate-title/preview`,
+    { product_id: productId, candidate_ids: candidateIds },
   )
 }
 
