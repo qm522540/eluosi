@@ -168,47 +168,6 @@ const AiDescriptionModal = ({
         message="描述启用后，健康诊断的「描述长度」维度会同步上涨（300-2000 字符为满分区间）"
       />
 
-      {/* 品牌理念 (店铺级共享): 用户编辑后点生成时一起保存 */}
-      <div style={{ marginBottom: 12, padding: '10px 12px', background: '#fafafa', borderRadius: 4, border: '1px dashed #d9d9d9' }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
-          <Text strong style={{ fontSize: 12 }}>
-            🎯 店铺品牌理念
-            <Text type="secondary" style={{ fontSize: 11, fontWeight: 'normal', marginLeft: 6 }}>
-              (店铺级,同店所有商品共享;为空时不传给 AI)
-            </Text>
-          </Text>
-          {brandPhilosophy && (
-            <Button
-              size="small"
-              type="text"
-              danger
-              icon={<ClearOutlined />}
-              onClick={handleClearPhilosophy}
-            >
-              清空
-            </Button>
-          )}
-        </div>
-        <Input.TextArea
-          value={brandPhilosophy}
-          onChange={(e) => {
-            setBrandPhilosophy(e.target.value)
-            setPhilosophyDirty(true)
-          }}
-          placeholder={philosophyLoading ? '加载中...' : '例如:专注极简北欧风首饰,女性日常通勤百搭,材质天然环保'}
-          maxLength={500}
-          showCount
-          rows={2}
-          disabled={philosophyLoading}
-          style={{ fontSize: 12 }}
-        />
-        {philosophyDirty && (
-          <Text type="warning" style={{ fontSize: 11 }}>
-            ⚠ 已修改,点「开始生成」后会自动保存到该店铺
-          </Text>
-        )}
-      </div>
-
       <Descriptions size="small" column={1} bordered style={{ marginBottom: 12 }}>
         <Descriptions.Item label="商品">{productName || `ID ${productId}`}</Descriptions.Item>
         <Descriptions.Item label="当前俄语标题">
@@ -262,6 +221,51 @@ const AiDescriptionModal = ({
             <Text type="secondary" style={{ fontSize: 11, display: 'block', marginTop: 6 }}>
               GLM 优先融入前 20-30 个高分候选词；低分长尾词若不契合可不融入。DB 里 NULL 的字段（比如品牌空、属性空）整段不会出现在 prompt 里。
             </Text>
+          </div>
+        </Descriptions.Item>
+        <Descriptions.Item
+          label={(
+            <div>
+              <div>🎯 店铺品牌理念</div>
+              <div style={{ fontSize: 11, color: '#999', fontWeight: 'normal', marginTop: 2 }}>
+                店铺级共享<br/>同店所有商品共用<br/>为空时不传给 AI
+              </div>
+            </div>
+          )}
+        >
+          <div>
+            <Input.TextArea
+              value={brandPhilosophy}
+              onChange={(e) => {
+                setBrandPhilosophy(e.target.value)
+                setPhilosophyDirty(true)
+              }}
+              placeholder={philosophyLoading ? '加载中...' : '例如:专注极简北欧风首饰,女性日常通勤百搭,材质天然环保'}
+              maxLength={500}
+              showCount
+              rows={2}
+              disabled={philosophyLoading}
+              style={{ fontSize: 12 }}
+            />
+            <div style={{ marginTop: 4, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              {philosophyDirty ? (
+                <Text type="warning" style={{ fontSize: 11 }}>
+                  ⚠ 已修改,点「开始生成」后会自动保存到该店铺
+                </Text>
+              ) : <span />}
+              {brandPhilosophy && (
+                <Button
+                  size="small"
+                  type="text"
+                  danger
+                  icon={<ClearOutlined />}
+                  onClick={handleClearPhilosophy}
+                  style={{ fontSize: 11 }}
+                >
+                  清空
+                </Button>
+              )}
+            </div>
           </div>
         </Descriptions.Item>
       </Descriptions>
