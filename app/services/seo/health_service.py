@@ -34,13 +34,20 @@ from app.utils.errors import ErrorCode
 
 # ==================== 评分函数 ====================
 
-def _score_coverage(total: int, covered: int) -> tuple[float, dict]:
-    """候选词覆盖率得分，上限 60。"""
+def _score_coverage(total: int, covered: int,
+                    self_total: int = 0, cat_total: int = 0) -> tuple[float, dict]:
+    """候选词覆盖率得分，上限 60。
+
+    覆盖池 = 本商品候选词 ∪ 类目热门 Top 30 (去重后总数)
+    命中 = 本商品候选词 in_title|in_attrs + 类目热门词在 title/attrs 字符串里出现
+    self_total / cat_total 用于 detail 展示，不参与算分。
+    """
     if total == 0:
         return 0.0, {"weight": 60, "covered": 0, "total": 0, "data_insufficient": True}
     rate = covered / total
     return round(rate * 60, 1), {
         "weight": 60, "covered": covered, "total": total,
+        "self_total": self_total, "category_top_total": cat_total,
         "rate_pct": round(rate * 100, 1),
         "data_insufficient": False,
     }
@@ -148,7 +155,7 @@ def compute_shop_health(
     """
     shop_id = shop.id
 
-    # ---------- SQL 1: 商品主表 + 候选统计 + listing 字段 ----------
+    # ---------- SQL 1: 商品主表 + listing 字段 + type_id (覆盖率算分需要) ----------
     main_sql = text("""
         SELECT
             p.id AS pid,
@@ -158,28 +165,67 @@ def compute_shop_health(
             ANY_VALUE(pl.id) AS listing_id,
             ANY_VALUE(pl.title_ru) AS title_ru,
             ANY_VALUE(pl.description_ru) AS description_ru,
+            ANY_VALUE(pl.variant_attrs) AS variant_attrs,
+            ANY_VALUE(pl.platform_category_extra_id) AS type_id,
             ANY_VALUE(pl.rating) AS rating,
             ANY_VALUE(pl.review_count) AS review_count,
-            ANY_VALUE(pl.platform) AS platform,
-            COUNT(DISTINCT c.id) AS total_candidates,
-            SUM(CASE WHEN c.in_title = 1 OR c.in_attrs = 1 THEN 1 ELSE 0 END) AS covered
+            ANY_VALUE(pl.platform) AS platform
         FROM products p
         LEFT JOIN platform_listings pl
             ON pl.product_id = p.id
            AND pl.tenant_id = p.tenant_id
            AND pl.shop_id = p.shop_id
            AND pl.status NOT IN ('deleted', 'archived')
-        LEFT JOIN seo_keyword_candidates c
-            ON c.product_id = p.id
-           AND c.tenant_id = p.tenant_id
-           AND c.shop_id = p.shop_id
-           AND c.status = 'pending'
         WHERE p.tenant_id = :tid
           AND p.shop_id = :sid
           AND p.status = 'active'
         GROUP BY p.id
     """)
     rows = db.execute(main_sql, {"tid": tenant_id, "sid": shop_id}).fetchall()
+
+    # ---------- SQL 2: 拉本店所有商品候选词 (keyword + 已覆盖标记) ----------
+    cand_rows = db.execute(text("""
+        SELECT product_id, keyword,
+               (CASE WHEN in_title = 1 OR in_attrs = 1 THEN 1 ELSE 0 END) AS is_covered
+        FROM seo_keyword_candidates
+        WHERE tenant_id = :tid AND shop_id = :sid AND status = 'pending'
+    """), {"tid": tenant_id, "sid": shop_id}).fetchall()
+    self_kws_by_pid: dict = {}     # {pid: set(keyword)}
+    self_covered_by_pid: dict = {} # {pid: set(keyword)}
+    for c in cand_rows:
+        self_kws_by_pid.setdefault(c.product_id, set()).add(c.keyword)
+        if c.is_covered:
+            self_covered_by_pid.setdefault(c.product_id, set()).add(c.keyword)
+
+    # ---------- SQL 3: 跨店本类目热门 Top 30 (按 type_id 聚合, 跨店共享) ----------
+    type_ids = {str(r.type_id) for r in rows if r.type_id}
+    cat_top_by_type: dict = {}     # {type_id_str: set(keyword)}
+    if type_ids:
+        from sqlalchemy import bindparam
+        agg_stmt = text("""
+            SELECT pl.platform_category_extra_id AS type_id, c.keyword,
+                   SUM(COALESCE(c.organic_orders,0)+COALESCE(c.paid_orders,0)) AS total_orders,
+                   SUM(COALESCE(c.organic_impressions,0)) AS total_imps,
+                   MAX(c.score) AS max_score
+            FROM seo_keyword_candidates c
+            JOIN platform_listings pl
+              ON pl.product_id=c.product_id AND pl.tenant_id=c.tenant_id
+              AND pl.shop_id=c.shop_id AND pl.status NOT IN ('deleted','archived')
+            WHERE c.tenant_id=:tid AND c.status='pending'
+              AND pl.platform_category_extra_id IN :tids
+            GROUP BY pl.platform_category_extra_id, c.keyword
+            HAVING total_orders > 0 OR total_imps >= 10
+        """).bindparams(bindparam("tids", expanding=True))
+        agg_rows = db.execute(agg_stmt, {"tid": tenant_id, "tids": list(type_ids)}).fetchall()
+        # Python 分组排序取 Top 30
+        tmp: dict = {}
+        for x in agg_rows:
+            tmp.setdefault(str(x.type_id), []).append((
+                x.keyword, int(x.total_orders or 0), int(x.total_imps or 0), float(x.max_score or 0),
+            ))
+        for tid, kws in tmp.items():
+            kws.sort(key=lambda k: (k[1], k[2], k[3]), reverse=True)
+            cat_top_by_type[tid] = {kw[0] for kw in kws[:30]}
 
     # ---------- 过滤关键词（Python 层，商品量少）----------
     # 支持搜：商品中文名 / 俄语标题 / 本地编码 sku（用户输 QQ-B0062 类编码也能匹配）
@@ -191,13 +237,39 @@ def compute_shop_health(
                 or (r.sku or "").lower().find(kw_low) >= 0]
 
     # ---------- Python 算分 ----------
+    import json as _json
     items = []
     totals = {"poor": 0, "fair": 0, "good": 0, "sum_score": 0.0}
     for r in rows:
-        total_cand = int(r.total_candidates or 0)
-        covered = int(r.covered or 0)
+        # 1. 本商品候选词集合
+        self_kws = self_kws_by_pid.get(r.pid, set())
+        self_covered = self_covered_by_pid.get(r.pid, set())
 
-        cov_score, cov_detail = _score_coverage(total_cand, covered)
+        # 2. 跨店本类目 Top 30
+        cat_top = cat_top_by_type.get(str(r.type_id), set()) if r.type_id else set()
+
+        # 3. 类目热门词在本商品 title/attrs 字符串里出现的, 算 covered
+        title_low = (r.title_ru or "").lower()
+        attrs_low = ""
+        if r.variant_attrs:
+            try:
+                va = r.variant_attrs if isinstance(r.variant_attrs, (list, dict)) else _json.loads(r.variant_attrs)
+                attrs_low = _json.dumps(va, ensure_ascii=False).lower()
+            except (TypeError, ValueError):
+                attrs_low = str(r.variant_attrs).lower()
+        cat_in_text = {kw for kw in cat_top if kw.lower() in title_low or kw.lower() in attrs_low}
+
+        # 4. union: total = 本商品 ∪ 类目 Top 30 (去重) ; covered 同样去重
+        total_kws = self_kws | cat_top
+        covered_kws = self_covered | cat_in_text
+        total_cand = len(total_kws)
+        covered = len(covered_kws)
+
+        cov_score, cov_detail = _score_coverage(
+            total_cand, covered,
+            self_total=len(self_kws),
+            cat_total=len(cat_top),
+        )
         tit_score, tit_detail = _score_title_length(r.title_ru)
         desc_score, desc_detail = _score_description_length(r.description_ru)
 
