@@ -6,7 +6,7 @@ import {
 import {
   ReloadOutlined, ApiOutlined, CheckCircleFilled, CloseCircleFilled,
   ClockCircleOutlined, PauseCircleOutlined, ExclamationCircleOutlined,
-  ShopOutlined, GlobalOutlined, HandOutlined,
+  ShopOutlined, GlobalOutlined, ThunderboltOutlined,
 } from '@ant-design/icons'
 import { getShops } from '@/api/shops'
 import {
@@ -185,7 +185,7 @@ const DataSourceTab = () => {
       width: 200,
       render: (v, r) => r.manual_only ? (
         <Space size={4}>
-          <Tag color="orange" icon={<HandOutlined />} style={{ marginRight: 0 }}>手动触发</Tag>
+          <Tag color="orange" icon={<ThunderboltOutlined />} style={{ marginRight: 0 }}>手动触发</Tag>
           <span style={{ fontSize: 12, color: '#999' }}>用户点同步按钮</span>
         </Space>
       ) : (
