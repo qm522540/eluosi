@@ -16,8 +16,10 @@ product_search_queries 数据对齐。
 from app.tasks.celery_app import celery_app
 from app.database import SessionLocal
 from app.models.shop import Shop
+from app.services.data_source.service import is_data_source_enabled, record_sync_run
 from app.services.seo.service import analyze_paid_to_organic
 from app.utils.logger import setup_logger
+from app.utils.moscow_time import utc_now_naive
 
 logger = setup_logger("tasks.seo_engine")
 
@@ -27,15 +29,39 @@ logger = setup_logger("tasks.seo_engine")
     bind=True, max_retries=1, default_retry_delay=600,
 )
 def refresh_all_shops_candidates(self):
-    """遍历所有 active WB+Ozon 店,逐一刷 SEO 候选池"""
+    """遍历所有 active WB+Ozon 店,逐一刷 SEO 候选池
+
+    seo_engine 是跨店共享数据源 (data_source_config.shop_id=0),
+    但 tenant 维度仍独立 — 不同租户可独立暂停 SEO 引擎。
+    """
     db = SessionLocal()
     try:
+        t0 = utc_now_naive()
         shops = db.query(Shop).filter(
             Shop.platform.in_(["wb", "ozon"]),
             Shop.status == "active",
         ).all()
         results = []
+        total_written = 0
+        had_error = False
+        # tenant 级 hook 缓存 + per-tenant 累计 (record_sync_run 按 tenant 各写一行)
+        tenant_gate = {}      # tenant_id -> (enabled, skip_reason)
+        tenant_stat = {}      # tenant_id -> {"written": int, "had_error": bool, "shops": int}
+
         for shop in shops:
+            tid = shop.tenant_id
+            # Per-tenant hook (共享数据源,每个 tenant 一次决策)
+            if tid not in tenant_gate:
+                tenant_gate[tid] = is_data_source_enabled(
+                    db, tenant_id=tid, shop_id=None, source_key="seo_engine",
+                )
+                tenant_stat[tid] = {"written": 0, "had_error": False, "shops": 0}
+            enabled, skip_reason = tenant_gate[tid]
+            if not enabled:
+                logger.info(f"tenant={tid} shop_id={shop.id} seo_engine 暂停: {skip_reason}")
+                results.append({"shop_id": shop.id, "skipped": skip_reason})
+                continue
+            tenant_stat[tid]["shops"] += 1
             try:
                 r = analyze_paid_to_organic(
                     db, tenant_id=shop.tenant_id, shop=shop,
@@ -43,20 +69,39 @@ def refresh_all_shops_candidates(self):
                 )
                 db.commit()
                 data = r.get("data") or {}
+                written = int(data.get("written", 0) or 0)
+                total_written += written
+                tenant_stat[tid]["written"] += written
                 results.append({
                     "shop_id": shop.id, "shop_name": shop.name,
                     "candidates": data.get("candidates", 0),
-                    "written": data.get("written", 0),
+                    "written": written,
                 })
                 logger.info(
                     f"shop_id={shop.id} {shop.name} 候选池刷新完成: "
-                    f"candidates={data.get('candidates', 0)} written={data.get('written', 0)}"
+                    f"candidates={data.get('candidates', 0)} written={written}"
                 )
             except Exception as e:
                 db.rollback()
+                had_error = True
+                tenant_stat[tid]["had_error"] = True
                 logger.error(f"shop_id={shop.id} {shop.name} 候选池刷新失败: {e}")
                 results.append({"shop_id": shop.id, "error": str(e)[:200]})
-        logger.info(f"SEO 引擎每日刷新完成,共处理 {len(shops)} 店")
-        return {"shops": len(shops), "results": results}
+
+        # 收尾: 每个 (允许跑过的) tenant 各 record 一行 (共享数据源 shop_id=None)
+        dur_ms = int((utc_now_naive() - t0).total_seconds() * 1000)
+        for tid, st in tenant_stat.items():
+            enabled, _ = tenant_gate[tid]
+            if not enabled:
+                # skipped tenant 已经在循环里 record 了 (其实没有 — 这里补一次)
+                record_sync_run(db, tenant_id=tid, shop_id=None, source_key="seo_engine",
+                               status="skipped", msg=tenant_gate[tid][1] or "")
+                continue
+            rec_status = "partial" if st["had_error"] else "success"
+            record_sync_run(db, tenant_id=tid, shop_id=None, source_key="seo_engine",
+                           status=rec_status, rows=st["written"], duration_ms=dur_ms,
+                           msg=f"shops={st['shops']} written={st['written']}")
+        logger.info(f"SEO 引擎每日刷新完成,共处理 {len(shops)} 店,total_written={total_written}")
+        return {"shops": len(shops), "results": results, "total_written": total_written}
     finally:
         db.close()

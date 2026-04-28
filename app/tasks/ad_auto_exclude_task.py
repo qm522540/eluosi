@@ -22,6 +22,7 @@ from app.models.shop import Shop
 from app.models.ad import (
     AdCampaign, AdCampaignAutoExclude, AdAutoExcludeLog, AdKeywordProtected,
 )
+from app.services.data_source.service import is_data_source_enabled, record_sync_run
 from app.services.keyword_stats.rules import get_rules, classify
 from app.utils.logger import setup_logger
 
@@ -320,27 +321,57 @@ def auto_exclude_keywords(self):
             AdCampaignAutoExclude.enabled == 1,
         ).all()
         results = []
+        # 数据源开关 hook 缓存 (一个 shop 多个 campaign 共享一次检查)
+        shop_gate = {}
         for cfg in configs:
             shop = db.query(Shop).filter(Shop.id == cfg.shop_id).first()
             camp = db.query(AdCampaign).filter(AdCampaign.id == cfg.campaign_id).first()
             if not shop or not camp or shop.platform != "wb":
                 continue
+            # Per-shop hook gate
+            if shop.id not in shop_gate:
+                enabled, skip_reason = is_data_source_enabled(
+                    db, shop.tenant_id, shop.id, "wb_ad_auto_exclude",
+                )
+                shop_gate[shop.id] = (enabled, skip_reason)
+                if not enabled:
+                    record_sync_run(db, shop.tenant_id, shop.id, "wb_ad_auto_exclude",
+                                   status="skipped", msg=skip_reason or "")
+            enabled, skip_reason = shop_gate[shop.id]
+            if not enabled:
+                logger.info(f"shop={shop.id} wb_ad_auto_exclude 跳过: {skip_reason}")
+                results.append({"campaign_id": cfg.campaign_id, "skipped": skip_reason})
+                continue
+
             run_id = uuid.uuid4().hex[:16]
-            excluded, saved, err = _run_async(
-                _exclude_one_campaign(db, shop, camp, run_id)
-            )
-            cfg.last_run_at = utc_now_naive()
-            cfg.last_run_excluded = excluded
-            cfg.last_run_saved = round(saved * 30, 2)  # 月省 = 日省 ×30
-            db.commit()
-            results.append({
-                "campaign_id": cfg.campaign_id, "excluded": excluded,
-                "saved_per_day": saved, "error": err,
-            })
-            logger.info(
-                f"自动屏蔽 camp={cfg.campaign_id}: 屏蔽 {excluded} 词，"
-                f"日省 ¥{saved:.2f}, 月省估算 ¥{saved*30:.2f}, error={err}"
-            )
+            t0 = utc_now_naive()
+            try:
+                excluded, saved, err = _run_async(
+                    _exclude_one_campaign(db, shop, camp, run_id)
+                )
+                cfg.last_run_at = utc_now_naive()
+                cfg.last_run_excluded = excluded
+                cfg.last_run_saved = round(saved * 30, 2)  # 月省 = 日省 ×30
+                db.commit()
+                dur_ms = int((utc_now_naive() - t0).total_seconds() * 1000)
+                rec_status = "failed" if err else ("partial" if excluded == 0 else "success")
+                record_sync_run(db, shop.tenant_id, shop.id, "wb_ad_auto_exclude",
+                               status=rec_status, rows=excluded, duration_ms=dur_ms,
+                               msg=str(err)[:500] if err else f"saved/day={saved:.2f}")
+                results.append({
+                    "campaign_id": cfg.campaign_id, "excluded": excluded,
+                    "saved_per_day": saved, "error": err,
+                })
+                logger.info(
+                    f"自动屏蔽 camp={cfg.campaign_id}: 屏蔽 {excluded} 词，"
+                    f"日省 ¥{saved:.2f}, 月省估算 ¥{saved*30:.2f}, error={err}"
+                )
+            except Exception as e:
+                dur_ms = int((utc_now_naive() - t0).total_seconds() * 1000)
+                record_sync_run(db, shop.tenant_id, shop.id, "wb_ad_auto_exclude",
+                               status="failed", msg=str(e)[:500], duration_ms=dur_ms)
+                logger.error(f"自动屏蔽 camp={cfg.campaign_id} 异常: {e}")
+                results.append({"campaign_id": cfg.campaign_id, "error": str(e)[:200]})
         return {"campaigns": len(configs), "results": results}
     except Exception as e:
         logger.error(f"自动屏蔽全局任务异常: {e}", exc_info=True)

@@ -13,8 +13,12 @@ from app.models.shop import Shop
 from app.models.task_log import TaskLog
 from app.services.data.ozon_stats_collector import smart_sync as ozon_smart_sync
 from app.services.data.wb_stats_collector import smart_sync as wb_smart_sync
+from app.services.data_source.service import is_data_source_enabled, record_sync_run
 from app.utils.logger import setup_logger
 from app.utils.moscow_time import utc_now_naive
+
+# 平台 → 该 task 对应的 source_key
+_PLATFORM_SOURCE_KEY = {"wb": "wb_orders", "ozon": "ozon_orders"}
 
 logger = setup_logger("tasks.daily_sync")
 
@@ -73,16 +77,38 @@ def daily_sync_all_shops(self):
             sync_fn = PLATFORM_SYNC.get(shop.platform)
             if not sync_fn:
                 continue
+            source_key = _PLATFORM_SOURCE_KEY.get(shop.platform)
+            # 数据源开关 hook
+            enabled, skip_reason = is_data_source_enabled(
+                db, shop.tenant_id, shop.id, source_key,
+            )
+            if not enabled:
+                logger.info(f"店铺 {shop.name}({shop.platform}) {source_key} 跳过: {skip_reason}")
+                record_sync_run(db, shop.tenant_id, shop.id, source_key,
+                               status="skipped", msg=skip_reason or "")
+                results.append({
+                    "shop_id": shop.id, "shop_name": shop.name,
+                    "platform": shop.platform, "skipped": skip_reason,
+                })
+                continue
+            t0 = utc_now_naive()
             try:
                 result = _run_async(sync_fn(db, shop.id, shop.tenant_id))
+                synced = int(result.get("synced", 0))
+                dur_ms = int((utc_now_naive() - t0).total_seconds() * 1000)
+                record_sync_run(db, shop.tenant_id, shop.id, source_key,
+                               status="success", rows=synced, duration_ms=dur_ms)
                 results.append({
                     "shop_id": shop.id,
                     "shop_name": shop.name,
                     "platform": shop.platform,
-                    "synced": result.get("synced", 0),
+                    "synced": synced,
                 })
-                logger.info(f"店铺 {shop.name}({shop.platform}) 同步完成: {result.get('synced', 0)}条")
+                logger.info(f"店铺 {shop.name}({shop.platform}) 同步完成: {synced}条")
             except Exception as e:
+                dur_ms = int((utc_now_naive() - t0).total_seconds() * 1000)
+                record_sync_run(db, shop.tenant_id, shop.id, source_key,
+                               status="failed", msg=str(e)[:500], duration_ms=dur_ms)
                 logger.error(f"店铺 {shop.name}({shop.platform}) 同步失败: {e}")
                 results.append({
                     "shop_id": shop.id,

@@ -109,6 +109,14 @@ DATA_SOURCES = {
         "task_name": "app.tasks.ozon_product_queries_task.sync_ozon_product_queries",
         "depends": ["Premium 订阅"],
     },
+    "ozon_bid_management": {
+        "label": "Ozon 出价管理",
+        "category": "api",
+        "platform": "ozon",
+        "schedule_desc": "每小时 :05",
+        "task_name": "app.tasks.bid_management.run_bid_management",
+        "depends": ["seller token", "Performance 凭证"],
+    },
     # ============ 本地类 (跨店共享, 不受店铺 API 总开关影响) ============
     "seo_engine": {
         "label": "SEO 候选池引擎",

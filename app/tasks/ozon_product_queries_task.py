@@ -22,9 +22,10 @@ from sqlalchemy import text
 from app.tasks.celery_app import celery_app
 from app.database import SessionLocal
 from app.models.shop import Shop
+from app.services.data_source.service import is_data_source_enabled, record_sync_run
 from app.services.search_insights.service import refresh_shop
 from app.utils.logger import setup_logger
-from app.utils.moscow_time import moscow_today
+from app.utils.moscow_time import moscow_today, utc_now_naive
 
 logger = setup_logger("tasks.ozon_product_queries")
 
@@ -51,16 +52,35 @@ def sync_ozon_product_queries(self):
         ).all()
         results = []
         for shop in shops:
+            # 数据源开关 hook
+            enabled, skip_reason = is_data_source_enabled(
+                db, shop.tenant_id, shop.id, "ozon_search_texts",
+            )
+            if not enabled:
+                logger.info(f"shop_id={shop.id} ozon_search_texts 跳过: {skip_reason}")
+                record_sync_run(db, shop.tenant_id, shop.id, "ozon_search_texts",
+                               status="skipped", msg=skip_reason or "")
+                results.append({"shop_id": shop.id, "skipped": skip_reason})
+                continue
+
+            t0 = utc_now_naive()
             try:
                 r = _run_async(refresh_shop(db, shop.tenant_id, shop, days=7))
                 code = r.get("code", 0)
                 data = r.get("data") or {}
+                dur_ms = int((utc_now_naive() - t0).total_seconds() * 1000)
                 if code == 93001:
                     logger.info(f"shop_id={shop.id} {shop.name} 未开通 Ozon Premium，跳过")
+                    record_sync_run(db, shop.tenant_id, shop.id, "ozon_search_texts",
+                                   status="skipped", msg="未开通 Premium 订阅", duration_ms=dur_ms)
                     results.append({"shop_id": shop.id, "skipped": "no_premium"})
                     continue
                 if code != 0:
                     logger.warning(f"shop_id={shop.id} refresh 失败 code={code} msg={r.get('msg')}")
+                    record_sync_run(db, shop.tenant_id, shop.id, "ozon_search_texts",
+                                   status="failed",
+                                   msg=f"code={code} {r.get('msg', '')}"[:500],
+                                   duration_ms=dur_ms)
                     results.append({"shop_id": shop.id, "error_code": code})
                     continue
                 # 幂等保护命中（已有快照 / 锁占用）
@@ -68,22 +88,36 @@ def sync_ozon_product_queries(self):
                     logger.info(
                         f"shop_id={shop.id} {shop.name} skipped reason={data.get('reason')}"
                     )
+                    record_sync_run(db, shop.tenant_id, shop.id, "ozon_search_texts",
+                                   status="skipped",
+                                   msg=str(data.get("reason", ""))[:500],
+                                   duration_ms=dur_ms)
                     results.append({
                         "shop_id": shop.id,
                         "skipped": data.get("reason"),
                         "existing_rows": data.get("existing_rows"),
                     })
                     continue
+                synced = int(data.get("synced_queries") or 0)
+                errs = data.get("errors") or []
+                rec_status = "partial" if errs else "success"
+                rec_msg = "; ".join(errs)[:500] if errs else f"range={data.get('date_range')}"
+                record_sync_run(db, shop.tenant_id, shop.id, "ozon_search_texts",
+                               status=rec_status, rows=synced, duration_ms=dur_ms,
+                               msg=rec_msg)
                 logger.info(
-                    f"shop_id={shop.id} {shop.name} synced_queries={data.get('synced_queries')} "
+                    f"shop_id={shop.id} {shop.name} synced_queries={synced} "
                     f"range={data.get('date_range')}"
                 )
                 results.append({
                     "shop_id": shop.id,
-                    "synced_queries": data.get("synced_queries"),
-                    "errors": data.get("errors"),
+                    "synced_queries": synced,
+                    "errors": errs,
                 })
             except Exception as e:
+                dur_ms = int((utc_now_naive() - t0).total_seconds() * 1000)
+                record_sync_run(db, shop.tenant_id, shop.id, "ozon_search_texts",
+                               status="failed", msg=str(e)[:500], duration_ms=dur_ms)
                 logger.error(f"shop_id={shop.id} 同步异常: {e}", exc_info=True)
                 results.append({"shop_id": shop.id, "error": str(e)[:200]})
 

@@ -227,15 +227,23 @@ const DataSourceTab = () => {
     {
       title: '开关',
       key: 'switch',
-      width: 90,
-      render: (_, r) => (
-        <Tooltip title={r.manual_hold_reason ? `暂停原因: ${r.manual_hold_reason}` : ''}>
-          <Switch
-            checked={r.enabled}
-            onChange={(c) => handleSourceToggle(r.key, c)}
-          />
-        </Tooltip>
-      ),
+      width: 110,
+      render: (_, r) => {
+        // 总开关压制 (Level 1 关 + 此源是 API 类) → Switch 强制 disabled,提示用户
+        const apiSuppressed = r.category === 'api' && shopDetail && !shopDetail.api_enabled
+        const tip = apiSuppressed
+          ? '店铺 API 总开关关闭中,此开关暂被压制不生效'
+          : (r.manual_hold_reason ? `暂停原因: ${r.manual_hold_reason}` : '')
+        return (
+          <Tooltip title={tip}>
+            <Switch
+              checked={r.enabled}
+              disabled={apiSuppressed}
+              onChange={(c) => handleSourceToggle(r.key, c)}
+            />
+          </Tooltip>
+        )
+      },
     },
   ]
 

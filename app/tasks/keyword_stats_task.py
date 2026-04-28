@@ -14,7 +14,9 @@ from app.database import SessionLocal
 from app.models.shop import Shop
 from app.models.ad import AdCampaign
 from app.models.keyword_stat import KeywordDailyStat
+from app.services.data_source.service import is_data_source_enabled, record_sync_run
 from app.utils.logger import setup_logger
+from app.utils.moscow_time import utc_now_naive
 
 logger = setup_logger("tasks.keyword_stats")
 
@@ -115,9 +117,35 @@ def sync_keyword_stats(self):
         results = {}
         for shop in shops:
             if shop.platform == "wb":
-                r = _run_async(_sync_wb_shop_keywords(db, shop, yesterday, yesterday))
-                results[shop.id] = r
-                logger.info(f"WB shop={shop.id} 关键词同步: {r}")
+                # 数据源开关 hook
+                enabled, skip_reason = is_data_source_enabled(
+                    db, shop.tenant_id, shop.id, "wb_keyword_stats",
+                )
+                if not enabled:
+                    logger.info(f"WB shop={shop.id} wb_keyword_stats 跳过: {skip_reason}")
+                    record_sync_run(db, shop.tenant_id, shop.id, "wb_keyword_stats",
+                                   status="skipped", msg=skip_reason or "")
+                    results[shop.id] = {"skipped": skip_reason}
+                    continue
+                t0 = utc_now_naive()
+                try:
+                    r = _run_async(_sync_wb_shop_keywords(db, shop, yesterday, yesterday))
+                    dur_ms = int((utc_now_naive() - t0).total_seconds() * 1000)
+                    inserted = int((r or {}).get("inserted", 0))
+                    errs = (r or {}).get("errors") or []
+                    rec_status = "partial" if errs else "success"
+                    rec_msg = "; ".join(errs)[:500] if errs else f"campaigns={r.get('campaigns', 0)}"
+                    record_sync_run(db, shop.tenant_id, shop.id, "wb_keyword_stats",
+                                   status=rec_status, rows=inserted, duration_ms=dur_ms,
+                                   msg=rec_msg)
+                    results[shop.id] = r
+                    logger.info(f"WB shop={shop.id} 关键词同步: {r}")
+                except Exception as e:
+                    dur_ms = int((utc_now_naive() - t0).total_seconds() * 1000)
+                    record_sync_run(db, shop.tenant_id, shop.id, "wb_keyword_stats",
+                                   status="failed", msg=str(e)[:500], duration_ms=dur_ms)
+                    logger.error(f"WB shop={shop.id} 关键词同步异常: {e}")
+                    results[shop.id] = {"error": str(e)[:200]}
             # OZON: 异步报告，后续补
         # 清理 90 天前数据
         cutoff = (moscow_today() - timedelta(days=90)).isoformat()

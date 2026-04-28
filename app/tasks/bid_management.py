@@ -19,8 +19,10 @@ from sqlalchemy import text
 
 from app.database import SessionLocal
 from app.models.shop import Shop
+from app.services.data_source.service import is_data_source_enabled, record_sync_run
 from app.tasks.celery_app import celery_app
 from app.utils.logger import setup_logger
+from app.utils.moscow_time import utc_now_naive
 
 logger = setup_logger("tasks.bid_management")
 
@@ -56,15 +58,36 @@ def run_bid_management(self):
         logger.info(f"出价管理：开始执行 共{len(shops)}个店铺")
 
         results = []
+        _PLATFORM_SOURCE_KEY = {"wb": "wb_bid_management", "ozon": "ozon_bid_management"}
         for i, shop in enumerate(shops):
+            source_key = _PLATFORM_SOURCE_KEY.get(shop.platform)
+            # 数据源开关 hook (wb + ozon 都 gate, 1:1 跟 UI 对齐)
+            enabled, skip_reason = is_data_source_enabled(
+                db, shop.tenant_id, shop.id, source_key,
+            )
+            if not enabled:
+                logger.info(f"店铺 {shop.name} {source_key} 跳过: {skip_reason}")
+                record_sync_run(db, shop.tenant_id, shop.id, source_key,
+                               status="skipped", msg=skip_reason or "")
+                results.append({"shop_id": shop.id, "shop_name": shop.name, "skipped": skip_reason})
+                continue  # skip 不消耗 API,无需 60s sleep,直接下一个
+
+            t0 = utc_now_naive()
             try:
                 result = _process_shop(db, shop)
+                dur_ms = int((utc_now_naive() - t0).total_seconds() * 1000)
+                record_sync_run(db, shop.tenant_id, shop.id, source_key,
+                               status="success", duration_ms=dur_ms,
+                               msg=str((result or {}).get("mode", ""))[:500])
                 results.append({
                     "shop_id": shop.id,
                     "shop_name": shop.name,
                     **(result or {}),
                 })
             except Exception as e:
+                dur_ms = int((utc_now_naive() - t0).total_seconds() * 1000)
+                record_sync_run(db, shop.tenant_id, shop.id, source_key,
+                               status="failed", msg=str(e)[:500], duration_ms=dur_ms)
                 logger.error(f"店铺 {shop.name} 出价管理异常: {e}")
                 results.append({
                     "shop_id": shop.id,

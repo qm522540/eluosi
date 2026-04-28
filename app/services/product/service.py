@@ -530,18 +530,54 @@ def _flatten_ozon_category_tree(tree: list) -> dict:
 
 def sync_products_from_platform(db: Session, shop_id: int, tenant_id: int) -> dict:
     from app.models.shop import Shop
+    from app.services.data_source.service import is_data_source_enabled, record_sync_run
+    from app.utils.moscow_time import utc_now_naive
     shop = db.query(Shop).filter(
         Shop.id == shop_id, Shop.tenant_id == tenant_id,
     ).first()
     if not shop:
         return {"code": ErrorCode.SHOP_NOT_FOUND, "msg": "店铺不存在"}
-    if shop.platform == "wb":
-        return _sync_wb_products(db, shop, tenant_id)
-    elif shop.platform == "ozon":
-        return _sync_ozon_products(db, shop, tenant_id)
-    elif shop.platform == "yandex":
-        return _sync_yandex_products(db, shop, tenant_id)
-    return {"code": 0, "data": {"synced": 0}}
+
+    # 数据源开关 hook (wb/ozon 在 catalog,yandex 暂未纳管不 gate)
+    _PLATFORM_SOURCE_KEY = {"wb": "wb_products", "ozon": "ozon_products"}
+    source_key = _PLATFORM_SOURCE_KEY.get(shop.platform)
+    if source_key:
+        enabled, skip_reason = is_data_source_enabled(
+            db, tenant_id, shop_id, source_key,
+        )
+        if not enabled:
+            logger.info(f"shop={shop_id} {source_key} 跳过: {skip_reason}")
+            record_sync_run(db, tenant_id, shop_id, source_key,
+                           status="skipped", msg=skip_reason or "")
+            return {"code": ErrorCode.SUCCESS,
+                    "data": {"synced": 0, "skipped": skip_reason}}
+
+    t0 = utc_now_naive()
+    try:
+        if shop.platform == "wb":
+            r = _sync_wb_products(db, shop, tenant_id)
+        elif shop.platform == "ozon":
+            r = _sync_ozon_products(db, shop, tenant_id)
+        elif shop.platform == "yandex":
+            r = _sync_yandex_products(db, shop, tenant_id)
+        else:
+            r = {"code": 0, "data": {"synced": 0}}
+
+        if source_key:
+            dur_ms = int((utc_now_naive() - t0).total_seconds() * 1000)
+            data = (r or {}).get("data") or {}
+            synced = int(data.get("synced", 0) or 0)
+            rec_status = "success" if (r or {}).get("code") == 0 else "failed"
+            record_sync_run(db, tenant_id, shop_id, source_key,
+                           status=rec_status, rows=synced, duration_ms=dur_ms,
+                           msg=str((r or {}).get("msg", ""))[:500])
+        return r
+    except Exception as e:
+        if source_key:
+            dur_ms = int((utc_now_naive() - t0).total_seconds() * 1000)
+            record_sync_run(db, tenant_id, shop_id, source_key,
+                           status="failed", msg=str(e)[:500], duration_ms=dur_ms)
+        raise
 
 
 def _sync_wb_products(db: Session, shop, tenant_id: int) -> dict:
