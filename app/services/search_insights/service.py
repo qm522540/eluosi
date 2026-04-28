@@ -283,18 +283,6 @@ def _refresh_lock_key(shop_id: int) -> str:
     return f"search_insights:refresh_lock:shop_{shop_id}"
 
 
-def _snapshot_exists(db: Session, tenant_id: int, shop_id: int, stat_date: str) -> int:
-    """查目标 stat_date 是否已有该 shop 的写入。返回行数。
-
-    幂等预检用：避免连点同步时浪费 API 配额。
-    """
-    row = db.execute(text("""
-        SELECT COUNT(*) AS cnt FROM product_search_queries
-        WHERE tenant_id = :tid AND shop_id = :sid AND stat_date = :sd
-    """), {"tid": tenant_id, "sid": shop_id, "sd": stat_date}).fetchone()
-    return int(row.cnt or 0) if row else 0
-
-
 async def refresh_shop(
     db: Session, tenant_id: int, shop, days: int = 7, force: bool = False,
 ) -> dict:
@@ -303,12 +291,16 @@ async def refresh_shop(
     规则 4：必须按 shop_id 单店铺触发；shop 由路由层 get_owned_shop 校验属租户。
     未开通订阅时返回 93001，调用方前端显示友好提示。
 
-    幂等保护（2026-04-26 修复重复打 API 问题）：
-    1. Redis SETNX in-progress 锁：连点 3 次只跑第 1 次，后续返回 skipped
-    2. 增量预检：目标 stat_date (today-2) 已有数据则 skip（force=True 跳过此检查）
-    3. 注意：WB/Ozon API 都只返 period 聚合值（不返每天明细），所以
-       stat_date = "窗口结束日 today-2"，是一份"截至此日的 N 天聚合快照"
-       — 同窗口重跑由 ON DUPLICATE KEY UPDATE 覆盖；跨天会产生新 stat_date 行
+    模式（2026-04-28 起 WB/Ozon 双平台统一为"按天补缺失"）：
+    - 计算窗口 [start_date, end_date]，查 DB 已有的 stat_date
+    - 只对缺失的天调 API（每个 stat_date 装"那一天的真实数字"，非 N 天聚合）
+    - 跨日 SUM = 真实 N 天总量, list_shop 按 days 切换不会膨胀也不会双计
+    - force=True 时清掉窗口内已有重拉
+
+    幂等保护：
+    1. Redis SETNX in-progress 锁：连点 3 次只跑第 1 次
+    2. WB seller quota pre-check（per-seller-per-endpoint 共享池冷却中直接 skip）
+    3. missing_dates 为 0 直接返"已是最新"
     """
     if shop.platform not in ("wb", "ozon"):
         return {"code": ErrorCode.PARAM_ERROR, "msg": "该平台暂不支持搜索词洞察"}
@@ -341,29 +333,7 @@ async def refresh_shop(
         logger.warning(f"refresh_shop redis lock 获取失败 shop={shop.id}: {e}")
         redis_client = None  # 降级：Redis 不可用时不阻塞业务
 
-    # —— 幂等保护 2：增量预检（仅 WB；Ozon 走分支内"按天补缺失"检查）——
-    # WB 仍是"days=7 一次性 stat_date=date_to"聚合模式，date_to 已有 = 整批已拉过
-    # Ozon 是按天写入，date_to 已有 ≠ 全窗口已有，预检会漏写其他缺失天，所以跳过
-    if not force and shop.platform == "wb":
-        existing = _snapshot_exists(db, tenant_id, shop.id, date_to)
-        if existing > 0:
-            if redis_client:
-                try:
-                    redis_client.delete(lock_key)
-                except Exception:
-                    pass
-            logger.info(
-                f"refresh_shop WB shop={shop.id} stat_date={date_to} 已有 {existing} 行，跳过"
-            )
-            return {
-                "code": 0,
-                "data": {
-                    "shop_id": shop.id, "synced_queries": 0,
-                    "skipped": True, "reason": "snapshot_already_exists",
-                    "existing_rows": existing, "stat_date": date_to,
-                    "msg": f"{date_to} 快照已存在（{existing} 行），如需强制重拉传 force=true",
-                },
-            }
+    # WB 跟 Ozon 现在都走"按天补缺失"模式 —— 幂等检查在分支内做（看 missing_dates）
 
     # —— 主流程 try/finally：保证 lock 在所有 return 路径都释放 ——
     try:
@@ -388,10 +358,16 @@ async def refresh_shop(
         errors = []
 
         if shop.platform == "wb":
-            # WB seller quota 熔断 pre-check（2026-04-23 晚老林 review 驱动）：
-            # quota 是 per-seller-per-endpoint-group 共享池，写端点烧光读端点也 429。
-            # 2026-04-24 ab895eb 后 key 主走 seller_{uuid}（同 seller 多 shop 共享冷却），
-            # 历史 shop_{id} key 仅作 fallback。两个 key 任一命中就 skip。
+            # —— 2026-04-28 重构：按天补缺失模式（参考 Ozon 写法）——
+            # 实测 WB /api/v2/search-report/product/search-texts 接受 currentPeriod
+            # start=end 单日窗口，所以 stat_date 装"那一天的真实数字"非 N 天聚合。
+            # 跨日 SUM = 真实 N 天总量,list_shop 可任意 days 切换不膨胀 / 不双计。
+            # end_date = today-2: WB 没保护期, today-2 OK
+            end_date = today - timedelta(days=2)
+            start_date = end_date - timedelta(days=days - 1)
+
+            # WB seller quota 熔断 pre-check（quota 是 per-seller-per-endpoint-group 共享池，
+            # 写端点烧光读端点也 429。key 主走 seller_{uuid}，老 shop_{id} 作 fallback）
             try:
                 r = _get_redis_client()
                 cooldown = 0
@@ -421,76 +397,136 @@ async def refresh_shop(
                     },
                 }
 
-            # WB search-texts 端点实测限流严格（估 3-5 rpm），批量 nmIds 降低调用次数
-            # 2026-04-23：WB 对单次 nmIds 数量上限未文档化，保守取 20
+            # 1. 查 DB 已有的 stat_date
+            existing_rows = db.execute(text("""
+                SELECT DISTINCT stat_date FROM product_search_queries
+                WHERE tenant_id = :tid AND shop_id = :sid AND platform = 'wb'
+                  AND stat_date BETWEEN :sd AND :ed
+            """), {"tid": tenant_id, "sid": shop.id,
+                   "sd": start_date, "ed": end_date}).fetchall()
+            existing_dates = {r.stat_date for r in existing_rows}
+
+            # 2. force=True：清掉窗口内已有重拉；否则只补缺失
+            if force and existing_dates:
+                db.execute(text("""
+                    DELETE FROM product_search_queries
+                    WHERE tenant_id = :tid AND shop_id = :sid AND platform = 'wb'
+                      AND stat_date BETWEEN :sd AND :ed
+                """), {"tid": tenant_id, "sid": shop.id,
+                       "sd": start_date, "ed": end_date})
+                db.commit()
+                existing_dates = set()
+                logger.info(f"force=True WB shop={shop.id} 已清窗口内 {len(existing_rows)} 行准备重拉")
+
+            # 3. 计算缺失天列表
+            missing_dates = []
+            d = start_date
+            while d <= end_date:
+                if d not in existing_dates:
+                    missing_dates.append(d)
+                d += timedelta(days=1)
+
+            if not missing_dates:
+                return {
+                    "code": 0,
+                    "data": {
+                        "shop_id": shop.id, "synced_queries": 0,
+                        "skipped": True, "reason": "no_missing_dates",
+                        "existing_dates": [str(x) for x in sorted(existing_dates)],
+                        "msg": f"[{start_date}, {end_date}] 范围内 {len(existing_dates)} 天已有数据，无缺失",
+                    },
+                }
+
+            logger.info(
+                f"WB shop={shop.id} 按天补齐 missing={len(missing_dates)} 天 "
+                f"(已有 {len(existing_dates)} 天) 范围[{start_date}, {end_date}]"
+            )
+
+            # 4. 按天循环 + 内层 nm_id 分批
+            # WB search-texts 实测限流严格（估 3-5 rpm），批量 nmIds 降低调用次数
             WB_BATCH_SIZE = 20          # 单次调用 nmIds 个数上限
             WB_BATCH_PAUSE_S = 20       # 批间 sleep 秒，抵御 429
-            # 2026-04-23 实战：WB 触发 "global limiter per seller" 后整个任务周期挡死，
-            # 连续 3 批全空 = quota 耗尽，early exit 避免 30 批 × 20s = 10min 空跑
-            EMPTY_BATCH_ABORT = 3
+            EMPTY_BATCH_ABORT = 3       # 连续 N 批全空 = quota 烧完 → break 整个循环
 
             nm_to_pid = {}
             for l in listings:
                 if str(l.psk).isdigit():
                     nm_to_pid[int(l.psk)] = l.pid
             all_nm_ids = list(nm_to_pid.keys())
-            batches_total = (len(all_nm_ids) + WB_BATCH_SIZE - 1) // WB_BATCH_SIZE
+            batches_per_day = (len(all_nm_ids) + WB_BATCH_SIZE - 1) // WB_BATCH_SIZE
 
+            synced_per_day = {}
             consecutive_empty = 0
+            quota_break = False
             wb = WBClient(shop_id=shop.id, api_key=shop.api_key)
             try:
-                for bi in range(batches_total):
-                    batch = all_nm_ids[bi * WB_BATCH_SIZE : (bi + 1) * WB_BATCH_SIZE]
-                    if bi > 0:
-                        await asyncio.sleep(WB_BATCH_PAUSE_S)
-                    try:
-                        items = await wb.fetch_product_search_texts(
-                            nm_ids=batch, date_from=date_from, date_to=date_to,
-                        )
-                    except SubscriptionRequiredError as e:
-                        return {
-                            "code": ErrorCode.SEARCH_INSIGHTS_SUBSCRIPTION_REQUIRED,
-                            "msg": f"WB 店铺未开通 Jam 订阅：{e.detail[:80]}",
-                        }
-                    except WBSellerQuotaExhausted as e:
-                        # 跑到一半被上游端点（AI 调价/PATCH bids）触发熔断 → 立即 break，
-                        # 不要 continue 再 sleep 20s 重试 N 批白烧。
-                        logger.info(
-                            f"WB quota tripped mid-refresh shop={shop.id} batch={bi+1}/{batches_total}: {e}"
-                        )
-                        errors.append({"type": "quota", "quota_exhausted": True,
-                                       "at_batch": bi + 1, "reason": str(e)[:200]})
+                for d in missing_dates:
+                    if quota_break:
                         break
-                    except Exception as e:
-                        errors.append({"type": "batch_error",
-                                       "batch": batch[:3], "error": str(e)[:200]})
-                        logger.warning(f"WB fetch_product_search_texts batch={len(batch)} 失败: {e}")
-                        continue
-                    if not items:
-                        consecutive_empty += 1
-                        if consecutive_empty >= EMPTY_BATCH_ABORT:
-                            logger.warning(
-                                f"WB 连续 {EMPTY_BATCH_ABORT} 批返回空（疑似 global limiter 触发 quota 耗尽），"
-                                f"已完成 {bi + 1}/{batches_total} 批，early exit 节省时间"
+                    d_str = d.isoformat()
+                    day_total = 0
+                    for bi in range(batches_per_day):
+                        batch = all_nm_ids[bi * WB_BATCH_SIZE : (bi + 1) * WB_BATCH_SIZE]
+                        # 批间 + 跨天都要 sleep 抵御 429
+                        if bi > 0 or d != missing_dates[0]:
+                            await asyncio.sleep(WB_BATCH_PAUSE_S)
+                        try:
+                            items = await wb.fetch_product_search_texts(
+                                nm_ids=batch,
+                                date_from=d_str, date_to=d_str,  # 单日窗口
                             )
-                            errors.append({"type": "early_exit", "early_exit": True,
-                                           "reason": f"{EMPTY_BATCH_ABORT} 批连续空（WB 限流/quota）"})
+                        except SubscriptionRequiredError as e:
+                            return {
+                                "code": ErrorCode.SEARCH_INSIGHTS_SUBSCRIPTION_REQUIRED,
+                                "msg": f"WB 店铺未开通 Jam 订阅：{e.detail[:80]}",
+                            }
+                        except WBSellerQuotaExhausted as e:
+                            logger.info(
+                                f"WB quota tripped mid-refresh shop={shop.id} "
+                                f"date={d_str} batch={bi+1}/{batches_per_day}: {e}"
+                            )
+                            errors.append({"type": "quota", "quota_exhausted": True,
+                                           "date": d_str, "at_batch": bi + 1,
+                                           "reason": str(e)[:200]})
+                            quota_break = True
                             break
-                    else:
-                        consecutive_empty = 0
-                    # items 每条含 nm_id → 按 nm_id 分组 upsert
-                    grouped = {}
-                    for it in items or []:
-                        nm = it.get("nm_id")
-                        if nm is None:
+                        except Exception as e:
+                            errors.append({"type": "batch_error", "date": d_str,
+                                           "batch": batch[:3], "error": str(e)[:200]})
+                            logger.warning(
+                                f"WB shop={shop.id} date={d_str} batch={len(batch)} 失败: {e}"
+                            )
                             continue
-                        grouped.setdefault(int(nm), []).append(it)
-                    for nm_id, rows in grouped.items():
-                        pid = nm_to_pid.get(nm_id)
-                        total_rows += _upsert_rows(
-                            db, tenant_id, shop.id, "wb",
-                            str(nm_id), pid, date_to, rows,
-                        )
+                        if not items:
+                            consecutive_empty += 1
+                            if consecutive_empty >= EMPTY_BATCH_ABORT:
+                                logger.warning(
+                                    f"WB 连续 {EMPTY_BATCH_ABORT} 批返回空 "
+                                    f"(疑似 global limiter quota 耗尽), "
+                                    f"已完成至 date={d_str} batch={bi+1}, early exit"
+                                )
+                                errors.append({"type": "early_exit", "early_exit": True,
+                                               "reason": f"{EMPTY_BATCH_ABORT} 批连续空（WB 限流/quota）"})
+                                quota_break = True
+                                break
+                        else:
+                            consecutive_empty = 0
+                        # items 每条含 nm_id → 按 nm_id 分组 upsert
+                        grouped = {}
+                        for it in items or []:
+                            nm = it.get("nm_id")
+                            if nm is None:
+                                continue
+                            grouped.setdefault(int(nm), []).append(it)
+                        for nm_id, rows in grouped.items():
+                            pid = nm_to_pid.get(nm_id)
+                            day_total += _upsert_rows(
+                                db, tenant_id, shop.id, "wb",
+                                str(nm_id), pid, d_str, rows,
+                            )
+                    synced_per_day[d_str] = day_total
+                    total_rows += day_total
+                logger.info(f"WB shop={shop.id} 按天写入完成 per_day={synced_per_day}")
             finally:
                 await wb.close()
 
