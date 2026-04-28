@@ -14,6 +14,7 @@ import { PLATFORMS, SHOP_STATUS } from '@/utils/constants'
 import ProfileTab from '@/components/ProfileTab'
 import NotificationsTab from '@/components/NotificationsTab'
 import WechatWorkTab from '@/components/WechatWorkTab'
+import DataSourceTab from '@/components/DataSourceTab'
 
 const { Title } = Typography
 
@@ -415,6 +416,11 @@ const Settings = () => {
       key: 'shops',
       label: '店铺管理',
       children: shopManagement,
+    },
+    {
+      key: 'data-sources',
+      label: '数据源管理',
+      children: <DataSourceTab />,
     },
     {
       key: 'profile',
