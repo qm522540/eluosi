@@ -413,19 +413,6 @@ const KeywordRollupTab = ({ shops = [], shopId, onShopChange, onJumpToProduct })
         sorter: (a, b) => (a.revenue || 0) - (b.revenue || 0),
         render: v => `₽${Number(v || 0).toFixed(2)}`,
       },
-      {
-        title: '操作', key: 'action', width: 110, align: 'center',
-        render: (_, r) => (
-          <Button
-            size="small" type="link"
-            onClick={() => onJumpToProduct && onJumpToProduct({
-              productId: r.product_id, keyword: kw,
-            })}
-          >
-            加进标题
-          </Button>
-        ),
-      },
     ]
 
     return (
