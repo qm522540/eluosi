@@ -1,6 +1,6 @@
 from fastapi import APIRouter
 
-from app.api.v1 import system, auth, shops, products, ads, finance, notifications, bid_management, category_mapping, keyword_stats, region_stats, search_insights, seo
+from app.api.v1 import system, auth, shops, products, ads, finance, notifications, bid_management, category_mapping, keyword_stats, search_insights, seo
 
 api_router = APIRouter()
 
@@ -33,9 +33,6 @@ api_router.include_router(category_mapping.router, prefix="/mapping", tags=["映
 
 # 关键词统计
 api_router.include_router(keyword_stats.router, prefix="/keyword-stats", tags=["关键词统计"])
-
-# 地区销售统计
-api_router.include_router(region_stats.router, prefix="/region-stats", tags=["地区销售"])
 
 # 搜索词洞察（SEO 流量分析，需 Jam / Premium 订阅）
 api_router.include_router(search_insights.router, prefix="/search-insights", tags=["搜索词洞察"])
