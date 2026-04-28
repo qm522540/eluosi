@@ -1,6 +1,6 @@
 from fastapi import APIRouter
 
-from app.api.v1 import system, auth, shops, products, ads, finance, notifications, bid_management, category_mapping, keyword_stats, search_insights, seo
+from app.api.v1 import system, auth, shops, products, ads, finance, notifications, bid_management, category_mapping, keyword_stats, search_insights, seo, data_sources
 
 api_router = APIRouter()
 
@@ -39,6 +39,9 @@ api_router.include_router(search_insights.router, prefix="/search-insights", tag
 
 # SEO 优化（付费词反哺自然词 + 多源融合候选池）
 api_router.include_router(seo.router, prefix="/seo", tags=["SEO优化"])
+
+# 数据源管理（系统设置 → 数据源 Tab：店铺 API 总开关 + 单数据源开关）
+api_router.include_router(data_sources.router, prefix="/data-sources", tags=["数据源管理"])
 
 # 后续模块:
 # from app.api.v1 import inventory
