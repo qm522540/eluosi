@@ -17,7 +17,7 @@
 DATA_SOURCES = {
     # ============ WB API 类 ============
     "wb_orders": {
-        "label": "WB 订单同步",
+        "label": "WB 推广数据同步",
         "category": "api",
         "platform": "wb",
         "schedule_desc": "每日 02:00 (MSK)",
@@ -76,7 +76,7 @@ DATA_SOURCES = {
     },
     # ============ Ozon API 类 ============
     "ozon_orders": {
-        "label": "Ozon 订单同步",
+        "label": "Ozon 推广数据同步",
         "category": "api",
         "platform": "ozon",
         "schedule_desc": "每日 02:00 (MSK,与 WB 同任务)",
