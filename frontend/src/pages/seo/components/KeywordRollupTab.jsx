@@ -283,14 +283,14 @@ const KeywordRollupTab = ({ shops = [], shopId, onShopChange, onJumpToProduct })
     if (!state) return null
 
     const subColumns = [
-      ...(shopIds.length > 1 ? [{
+      {
         title: '店铺', key: 'shop_id', width: 110,
         render: (_, r) => (
           <Tag color="geekblue" style={{ fontSize: 11, margin: 0 }}>
             {shopNameMap[r.shop_id] || `shop#${r.shop_id}`}
           </Tag>
         ),
-      }] : []),
+      },
       {
         title: '商品', key: 'product',
         render: (_, r) => (
@@ -308,9 +308,18 @@ const KeywordRollupTab = ({ shops = [], shopId, onShopChange, onJumpToProduct })
               <Text style={{ fontSize: 12, maxWidth: 360 }} ellipsis={{ tooltip: r.title }}>
                 {r.title || '(无标题)'}
               </Text>
-              <Text type="secondary" style={{ fontSize: 11 }}>
-                SKU {r.platform_sku_id || r.product_id}
-              </Text>
+              <Space size={4} wrap>
+                <Text type="secondary" style={{ fontSize: 11 }}>
+                  SKU {r.platform_sku_id || r.product_id}
+                </Text>
+                {r.product_sku && (
+                  <Tooltip title="本地编码（products.sku）— 跨店同一商品共用此编码">
+                    <Tag color="cyan" style={{ margin: 0, fontSize: 10 }}>
+                      {r.product_sku}
+                    </Tag>
+                  </Tooltip>
+                )}
+              </Space>
             </Space>
           </Space>
         ),

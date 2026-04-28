@@ -305,6 +305,7 @@ def list_rollup_products(
             ANY_VALUE(COALESCE(pl.title_ru, p.name_ru, p.name_zh, '')) AS title,
             ANY_VALUE(p.image_url)         AS image_url,
             ANY_VALUE(pl.platform_sku_id)  AS platform_sku_id,
+            ANY_VALUE(p.sku)               AS product_sku,
             MAX(CASE WHEN LOWER(COALESCE(pl.title_ru, p.name_ru, p.name_zh, ''))
                           LIKE CONCAT('%', :kw_lower, '%') THEN 1 ELSE 0 END) AS in_title,
             MAX(CASE WHEN LOWER(COALESCE(CAST(pl.variant_attrs AS CHAR), ''))
@@ -342,6 +343,7 @@ def list_rollup_products(
         "title":           r.title or "",
         "image_url":       r.image_url or "",
         "platform_sku_id": r.platform_sku_id or "",
+        "product_sku":     r.product_sku or "",
         "in_title":        bool(r.in_title),
         "in_attrs":        bool(r.in_attrs),
         "frequency":       int(r.frequency or 0),
