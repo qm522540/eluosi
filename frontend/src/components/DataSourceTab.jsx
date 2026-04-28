@@ -6,7 +6,7 @@ import {
 import {
   ReloadOutlined, ApiOutlined, CheckCircleFilled, CloseCircleFilled,
   ClockCircleOutlined, PauseCircleOutlined, ExclamationCircleOutlined,
-  ShopOutlined, GlobalOutlined,
+  ShopOutlined, GlobalOutlined, HandOutlined,
 } from '@ant-design/icons'
 import { getShops } from '@/api/shops'
 import {
@@ -182,8 +182,13 @@ const DataSourceTab = () => {
       title: '调度',
       dataIndex: 'schedule_desc',
       key: 'schedule_desc',
-      width: 180,
-      render: (v) => (
+      width: 200,
+      render: (v, r) => r.manual_only ? (
+        <Space size={4}>
+          <Tag color="orange" icon={<HandOutlined />} style={{ marginRight: 0 }}>手动触发</Tag>
+          <span style={{ fontSize: 12, color: '#999' }}>用户点同步按钮</span>
+        </Space>
+      ) : (
         <Space size={4}>
           <ClockCircleOutlined style={{ color: '#999' }} />
           <span style={{ fontSize: 13 }}>{v}</span>

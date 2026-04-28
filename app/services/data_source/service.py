@@ -18,6 +18,8 @@
 
 from __future__ import annotations
 
+import json
+from datetime import timedelta
 from typing import Optional
 
 from sqlalchemy import text
@@ -90,12 +92,19 @@ def record_sync_run(
     db: Session, tenant_id: int, shop_id: Optional[int], source_key: str,
     *, status: str, msg: str = "", rows: int = 0, duration_ms: Optional[int] = None,
 ) -> None:
-    """beat task 跑完写回最近同步状态 (供 UI 展示)。
+    """beat task / 手动同步入口 跑完写回最近同步状态。
 
     status: success / partial / failed / skipped
-    幂等: 没记录就 INSERT,有就 UPDATE。
+    同时写两张表:
+      1. data_source_config — 给 UI 看 (只保留最新状态)
+      2. task_logs          — 给全系统观测看 (保留全部历史; 老林 4-28 建议)
+
+    task_logs.task_name 用 "data_source.{source_key}" 前缀,避免跟 daily_sync 等
+    原生写 task_logs 的 task 行混淆,grep 时一眼区分。
     """
     now = utc_now_naive()
+
+    # ===== 1. data_source_config (UI 最新状态) =====
     try:
         db.execute(text("""
             INSERT INTO data_source_config (
@@ -118,7 +127,44 @@ def record_sync_run(
         })
         db.commit()
     except Exception as e:
-        logger.warning(f"record_sync_run 失败 shop={shop_id} source={source_key}: {e}")
+        logger.warning(f"record_sync_run data_source_config 失败 shop={shop_id} source={source_key}: {e}")
+
+    # ===== 2. task_logs (全系统观测面) =====
+    # task_logs.status enum 只有 success/failed/... 没有 partial/skipped,
+    # 把 partial 当 success(任务完成,部分行失败), skipped 当 success(主动跳过非异常)
+    # 真实 sub_status 放 result.json 里完整保留
+    try:
+        tl_status = "failed" if status == "failed" else "success"
+        result_json = json.dumps({
+            "sub_status": status,
+            "shop_id": shop_id,
+            "source_key": source_key,
+            "rows": int(rows or 0),
+        }, ensure_ascii=False)
+        # started_at 反推: now - duration
+        started_at = now - timedelta(milliseconds=duration_ms) if duration_ms else now
+        db.execute(text("""
+            INSERT INTO task_logs (
+                tenant_id, task_name, status, result, error_message,
+                started_at, finished_at, duration_ms, created_at, updated_at
+            ) VALUES (
+                :tid, :tn, :status, :result, :err,
+                :start, :finish, :dur, :now, :now
+            )
+        """), {
+            "tid": tenant_id,
+            "tn": f"data_source.{source_key}",
+            "status": tl_status,
+            "result": result_json,
+            "err": msg[:500] if status == "failed" else None,
+            "start": started_at,
+            "finish": now,
+            "dur": duration_ms,
+            "now": now,
+        })
+        db.commit()
+    except Exception as e:
+        logger.warning(f"record_sync_run task_logs 失败 shop={shop_id} source={source_key}: {e}")
 
 
 # ==================== UI 查询入口 ====================
@@ -172,6 +218,7 @@ def get_shop_status(db: Session, tenant_id: int, shop_id: int) -> dict:
             "label": meta["label"],
             "category": meta["category"],
             "schedule_desc": meta["schedule_desc"],
+            "manual_only": bool(meta.get("manual_only", False)),
             "depends": meta.get("depends", []),
             "enabled": bool(enabled),
             "effective_enabled": effective,
@@ -224,6 +271,7 @@ def get_shared_data_sources(db: Session, tenant_id: int) -> dict:
             "label": meta["label"],
             "category": meta["category"],
             "schedule_desc": meta["schedule_desc"],
+            "manual_only": bool(meta.get("manual_only", False)),
             "depends": meta.get("depends", []),
             "enabled": bool(enabled),
             "effective_enabled": bool(enabled),
