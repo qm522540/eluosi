@@ -6,12 +6,12 @@ import {
 import {
   ReloadOutlined, ApiOutlined, CheckCircleFilled, CloseCircleFilled,
   ClockCircleOutlined, PauseCircleOutlined, ExclamationCircleOutlined,
-  ShopOutlined, GlobalOutlined, ThunderboltOutlined,
+  ShopOutlined, GlobalOutlined, ThunderboltOutlined, SyncOutlined,
 } from '@ant-design/icons'
 import { getShops } from '@/api/shops'
 import {
   getShopDataSources, getSharedDataSources,
-  patchShopApiSwitch, patchDataSource,
+  patchShopApiSwitch, patchDataSource, triggerSyncDataSource,
 } from '@/api/data_source'
 import { formatMoscowTime } from '@/utils/time'
 import { PLATFORMS } from '@/utils/constants'
@@ -42,6 +42,8 @@ const DataSourceTab = () => {
   const [pauseModal, setPauseModal] = useState({ open: false, type: null, sourceKey: null })
   const [pauseForm] = Form.useForm()
   const [submitting, setSubmitting] = useState(false)
+  // 手动更新中的 source_key 集合 (UI loading 状态)
+  const [triggering, setTriggering] = useState(new Set())
 
   // 加载店铺列表
   useEffect(() => {
@@ -96,6 +98,25 @@ const DataSourceTab = () => {
       // 禁用,弹窗填原因
       setPauseModal({ open: true, type: 'shop', sourceKey: null })
       pauseForm.resetFields()
+    }
+  }
+
+  // ========== 手动触发同步 ==========
+  const handleManualTrigger = async (sourceKey, sourceLabel) => {
+    setTriggering(prev => new Set(prev).add(sourceKey))
+    try {
+      const r = await triggerSyncDataSource(shopId, sourceKey)
+      message.success(`已派发"${sourceLabel}"后台执行,稍后看"最近同步"列查结果`)
+      // 5 秒后刷新一次状态 (大部分快任务能跑完)
+      setTimeout(() => fetchShopData(), 5000)
+    } catch (err) {
+      message.error(err.message || '派发失败')
+    } finally {
+      setTriggering(prev => {
+        const next = new Set(prev)
+        next.delete(sourceKey)
+        return next
+      })
     }
   }
 
@@ -227,7 +248,7 @@ const DataSourceTab = () => {
     {
       title: '开关',
       key: 'switch',
-      width: 110,
+      width: 90,
       render: (_, r) => {
         // 总开关压制 (Level 1 关 + 此源是 API 类) → Switch 强制 disabled,提示用户
         const apiSuppressed = r.category === 'api' && shopDetail && !shopDetail.api_enabled
@@ -241,6 +262,33 @@ const DataSourceTab = () => {
               disabled={apiSuppressed}
               onChange={(c) => handleSourceToggle(r.key, c)}
             />
+          </Tooltip>
+        )
+      },
+    },
+    {
+      title: '操作',
+      key: 'action',
+      width: 110,
+      render: (_, r) => {
+        // 自动屏蔽托管暂不支持单店触发(只能按活动级)
+        const unsupported = r.key === 'wb_ad_auto_exclude'
+        const disabled = unsupported || !r.effective_enabled
+        const tip = unsupported
+          ? '请到广告管理 → 活动详情 → "立即跑一次" 按钮按活动触发'
+          : (!r.effective_enabled ? '已暂停或被总开关压制,无法手动更新' : '立即派发后台同步')
+        return (
+          <Tooltip title={tip}>
+            <Button
+              type="link"
+              size="small"
+              icon={<SyncOutlined spin={triggering.has(r.key)} />}
+              loading={triggering.has(r.key)}
+              disabled={disabled}
+              onClick={() => handleManualTrigger(r.key, r.label)}
+            >
+              更新
+            </Button>
           </Tooltip>
         )
       },
@@ -318,7 +366,7 @@ const DataSourceTab = () => {
         <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无共享数据源" />
       ) : (
         <Table
-          columns={sourceColumns.filter(c => c.key !== 'switch').concat([{
+          columns={sourceColumns.filter(c => c.key !== 'switch' && c.key !== 'action').concat([{
             title: '开关',
             key: 'switch',
             width: 90,

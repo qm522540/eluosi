@@ -33,6 +33,7 @@ celery_app.conf.update(
         "app.tasks.wb_search_texts_task",
         "app.tasks.cluster_oracle_sync",
         "app.tasks.seo_engine_task",
+        "app.tasks.manual_trigger_task",
     ],
 )
 

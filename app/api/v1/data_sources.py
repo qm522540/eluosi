@@ -110,3 +110,38 @@ def patch_data_source(
     if result.get("code") != 0:
         return error(result["code"], result.get("msg", ""))
     return success(result["data"])
+
+
+# ==================== 手动更新触发 ====================
+
+@router.post("/shop/{shop_id}/{source_key}/sync")
+def manual_trigger_sync(
+    shop_id: int,
+    source_key: str,
+    db: Session = Depends(get_db),
+    tenant_id: int = Depends(get_tenant_id),
+    shop=Depends(get_owned_shop),
+):
+    """数据源管理 Tab "手动更新" 按钮入口 — celery 异步派发。
+
+    前端立刻拿 task_id, 实际状态看 "最近同步" 列。
+    """
+    from app.services.data_source.catalog import DATA_SOURCES
+    from app.services.data_source.service import is_data_source_enabled
+
+    if source_key not in DATA_SOURCES:
+        return error(40001, f"未知数据源: {source_key}")
+
+    # 派发前先检查是否被禁用 — 如果禁用直接拒绝, 不派发到 worker
+    enabled, reason = is_data_source_enabled(db, tenant_id, shop_id, source_key)
+    if not enabled:
+        return error(40002, f"数据源已暂停, 无法手动更新: {reason}")
+
+    # 派发 celery task
+    from app.tasks.manual_trigger_task import manual_trigger_one
+    async_result = manual_trigger_one.delay(shop_id, tenant_id, source_key)
+    return success({
+        "task_id": async_result.id,
+        "source_key": source_key,
+        "msg": "已派发, 后台执行中, 请查看 '最近同步' 列查看结果",
+    })

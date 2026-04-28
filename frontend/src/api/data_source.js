@@ -21,3 +21,8 @@ export function patchShopApiSwitch(shopId, body) {
 export function patchDataSource(shopId, sourceKey, body) {
   return request.patch(`/data-sources/shop/${shopId}/${sourceKey}`, body)
 }
+
+// 手动触发该数据源同步 — celery 异步派发
+export function triggerSyncDataSource(shopId, sourceKey) {
+  return request.post(`/data-sources/shop/${shopId}/${sourceKey}/sync`)
+}
