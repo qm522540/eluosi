@@ -775,6 +775,11 @@ class OzonClient(BasePlatformClient):
         """
         if not offer_id or not value:
             return {"error": "offer_id 或 value 为空"}
+        if len(value) > max_chars:
+            logger.warning(
+                f"Ozon attr={attr_id} offer={offer_id} value 超长被截断 "
+                f"{len(value)} → {max_chars} 字符"
+            )
         url = f"{OZON_SELLER_API}/v1/product/attributes/update"
         body = {
             "items": [{

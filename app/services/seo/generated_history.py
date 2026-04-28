@@ -17,6 +17,8 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.utils.errors import ErrorCode
+from app.utils.logger import logger
+from app.utils.moscow_time import utc_now_naive
 
 
 def list_generated_titles(
@@ -157,15 +159,12 @@ async def mark_title_applied(
          - WB: 暂不支持 (下一步加, 用户暂时手动到平台改)
       5. 平台 API 失败不回滚本地 (本地已应用, 用户可看到; 失败信息回传前端提示)
     """
-    from datetime import datetime, timezone
-
     row = db.execute(text("""
         SELECT g.id, g.approval_status, g.content_type, g.generated_text,
                pl.id AS listing_id, pl.platform, pl.platform_product_id,
                pl.title_ru AS old_title, pl.description_ru AS old_desc
         FROM seo_generated_contents g
         JOIN platform_listings pl ON pl.id = g.listing_id
-        LEFT JOIN platform_listings pl2 ON pl2.id = g.listing_id
         WHERE g.id = :gid
           AND g.tenant_id = :tid
           AND pl.shop_id = :sid
@@ -186,15 +185,16 @@ async def mark_title_applied(
         return {"code": ErrorCode.SUCCESS,
                 "data": {"id": generated_id, "msg": "生成内容为空,跳过"}}
 
-    # 取 offer_id (Ozon 改商品需要 offer_id 而非 product_id)
+    # 取 offer_id (Ozon 改商品需要 offer_id = 卖家 SKU, 不是 platform_product_id 数字 ID)
+    # 不 fallback 到 platform_product_id, 否则会调错商品
     offer_row = db.execute(text("""
         SELECT p.sku FROM platform_listings pl
-        JOIN products p ON p.id = pl.product_id
-        WHERE pl.id = :lid LIMIT 1
-    """), {"lid": row.listing_id}).first()
-    offer_id = (offer_row.sku if offer_row else None) or row.platform_product_id
+        JOIN products p ON p.id = pl.product_id AND p.tenant_id = pl.tenant_id
+        WHERE pl.id = :lid AND pl.tenant_id = :tid LIMIT 1
+    """), {"lid": row.listing_id, "tid": tenant_id}).first()
+    offer_id = (offer_row.sku if offer_row else None) or None
 
-    now_utc = datetime.now(timezone.utc)
+    now_utc = utc_now_naive()
 
     # 1. 改本地 listing 字段 (title 或 description)
     if row.content_type == "title":
@@ -259,7 +259,7 @@ async def mark_title_applied(
             "data": {
                 "id": generated_id,
                 "approval_status": "applied",
-                "applied_at": now_utc.isoformat(),
+                "applied_at": now_utc.isoformat() + "Z",
                 "local_updated": True,
                 "platform_writeback": platform_result,
             }}
