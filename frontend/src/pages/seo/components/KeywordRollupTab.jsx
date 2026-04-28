@@ -88,11 +88,17 @@ const KeywordRollupTab = ({ shops = [], shopId, onShopChange, onJumpToProduct })
 
   useEffect(() => { fetchData() }, [fetchData])
 
-  const loadProducts = async (kw) => {
+  const loadProducts = async (kw, crossShopIds = []) => {
     setExpanded(prev => ({ ...prev, [kw]: { loading: true, items: [] } }))
     try {
+      // 把跨店 shop_ids 一起传给后端,让下钻 SQL 也包含未选中店里的真实贡献,
+      // 前端按 selected vs cross 区分展示 (避免用户点开看不到"跨店那 +1"的疑惑)
+      const allSids = Array.from(new Set([
+        ...shopIds.map(Number),
+        ...crossShopIds.map(Number),
+      ]))
       const res = await getKeywordRollupProducts(shopIds[0], {
-        keyword: kw, days, limit: 50, shop_ids: shopIds.join(','),
+        keyword: kw, days, limit: 50, shop_ids: allSids.join(','),
       })
       if (res.code === 0) {
         setExpanded(prev => ({ ...prev, [kw]: { loading: false, items: res.data?.items || [] } }))
@@ -110,7 +116,10 @@ const KeywordRollupTab = ({ shops = [], shopId, onShopChange, onJumpToProduct })
     const kw = record.keyword
     if (expandedRow) {
       setExpandedKeys(prev => [...prev, kw])
-      if (!expanded[kw]) loadProducts(kw)
+      if (!expanded[kw]) {
+        const crossShopIds = (record.cross_shop_shops || []).map(s => s.shop_id)
+        loadProducts(kw, crossShopIds)
+      }
     } else {
       setExpandedKeys(prev => prev.filter(k => k !== kw))
     }
@@ -282,14 +291,25 @@ const KeywordRollupTab = ({ shops = [], shopId, onShopChange, onJumpToProduct })
     const state = expanded[kw]
     if (!state) return null
 
+    const selectedShopIdsSet = new Set(shopIds.map(Number))
     const subColumns = [
       {
-        title: '店铺', key: 'shop_id', width: 110,
-        render: (_, r) => (
-          <Tag color="geekblue" style={{ fontSize: 11, margin: 0 }}>
-            {shopNameMap[r.shop_id] || `shop#${r.shop_id}`}
-          </Tag>
-        ),
+        title: '店铺', key: 'shop_id', width: 150,
+        render: (_, r) => {
+          const isCross = !selectedShopIdsSet.has(Number(r.shop_id))
+          return (
+            <Space size={4} direction="vertical">
+              <Tag color={isCross ? 'orange' : 'geekblue'} style={{ fontSize: 11, margin: 0 }}>
+                {shopNameMap[r.shop_id] || `shop#${r.shop_id}`}
+              </Tag>
+              {isCross && (
+                <Tooltip title="此店未在当前筛选范围内 — 跨店出现该词,数据仅供参考(不计入主表 SUM)">
+                  <Tag color="gold" style={{ fontSize: 10, margin: 0 }}>跨店</Tag>
+                </Tooltip>
+              )}
+            </Space>
+          )
+        },
       },
       {
         title: '商品', key: 'product',
