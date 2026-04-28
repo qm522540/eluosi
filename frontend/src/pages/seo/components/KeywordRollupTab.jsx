@@ -207,31 +207,31 @@ const KeywordRollupTab = ({ shops = [], shopId, onShopChange, onJumpToProduct })
     },
     {
       title: (
-        <Tooltip title="搜索量 = 你商品在搜索结果列表中出现的累计次数（WB frequency / Ozon unique_search_users，SKU 级累加）">
-          搜索量
+        <Tooltip title="平台搜索量 = 该词在 Ozon 全平台的总搜索次数(平台级数字,跟你店无关)。Ozon API unique_search_users,跨日累计">
+          平台搜索量
         </Tooltip>
       ),
-      dataIndex: 'frequency', align: 'right', width: 100,
+      dataIndex: 'frequency', align: 'right', width: 110,
       sorter: (a, b) => (a.frequency || 0) - (b.frequency || 0),
       render: v => (v || 0).toLocaleString(),
     },
     {
       title: (
-        <Tooltip title="曝光 = 用户搜该词后真正滚动看见你商品卡片的累计次数（Ozon unique_view_users）。恒有 曝光 ≤ 搜索量">
-          曝光
+        <Tooltip title="本店曝光 = 该词搜索结果里,本店所有相关 SKU 累计被看到的次数(SKU 级,跨 SKU 跨日累加)。一次搜索能给本店多个 SKU 同时露脸,所以本店曝光可以 > 平台搜索量">
+          本店曝光
         </Tooltip>
       ),
-      dataIndex: 'impressions', align: 'right', width: 90,
+      dataIndex: 'impressions', align: 'right', width: 100,
       sorter: (a, b) => (a.impressions || 0) - (b.impressions || 0),
       render: v => (v || 0).toLocaleString(),
     },
     {
       title: (
-        <Tooltip title="曝光比例 = 曝光 / 搜索量。反映商品在搜索结果里被翻到的程度。≥60% 绿（排名好）/ 30~60% 橙 / <30% 红（排名靠后）">
-          曝光比例
+        <Tooltip title="平均占位 = 本店曝光 / 平台搜索量。反映该词每次搜索本店平均占几个搜索结果位.&#10;> 100% 多 SKU 同时上榜(强势,绿)&#10;50~100% 部分搜索上榜(橙)&#10;< 50% 大多搜索没占到位(红,排名靠后)">
+          平均占位
         </Tooltip>
       ),
-      key: 'view_rate', align: 'right', width: 95,
+      key: 'view_rate', align: 'right', width: 100,
       sorter: (a, b) => {
         const ra = a.frequency ? a.impressions / a.frequency : 0
         const rb = b.frequency ? b.impressions / b.frequency : 0
@@ -241,8 +241,8 @@ const KeywordRollupTab = ({ shops = [], shopId, onShopChange, onJumpToProduct })
         if (!r.frequency) return '-'
         const pct = r.impressions / r.frequency * 100
         let color = '#f5222d'
-        if (pct >= 60) color = '#52c41a'
-        else if (pct >= 30) color = '#faad14'
+        if (pct >= 100) color = '#52c41a'
+        else if (pct >= 50) color = '#faad14'
         return <Text style={{ color, fontWeight: 500 }}>{pct.toFixed(0)}%</Text>
       },
     },
@@ -390,12 +390,22 @@ const KeywordRollupTab = ({ shops = [], shopId, onShopChange, onJumpToProduct })
         ),
       },
       {
-        title: '搜索量', dataIndex: 'frequency', align: 'right', width: 90,
+        title: (
+          <Tooltip title="平台搜索量 = 该词在 Ozon 全平台总搜索次数(平台级,跨日累计;同 SKU 行该数字相同)">
+            平台搜索量
+          </Tooltip>
+        ),
+        dataIndex: 'frequency', align: 'right', width: 100,
         sorter: (a, b) => (a.frequency || 0) - (b.frequency || 0),
         render: v => (v || 0).toLocaleString(),
       },
       {
-        title: '曝光', dataIndex: 'impressions', align: 'right', width: 80,
+        title: (
+          <Tooltip title="本店曝光 = 该 SKU 在该词搜索结果里被独立用户看到的次数(SKU 级真值)">
+            本店曝光
+          </Tooltip>
+        ),
+        dataIndex: 'impressions', align: 'right', width: 90,
         sorter: (a, b) => (a.impressions || 0) - (b.impressions || 0),
         render: v => (v || 0).toLocaleString(),
       },
