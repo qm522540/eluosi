@@ -104,27 +104,47 @@ def compute_keyword_rollup(
         kw_like = f"%{keyword.strip().lower()}%"
 
     kw_clause = "AND LOWER(q.query_text) LIKE :kw" if kw_like else ""
-    having_min_orders = "AND SUM(q.orders) >= :min_orders" if min_orders > 0 else ""
+    # frequency 修复后 outer 用 daily_orders 别名 (q.orders 在 outer 不可见)
+    having_min_orders = "AND SUM(daily_orders) >= :min_orders" if min_orders > 0 else ""
 
+    # frequency 修正 (2026-04-28 老张):
+    # Ozon API frequency = unique_search_users (平台级常量,平等附给每个 SKU 行) →
+    # 直接 SUM 会按 SKU 数 N 倍重复 (实测 ×11~15 倍虚高).
+    # 修法: inner subquery 按 (query, date) 取 MAX(frequency) 得到该词当天平台级真值,
+    # 外层 SUM(daily_freq) 跨日累计.其他列 (impressions/orders/...) 是 SKU 级,内层 SUM 正确.
+    # WB frequency 是 SKU 级真实贡献,改 MAX 会损失 (但实测 SKU 间值接近,损失通常 <30%);
+    # 为简洁统一两平台同模式,接受 WB 略损以换 Ozon 准.
     sql = text(f"""
         SELECT
-            q.query_text AS keyword,
-            SUM(q.frequency)    AS frequency,
-            SUM(q.impressions)  AS impressions,
-            SUM(q.add_to_cart)  AS add_to_cart,
-            SUM(q.orders)       AS orders,
-            SUM(q.revenue)      AS revenue,
-            COUNT(DISTINCT q.product_id) AS product_count
-        FROM product_search_queries q
-        JOIN products p ON p.id = q.product_id AND p.tenant_id = q.tenant_id
-        WHERE q.tenant_id = :tid
-          AND q.shop_id IN :sids
-          AND q.stat_date >= :since
-          AND q.product_id IS NOT NULL
-          AND (p.status != 'deleted' OR p.status IS NULL)
-          {kw_clause}
-        GROUP BY q.query_text
-        HAVING (SUM(q.frequency) >= 5 OR SUM(q.orders) >= 1)
+            keyword,
+            SUM(daily_freq)     AS frequency,
+            SUM(daily_imp)      AS impressions,
+            SUM(daily_cart)     AS add_to_cart,
+            SUM(daily_orders)   AS orders,
+            SUM(daily_revenue)  AS revenue,
+            MAX(daily_skus)     AS product_count
+        FROM (
+            SELECT
+                q.query_text AS keyword,
+                q.stat_date,
+                MAX(q.frequency)             AS daily_freq,
+                SUM(q.impressions)           AS daily_imp,
+                SUM(q.add_to_cart)           AS daily_cart,
+                SUM(q.orders)                AS daily_orders,
+                SUM(q.revenue)               AS daily_revenue,
+                COUNT(DISTINCT q.product_id) AS daily_skus
+            FROM product_search_queries q
+            JOIN products p ON p.id = q.product_id AND p.tenant_id = q.tenant_id
+            WHERE q.tenant_id = :tid
+              AND q.shop_id IN :sids
+              AND q.stat_date >= :since
+              AND q.product_id IS NOT NULL
+              AND (p.status != 'deleted' OR p.status IS NULL)
+              {kw_clause}
+            GROUP BY q.query_text, q.stat_date
+        ) t
+        GROUP BY keyword
+        HAVING (SUM(daily_freq) >= 5 OR SUM(daily_orders) >= 1)
           {having_min_orders}
         ORDER BY {order_by}
         LIMIT :lim
