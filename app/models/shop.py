@@ -1,6 +1,6 @@
 from datetime import datetime
 from typing import Optional
-from sqlalchemy import BigInteger, String, Enum, DateTime
+from sqlalchemy import BigInteger, String, Enum, DateTime, SmallInteger
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database import Base
@@ -41,3 +41,10 @@ class Shop(BaseMixin, Base):
         nullable=False, default="active"
     )
     last_sync_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    # 数据源管理 Level 1 (店铺 API 总开关) — migration 060
+    # 新店默认 1=启用,UI 改 0=禁用紧急止血时填 reason + at + (可选 until + by)
+    api_enabled: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=1)
+    api_disabled_reason: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    api_disabled_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    api_disabled_until: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    api_disabled_by: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
