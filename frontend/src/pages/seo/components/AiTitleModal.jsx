@@ -453,6 +453,39 @@ const AiTitleModal = ({
             )}
           </div>
 
+          {result.manual_keywords?.length > 0 && (
+            <Alert
+              type={result.dropped_manual?.length ? 'error' : 'success'}
+              showIcon
+              style={{ marginBottom: 12 }}
+              message={(
+                <span>
+                  ⚡ 你手动输入了 <strong>{result.manual_keywords.length}</strong> 个关键词
+                  （最高优先级硬约束，AI 必须 100% 融入）：
+                </span>
+              )}
+              description={(
+                <div>
+                  <Space size={4} wrap style={{ marginBottom: result.dropped_manual?.length ? 6 : 0 }}>
+                    {result.manual_keywords.map((kw, i) => {
+                      const dropped = result.dropped_manual?.includes(kw)
+                      return (
+                        <Tag key={i} color={dropped ? 'red' : 'green'} style={{ margin: 0, fontWeight: 600 }}>
+                          {dropped ? '✗ ' : '✓ '}{kw}
+                        </Tag>
+                      )
+                    })}
+                  </Space>
+                  {result.dropped_manual?.length > 0 && (
+                    <Text type="danger" style={{ fontSize: 12, fontWeight: 600 }}>
+                      ⚠️ AI 漏了 {result.dropped_manual.length} 个手填词（红色标签）—— 强烈建议点「重新生成」让 AI 重试，否则采用前请手动补回。
+                    </Text>
+                  )}
+                </div>
+              )}
+            />
+          )}
+
           {result.preserved_keywords?.length > 0 && (
             <Alert
               type={result.dropped_preserve?.length ? 'warning' : 'info'}

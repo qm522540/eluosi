@@ -49,6 +49,11 @@ SYSTEM_PROMPT = """你是俄罗斯跨境电商（WB / Ozon / Yandex）SEO 标题
     - 商品是耳环 (`серьги`) → 禁止加 `кольцо`/`кольца`(戒指)/`колье`/`кулон`(项链)/`брошь`(胸针)/`браслет`(手链)
     - 商品是戒指 (`кольцо`) → 禁止加 `серьги`/`колье`/`брошь` 等
     即使候选词或属性里有相关词，也不要加。如果不确定，**只用本品类的词**。
+11. **手动输入关键词必须 100% 融入 (最高硬约束)**：用户在「手动输入关键词」框里手填的词，
+    级别**高于一切其他词** (高于反哺词 / 类目热门词 / 品牌词)。即使要牺牲候选词或类目词，
+    也必须把每一个手动词原样塞进新标题。**丢一个手动词 = 此次生成视为失败**。
+    用户手填这些词的场景通常是看到竞品热销词在系统里没有/想强推某个营销词，
+    所以这是用户的硬指令，不是建议。
 
 【位置规则 —— 决定搜索权重】
 平台搜索权重从标题开头向后递减，按"权重梯度"排词：
@@ -227,6 +232,20 @@ def _build_user_prompt(
     if hint:
         lines.append(hint)
         lines.append("")
+
+    # 手动输入词放最前面 — 让 AI 第一眼看到, 避免 prompt 末尾的注意力衰减
+    if manual_keywords:
+        manual_clean = [k.strip() for k in manual_keywords if k and k.strip()]
+        if manual_clean:
+            lines.append(
+                f"【⚡ 用户手动输入关键词（共 {len(manual_clean)} 个，"
+                "**最高优先级硬约束** — 必须 100% 出现在新标题里，"
+                "不允许漏一个，对应 SYSTEM_PROMPT 规则 #11）】"
+            )
+            for i, k in enumerate(manual_clean, 1):
+                lines.append(f"{i}. {k}")
+            lines.append("")
+
     lines.extend([
         "【当前商品信息】",
         f"中文名：{name_zh}",
@@ -305,14 +324,15 @@ def _build_user_prompt(
             metric = f"（{' / '.join(metric_parts)}）" if metric_parts else ""
             lines.append(f"{i}. {k['keyword']} {metric}")
 
+    # 末尾再提醒一次手动输入词 (放开头 + 收尾双重提醒)
     if manual_keywords:
-        # 去重已经在前端做了, 这里也做一道 (空、纯空格)
         manual_clean = [k.strip() for k in manual_keywords if k and k.strip()]
         if manual_clean:
             lines.append("")
-            lines.append(f"【用户手动输入关键词（共 {len(manual_clean)} 个，最高优先级 — 这是用户根据竞品/经验手填的词，请尽量融入）】")
-            for i, k in enumerate(manual_clean, 1):
-                lines.append(f"{i}. {k}")
+            lines.append(
+                "⚠️ 再次提醒：上面【⚡ 用户手动输入关键词】里的 "
+                f"{len(manual_clean)} 个词必须 100% 出现在新标题中，缺一不可。"
+            )
 
     lines.append("")
     lines.append("请按上述约束生成新俄语标题，返回 JSON。")
@@ -674,6 +694,16 @@ async def generate_title(
             f"{dropped_preserve}"
         )
 
+    # 检查 AI 是否真的融入了所有"用户手动输入词"(规则 #11 硬约束)
+    # 不强制重试,但日志 WARNING + 前端飘红色 warning,让用户决定要不要"重新生成"
+    manual_input = [k.strip() for k in (manual_keywords or []) if k and k.strip()]
+    dropped_manual = [kw for kw in manual_input if kw.lower() not in new_title_lower]
+    if dropped_manual:
+        logger.warning(
+            f"SEO title generate: AI dropped MANUAL keywords product={product_id}: "
+            f"{dropped_manual} (违反规则 #11)"
+        )
+
     return {
         "code": ErrorCode.SUCCESS,
         "data": {
@@ -682,6 +712,8 @@ async def generate_title(
             "included_keywords": parsed["included_keywords"] or [c["keyword"] for c in candidates],
             "preserved_keywords": preserve_keywords,
             "dropped_preserve": dropped_preserve,
+            "manual_keywords": manual_input,
+            "dropped_manual": dropped_manual,
             "ai_model": ai_result["model"],
             "decision_id": ai_result["decision_id"],
             "generated_content_id": gen.id,
