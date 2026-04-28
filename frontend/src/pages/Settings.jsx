@@ -248,45 +248,53 @@ const Settings = () => {
             </div>
             <div style={{ borderLeft: '3px solid #005BFF', paddingLeft: 12, marginBottom: 16 }}>
               <div style={{ fontWeight: 600, marginBottom: 8 }}>卖家 API 凭证</div>
-              <Form.Item
-                name="client_id"
-                label="Client ID"
-                rules={editingShop ? [] : [{ required: true, message: '请输入Client ID' }]}
-                extra="获取路径：seller.ozon.ru → 设置 → API密钥 → Client ID（纯数字）"
-              >
-                <Input placeholder={editingShop ? '不修改请留空' : '例如：2727539'} />
-              </Form.Item>
-              <Form.Item
-                name="api_key"
-                label="API Key"
-                rules={editingShop ? [] : [{ required: true, message: '请输入API Key' }]}
-                extra="获取路径：seller.ozon.ru → 设置 → API密钥 → 生成密钥"
-              >
-                <Input.Password
-                  placeholder={editingShop ? '不修改请留空' : '请输入Ozon卖家API Key'}
-                  iconRender={() => <EyeInvisibleOutlined />}
-                />
-              </Form.Item>
+              <div style={{ display: 'flex', gap: 16 }}>
+                <Form.Item
+                  name="client_id"
+                  label="Client ID"
+                  rules={editingShop ? [] : [{ required: true, message: '请输入Client ID' }]}
+                  extra="seller.ozon.ru → 设置 → API密钥 (纯数字)"
+                  style={{ flex: 1 }}
+                >
+                  <Input placeholder={editingShop ? '不修改请留空' : '例如：2727539'} />
+                </Form.Item>
+                <Form.Item
+                  name="api_key"
+                  label="API Key"
+                  rules={editingShop ? [] : [{ required: true, message: '请输入API Key' }]}
+                  extra="seller.ozon.ru → 设置 → 生成密钥"
+                  style={{ flex: 1 }}
+                >
+                  <Input.Password
+                    placeholder={editingShop ? '不修改请留空' : '请输入Ozon卖家API Key'}
+                    iconRender={() => <EyeInvisibleOutlined />}
+                  />
+                </Form.Item>
+              </div>
             </div>
             <div style={{ borderLeft: '3px solid #faad14', paddingLeft: 12, marginBottom: 8 }}>
               <div style={{ fontWeight: 600, marginBottom: 8 }}>广告 API 凭证 (Performance)</div>
-              <Form.Item
-                name="perf_client_id"
-                label="广告 Client ID"
-                extra="获取路径：performance.ozon.ru → 设置 → API接入 → 创建应用 → Client ID"
-              >
-                <Input placeholder="例如：xxxxx@advertising.performance.ozon.ru" />
-              </Form.Item>
-              <Form.Item
-                name="perf_client_secret"
-                label="广告 Client Secret"
-                extra="获取路径：performance.ozon.ru → 设置 → API接入 → 创建应用 → Client Secret"
-              >
-                <Input.Password
-                  placeholder="选填，配置后才能同步广告数据"
-                  iconRender={() => <EyeInvisibleOutlined />}
-                />
-              </Form.Item>
+              <div style={{ display: 'flex', gap: 16 }}>
+                <Form.Item
+                  name="perf_client_id"
+                  label="广告 Client ID"
+                  extra="performance.ozon.ru → API接入 → Client ID"
+                  style={{ flex: 1 }}
+                >
+                  <Input placeholder="xxxxx@advertising.performance.ozon.ru" />
+                </Form.Item>
+                <Form.Item
+                  name="perf_client_secret"
+                  label="广告 Client Secret"
+                  extra="performance.ozon.ru → API接入 → Client Secret"
+                  style={{ flex: 1 }}
+                >
+                  <Input.Password
+                    placeholder="选填,配置后才能同步广告数据"
+                    iconRender={() => <EyeInvisibleOutlined />}
+                  />
+                </Form.Item>
+              </div>
             </div>
           </>
         )}
@@ -360,7 +368,7 @@ const Settings = () => {
         onOk={handleSubmit}
         onCancel={() => setModalVisible(false)}
         confirmLoading={submitting}
-        width={520}
+        width={760}
         destroyOnClose
       >
         <Form form={form} layout="vertical" style={{ marginTop: 16 }}>

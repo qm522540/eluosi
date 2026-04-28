@@ -83,6 +83,18 @@ def create_shop(db: Session, tenant_id: int, data: dict) -> dict:
         if current_count >= tenant.max_shops:
             return {"code": ErrorCode.SHOP_LIMIT_EXCEEDED, "msg": f"店铺数量已达上限({tenant.max_shops})"}
 
+        # 重名检查 (同租户内,排除 deleted)
+        name = (data.get("name") or "").strip()
+        if name:
+            dup = db.query(Shop).filter(
+                Shop.tenant_id == tenant_id,
+                Shop.name == name,
+                Shop.status != "deleted",
+            ).first()
+            if dup:
+                return {"code": ErrorCode.SHOP_NAME_EXISTS,
+                        "msg": f"店铺名称 '{name}' 已存在,请换一个"}
+
         shop = Shop(tenant_id=tenant_id, **data)
         db.add(shop)
         db.flush()  # 拿到 shop.id 但不 commit，确保配套行与店铺同原子
@@ -149,6 +161,19 @@ def update_shop(db: Session, shop_id: int, tenant_id: int, data: dict) -> dict:
 
         if not shop:
             return {"code": ErrorCode.SHOP_NOT_FOUND, "msg": "店铺不存在"}
+
+        # 重名检查 (排除自己;空字符串/未传不检查)
+        new_name = (data.get("name") or "").strip()
+        if new_name and new_name != shop.name:
+            dup = db.query(Shop).filter(
+                Shop.tenant_id == tenant_id,
+                Shop.name == new_name,
+                Shop.status != "deleted",
+                Shop.id != shop_id,
+            ).first()
+            if dup:
+                return {"code": ErrorCode.SHOP_NAME_EXISTS,
+                        "msg": f"店铺名称 '{new_name}' 已存在,请换一个"}
 
         jwt_updated = False
         for key, value in data.items():

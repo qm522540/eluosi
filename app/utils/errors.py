@@ -20,6 +20,7 @@ class ErrorCode:
     SHOP_CREDENTIAL_INVALID = 30002
     SHOP_LIMIT_EXCEEDED = 30003
     SHOP_PLATFORM_ERROR = 30004
+    SHOP_NAME_EXISTS = 30005
 
     # 商品 4xxxx
     PRODUCT_NOT_FOUND = 40001
@@ -100,6 +101,7 @@ ERROR_MESSAGES = {
     ErrorCode.PERMISSION_DENIED: "权限不足",
     ErrorCode.SHOP_NOT_FOUND: "店铺不存在",
     ErrorCode.SHOP_CREDENTIAL_INVALID: "店铺API凭证无效",
+    ErrorCode.SHOP_NAME_EXISTS: "店铺名称已存在",
     ErrorCode.PRODUCT_NOT_FOUND: "商品不存在",
     ErrorCode.AD_CAMPAIGN_NOT_FOUND: "广告活动不存在",
     ErrorCode.AD_GROUP_NOT_FOUND: "广告组不存在",
