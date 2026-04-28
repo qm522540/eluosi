@@ -35,11 +35,17 @@ const KeywordRollupTab = ({ shops = [], shopId, onShopChange, onJumpToProduct })
   const [kwTranslations, setKwTranslations] = useState({})
 
   // 多选店铺 state（内部，初始跟随父级 shopId 单店）
+  // 父级 shopId 变化时:只在 shopIds 为空时才 fall back 到 [shopId],
+  // 否则保留用户已选的多店 (避免父级单选切换 wipe 多店选择 — 之前 bug)
   const [shopIds, setShopIds] = useState(shopId ? [shopId] : [])
   useEffect(() => {
-    if (shopId && !shopIds.includes(shopId)) {
-      setShopIds([shopId])
-    }
+    if (!shopId) return
+    setShopIds(prev => {
+      if (!prev || prev.length === 0) return [shopId]
+      // 父级店在内部 shopIds 里就保持; 不在就追加 (保留用户的多选)
+      if (prev.includes(shopId)) return prev
+      return [...prev, shopId]
+    })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [shopId])
 
@@ -292,6 +298,15 @@ const KeywordRollupTab = ({ shops = [], shopId, onShopChange, onJumpToProduct })
     if (!state) return null
 
     const selectedShopIdsSet = new Set(shopIds.map(Number))
+    // 统计每个本地编码 (product_sku) 在选中店里出现的店数 (跨店同款探测)
+    const skuShopCount = {}
+    ;(state.items || []).forEach(it => {
+      if (it.product_sku && selectedShopIdsSet.has(Number(it.shop_id))) {
+        const set = skuShopCount[it.product_sku] || new Set()
+        set.add(Number(it.shop_id))
+        skuShopCount[it.product_sku] = set
+      }
+    })
     const subColumns = [
       {
         title: '店铺', key: 'shop_id', width: 150,
@@ -336,6 +351,14 @@ const KeywordRollupTab = ({ shops = [], shopId, onShopChange, onJumpToProduct })
                   <Tooltip title="本地编码（products.sku）— 跨店同一商品共用此编码">
                     <Tag color="cyan" style={{ margin: 0, fontSize: 10 }}>
                       {r.product_sku}
+                    </Tag>
+                  </Tooltip>
+                )}
+                {r.product_sku && skuShopCount[r.product_sku]
+                    && skuShopCount[r.product_sku].size >= 2 && (
+                  <Tooltip title="同一本地编码在多个选中店都上架 — 改一次商品资料可同步到这些店">
+                    <Tag color="purple" style={{ margin: 0, fontSize: 10 }}>
+                      ×{skuShopCount[r.product_sku].size} 店同款
                     </Tag>
                   </Tooltip>
                 )}

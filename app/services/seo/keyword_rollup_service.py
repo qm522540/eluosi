@@ -121,8 +121,7 @@ def compute_keyword_rollup(
             SUM(daily_imp)      AS impressions,
             SUM(daily_cart)     AS add_to_cart,
             SUM(daily_orders)   AS orders,
-            SUM(daily_revenue)  AS revenue,
-            MAX(daily_skus)     AS product_count
+            SUM(daily_revenue)  AS revenue
         FROM (
             SELECT
                 q.query_text AS keyword,
@@ -131,8 +130,7 @@ def compute_keyword_rollup(
                 SUM(q.impressions)           AS daily_imp,
                 SUM(q.add_to_cart)           AS daily_cart,
                 SUM(q.orders)                AS daily_orders,
-                SUM(q.revenue)               AS daily_revenue,
-                COUNT(DISTINCT q.product_id) AS daily_skus
+                SUM(q.revenue)               AS daily_revenue
             FROM product_search_queries q
             JOIN products p ON p.id = q.product_id AND p.tenant_id = q.tenant_id
             WHERE q.tenant_id = :tid
@@ -161,6 +159,26 @@ def compute_keyword_rollup(
 
     rows = db.execute(sql, params).fetchall()
 
+    # product_count 单独查 (跨日跨店真值,不能在 inner subquery 算否则受 GROUP BY 影响)
+    pc_sql = text(f"""
+        SELECT q.query_text AS keyword,
+               COUNT(DISTINCT q.product_id) AS pc
+        FROM product_search_queries q
+        JOIN products p ON p.id = q.product_id AND p.tenant_id = q.tenant_id
+        WHERE q.tenant_id = :tid
+          AND q.shop_id IN :sids
+          AND q.stat_date >= :since
+          AND q.product_id IS NOT NULL
+          AND (p.status != 'deleted' OR p.status IS NULL)
+          {kw_clause}
+        GROUP BY q.query_text
+    """).bindparams(bindparam("sids", expanding=True))
+    pc_params = {"tid": tenant_id, "sids": sids, "since": since}
+    if kw_like:
+        pc_params["kw"] = kw_like
+    pc_rows = db.execute(pc_sql, pc_params).fetchall()
+    pc_map = {r.keyword: int(r.pc or 0) for r in pc_rows}
+
     import math
     def _calc_score(orders, impressions, add_to_cart, product_count):
         # 与候选池 score 同思路：log(订单+1)*2 + log(曝光+1) + log(自然订单+1)*2 + 来源数*2
@@ -174,18 +192,21 @@ def compute_keyword_rollup(
         )
         return round(score, 1)
 
-    items = [{
-        "keyword":       r.keyword,
-        "frequency":     int(r.frequency or 0),
-        "impressions":   int(r.impressions or 0),
-        "add_to_cart":   int(r.add_to_cart or 0),
-        "orders":        int(r.orders or 0),
-        "revenue":       round(float(r.revenue or 0), 2),
-        "product_count": int(r.product_count or 0),
-        "score":         _calc_score(int(r.orders or 0), int(r.impressions or 0),
-                                     int(r.add_to_cart or 0), int(r.product_count or 0)),
-        "candidate_row_count": 0,
-    } for r in rows]
+    items = []
+    for r in rows:
+        pc = pc_map.get(r.keyword, 0)
+        items.append({
+            "keyword":       r.keyword,
+            "frequency":     int(r.frequency or 0),
+            "impressions":   int(r.impressions or 0),
+            "add_to_cart":   int(r.add_to_cart or 0),
+            "orders":        int(r.orders or 0),
+            "revenue":       round(float(r.revenue or 0), 2),
+            "product_count": pc,
+            "score":         _calc_score(int(r.orders or 0), int(r.impressions or 0),
+                                         int(r.add_to_cart or 0), pc),
+            "candidate_row_count": 0,
+        })
 
     # 全店汇总：套相同 WHERE + HAVING（含 keyword/min_orders 过滤），但不带 ORDER BY + LIMIT。
     # 修复 UX bug：之前 summary 基于 items 求和，切排序后取出的 200 词集合变化导致
