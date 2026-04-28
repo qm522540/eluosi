@@ -347,6 +347,7 @@ def _collect_inputs(
         "ok": True,
         "platform_listing_id": prod_row.listing_id,
         "platform": getattr(shop, "platform", None),
+        "platform_category_name": prod_row.platform_category_name,
         "context_fields": context_fields,
         "attrs": attrs,
         "category_top_keywords": category_top_keywords,
@@ -492,6 +493,18 @@ async def preview_description_inputs(
         k["keyword_zh"] = translations.get(k["keyword"], "")
     for k in prod_kws:
         k["keyword_zh"] = translations.get(k["keyword"], "")
+
+    # 跨品类标记 (本类目=耳环, 同类目热门里出现 кольцо/колье 等 → 标 looks_cross_category)
+    # 与 AI 标题侧 preview_title_inputs 共用 CATEGORY_PRIMARY_ROOTS 规则
+    from app.services.seo.title_generator import _detect_category_key, _is_cross_category
+    cat_key = _detect_category_key(inputs.get("platform_category_name"))
+    for k in cat_kws:
+        k["looks_cross_category"] = _is_cross_category(k.get("keyword", ""), cat_key)
+
+    # 重复标记: 本商品热门词若已出现在同类目热门词里, 标 dup_with_cat_top → 前端默认不勾
+    cat_kw_set = {k.get("keyword", "").lower() for k in cat_kws if k.get("keyword")}
+    for k in prod_kws:
+        k["dup_with_cat_top"] = (k.get("keyword", "").lower() in cat_kw_set)
 
     return {
         "code": 0,

@@ -64,14 +64,16 @@ const AiDescriptionModal = ({
       setBrandPhilosophy(bpRes?.data?.brand_philosophy || '')
       if (prevRes?.data) {
         setPreview(prevRes.data)
-        // 默认全选
+        // 默认全选 — 但跨品类词 / 与同类目热门重复的本商品词不勾(让用户主动勾)
         setSelectedContextKeys(new Set((prevRes.data.context_fields || []).map(f => f.key)))
         setSelectedAttrIds(new Set((prevRes.data.attrs || []).map(a => a.id)))
-        const allKws = [
-          ...(prevRes.data.category_top_keywords || []).map(k => k.keyword),
-          ...(prevRes.data.product_top_keywords || []).map(k => k.keyword),
-        ]
-        setSelectedKeywords(new Set(allKws))
+        const catKws = (prevRes.data.category_top_keywords || [])
+          .filter(k => !k.looks_cross_category)
+          .map(k => k.keyword)
+        const prodKws = (prevRes.data.product_top_keywords || [])
+          .filter(k => !k.dup_with_cat_top)
+          .map(k => k.keyword)
+        setSelectedKeywords(new Set([...catKws, ...prodKws]))
       }
     }).finally(() => setPreviewLoading(false))
   }, [open, shopId, productId])
@@ -336,29 +338,37 @@ const AiDescriptionModal = ({
                 </Button>
               </Space>
               <Space size={[6, 6]} wrap>
-                {preview.category_top_keywords.map(k => (
-                  <Checkbox
-                    key={'cat-' + k.keyword}
-                    checked={selectedKeywords.has(k.keyword)}
-                    onChange={toggleSet(selectedKeywords, setSelectedKeywords).bind(null, k.keyword)}
-                  >
-                    <Tooltip title={`总订单 ${k.total_orders} / 总曝光 ${k.total_impressions} / 覆盖 ${k.product_count} 商品`}>
-                      <span style={{ fontSize: 11, display: 'inline-block', lineHeight: 1.3 }}>
-                        <div>
-                          {k.keyword}
-                          <Text type="secondary" style={{ fontSize: 10, marginLeft: 4 }}>
-                            ({k.total_orders}单/{k.total_impressions}曝)
-                          </Text>
-                        </div>
-                        {k.keyword_zh && k.keyword_zh !== k.keyword && (
-                          <div style={{ fontSize: 10, color: '#1677ff' }}>
-                            {k.keyword_zh}
+                {preview.category_top_keywords.map(k => {
+                  const cross = k.looks_cross_category
+                  return (
+                    <Checkbox
+                      key={'cat-' + k.keyword}
+                      checked={selectedKeywords.has(k.keyword)}
+                      onChange={toggleSet(selectedKeywords, setSelectedKeywords).bind(null, k.keyword)}
+                    >
+                      <Tooltip title={cross
+                        ? `本商品类目与该词主品类不一致, 默认不勾(防 AI 把"戒指"/"项链"塞进耳环描述). 总订单 ${k.total_orders} / 总曝光 ${k.total_impressions}`
+                        : `总订单 ${k.total_orders} / 总曝光 ${k.total_impressions} / 覆盖 ${k.product_count} 商品`}>
+                        <span style={{ fontSize: 11, display: 'inline-block', lineHeight: 1.3 }}>
+                          <div>
+                            {k.keyword}
+                            {cross && (
+                              <Tag color="red" style={{ fontSize: 9, marginLeft: 4, padding: '0 4px', lineHeight: '14px', height: 14 }}>跨品类?</Tag>
+                            )}
+                            <Text type="secondary" style={{ fontSize: 10, marginLeft: 4 }}>
+                              ({k.total_orders}单/{k.total_impressions}曝)
+                            </Text>
                           </div>
-                        )}
-                      </span>
-                    </Tooltip>
-                  </Checkbox>
-                ))}
+                          {k.keyword_zh && k.keyword_zh !== k.keyword && (
+                            <div style={{ fontSize: 10, color: '#1677ff' }}>
+                              {k.keyword_zh}
+                            </div>
+                          )}
+                        </span>
+                      </Tooltip>
+                    </Checkbox>
+                  )
+                })}
               </Space>
             </div>
           )}
@@ -381,16 +391,22 @@ const AiDescriptionModal = ({
               <Space size={[6, 6]} wrap>
                 {preview.product_top_keywords.map(k => {
                   const orders = (k.organic_orders || 0) + (k.paid_orders || 0)
+                  const dup = k.dup_with_cat_top
                   return (
                     <Checkbox
                       key={'prod-' + k.keyword}
                       checked={selectedKeywords.has(k.keyword)}
                       onChange={toggleSet(selectedKeywords, setSelectedKeywords).bind(null, k.keyword)}
                     >
-                      <Tooltip title={`score ${k.score?.toFixed?.(1) || '-'} / 自然曝光 ${k.organic_impressions} / 订单 ${orders}`}>
+                      <Tooltip title={dup
+                        ? `该词已在上面"同类目热门"里出现, 默认不勾避免给 AI 喂两遍同词. score ${k.score?.toFixed?.(1) || '-'} / 自然曝光 ${k.organic_impressions} / 订单 ${orders}`
+                        : `score ${k.score?.toFixed?.(1) || '-'} / 自然曝光 ${k.organic_impressions} / 订单 ${orders}`}>
                         <span style={{ fontSize: 11, display: 'inline-block', lineHeight: 1.3 }}>
                           <div>
                             {k.keyword}
+                            {dup && (
+                              <Tag color="default" style={{ fontSize: 9, marginLeft: 4, padding: '0 4px', lineHeight: '14px', height: 14 }}>同类目已有</Tag>
+                            )}
                             <Text type="secondary" style={{ fontSize: 10, marginLeft: 4 }}>
                               ({k.organic_impressions}曝/{orders}单)
                             </Text>
