@@ -14,6 +14,7 @@ from app.models.task_log import TaskLog
 from app.services.data.ozon_stats_collector import smart_sync as ozon_smart_sync
 from app.services.data.wb_stats_collector import smart_sync as wb_smart_sync
 from app.utils.logger import setup_logger
+from app.utils.moscow_time import utc_now_naive
 
 logger = setup_logger("tasks.daily_sync")
 
@@ -46,7 +47,7 @@ def daily_sync_all_shops(self):
             task_name="daily_sync_all_shops",
             celery_task_id=self.request.id,
             status="running",
-            started_at=datetime.now(timezone.utc),
+            started_at=utc_now_naive(),
         )
         db.add(task_log)
         db.commit()
@@ -61,7 +62,7 @@ def daily_sync_all_shops(self):
             logger.info("无active的Ozon/WB店铺，跳过每日同步")
             task_log.status = "success"
             task_log.result = {"msg": "no_shops"}
-            task_log.finished_at = datetime.now(timezone.utc)
+            task_log.finished_at = utc_now_naive()
             db.commit()
             return
 
@@ -92,7 +93,7 @@ def daily_sync_all_shops(self):
 
         task_log.status = "success"
         task_log.result = {"shops": len(shops), "details": results}
-        task_log.finished_at = datetime.now(timezone.utc)
+        task_log.finished_at = utc_now_naive()
         if task_log.started_at:
             delta = task_log.finished_at - task_log.started_at
             task_log.duration_ms = int(delta.total_seconds() * 1000)

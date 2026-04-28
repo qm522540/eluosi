@@ -12,7 +12,7 @@
 
 from datetime import datetime, date, timedelta, timezone
 
-from app.utils.moscow_time import moscow_today
+from app.utils.moscow_time import moscow_today, utc_now_naive
 from decimal import Decimal
 
 from app.tasks.celery_app import celery_app
@@ -55,7 +55,7 @@ def check_roi_anomaly(self):
             task_name="check_roi_anomaly",
             celery_task_id=self.request.id,
             status="running",
-            started_at=datetime.now(timezone.utc),
+            started_at=utc_now_naive(),
         )
         db.add(task_log)
         db.commit()
@@ -144,7 +144,7 @@ def check_roi_anomaly(self):
                         title=f"ROI异常: {campaign.name}",
                         content=alert_content,
                         channel="both",
-                        sent_at=datetime.now(timezone.utc),
+                        sent_at=utc_now_naive(),
                     )
                     db.add(notification)
                     alerts_generated += 1
@@ -164,7 +164,7 @@ def check_roi_anomaly(self):
 
         task_log.status = "success"
         task_log.result = result
-        task_log.finished_at = datetime.now(timezone.utc)
+        task_log.finished_at = utc_now_naive()
         if task_log.started_at:
             task_log.duration_ms = int(
                 (task_log.finished_at - task_log.started_at).total_seconds() * 1000
@@ -181,7 +181,7 @@ def check_roi_anomaly(self):
             if task_log:
                 task_log.status = "failed"
                 task_log.error_message = str(e)[:2000]
-                task_log.finished_at = datetime.now(timezone.utc)
+                task_log.finished_at = utc_now_naive()
                 db.commit()
         db.rollback()
         raise self.retry(exc=e)

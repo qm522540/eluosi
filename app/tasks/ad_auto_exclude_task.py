@@ -12,7 +12,7 @@ import asyncio
 import uuid
 from datetime import date, datetime, timedelta, timezone
 
-from app.utils.moscow_time import moscow_today
+from app.utils.moscow_time import moscow_today, utc_now_naive
 
 from sqlalchemy import text
 
@@ -329,7 +329,7 @@ def auto_exclude_keywords(self):
             excluded, saved, err = _run_async(
                 _exclude_one_campaign(db, shop, camp, run_id)
             )
-            cfg.last_run_at = datetime.now(timezone.utc)
+            cfg.last_run_at = utc_now_naive()
             cfg.last_run_excluded = excluded
             cfg.last_run_saved = round(saved * 30, 2)  # 月省 = 日省 ×30
             db.commit()
@@ -376,7 +376,7 @@ def auto_exclude_for_campaign(self, campaign_id: int, tenant_id: int):
         excluded, saved, err = _run_async(
             _exclude_one_campaign(db, shop, camp, run_id)
         )
-        cfg.last_run_at = datetime.now(timezone.utc)
+        cfg.last_run_at = utc_now_naive()
         cfg.last_run_excluded = excluded
         cfg.last_run_saved = round(saved * 30, 2)
         db.commit()

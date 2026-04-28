@@ -12,7 +12,7 @@
 import asyncio
 from datetime import datetime, date, timedelta, timezone
 
-from app.utils.moscow_time import moscow_today
+from app.utils.moscow_time import moscow_today, utc_now_naive
 
 from app.tasks.celery_app import celery_app
 from app.database import SessionLocal
@@ -42,7 +42,7 @@ def _log_task(db, task_name: str, celery_id: str) -> int:
         task_name=task_name,
         celery_task_id=celery_id,
         status="running",
-        started_at=datetime.now(timezone.utc),
+        started_at=utc_now_naive(),
     )
     db.add(task_log)
     db.commit()
@@ -56,7 +56,7 @@ def _finish_task(db, log_id: int, status: str, result: dict = None, error: str =
         task_log.status = status
         task_log.result = result
         task_log.error_message = error[:2000] if error else None
-        task_log.finished_at = datetime.now(timezone.utc)
+        task_log.finished_at = utc_now_naive()
         if task_log.started_at:
             delta = task_log.finished_at - task_log.started_at
             task_log.duration_ms = int(delta.total_seconds() * 1000)
