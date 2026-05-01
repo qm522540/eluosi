@@ -160,18 +160,26 @@ def compute_keyword_rollup(
     rows = db.execute(sql, params).fetchall()
 
     # product_count 单独查 (跨日跨店真值,不能在 inner subquery 算否则受 GROUP BY 影响)
+    # 2026-05-01 修：原 SQL 无门槛 → 把"28 天有过 1 次零散曝光"的商品也算进去,
+    # 跨店 124 个里只有 6 个真带过单, UI 商品数虚高 ~20 倍。
+    # 修法：嵌套 GROUP BY (query, product_id) + HAVING (SUM(impressions)>=5 OR SUM(orders)>=1)
+    # 跟主表"真贡献"语义对齐 — 商品要么累计 5 次曝光, 要么至少带过 1 单, 才算"贡献"。
     pc_sql = text(f"""
-        SELECT q.query_text AS keyword,
-               COUNT(DISTINCT q.product_id) AS pc
-        FROM product_search_queries q
-        JOIN products p ON p.id = q.product_id AND p.tenant_id = q.tenant_id
-        WHERE q.tenant_id = :tid
-          AND q.shop_id IN :sids
-          AND q.stat_date >= :since
-          AND q.product_id IS NOT NULL
-          AND (p.status != 'deleted' OR p.status IS NULL)
-          {kw_clause}
-        GROUP BY q.query_text
+        SELECT keyword, COUNT(*) AS pc
+        FROM (
+            SELECT q.query_text AS keyword, q.product_id
+            FROM product_search_queries q
+            JOIN products p ON p.id = q.product_id AND p.tenant_id = q.tenant_id
+            WHERE q.tenant_id = :tid
+              AND q.shop_id IN :sids
+              AND q.stat_date >= :since
+              AND q.product_id IS NOT NULL
+              AND (p.status != 'deleted' OR p.status IS NULL)
+              {kw_clause}
+            GROUP BY q.query_text, q.product_id
+            HAVING (SUM(q.impressions) >= 5 OR SUM(q.orders) >= 1)
+        ) t
+        GROUP BY keyword
     """).bindparams(bindparam("sids", expanding=True))
     pc_params = {"tid": tenant_id, "sids": sids, "since": since}
     if kw_like:
