@@ -446,7 +446,9 @@ async def refresh_shop(
             # WB search-texts 实测限流严格（估 3-5 rpm），批量 nmIds 降低调用次数
             WB_BATCH_SIZE = 20          # 单次调用 nmIds 个数上限
             WB_BATCH_PAUSE_S = 20       # 批间 sleep 秒，抵御 429
-            EMPTY_BATCH_ABORT = 3       # 连续 N 批全空 = quota 烧完 → break 整个循环
+            # 早退保护（2026-05-01 修：原跨天累计 → 误把"店铺数据稀疏"判成"quota 烧光"）
+            EMPTY_BATCH_ABORT = 3       # 单天前 N 批连续空 + 当天 0 行 → 跳过该天（不退整体）
+            EMPTY_DAYS_ABORT = 3        # 连续 N 整天 0 行 → 推断 quota 真烧光，整体退出
 
             nm_to_pid = {}
             for l in listings:
@@ -456,13 +458,14 @@ async def refresh_shop(
             batches_per_day = (len(all_nm_ids) + WB_BATCH_SIZE - 1) // WB_BATCH_SIZE
 
             synced_per_day = {}
-            consecutive_empty = 0
+            consecutive_empty_days = 0  # 跨天累计：当天 0 行 +1，写入 reset
             quota_break = False
             wb = WBClient(shop_id=shop.id, api_key=shop.api_key)
             try:
                 for d in missing_dates:
                     if quota_break:
                         break
+                    consecutive_empty = 0  # 单天 reset（避免跨天累计误判稀疏 shop）
                     d_str = d.isoformat()
                     day_total = 0
                     for bi in range(batches_per_day):
@@ -499,16 +502,16 @@ async def refresh_shop(
                             continue
                         if not items:
                             consecutive_empty += 1
-                            if consecutive_empty >= EMPTY_BATCH_ABORT:
+                            # 当天 day_total>0 表示 API 在工作（数据只是稀疏），不触发早退
+                            # 仅当"前 N 批连续空 + 当天 0 行"时才跳过该天（不退整体）
+                            if consecutive_empty >= EMPTY_BATCH_ABORT and day_total == 0:
                                 logger.warning(
-                                    f"WB 连续 {EMPTY_BATCH_ABORT} 批返回空 "
-                                    f"(疑似 global limiter quota 耗尽), "
-                                    f"已完成至 date={d_str} batch={bi+1}, early exit"
+                                    f"WB shop={shop.id} date={d_str} 前 {EMPTY_BATCH_ABORT} 批"
+                                    f"连续空 + 0 行，跳过该天（continue next day）"
                                 )
-                                errors.append({"type": "early_exit", "early_exit": True,
-                                               "reason": f"{EMPTY_BATCH_ABORT} 批连续空（WB 限流/quota）"})
-                                quota_break = True
-                                break
+                                errors.append({"type": "day_empty_skip", "date": d_str,
+                                               "reason": f"前 {EMPTY_BATCH_ABORT} 批连续空 + 当天 0 行"})
+                                break  # 退当天 inner loop，外层继续下一天
                         else:
                             consecutive_empty = 0
                         # items 每条含 nm_id → 按 nm_id 分组 upsert
@@ -526,6 +529,20 @@ async def refresh_shop(
                             )
                     synced_per_day[d_str] = day_total
                     total_rows += day_total
+
+                    # 跨天兜底：连续 N 整天 0 行 → 推断 quota 真烧光，整体退出（防一直空跑耗 quota）
+                    if day_total == 0:
+                        consecutive_empty_days += 1
+                        if consecutive_empty_days >= EMPTY_DAYS_ABORT:
+                            logger.warning(
+                                f"WB shop={shop.id} 连续 {consecutive_empty_days} 整天 0 行，"
+                                f"推断 quota 真烧光 / shop 完全无搜索词数据，early exit"
+                            )
+                            errors.append({"type": "early_exit", "early_exit": True,
+                                           "reason": f"{consecutive_empty_days} 整天连续 0 行"})
+                            quota_break = True
+                    else:
+                        consecutive_empty_days = 0
                 logger.info(f"WB shop={shop.id} 按天写入完成 per_day={synced_per_day}")
             finally:
                 await wb.close()
