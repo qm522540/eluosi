@@ -64,14 +64,21 @@ def _save_db_cache(db: Session, translations: dict):
         db.rollback()
 
 
-async def translate_keywords_cached(keywords: list, db: Optional[Session] = None) -> dict:
+async def translate_keywords_cached(
+    keywords: list,
+    db: Optional[Session] = None,
+    db_only: bool = False,
+) -> dict:
     """批量翻译关键词，返回 {keyword_ru: keyword_zh}
 
     三层查找：
     1. L1 进程内存（_cache）
     2. L2 DB ru_zh_dict 持久化
     3. L3 Kimi AI 真翻
-    新翻译同时回写 L1 + L2。
+
+    db_only=True：仅走 L1+L2，跳过 L3（用户面 API 调用专用 — 避免 Kimi
+    限流/超时阻塞 batch 响应导致 DB 命中部分一起丢失）。
+    db_only=False：完整三层，新翻译回写 L1+L2（后台预填脚本专用）。
     """
     if not keywords:
         return {}
@@ -96,6 +103,13 @@ async def translate_keywords_cached(keywords: list, db: Optional[Session] = None
         miss_l2 = miss_l1
 
     # L3: Kimi
+    if miss_l2 and db_only:
+        # db_only 模式：DB 没命中的留空，前端可显示"翻译中..."；
+        # 由后台预填脚本异步走 Kimi 入库供未来命中。
+        for kw in miss_l2:
+            result[kw] = kw  # 返回原词，让前端 hasZh 判断为 false
+        return result
+
     if miss_l2:
         try:
             translated = await _translate_batch(miss_l2)

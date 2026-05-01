@@ -26,8 +26,11 @@ export function getKeywordSyncStatus(shopId) {
   return request.get(`${BASE}/sync-status`, { params: { shop_id: shopId } })
 }
 
-export function translateKeywords(keywords) {
-  return request.post(`${BASE}/translate-keywords`, { keywords }, { timeout: 60000 })
+export function translateKeywords(keywords, dbOnly = true) {
+  // dbOnly 默认 true：用户面调用永远只查 DB 缓存，避免 Kimi 阻塞 batch 响应
+  // 没翻译过的词后端会留原词，前端 hasZh 判断为 false → 显示"翻译中..."
+  // 后台预填脚本应显式传 dbOnly=false 走 Kimi
+  return request.post(`${BASE}/translate-keywords`, { keywords, db_only: dbOnly }, { timeout: 10000 })
 }
 
 export function getKeywordCampaigns(params) {

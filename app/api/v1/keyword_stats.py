@@ -212,7 +212,8 @@ from typing import List
 
 
 class TranslateKeywordsRequest(BaseModel):
-    keywords: List[str] = Field(..., min_length=1, max_length=100)
+    keywords: List[str] = Field(..., min_length=1, max_length=200)
+    db_only: bool = Field(False, description="True=仅查 DB 缓存不调 Kimi（用户面默认）")
 
 
 class ExcludeKeywordRequest(BaseModel):
@@ -462,9 +463,14 @@ async def translate_keywords(
     db: Session = Depends(get_db),
     tenant_id: int = Depends(get_tenant_id),
 ):
-    """批量翻译俄文关键词为中文（Kimi AI，带 DB + 内存双层缓存）"""
+    """批量翻译俄文关键词为中文（DB + 内存双层缓存，可选 Kimi）
+
+    db_only=True: 用户面调用默认走这条 — 仅 L1+L2 同步返回，毫秒级
+                  没翻译过的词留原词（前端显示"翻译中..."），后台脚本预填
+    db_only=False: 后台预填脚本调 — 走完整 L3 Kimi 入库
+    """
     from app.services.keyword_stats.translator import translate_keywords_cached
-    result = await translate_keywords_cached(req.keywords, db=db)
+    result = await translate_keywords_cached(req.keywords, db=db, db_only=req.db_only)
     return success(result)
 
 
