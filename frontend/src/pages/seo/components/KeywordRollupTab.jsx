@@ -471,75 +471,82 @@ const KeywordRollupTab = ({ shops = [], shopId, onShopChange, onJumpToProduct })
         )}
       />
 
-      <Space wrap style={{ marginBottom: 12 }}>
-        <Text type="secondary">店铺（可多选）：</Text>
-        <Select
-          mode="multiple"
-          style={{ minWidth: 280, maxWidth: 480 }}
-          value={shopIds}
-          onChange={vs => {
-            const next = vs && vs.length ? vs : (shopId ? [shopId] : [])
-            setShopIds(next)
-            // 同步父级单选（用第一个），让其他依赖父级 shopId 的逻辑（候选池切店等）跟上
-            if (next[0] && next[0] !== shopId && onShopChange) onShopChange(next[0])
-          }}
-          maxTagCount="responsive"
-          placeholder="至少选一家店铺"
-          options={shops.map(s => ({ label: `${s.name} (${s.platform})`, value: s.id }))}
-          showSearch
-          optionFilterProp="label"
-        />
-        <Text type="secondary">窗口：</Text>
-        <Segmented
-          value={days}
-          onChange={setDays}
-          options={[
-            { label: '7 天', value: 7 },
-            { label: '14 天', value: 14 },
-            { label: '30 天', value: 30 },
-            { label: '60 天', value: 60 },
-          ]}
-        />
-        <Text type="secondary">排序：</Text>
-        <Segmented
-          value={sort}
-          onChange={setSort}
-          options={[
-            { label: '收入 ↓', value: 'revenue_desc' },
-            { label: '订单 ↓', value: 'orders_desc' },
-            { label: '曝光 ↓', value: 'impressions_desc' },
-            { label: '加购 ↓', value: 'cart_desc' },
-          ]}
-        />
-        <Input
-          placeholder="关键词筛选"
-          prefix={<SearchOutlined />}
-          allowClear
-          value={keyword}
-          onChange={e => setKeyword(e.target.value)}
-          onPressEnter={fetchData}
-          style={{ width: 180 }}
-        />
-        <Button
-          size="small"
-          type={onlyWithOrders ? 'primary' : 'default'}
-          onClick={() => setOnlyWithOrders(v => !v)}
-        >
-          仅带订单 {onlyWithOrders ? '✓' : ''}
-        </Button>
-        {!onlyWithOrders && (
-          <>
-            <Text type="secondary">订单 ≥</Text>
-            <InputNumber
-              min={0} max={1000}
-              value={minOrders}
-              onChange={v => setMinOrders(v || 0)}
-              style={{ width: 76 }}
-            />
-          </>
-        )}
-        <Button icon={<ReloadOutlined />} onClick={fetchData}>刷新</Button>
-      </Space>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 12 }}>
+        {/* 第 1 行：数据维度（店铺 + 时间窗口）*/}
+        <Space wrap>
+          <Text type="secondary">店铺（可多选）：</Text>
+          <Select
+            mode="multiple"
+            style={{ minWidth: 280, maxWidth: 480 }}
+            value={shopIds}
+            onChange={vs => {
+              const next = vs && vs.length ? vs : (shopId ? [shopId] : [])
+              setShopIds(next)
+              // 同步父级单选（用第一个），让其他依赖父级 shopId 的逻辑（候选池切店等）跟上
+              if (next[0] && next[0] !== shopId && onShopChange) onShopChange(next[0])
+            }}
+            maxTagCount="responsive"
+            placeholder="至少选一家店铺"
+            options={shops.map(s => ({ label: `${s.name} (${s.platform})`, value: s.id }))}
+            showSearch
+            optionFilterProp="label"
+          />
+          <Text type="secondary">窗口：</Text>
+          <Segmented
+            value={days}
+            onChange={setDays}
+            options={[
+              { label: '7 天', value: 7 },
+              { label: '14 天', value: 14 },
+              { label: '30 天', value: 30 },
+              { label: '60 天', value: 60 },
+            ]}
+          />
+        </Space>
+
+        {/* 第 2 行：排序 + 筛选 + 过滤 + 刷新 */}
+        <Space wrap>
+          <Text type="secondary">排序：</Text>
+          <Segmented
+            value={sort}
+            onChange={setSort}
+            options={[
+              { label: '收入 ↓', value: 'revenue_desc' },
+              { label: '订单 ↓', value: 'orders_desc' },
+              { label: '曝光 ↓', value: 'impressions_desc' },
+              { label: '加购 ↓', value: 'cart_desc' },
+            ]}
+          />
+          <Input
+            placeholder="关键词筛选"
+            prefix={<SearchOutlined />}
+            allowClear
+            value={keyword}
+            onChange={e => setKeyword(e.target.value)}
+            onPressEnter={fetchData}
+            style={{ width: 180 }}
+          />
+          <Button
+            size="small"
+            type={onlyWithOrders ? 'primary' : 'default'}
+            onClick={() => setOnlyWithOrders(v => !v)}
+          >
+            仅带订单 {onlyWithOrders ? '✓' : ''}
+          </Button>
+          {!onlyWithOrders && (
+            <>
+              <Text type="secondary">订单 ≥</Text>
+              <InputNumber
+                min={0} max={1000}
+                value={minOrders}
+                onChange={v => setMinOrders(v || 0)}
+                style={{ width: 76 }}
+              />
+            </>
+          )}
+          <Button icon={<ReloadOutlined />} onClick={fetchData}>刷新</Button>
+        </Space>
+      </div>
 
       {data?.data_status === 'not_ready' ? (
         <Alert
