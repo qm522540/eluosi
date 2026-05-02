@@ -156,6 +156,25 @@ async def _publish_pending(db: Session, pending_id: int) -> dict:
     t0 = utc_now_naive()
     payload = pending.proposed_payload or {}
 
+    # 草稿期 images_oss 是 B 店原图 URL, 这里下载到 OSS 后写回
+    # (扫描不下图: 否则 385 件全量 × 串行 25s/件 = 2.5h, 同步触发必 timeout;
+    #  被拒商品也省 OSS 流量。审核期 review 用 source URL 显示完全可用)
+    source_images = payload.get("images_oss") or []
+    if source_images:
+        try:
+            from app.utils.oss_client import download_images_batch
+            prefix = f"clone/{tenant_id}/{task.id}/{pending.source_sku_id}"
+            oss_urls = await download_images_batch(source_images, prefix)
+            if oss_urls:
+                payload = {**payload, "images_oss": oss_urls}
+                pending.proposed_payload = payload
+                db.commit()
+        except Exception as e:
+            logger.error(
+                f"OSS 下图失败 pending={pending.id}: {e}, fallback 用 source URL"
+            )
+            # source URL 给 Ozon 也能过, 只是审核期 B 店改图会失效
+
     # 按平台 dispatch
     if target_shop.platform == "ozon":
         r = await _publish_to_ozon(target_shop, payload)

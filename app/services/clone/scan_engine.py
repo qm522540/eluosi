@@ -157,25 +157,19 @@ def _create_drafts(
         return None, None, msg
 
 
-# ==================== 图片到 OSS ====================
-
-async def _save_images_to_oss(
-    images: list, tenant_id: int, task_id: int, source_sku_id: str,
-) -> list:
-    """B 图片下载到 OSS,返回新 URL 列表 (失败的 SKU 跳过该图,不阻断)"""
-    if not images:
-        return []
-    try:
-        from app.utils.oss_client import download_images_batch
-        prefix = f"clone/{tenant_id}/{task_id}/{source_sku_id}"
-        oss_urls = await download_images_batch(images, prefix)
-        return oss_urls or []
-    except Exception as e:
-        logger.error(
-            f"OSS 上传失败 task={task_id} sku={source_sku_id}: {e}, "
-            f"fallback 用 source URL"
-        )
-        return list(images)  # OSS 不可用时退回 source URL
+# ==================== 图片处理 ====================
+#
+# 草稿期不下载图片到 OSS, 只暂存 B 店原图 URL。
+# OSS 下载延后到 _publish_pending(publish_engine) 执行。
+#
+# 原因:
+# - 串行下图 25 秒/SKU × 385 件 = 2.5h, 同步触发 scan-now 必撞 nginx 60s timeout
+# - 被拒的商品下载也是浪费 OSS 流量
+# - review 阶段用 B 店原图预览完全可用 (审核期内 B 店改图/删图是小概率)
+#
+# proposed_payload.images_oss 字段语义:
+#   草稿期 = B 店原图 URL 列表
+#   publish 后 = OSS URL 列表 (publish_engine 在 dispatch 前下载并写回)
 
 
 # ==================== AI 改写批处理 ====================
@@ -331,10 +325,9 @@ async def _run_scan(db: Session, task_id: int, tenant_id: int) -> dict:
                 })
                 continue
 
-            # f. 图片到 OSS
-            oss_urls = await _save_images_to_oss(
-                snap.images, tenant_id, task.id, snap.source_sku_id,
-            )
+            # f. 草稿期不下载图片到 OSS, 只暂存 B 店原图 URL
+            #    OSS 下载延后到 publish_engine._publish_pending 执行
+            oss_urls = list(snap.images or [])
 
             # g. proposed_payload 骨架 (AI 改写延后)
             proposed = {
