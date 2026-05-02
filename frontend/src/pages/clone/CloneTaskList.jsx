@@ -2,11 +2,11 @@ import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
   Card, Table, Button, Space, Tag, Modal, Form, Select, InputNumber,
-  Switch, message, Popconfirm, Tooltip, Typography,
+  Switch, message, Popconfirm, Tooltip, Typography, Checkbox, Image,
 } from 'antd'
 import {
   PlusOutlined, ThunderboltOutlined, EyeOutlined, DeleteOutlined,
-  PlayCircleOutlined, PauseCircleOutlined,
+  PlayCircleOutlined, PauseCircleOutlined, CheckCircleOutlined,
 } from '@ant-design/icons'
 import * as cloneApi from '@/api/clone'
 
@@ -21,6 +21,11 @@ const CloneTaskList = () => {
   const [form] = Form.useForm()
   const [submitting, setSubmitting] = useState(false)
   const [scanningId, setScanningId] = useState(null)
+  // 11.2 扫描预览 Modal
+  const [previewState, setPreviewState] = useState({
+    open: false, task: null, candidates: [], stats: {}, selectedSkus: new Set(),
+    confirming: false,
+  })
 
   const loadTasks = async () => {
     setLoading(true)
@@ -81,45 +86,110 @@ const CloneTaskList = () => {
     }
   }
 
+  // 11.2: 第一步 — 调 scan-preview 拿候选清单, 弹勾选 Modal
   const handleScanNow = async (task) => {
     setScanningId(task.id)
     try {
-      const r = await cloneApi.scanNow(task.id)
+      const r = await cloneApi.scanPreview(task.id)
       const d = r.data
+      const candidates = d.candidates || []
+      const stats = {
+        found: d.found || 0,
+        skip_pending: d.skip_pending || 0,
+        skip_a_shop_sku_exists: d.skip_a_shop_sku_exists || 0,
+        skip_published: d.skip_published || 0,
+        skip_rejected: d.skip_rejected || 0,
+        skip_category_missing: d.skip_category_missing || 0,
+        duration_ms: d.duration_ms || 0,
+      }
+      if (candidates.length === 0) {
+        // 没新候选, 直接显示统计
+        Modal.info({
+          title: '扫描完成 — 无新候选',
+          width: 460,
+          content: (
+            <div>
+              <p>共扫描 B 店商品: <strong>{stats.found}</strong> 件</p>
+              <div style={{ background: '#fafafa', padding: 8, marginTop: 8, fontSize: 13 }}>
+                <div style={{ marginBottom: 4, color: '#666' }}>全部跳过原因:</div>
+                <p style={{ margin: '2px 0' }}>· 已在审核队列: {stats.skip_pending}</p>
+                <p style={{ margin: '2px 0' }}>· A 店已有同 SKU: {stats.skip_a_shop_sku_exists}</p>
+                <p style={{ margin: '2px 0' }}>· 已发布到 A 店: {stats.skip_published}</p>
+                <p style={{ margin: '2px 0' }}>· 之前被拒绝: {stats.skip_rejected}</p>
+                <p style={{ margin: '2px 0' }}>· 类目映射缺失: {stats.skip_category_missing}</p>
+              </div>
+              <p style={{ marginTop: 8, color: '#999', fontSize: 12 }}>耗时 {stats.duration_ms} ms</p>
+            </div>
+          ),
+        })
+        return
+      }
+      // 有新候选, 弹预览 Modal 默认全选
+      setPreviewState({
+        open: true, task, candidates, stats,
+        selectedSkus: new Set(candidates.map(c => c.source_sku_id)),
+        confirming: false,
+      })
+    } catch (e) {
+      message.error(e.message || '扫描预览失败')
+    } finally {
+      setScanningId(null)
+    }
+  }
+
+  // 11.2: 第二步 — 用户在 Modal 勾选后点"开始克隆 X 件", 调 scan-now(selected_skus)
+  const handleConfirmClone = async () => {
+    const { task, selectedSkus } = previewState
+    if (selectedSkus.size === 0) {
+      message.warning('请至少勾选 1 件')
+      return
+    }
+    setPreviewState(s => ({ ...s, confirming: true }))
+    try {
+      const r = await cloneApi.scanNow(task.id, Array.from(selectedSkus))
+      const d = r.data
+      setPreviewState({
+        open: false, task: null, candidates: [], stats: {},
+        selectedSkus: new Set(), confirming: false,
+      })
       Modal.success({
-        title: '扫描完成',
-        width: 480,
+        title: `已立项 ${d.new || 0} 件待审核`,
+        width: 420,
         content: (
           <div>
-            <p>共扫描 B 店商品: <strong>{d.found || 0}</strong> 件</p>
-            <p style={{ color: '#52c41a' }}>
-              新增待审核: <strong>{d.new || 0}</strong> 件
-            </p>
-            <div style={{
-              background: '#fafafa', padding: 8, marginTop: 8, fontSize: 13,
-            }}>
-              <div style={{ marginBottom: 4, color: '#666' }}>跳过明细:</div>
-              <p style={{ margin: '2px 0' }}>· 已在审核队列（含已批准/失败）: {d.skip_pending || 0}</p>
-              <p style={{ margin: '2px 0' }}>· A 店本地已有同 SKU 命名: {d.skip_a_shop_sku_exists || 0}</p>
-              <p style={{ margin: '2px 0' }}>· 已发布到 A 店: {d.skip_published || 0}</p>
-              <p style={{ margin: '2px 0' }}>· 之前被拒绝: {d.skip_rejected || 0}</p>
-              <p style={{ margin: '2px 0' }}>· 类目映射缺失: {d.skip_category_missing || 0}</p>
-            </div>
+            <p>新增待审核: <strong style={{ color: '#52c41a' }}>{d.new || 0}</strong> 件</p>
             {d.ai_rewrite_total > 0 && (
-              <p style={{ marginTop: 8 }}>
-                AI 改写: {d.ai_rewrite_total} 条 / 失败 {d.ai_rewrite_failed}
-              </p>
+              <p>AI 改写: {d.ai_rewrite_total} 条 / 失败 {d.ai_rewrite_failed}</p>
             )}
             <p style={{ marginTop: 8, color: '#999', fontSize: 12 }}>耗时 {d.duration_ms} ms</p>
+            <p style={{ marginTop: 8, fontSize: 13 }}>
+              请到「待审核商品」页面审核 → 批准 → 等 publish-pending beat (5 分钟) 真上架
+            </p>
           </div>
         ),
       })
       loadTasks()
     } catch (e) {
-      message.error(e.message || '扫描失败')
-    } finally {
-      setScanningId(null)
+      message.error(e.message || '立项失败')
+      setPreviewState(s => ({ ...s, confirming: false }))
     }
+  }
+
+  const togglePreviewSku = (sku) => {
+    setPreviewState(s => {
+      const sel = new Set(s.selectedSkus)
+      if (sel.has(sku)) sel.delete(sku)
+      else sel.add(sku)
+      return { ...s, selectedSkus: sel }
+    })
+  }
+  const toggleAllPreview = () => {
+    setPreviewState(s => {
+      if (s.selectedSkus.size === s.candidates.length) {
+        return { ...s, selectedSkus: new Set() }
+      }
+      return { ...s, selectedSkus: new Set(s.candidates.map(c => c.source_sku_id)) }
+    })
   }
 
   const handleToggleFollowPrice = async (task, value) => {
@@ -392,6 +462,108 @@ const CloneTaskList = () => {
             创建后默认未启用，请在列表中手动启用。跨平台克隆需先在「映射管理」建好类目映射。
           </Text>
         </Form>
+      </Modal>
+
+      {/* 11.2 扫描预览 Modal — 让用户勾选要克隆的 SKU */}
+      <Modal
+        title={
+          <Space>
+            <CheckCircleOutlined style={{ color: '#52c41a' }} />
+            <span>扫描预览 — 选要克隆的 SKU</span>
+            {previewState.task && (
+              <Tag>#{previewState.task.id} {previewState.task.target_shop?.name} ← {previewState.task.source_shop?.name}</Tag>
+            )}
+          </Space>
+        }
+        open={previewState.open}
+        width={1100}
+        confirmLoading={previewState.confirming}
+        okText={`开始克隆 (${previewState.selectedSkus.size} 件)`}
+        okButtonProps={{ disabled: previewState.selectedSkus.size === 0 }}
+        cancelText="取消"
+        onOk={handleConfirmClone}
+        onCancel={() => !previewState.confirming && setPreviewState(s => ({ ...s, open: false }))}
+        maskClosable={!previewState.confirming}
+      >
+        <div style={{ background: '#f5f5f5', padding: 10, marginBottom: 10, fontSize: 13, borderRadius: 4 }}>
+          <Space split={<span style={{ color: '#ddd' }}>|</span>} wrap>
+            <span>共扫描 <strong>{previewState.stats.found || 0}</strong> 件</span>
+            <span style={{ color: '#52c41a' }}>新候选 <strong>{previewState.candidates.length}</strong></span>
+            <span>已在队列 {previewState.stats.skip_pending || 0}</span>
+            <span>A 店已有 {previewState.stats.skip_a_shop_sku_exists || 0}</span>
+            <span>已发布 {previewState.stats.skip_published || 0}</span>
+            <span>类目缺 {previewState.stats.skip_category_missing || 0}</span>
+            <span style={{ color: '#999' }}>耗时 {previewState.stats.duration_ms || 0} ms</span>
+          </Space>
+        </div>
+        <Table
+          rowKey="source_sku_id"
+          dataSource={previewState.candidates}
+          size="small"
+          pagination={{ pageSize: 20, showSizeChanger: false, showTotal: t => `共 ${t} 件候选` }}
+          scroll={{ y: 400 }}
+          columns={[
+            {
+              title: (
+                <Checkbox
+                  checked={previewState.selectedSkus.size === previewState.candidates.length
+                    && previewState.candidates.length > 0}
+                  indeterminate={previewState.selectedSkus.size > 0
+                    && previewState.selectedSkus.size < previewState.candidates.length}
+                  onChange={toggleAllPreview}
+                />
+              ),
+              width: 50, fixed: 'left',
+              render: (_, c) => (
+                <Checkbox
+                  checked={previewState.selectedSkus.has(c.source_sku_id)}
+                  onChange={() => togglePreviewSku(c.source_sku_id)}
+                />
+              ),
+            },
+            {
+              title: '图', width: 70,
+              render: (_, c) => c.images && c.images[0]
+                ? <Image src={c.images[0]} width={50} height={50}
+                    style={{ objectFit: 'cover', borderRadius: 4 }} preview={false}
+                    placeholder fallback="" />
+                : <Text type="secondary" style={{ fontSize: 12 }}>无图</Text>,
+            },
+            {
+              title: 'B 店标题', dataIndex: 'title_ru', ellipsis: true,
+              render: v => <Text style={{ fontSize: 12 }}>{v || '-'}</Text>,
+            },
+            {
+              title: 'B 平台 SKU', dataIndex: 'source_sku_id', width: 120,
+              render: v => <Text code style={{ fontSize: 11 }}>{v}</Text>,
+            },
+            {
+              title: '本地 SKU', dataIndex: 'local_sku_b', width: 120,
+              render: v => v
+                ? <Tag color="blue">{v}</Tag>
+                : <Text type="secondary" style={{ fontSize: 11 }}>未命名</Text>,
+            },
+            {
+              title: 'B 价 → A 价', width: 140,
+              render: (_, c) => (
+                <span style={{ fontSize: 12 }}>
+                  {c.price_b} → <strong>{c.price_a_proposed}</strong> ₽
+                </span>
+              ),
+            },
+            { title: '库存', dataIndex: 'stock', width: 60 },
+            {
+              title: '类目', width: 90,
+              render: (_, c) => c.category_status === 'ok'
+                ? <Tag color="success">OK</Tag>
+                : <Tag color="warning">缺失</Tag>,
+            },
+          ]}
+        />
+        <div style={{ marginTop: 10, color: '#999', fontSize: 12 }}>
+          点"开始克隆"后, 选中的 SKU 会立项到「待审核商品」, 走 review → approve → publish 链路.
+          AI 标题/描述改写在立项时执行 (如果任务配了).
+        </div>
       </Modal>
     </div>
   )

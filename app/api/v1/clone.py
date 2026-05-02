@@ -12,6 +12,7 @@
 
 from typing import Optional, List
 from fastapi import APIRouter, Depends, Query
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.dependencies import get_db, get_current_user, get_tenant_id, get_owned_shop
@@ -20,6 +21,11 @@ from app.schemas.clone import (
     CloneTaskCreate, CloneTaskUpdate, RejectRequest,
     PendingPayloadUpdate, BatchActionRequest,
 )
+
+
+class ScanNowBody(BaseModel):
+    """11.2: scan-now 接受 preview 后用户勾选的 sku 子集; 不传则全量立项 (兼容旧逻辑)"""
+    selected_skus: Optional[List[str]] = None
 from app.services.clone import task_service
 from app.utils.errors import ErrorCode
 from app.utils.logger import setup_logger
@@ -116,11 +122,34 @@ def disable_clone_task(
 @router.post("/tasks/{task_id}/scan-now")
 async def scan_now_clone_task(
     task_id: int,
+    body: Optional[ScanNowBody] = None,
     db: Session = Depends(get_db),
     tenant_id: int = Depends(get_tenant_id),
 ):
-    """同步触发一次扫描 (规则 4 手动触发按 task_id 过滤)"""
-    r = await task_service.scan_now(db, tenant_id, task_id)
+    """同步触发一次扫描 (规则 4 手动触发按 task_id 过滤)
+
+    body.selected_skus:
+      - None / 缺省: 全量立项 (兼容老板"快捷模式")
+      - [sku1, sku2, ...]: 11.2 预览后只立项勾选的 SKU
+    """
+    selected = body.selected_skus if body else None
+    r = await task_service.scan_now(db, tenant_id, task_id, selected_skus=selected)
+    if r.get("code") == 0:
+        return success(r["data"])
+    return error(r["code"], r.get("msg"))
+
+
+@router.post("/tasks/{task_id}/scan-preview")
+async def scan_preview_clone_task(
+    task_id: int,
+    db: Session = Depends(get_db),
+    tenant_id: int = Depends(get_tenant_id),
+):
+    """11.2 扫描预览 — 干跑只返候选清单, 不写库
+
+    用户在前端 Modal 勾选后, 再调 scan-now(selected_skus) 真立项.
+    """
+    r = await task_service.scan_preview(db, tenant_id, task_id)
     if r.get("code") == 0:
         return success(r["data"])
     return error(r["code"], r.get("msg"))

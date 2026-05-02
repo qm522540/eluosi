@@ -287,21 +287,41 @@ def delete_task(db: Session, tenant_id: int, task_id: int) -> dict:
 
 # ==================== scan-now (调 scan_engine) ====================
 
-async def scan_now(db: Session, tenant_id: int, task_id: int) -> dict:
+async def scan_now(db: Session, tenant_id: int, task_id: int,
+                   selected_skus: Optional[list] = None) -> dict:
     """POST /tasks/{task_id}/scan-now — 同步触发一次扫描
+
+    Args:
+        selected_skus: None = 全量立项 (兼容旧逻辑); list = 只立项 preview 阶段勾选的
 
     Phase 1 简化: 不加 Redis 分布式锁 (TODO: 高并发下补 clone:scan:lock:{task_id})。
     """
     from app.services.clone.scan_engine import _run_scan
 
-    # 校验任务存在 + 启用
     task = db.query(CloneTask).filter(
         CloneTask.id == task_id, CloneTask.tenant_id == tenant_id,
     ).first()
     if not task:
         return {"code": ErrorCode.CLONE_TASK_NOT_FOUND, "msg": "克隆任务不存在"}
 
-    return await _run_scan(db, task_id, tenant_id)
+    selected_set = set(selected_skus) if selected_skus else None
+    return await _run_scan(db, task_id, tenant_id, selected_skus=selected_set)
+
+
+async def scan_preview(db: Session, tenant_id: int, task_id: int) -> dict:
+    """POST /tasks/{task_id}/scan-preview — 11.2 干跑预览, 不写库
+
+    用户通过返回的 candidates 清单勾选后, 再调 scan-now(selected_skus) 真立项.
+    """
+    from app.services.clone.scan_engine import _scan_preview
+
+    task = db.query(CloneTask).filter(
+        CloneTask.id == task_id, CloneTask.tenant_id == tenant_id,
+    ).first()
+    if not task:
+        return {"code": ErrorCode.CLONE_TASK_NOT_FOUND, "msg": "克隆任务不存在"}
+
+    return await _scan_preview(db, task_id, tenant_id)
 
 
 # ==================== §5.2 待审核商品 ====================

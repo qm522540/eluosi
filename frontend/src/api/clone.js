@@ -16,8 +16,15 @@ export const enableTask = (taskId) => request.post(`${BASE}/tasks/${taskId}/enab
 
 export const disableTask = (taskId) => request.post(`${BASE}/tasks/${taskId}/disable`)
 
-export const scanNow = (taskId) =>
-  request.post(`${BASE}/tasks/${taskId}/scan-now`, null, { timeout: 180000 })
+// 11.2: 干跑预览 — 返候选清单不写库
+export const scanPreview = (taskId) =>
+  request.post(`${BASE}/tasks/${taskId}/scan-preview`, null, { timeout: 180000 })
+
+// scan-now: selectedSkus=null 兼容旧"全量立项"; 传数组只立项 preview 勾选的
+export const scanNow = (taskId, selectedSkus = null) =>
+  request.post(`${BASE}/tasks/${taskId}/scan-now`,
+    selectedSkus ? { selected_skus: selectedSkus } : {},
+    { timeout: 180000 })
 
 export const deleteTask = (taskId) => request.delete(`${BASE}/tasks/${taskId}`)
 

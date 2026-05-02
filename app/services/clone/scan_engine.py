@@ -216,8 +216,14 @@ async def _ai_rewrite_one(
 
 # ==================== 主入口 ====================
 
-async def _run_scan(db: Session, task_id: int, tenant_id: int) -> dict:
+async def _run_scan(
+    db: Session, task_id: int, tenant_id: int,
+    selected_skus: Optional[set] = None,
+) -> dict:
     """扫描入口 — 同步触发 (scan-now) + Celery beat 共用
+
+    Args:
+        selected_skus: None = 全量立项 (兼容旧逻辑); set = 只立项指定的 source_sku_id
 
     Returns: {code, data: {found, new, skip_*, duration_ms, log_id}, msg?}
     """
@@ -293,6 +299,9 @@ async def _run_scan(db: Session, task_id: int, tenant_id: int) -> dict:
 
         for snap in snapshots:
             found += 1
+            # 11.2: 用户在 preview 后没勾的 sku 直接跳过, 不立项也不计 skip
+            if selected_skus is not None and snap.source_sku_id not in selected_skus:
+                continue
             # a. 查重 (UNIQUE 约束 + 显式查避免 INSERT 抛异常)
             existing = db.query(ClonePendingProduct).filter(
                 ClonePendingProduct.task_id == task_id,
@@ -503,4 +512,168 @@ async def _run_scan(db: Session, task_id: int, tenant_id: int) -> dict:
         "ai_rewrite_failed": ai_rewrite_failed,
         "duration_ms": duration_ms,
         "log_id": log.id,
+    }}
+
+
+# ==================== 11.2 干跑预览 ====================
+
+async def _scan_preview(db: Session, task_id: int, tenant_id: int) -> dict:
+    """干跑扫描 — 拉 B 店全量, 过滤后返候选清单, 不写库
+
+    跟 _run_scan 共享同样的过滤逻辑 (同 task 去重 + 跨店 sku 去重 + 类目映射),
+    但跳过 _create_drafts / INSERT pending / AI 改写 — 让用户预览后再确认.
+
+    Returns: {code, data: {
+        found, skip_*, candidates: [...], skipped_skus_sample: [...], duration_ms
+    }}
+    """
+    t0 = utc_now_naive()
+
+    task = db.query(CloneTask).filter(
+        CloneTask.id == task_id, CloneTask.tenant_id == tenant_id,
+    ).first()
+    if not task:
+        from app.utils.errors import ErrorCode
+        return {"code": ErrorCode.CLONE_TASK_NOT_FOUND, "msg": "克隆任务不存在"}
+
+    source_shop = db.query(Shop).filter(Shop.id == task.source_shop_id).first()
+    target_shop = db.query(Shop).filter(Shop.id == task.target_shop_id).first()
+    if not source_shop or not target_shop:
+        from app.utils.errors import ErrorCode
+        return {"code": ErrorCode.CLONE_TASK_SOURCE_INVALID, "msg": "源/目标店铺已不存在"}
+
+    target_platform = target_shop.platform
+    source_platform = source_shop.platform
+
+    found = 0
+    skip_published = skip_rejected = skip_pending = skip_category_missing = 0
+    skip_a_shop_sku_exists = 0
+    skipped_skus: list[dict] = []
+    candidates: list[dict] = []
+
+    # 预拉 A 店真实 sku 集合
+    a_existing_skus = set()
+    rows = db.query(Product.sku).filter(
+        Product.shop_id == task.target_shop_id,
+        Product.tenant_id == tenant_id,
+        Product.status != 'deleted',
+        Product.sku.isnot(None),
+    ).all()
+    for (s,) in rows:
+        if s and not s.startswith(('clone-pending-', 'clone-draft-')):
+            a_existing_skus.add(s)
+
+    try:
+        provider = get_provider(db, source_shop)
+    except Exception as e:
+        logger.error(f"_scan_preview get_provider 失败 task={task_id}: {e}")
+        from app.utils.errors import ErrorCode
+        return {"code": ErrorCode.CLONE_SOURCE_API_FAILED, "msg": str(e)[:200]}
+
+    cursor: Optional[str] = None
+    while True:
+        try:
+            snapshots, cursor = await provider.list_products(cursor=cursor, limit=LIST_PAGE_SIZE)
+        except NotImplementedError as e:
+            from app.utils.errors import ErrorCode
+            return {"code": ErrorCode.CLONE_SOURCE_API_FAILED, "msg": str(e)[:200]}
+        except Exception as e:
+            logger.error(f"_scan_preview list_products 失败 task={task_id}: {e}")
+            from app.utils.errors import ErrorCode
+            return {"code": ErrorCode.CLONE_SOURCE_API_FAILED, "msg": str(e)[:200]}
+
+        if not snapshots:
+            break
+
+        for snap in snapshots:
+            found += 1
+
+            # 1. 同 task 去重
+            existing = db.query(ClonePendingProduct).filter(
+                ClonePendingProduct.task_id == task_id,
+                ClonePendingProduct.source_sku_id == snap.source_sku_id,
+            ).first()
+            if existing:
+                if existing.status == "published":
+                    skip_published += 1
+                    skipped_skus.append({"sku": snap.source_sku_id, "reason": "published"})
+                elif existing.status == "rejected":
+                    skip_rejected += 1
+                    skipped_skus.append({"sku": snap.source_sku_id, "reason": "rejected"})
+                else:
+                    skip_pending += 1
+                    skipped_skus.append({"sku": snap.source_sku_id, "reason": "in_queue"})
+                continue
+
+            # 2. 跨店本地 sku 去重 (11.1)
+            b_listing = db.query(PlatformListing).filter(
+                PlatformListing.shop_id == task.source_shop_id,
+                PlatformListing.tenant_id == tenant_id,
+                PlatformListing.platform_sku_id == snap.source_sku_id,
+                PlatformListing.status != 'deleted',
+            ).first()
+            b_local_sku = None
+            if b_listing and b_listing.product_id:
+                b_product = db.query(Product).filter(
+                    Product.id == b_listing.product_id,
+                    Product.tenant_id == tenant_id,
+                ).first()
+                if b_product and b_product.sku and not b_product.sku.startswith(('clone-pending-', 'clone-draft-')):
+                    b_local_sku = b_product.sku
+            if b_local_sku and b_local_sku in a_existing_skus:
+                skip_a_shop_sku_exists += 1
+                skipped_skus.append({
+                    "sku": snap.source_sku_id, "reason": "a_shop_sku_exists",
+                    "detail": f"A 店已有本地 sku={b_local_sku}",
+                })
+                continue
+
+            # 3. 类目映射
+            target_cat_id, mapping_status = _resolve_target_category(
+                db, tenant_id,
+                source_platform, snap.platform_category_id,
+                target_platform, task.category_strategy,
+            )
+            if mapping_status == "missing" and task.category_strategy in ("use_local_map", "reject_if_missing"):
+                skip_category_missing += 1
+                skipped_skus.append({
+                    "sku": snap.source_sku_id, "reason": "category_missing",
+                    "detail": f"{source_platform} cat={snap.platform_category_id} 未映射到 {target_platform}",
+                })
+                continue
+
+            # 4. 价格规则
+            target_price = _apply_price_rule(
+                snap.price_rub, task.price_mode, task.price_adjust_pct,
+            )
+
+            # 5. 收集候选 (不写库)
+            candidates.append({
+                "source_sku_id": snap.source_sku_id,
+                "title_ru": snap.title_ru,
+                "description_ru": (snap.description_ru or "")[:300],
+                "price_b": float(snap.price_rub),
+                "price_a_proposed": float(target_price),
+                "stock": snap.stock,
+                "images": list(snap.images or [])[:5],  # 缩略图最多 5 张
+                "category_status": mapping_status,
+                "target_category_id": target_cat_id,
+                "source_platform": snap.source_platform,
+                "local_sku_b": b_local_sku,
+            })
+
+        if not cursor:
+            break
+
+    duration_ms = int((utc_now_naive() - t0).total_seconds() * 1000)
+    return {"code": 0, "data": {
+        "found": found,
+        "skip_published": skip_published,
+        "skip_rejected": skip_rejected,
+        "skip_pending": skip_pending,
+        "skip_category_missing": skip_category_missing,
+        "skip_a_shop_sku_exists": skip_a_shop_sku_exists,
+        "candidates": candidates,
+        "skipped_skus_sample": skipped_skus[:50],
+        "duration_ms": duration_ms,
     }}
