@@ -189,14 +189,16 @@ def compute_keyword_rollup(
 
     import math
     def _calc_score(orders, impressions, add_to_cart, product_count):
-        # 与候选池 score 同思路：log(订单+1)*2 + log(曝光+1) + log(自然订单+1)*2 + 来源数*2
-        # 店铺 TOP 没"来源数"概念，用 product_count（多商品命中视为"多源信号"）做替代
-        # ROAS 项 Ozon 没付费数据，跳过
+        # 2026-05-02 老板拍板调权重：解决"品牌词曝光大商品多硬撑高分,
+        # 把成交词压在后面"的 bias。
+        # - 订单 ×4 → ×8：拉大订单优势，1 单 = 2.41 分（原 1.20）
+        # - 商品广 封顶 10 → 5：满分 1.5 分（原 3.0），不再跟订单权重打平
+        # - 曝光/加购权重不动
         score = (
-            math.log10(orders + 1) * 4
+            math.log10(orders + 1) * 8
             + math.log10(impressions + 1) * 1
             + math.log10(add_to_cart + 1) * 2
-            + min(product_count, 10) * 0.3  # 多商品命中加分但封顶 10
+            + min(product_count, 5) * 0.3  # 多商品命中加分但封顶 5（原 10）
         )
         return round(score, 1)
 
