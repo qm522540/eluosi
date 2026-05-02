@@ -39,7 +39,9 @@ const Optimize = () => {
 
   const [selectedKeys, setSelectedKeys] = useState([])
   const [aiModal, setAiModal] = useState({ open: false, product: null, candidates: [] })
-  const [activeTab, setActiveTab] = useState('by-product')
+  // 2026-05-02 老板拍：「按商品看（反哺候选）」Tab 暂时隐藏，等需要时再开。
+  // 默认进 by-keyword（店级关键词 TOP）。
+  const [activeTab, setActiveTab] = useState('by-keyword')
 
   useEffect(() => {
     getShops({ page: 1, page_size: 100 })
@@ -396,11 +398,14 @@ const Optimize = () => {
         activeKey={activeTab}
         onChange={setActiveTab}
         items={[
-          {
-            key: 'by-product',
-            label: '按商品看（反哺候选）',
-            children: byProductTab,
-          },
+          // 2026-05-02 老板拍：「按商品看（反哺候选）」Tab 暂时隐藏，等需要时再开。
+          // 代码 + byProductTab + onJumpToProduct 跳转逻辑全保留（注释掉），
+          // 恢复时取消下面 5 行注释 + Optimize.jsx:42 默认 activeTab 改回 'by-product' 即可。
+          // {
+          //   key: 'by-product',
+          //   label: '按商品看（反哺候选）',
+          //   children: byProductTab,
+          // },
           {
             key: 'by-keyword',
             label: '店级关键词 TOP',
@@ -409,16 +414,8 @@ const Optimize = () => {
                 shops={shops}
                 shopId={shopId}
                 onShopChange={(v) => { setShopId(v); setPage(1); setSelectedKeys([]) }}
-                onJumpToProduct={({ productId, keyword: kw }) => {
-                  setProductFilter(productId)
-                  setKeyword(kw)
-                  setSource('all')
-                  setStatus('pending')
-                  setPage(1)
-                  setSelectedKeys([])
-                  setActiveTab('by-product')
-                  message.info('已跳到「按商品看」Tab，已按该商品 + 关键词筛选')
-                }}
+                // by-product Tab 隐藏期间，跳转回调置空避免点了找不到目标
+                onJumpToProduct={null}
               />
             ),
           },
