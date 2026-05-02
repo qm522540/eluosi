@@ -56,7 +56,6 @@ const menuItems = [
     icon: <SearchOutlined />,
     label: 'SEO管理',
     children: [
-      { key: '/seo/optimize', icon: <FundOutlined />, label: '自然搜索词' },
       { key: '/seo/health', icon: <DashboardOutlined />, label: '健康诊断' },
       { key: '/seo/tracking', icon: <LineChartOutlined />, label: '排名追踪' },
       { key: '/seo/report', icon: <BarChartOutlined />, label: '效果报表' },
@@ -67,6 +66,8 @@ const menuItems = [
     icon: <BarChartOutlined />,
     label: '数据报表',
     children: [
+      // 2026-05-02 老板拍：「自然搜索词」从 SEO管理 移到这里第一个（路由不动）
+      { key: '/seo/optimize', icon: <FundOutlined />, label: '自然搜索词' },
       { key: '/reports/keywords', icon: <KeyOutlined />, label: '关键词统计' },
       { key: '/reports/search-insights', icon: <SearchOutlined />, label: '搜索词洞察' },
       { key: '/reports', icon: <LineChartOutlined />, label: '综合报表' },
@@ -150,8 +151,12 @@ const AppLayout = () => {
           defaultOpenKeys={[
             location.pathname.startsWith('/products') && 'products-group',
             location.pathname.startsWith('/ads') && 'ads-group',
-            location.pathname.startsWith('/reports') && 'reports-group',
-            location.pathname.startsWith('/seo') && 'seo-group',
+            // '/seo/optimize'（自然搜索词）物理上已移到数据报表组
+            (location.pathname.startsWith('/reports')
+              || location.pathname === '/seo/optimize') && 'reports-group',
+            // SEO 管理组只剩 /seo/health, /seo/tracking, /seo/report
+            (location.pathname.startsWith('/seo')
+              && location.pathname !== '/seo/optimize') && 'seo-group',
           ].filter(Boolean)}
           items={menuItems}
           onClick={handleMenuClick}
