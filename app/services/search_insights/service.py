@@ -68,21 +68,42 @@ def list_shop(
         where += " AND query_text LIKE :kw"
         params["kw"] = f"%{keyword}%"
 
-    # 跨 (sku, day) SUM：同一 query_text 命中多 SKU、多天的总和
+    # 2026-05-02 修：frequency 不能直接 SUM 跨 (sku, day) — 同一关键词同一天
+    # 不同 SKU 行存的 frequency 是相同的"平台总搜索数"（per-keyword-per-day），
+    # 直接 SUM 等于膨胀 N 倍（N = 该天命中 SKU 数）。
+    # 跟 c12a996 修店级 TOP 同款 bug，同款修法：先 (query, date) MAX 去重再 SUM 跨天。
+    # 其他指标（impressions/clicks/orders/revenue）是 per-(sku,day) 真分项，
+    # 跨 (sku, day) SUM 正确，保持原写法。
     agg_sql = f"""
-        SELECT query_text,
-               SUM(frequency) AS frequency,
-               SUM(impressions) AS impressions,
-               SUM(clicks) AS clicks,
-               SUM(add_to_cart) AS add_to_cart,
-               SUM(orders) AS orders,
-               SUM(revenue) AS revenue,
-               AVG(median_position) AS median_position,
-               COUNT(DISTINCT platform_sku_id) AS sku_count,
-               COUNT(DISTINCT stat_date) AS day_count
-        FROM product_search_queries
-        {where}
-        GROUP BY query_text
+        SELECT main.query_text,
+               COALESCE(freq.frequency, 0) AS frequency,
+               main.impressions, main.clicks, main.add_to_cart, main.orders, main.revenue,
+               main.median_position, main.sku_count, main.day_count
+        FROM (
+            SELECT query_text,
+                   SUM(impressions) AS impressions,
+                   SUM(clicks) AS clicks,
+                   SUM(add_to_cart) AS add_to_cart,
+                   SUM(orders) AS orders,
+                   SUM(revenue) AS revenue,
+                   AVG(median_position) AS median_position,
+                   COUNT(DISTINCT platform_sku_id) AS sku_count,
+                   COUNT(DISTINCT stat_date) AS day_count
+            FROM product_search_queries
+            {where}
+            GROUP BY query_text
+        ) main
+        LEFT JOIN (
+            SELECT query_text, SUM(daily_freq) AS frequency
+            FROM (
+                SELECT query_text, stat_date,
+                       MAX(frequency) AS daily_freq
+                FROM product_search_queries
+                {where}
+                GROUP BY query_text, stat_date
+            ) t
+            GROUP BY query_text
+        ) freq ON freq.query_text = main.query_text
     """
     rows = db.execute(text(agg_sql), params).fetchall()
     items = [{
