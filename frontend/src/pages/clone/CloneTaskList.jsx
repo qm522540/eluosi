@@ -88,17 +88,28 @@ const CloneTaskList = () => {
       const d = r.data
       Modal.success({
         title: '扫描完成',
+        width: 480,
         content: (
           <div>
-            <p>共扫描: {d.found} 件</p>
-            <p style={{ color: 'green' }}>新增待审核: {d.new}</p>
-            <p>已发布跳过: {d.skip_published}</p>
-            <p>已拒绝跳过: {d.skip_rejected}</p>
-            <p>类目映射缺失跳过: {d.skip_category_missing}</p>
+            <p>共扫描 B 店商品: <strong>{d.found || 0}</strong> 件</p>
+            <p style={{ color: '#52c41a' }}>
+              新增待审核: <strong>{d.new || 0}</strong> 件
+            </p>
+            <div style={{
+              background: '#fafafa', padding: 8, marginTop: 8, fontSize: 13,
+            }}>
+              <div style={{ marginBottom: 4, color: '#666' }}>跳过明细:</div>
+              <p style={{ margin: '2px 0' }}>· 已在审核队列（含已批准/失败）: {d.skip_pending || 0}</p>
+              <p style={{ margin: '2px 0' }}>· 已发布到 A 店: {d.skip_published || 0}</p>
+              <p style={{ margin: '2px 0' }}>· 之前被拒绝: {d.skip_rejected || 0}</p>
+              <p style={{ margin: '2px 0' }}>· 类目映射缺失: {d.skip_category_missing || 0}</p>
+            </div>
             {d.ai_rewrite_total > 0 && (
-              <p>AI 改写: {d.ai_rewrite_total} 条 / 失败 {d.ai_rewrite_failed}</p>
+              <p style={{ marginTop: 8 }}>
+                AI 改写: {d.ai_rewrite_total} 条 / 失败 {d.ai_rewrite_failed}
+              </p>
             )}
-            <p>耗时: {d.duration_ms} ms</p>
+            <p style={{ marginTop: 8, color: '#999', fontSize: 12 }}>耗时 {d.duration_ms} ms</p>
           </div>
         ),
       })
@@ -107,6 +118,16 @@ const CloneTaskList = () => {
       message.error(e.message || '扫描失败')
     } finally {
       setScanningId(null)
+    }
+  }
+
+  const handleToggleFollowPrice = async (task, value) => {
+    try {
+      await cloneApi.updateTask(task.id, { follow_price_change: value })
+      message.success(value ? '已开启跟价（B 改价 → A 自动同步）' : '已关闭跟价')
+      loadTasks()
+    } catch (e) {
+      message.error(e.message || '操作失败')
     }
   }
 
@@ -169,11 +190,18 @@ const CloneTaskList = () => {
               {t.price_mode === 'same' ? '同价' : `${t.price_adjust_pct >= 0 ? '+' : ''}${t.price_adjust_pct}%`}
             </Tag>
           </Tooltip>
-          {t.follow_price_change && (
-            <Tooltip title="B 店改价后 A 店自动跟改，不走审核">
-              <Tag color="blue">跟价</Tag>
-            </Tooltip>
-          )}
+          <Tooltip title={t.follow_price_change
+            ? 'B 改价 → A 自动跟改 (不走审核). 点击关闭'
+            : '开启后, B 改价 → A 自动跟改 (不走审核)'}>
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+              <Switch size="small"
+                checked={!!t.follow_price_change}
+                onChange={(v) => handleToggleFollowPrice(t, v)} />
+              <span style={{ fontSize: 12, color: t.follow_price_change ? '#1890ff' : '#999' }}>
+                跟价
+              </span>
+            </span>
+          </Tooltip>
         </Space>
       ),
     },
