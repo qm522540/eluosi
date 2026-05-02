@@ -50,7 +50,14 @@ class OzonSellerProvider(BaseShopProvider):
 
     def _get_client(self) -> OzonClient:
         if self._client is None:
-            self._client = OzonClient(self.source_shop)
+            shop = self.source_shop
+            self._client = OzonClient(
+                shop_id=shop.id,
+                api_key=shop.api_key,
+                client_id=shop.client_id,
+                perf_client_id=shop.perf_client_id or "",
+                perf_client_secret=shop.perf_client_secret or "",
+            )
         return self._client
 
     async def list_products(

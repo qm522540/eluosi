@@ -44,7 +44,13 @@ async def _publish_to_ozon(target_shop: Shop, payload: dict) -> dict:
     """
     from app.services.platform.ozon import OzonClient, OZON_SELLER_API
 
-    client = OzonClient(target_shop)
+    client = OzonClient(
+        shop_id=target_shop.id,
+        api_key=target_shop.api_key,
+        client_id=target_shop.client_id,
+        perf_client_id=target_shop.perf_client_id or "",
+        perf_client_secret=target_shop.perf_client_secret or "",
+    )
 
     # 新 offer_id (我们生成, Ozon 接受任意字符串作商家 SKU)
     new_offer_id = f"clone-{uuid.uuid4().hex[:12]}"
