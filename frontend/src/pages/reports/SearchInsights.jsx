@@ -120,7 +120,7 @@ const SearchInsights = () => {
       render: v => (v || 0).toLocaleString(),
     },
     {
-      title: <Tooltip title="曝光 = 用户搜词后，真正滚动看见你商品卡片的累计次数（WB 不返此字段为 0；Ozon unique_view_users）。恒有 曝光 ≤ 搜索次数（出现 ≥ 滚动看到）。「优化建议·店级 TOP」页累加的就是这个数。">
+      title: <Tooltip title="曝光 = 用户搜词后，真正滚动看见你商品卡片的累计次数（WB 不返此字段为 0；Ozon unique_view_users）。恒有 曝光 ≤ 搜索次数（出现 ≥ 滚动看到）。「自然搜索词·店级 TOP」页累加的就是这个数。">
         曝光 <InfoCircleOutlined style={{ color: '#999' }} />
       </Tooltip>,
       dataIndex: 'impressions', key: 'impressions', width: 90, align: 'right',
@@ -188,7 +188,7 @@ const SearchInsights = () => {
           style={{ marginLeft: 12, fontSize: 13 }}
           onClick={() => navigate('/seo/optimize')}
         >
-          → 进入 SEO 优化建议
+          → 进入自然搜索词
         </Button>
       </Title>
 

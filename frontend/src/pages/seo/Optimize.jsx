@@ -388,7 +388,7 @@ const Optimize = () => {
   return (
     <div>
       <div style={{ marginBottom: 16 }}>
-        <Title level={4} style={{ marginBottom: 4 }}>SEO 优化建议 · 反哺候选词库</Title>
+        <Title level={4} style={{ marginBottom: 4 }}>自然搜索词</Title>
         <Text type="secondary">
           基于买家真实搜索数据，告诉你「哪个商品的俄语标题里应该加哪些关键词」才能多吃免费曝光。
         </Text>

@@ -56,7 +56,7 @@ const menuItems = [
     icon: <SearchOutlined />,
     label: 'SEO管理',
     children: [
-      { key: '/seo/optimize', icon: <FundOutlined />, label: '优化建议' },
+      { key: '/seo/optimize', icon: <FundOutlined />, label: '自然搜索词' },
       { key: '/seo/health', icon: <DashboardOutlined />, label: '健康诊断' },
       { key: '/seo/tracking', icon: <LineChartOutlined />, label: '排名追踪' },
       { key: '/seo/report', icon: <BarChartOutlined />, label: '效果报表' },
