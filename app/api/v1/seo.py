@@ -402,7 +402,7 @@ def shop_keyword_rollup_products(
     shop_id: int,
     keyword: str = Query(..., min_length=1, description="要下钻的关键词"),
     days: int = Query(30, ge=7, le=90),
-    limit: int = Query(20, ge=1, le=100),
+    limit: int = Query(20, ge=1, le=500),
     shop_ids: str = Query("", description="多店合并模式，逗号分隔；未传则单店"),
     db: Session = Depends(get_db),
     tenant_id: int = Depends(get_tenant_id),
