@@ -100,6 +100,7 @@ const CloneTaskList = () => {
             }}>
               <div style={{ marginBottom: 4, color: '#666' }}>跳过明细:</div>
               <p style={{ margin: '2px 0' }}>· 已在审核队列（含已批准/失败）: {d.skip_pending || 0}</p>
+              <p style={{ margin: '2px 0' }}>· A 店本地已有同 SKU 命名: {d.skip_a_shop_sku_exists || 0}</p>
               <p style={{ margin: '2px 0' }}>· 已发布到 A 店: {d.skip_published || 0}</p>
               <p style={{ margin: '2px 0' }}>· 之前被拒绝: {d.skip_rejected || 0}</p>
               <p style={{ margin: '2px 0' }}>· 类目映射缺失: {d.skip_category_missing || 0}</p>

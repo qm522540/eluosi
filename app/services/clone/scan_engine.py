@@ -242,8 +242,23 @@ async def _run_scan(db: Session, task_id: int, tenant_id: int) -> dict:
     # 计数器
     found = new = 0
     skip_published = skip_rejected = skip_pending = skip_category_missing = 0
+    skip_a_shop_sku_exists = 0  # 11.1: A 店本地 SKU 已存在跳过
     skipped_skus: list[dict] = []
     ai_rewrite_targets: list[tuple[ClonePendingProduct, int, str, dict]] = []
+
+    # 11.1 真 BUG 修复: 预拉 A 店所有真实 sku 集合 (排除占位 'clone-*')
+    # 用于跨店去重 — 老板老板手工录的本地 sku, A 店已有就跳过
+    a_existing_skus = set()
+    rows = db.query(Product.sku).filter(
+        Product.shop_id == task.target_shop_id,
+        Product.tenant_id == tenant_id,
+        Product.status != 'deleted',
+        Product.sku.isnot(None),
+    ).all()
+    for (s,) in rows:
+        if s and not s.startswith(('clone-pending-', 'clone-draft-')):
+            a_existing_skus.add(s)
+    logger.info(f"task={task_id} A 店预拉 {len(a_existing_skus)} 个真实 sku 用于跨店去重")
 
     # 拿 provider (规则: factory dispatch + *Client 不绕路)
     try:
@@ -293,6 +308,31 @@ async def _run_scan(db: Session, task_id: int, tenant_id: int) -> dict:
                 else:
                     skip_pending += 1
                     skipped_skus.append({"sku": snap.source_sku_id, "reason": "in_queue"})
+                continue
+
+            # a2. 11.1: 跨店本地 SKU 去重 — 反查 B 店 listing → product.sku, 看 A 店是否已有同 sku
+            #     场景: 老板手工在 A 店建过该 sku, 不该重复立项 pending
+            #     B 店 sku 不规则/为空时此层跳过, 走原 (task_id, source_sku_id) UNIQUE 兜底
+            b_listing = db.query(PlatformListing).filter(
+                PlatformListing.shop_id == task.source_shop_id,
+                PlatformListing.tenant_id == tenant_id,
+                PlatformListing.platform_sku_id == snap.source_sku_id,
+                PlatformListing.status != 'deleted',
+            ).first()
+            b_local_sku = None
+            if b_listing and b_listing.product_id:
+                b_product = db.query(Product).filter(
+                    Product.id == b_listing.product_id,
+                    Product.tenant_id == tenant_id,
+                ).first()
+                if b_product and b_product.sku and not b_product.sku.startswith(('clone-pending-', 'clone-draft-')):
+                    b_local_sku = b_product.sku
+            if b_local_sku and b_local_sku in a_existing_skus:
+                skip_a_shop_sku_exists += 1
+                skipped_skus.append({
+                    "sku": snap.source_sku_id, "reason": "a_shop_sku_exists",
+                    "detail": f"A 店已有本地 sku={b_local_sku}",
+                })
                 continue
 
             # b. 类目映射
@@ -424,6 +464,7 @@ async def _run_scan(db: Session, task_id: int, tenant_id: int) -> dict:
         "skip_rejected": skip_rejected,
         "skip_pending": skip_pending,
         "skip_category_missing": skip_category_missing,
+        "skip_a_shop_sku_exists": skip_a_shop_sku_exists,  # 11.1
         "ai_rewrite_total": ai_rewrite_total,
         "ai_rewrite_failed": ai_rewrite_failed,
         "skipped_skus": skipped_skus[:200],  # 截断防 JSON 过大
@@ -443,7 +484,10 @@ async def _run_scan(db: Session, task_id: int, tenant_id: int) -> dict:
     task.last_check_at = utc_now_naive()
     task.last_found_count = found
     task.last_publish_count = new
-    task.last_skip_count = skip_published + skip_rejected + skip_category_missing + skip_pending
+    task.last_skip_count = (
+        skip_published + skip_rejected + skip_category_missing
+        + skip_pending + skip_a_shop_sku_exists
+    )
     task.last_error_msg = None
     db.commit()
     db.refresh(log)
@@ -452,7 +496,9 @@ async def _run_scan(db: Session, task_id: int, tenant_id: int) -> dict:
         "found": found, "new": new,
         "skip_published": skip_published,
         "skip_rejected": skip_rejected,
+        "skip_pending": skip_pending,
         "skip_category_missing": skip_category_missing,
+        "skip_a_shop_sku_exists": skip_a_shop_sku_exists,  # 11.1
         "ai_rewrite_total": ai_rewrite_total,
         "ai_rewrite_failed": ai_rewrite_failed,
         "duration_ms": duration_ms,
