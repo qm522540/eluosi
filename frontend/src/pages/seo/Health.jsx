@@ -29,7 +29,8 @@ const Health = () => {
         const items = (r.data?.items || []).filter(s => ['wb', 'ozon'].includes(s.platform))
         setShops(items)
         const urlShopId = Number(searchParams.get('shopId'))
-        const preferId = urlShopId && items.find(s => s.id === urlShopId) ? urlShopId : (items[0]?.id || null)
+        // 2026-05-02 老板拍：默认不自动选店铺，让用户自己选；URL 带 shopId 时仍尊重（自然搜索词跳转链路保留）
+        const preferId = urlShopId && items.find(s => s.id === urlShopId) ? urlShopId : null
         if (preferId && !shopId) setShopId(preferId)
       })
       .catch(() => setShops([]))
@@ -125,25 +126,37 @@ const Health = () => {
           onReload={() => { setPage(1); fetchData() }}
         />
 
-        <HealthStatsCards totals={data?.totals} />
+        {shopId ? (
+          <>
+            <HealthStatsCards totals={data?.totals} />
 
-        {emptyAll && (
+            {emptyAll && (
+              <Alert
+                type="info"
+                showIcon
+                style={{ marginBottom: 12 }}
+                message="该店铺暂无商品"
+                description="请先在「商品管理 → 商品列表」同步或新建商品"
+              />
+            )}
+
+            <HealthProductsTable
+              shopId={shopId}
+              data={data?.items}
+              loading={loading}
+              pagination={pagination}
+              onPaginationChange={onPaginationChange}
+            />
+          </>
+        ) : (
           <Alert
             type="info"
             showIcon
-            style={{ marginBottom: 12 }}
-            message="该店铺暂无商品"
-            description="请先在「商品管理 → 商品列表」同步或新建商品"
+            style={{ marginTop: 12 }}
+            message="请先选择店铺"
+            description="从上方店铺选择器挑一个 WB / Ozon 店铺后，将展示该店的 SEO 健康分布与商品列表。"
           />
         )}
-
-        <HealthProductsTable
-          shopId={shopId}
-          data={data?.items}
-          loading={loading}
-          pagination={pagination}
-          onPaginationChange={onPaginationChange}
-        />
       </Card>
     </div>
   )
