@@ -377,6 +377,7 @@ def list_rollup_products(
           AND LOWER(q.query_text) = :kw_lower
           AND (p.status != 'deleted' OR p.status IS NULL)
         GROUP BY q.product_id, q.shop_id
+        HAVING (SUM(q.impressions) >= 5 OR SUM(q.orders) >= 1)
         ORDER BY SUM(q.revenue) DESC, SUM(q.orders) DESC, SUM(q.impressions) DESC
         LIMIT :lim
     """).bindparams(bindparam("sids", expanding=True))
