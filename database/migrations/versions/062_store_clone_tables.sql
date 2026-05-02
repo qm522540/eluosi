@@ -9,10 +9,15 @@
 -- 3. clone_logs             克隆日志 (扫描/审核/发布/跟价)
 -- 4. clone_published_links  已发布关系 (追溯 + follow_price_change 跟价用)
 --
+-- 类型惯例 (老张 review 抓出的关键): 所有 id / tenant_id / shop_id / task_id / listing_id / user_id
+-- 用 BIGINT UNSIGNED, 与现有核心表 (platform_listings/shops/products/tenants/users/task_logs) 对齐。
+-- 060 data_source_config 用 BIGINT 不带 UNSIGNED 是历史例外, 不作惯例参考。
+-- JOIN platform_listings.clone_task_id ↔ clone_tasks.id 必须类型一致, 否则隐式转换 + 索引失效。
+--
 -- 规则 1 多租户: 所有表第一列 tenant_id, 业务 SQL where 必须显式 AND tenant_id
 -- 规则 6 时间: created_at / updated_at 用 CURRENT_TIMESTAMP 仅占位,
---             业务字段 (last_check_at, detected_at, reviewed_at, published_at, last_synced_at,
---             disabled_at 等) 必须由 service 层显式传 utc_now_naive()
+--             业务字段 (last_check_at / detected_at / reviewed_at / published_at / last_synced_at)
+--             必须由 service 层显式传 utc_now_naive()
 -- 关联文档: docs/api/store_clone.md §3
 -- 错误码段: 95xxx (定义在 app/utils/errors.py)
 --
@@ -24,11 +29,11 @@
 -- ==================== 1. clone_tasks ====================
 
 CREATE TABLE IF NOT EXISTS clone_tasks (
-    id INT PRIMARY KEY AUTO_INCREMENT,
-    tenant_id BIGINT NOT NULL,
-    target_shop_id BIGINT NOT NULL
+    id BIGINT UNSIGNED PRIMARY KEY AUTO_INCREMENT,
+    tenant_id BIGINT UNSIGNED NOT NULL,
+    target_shop_id BIGINT UNSIGNED NOT NULL
         COMMENT 'A 店 (落地店); 路由层 get_owned_shop 守卫归属',
-    source_shop_id BIGINT DEFAULT NULL
+    source_shop_id BIGINT UNSIGNED DEFAULT NULL
         COMMENT 'B 店 (被跟踪店); Phase 1 必填, Phase 2 公开 API 模式可空',
     source_type ENUM('seller_api','public_api') NOT NULL DEFAULT 'seller_api'
         COMMENT '数据来源类型; Phase 1 仅 seller_api',
@@ -88,13 +93,13 @@ CREATE TABLE IF NOT EXISTS clone_tasks (
 -- ==================== 2. clone_pending_products ====================
 
 CREATE TABLE IF NOT EXISTS clone_pending_products (
-    id INT PRIMARY KEY AUTO_INCREMENT,
-    tenant_id BIGINT NOT NULL,
-    task_id INT NOT NULL
+    id BIGINT UNSIGNED PRIMARY KEY AUTO_INCREMENT,
+    tenant_id BIGINT UNSIGNED NOT NULL,
+    task_id BIGINT UNSIGNED NOT NULL
         COMMENT '关联 clone_tasks.id',
 
     -- 来源
-    source_shop_id BIGINT DEFAULT NULL
+    source_shop_id BIGINT UNSIGNED DEFAULT NULL
         COMMENT 'Phase 1 等于 task.source_shop_id; Phase 2 可空',
     source_platform VARCHAR(20) NOT NULL,
     source_sku_id VARCHAR(100) NOT NULL
@@ -110,7 +115,7 @@ CREATE TABLE IF NOT EXISTS clone_pending_products (
                 'platform_category_id, attributes, _ai_rewrite_failed_*}',
 
     -- 关联 platform_listings 草稿 (AI 改写复用 SEO 接口的锚点)
-    draft_listing_id INT DEFAULT NULL
+    draft_listing_id BIGINT UNSIGNED DEFAULT NULL
         COMMENT '关联 platform_listings.id (status=inactive, clone_task_id IS NOT NULL)',
 
     -- 状态机
@@ -126,7 +131,7 @@ CREATE TABLE IF NOT EXISTS clone_pending_products (
         COMMENT '抓取时间 (UTC naive); service 层 utc_now_naive()',
     reviewed_at DATETIME DEFAULT NULL
         COMMENT '用户 approve / reject / restore 时间',
-    reviewed_by BIGINT DEFAULT NULL
+    reviewed_by BIGINT UNSIGNED DEFAULT NULL
         COMMENT '操作人 user_id',
     published_at DATETIME DEFAULT NULL
         COMMENT 'A 平台上架成功时间',
@@ -148,16 +153,18 @@ CREATE TABLE IF NOT EXISTS clone_pending_products (
 -- ==================== 3. clone_logs ====================
 
 CREATE TABLE IF NOT EXISTS clone_logs (
-    id BIGINT PRIMARY KEY AUTO_INCREMENT,
-    tenant_id BIGINT NOT NULL,
-    task_id INT DEFAULT NULL
+    id BIGINT UNSIGNED PRIMARY KEY AUTO_INCREMENT,
+    tenant_id BIGINT UNSIGNED NOT NULL,
+    task_id BIGINT UNSIGNED DEFAULT NULL
         COMMENT '系统级日志可空, 任务相关必填',
     log_type ENUM('scan','review','publish','price_sync') NOT NULL,
     status ENUM('success','partial','failed','skipped') NOT NULL,
     rows_affected INT NOT NULL DEFAULT 0,
     duration_ms INT DEFAULT NULL,
 
-    -- scan 类型 detail JSON 结构示例:
+    -- detail JSON 按 log_type 不同结构 (前端日志页据此渲染):
+    --
+    -- scan 类型:
     -- {
     --   "found": 120, "new": 3,
     --   "skip_published": 105, "skip_rejected": 12, "skip_category_missing": 0,
@@ -167,31 +174,43 @@ CREATE TABLE IF NOT EXISTS clone_logs (
     --     {"sku":"789","reason":"category_missing","detail":"WB subjectID 8126 未映射"}
     --   ]
     -- }
+    --
+    -- review 类型 (approve / reject / restore):
+    -- { "action": "approve|reject|restore", "pending_id": 101, "reason": "..." }
+    --
+    -- publish 类型:
+    -- { "pending_id": 101, "target_platform_sku_id": "...", "platform_resp": {...} }
+    --   失败时含 "error_code" / "error_msg"
+    --
+    -- price_sync 类型:
+    -- { "pending_id": 101, "old_price": 2400, "new_price": 2640, "delta_pct": 10.0 }
     detail JSON DEFAULT NULL,
     error_msg VARCHAR(500) DEFAULT NULL,
 
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 
     KEY idx_task_type (task_id, log_type, created_at),
-    KEY idx_tenant_created (tenant_id, created_at)
+    KEY idx_tenant_created (tenant_id, created_at),
+    KEY idx_tenant_log_type (tenant_id, log_type, created_at)
+        COMMENT 'UI 按租户 + 类型筛日志走此索引 (老张 review 加)'
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
-  COMMENT='店铺克隆日志 (扫描/审核/发布/跟价); detail JSON 含跳过明细';
+  COMMENT='店铺克隆日志 (扫描/审核/发布/跟价); detail JSON 按 log_type 多态';
 
 
 -- ==================== 4. clone_published_links ====================
 
 CREATE TABLE IF NOT EXISTS clone_published_links (
-    id INT PRIMARY KEY AUTO_INCREMENT,
-    tenant_id BIGINT NOT NULL,
-    task_id INT NOT NULL,
-    pending_id INT NOT NULL
+    id BIGINT UNSIGNED PRIMARY KEY AUTO_INCREMENT,
+    tenant_id BIGINT UNSIGNED NOT NULL,
+    task_id BIGINT UNSIGNED NOT NULL,
+    pending_id BIGINT UNSIGNED NOT NULL
         COMMENT '关联 clone_pending_products.id (一一对应)',
     source_platform VARCHAR(20) NOT NULL,
     source_sku_id VARCHAR(100) NOT NULL,
-    target_shop_id BIGINT NOT NULL,
+    target_shop_id BIGINT UNSIGNED NOT NULL,
     target_platform_sku_id VARCHAR(100) NOT NULL
         COMMENT 'A 店上架后的真实 SKU',
-    target_listing_id INT DEFAULT NULL
+    target_listing_id BIGINT UNSIGNED DEFAULT NULL
         COMMENT '关联 platform_listings.id (status=active 后)',
 
     -- 跟价数据 (follow_price_change=1 时维护; source_shop_id 通过 task_id 反查 clone_tasks)

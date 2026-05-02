@@ -11,10 +11,14 @@
 -- 不动 status ENUM 设计: 现有 8 处 WHERE status='active' 查询零污染,
 -- 草稿用 status='inactive' + clone_task_id IS NOT NULL 双条件区分。
 --
+-- 类型对齐: clone_task_id BIGINT UNSIGNED 必须与 clone_tasks.id 一致,
+-- 否则 JOIN platform_listings.clone_task_id ↔ clone_tasks.id 触发隐式转换 + 索引失效,
+-- 60+ 万 listing 表 JOIN 会塌。
+--
 -- 规则 6 时间: 本 migration 不涉及业务时间字段
 -- 关联文档: docs/api/store_clone.md §3.1
 
 ALTER TABLE platform_listings
-    ADD COLUMN clone_task_id INT DEFAULT NULL
+    ADD COLUMN clone_task_id BIGINT UNSIGNED DEFAULT NULL
         COMMENT '关联 clone_tasks.id; 非 NULL = 克隆草稿; NULL = 普通 listing',
     ADD KEY idx_clone_task (clone_task_id);
