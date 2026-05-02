@@ -72,3 +72,7 @@ class PlatformListing(BaseMixin, Base):
         Enum("active", "inactive", "deleted", "out_of_stock", "blocked", "archived", name="listing_status"),
         nullable=False, default="active"
     )
+    clone_task_id: Mapped[Optional[int]] = mapped_column(
+        BigInteger, nullable=True,
+        comment="关联 clone_tasks.id; 非 NULL = 店铺克隆草稿; NULL = 普通 listing"
+    )

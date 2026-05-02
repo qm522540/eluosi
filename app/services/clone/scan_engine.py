@@ -98,11 +98,16 @@ def _apply_price_rule(source_price: Decimal, mode: str,
 def _create_drafts(
     db: Session, task: CloneTask, snap: ProductSnapshot,
     target_cat_id: str,
-) -> tuple[Optional[int], Optional[int]]:
+) -> tuple[Optional[int], Optional[int], Optional[str]]:
     """新建占位 products + platform_listings 草稿 (规范 §3.3 状态机)
 
-    Returns: (product_id, listing_id) — 失败返 (None, None)
+    Returns: (product_id, listing_id, error_msg) — 失败返 (None, None, "...")
+
+    用 savepoint 包裹: 单 SKU 失败只回滚自己, 不污染同页其他草稿
+    (避免历史教训: ORM 字段缺失时 product 已 flush 但 listing 抛错,
+     外层 commit 把孤儿 product 一并写库)。
     """
+    sp = db.begin_nested()
     try:
         sku_placeholder = f"clone-pending-{task.id}-{snap.source_sku_id}"
         product = Product(
@@ -123,26 +128,33 @@ def _create_drafts(
         target_shop = db.query(Shop).filter(Shop.id == task.target_shop_id).first()
         target_platform = target_shop.platform if target_shop else snap.source_platform
 
+        # platform_product_id / platform_sku_id 在草稿期都用占位串
+        # publish 成功后由 publish_engine 回填真实 offer_id
+        draft_token = uuid.uuid4().hex[:8]
         listing = PlatformListing(
             tenant_id=task.tenant_id,
             shop_id=task.target_shop_id,
             product_id=product.id,
             platform=target_platform,
-            platform_sku_id=f"clone-draft-{uuid.uuid4().hex[:8]}",  # 占位,publish 后回填
-            platform_product_id=None,
+            platform_sku_id=f"clone-draft-{draft_token}",
+            platform_product_id=f"clone-draft-{draft_token}",
             title_ru=snap.title_ru,
             description_ru=snap.description_ru,
             platform_category_id=target_cat_id or None,
             status="inactive",
+            publish_status="draft",
             clone_task_id=task.id,
             created_at=utc_now_naive(),
         )
         db.add(listing)
         db.flush()
-        return product.id, listing.id
+        sp.commit()
+        return product.id, listing.id, None
     except Exception as e:
+        sp.rollback()
+        msg = str(e)[:200]
         logger.error(f"_create_drafts 失败 task={task.id} sku={snap.source_sku_id}: {e}")
-        return None, None
+        return None, None, msg
 
 
 # ==================== 图片到 OSS ====================
@@ -309,9 +321,14 @@ async def _run_scan(db: Session, task_id: int, tenant_id: int) -> dict:
             )
 
             # d/e. 创建草稿 product + listing
-            draft_product_id, draft_listing_id = _create_drafts(db, task, snap, target_cat_id or "")
+            draft_product_id, draft_listing_id, draft_err = _create_drafts(
+                db, task, snap, target_cat_id or "",
+            )
             if not draft_listing_id:
-                skipped_skus.append({"sku": snap.source_sku_id, "reason": "draft_create_failed"})
+                skipped_skus.append({
+                    "sku": snap.source_sku_id, "reason": "draft_create_failed",
+                    "detail": draft_err or "",
+                })
                 continue
 
             # f. 图片到 OSS
