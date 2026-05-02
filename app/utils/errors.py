@@ -90,6 +90,21 @@ class ErrorCode:
     SEO_TITLE_GENERATE_FAILED = 94004              # AI 生成标题失败（模型超时 / 返回异常 / 解析失败）
     SEO_PRODUCT_NOT_FOUND = 94005                  # 商品在当前店铺找不到 listing（需先同步商品）
 
+    # 店铺克隆 95xxx（A 店自动跟踪 B 店上新 → 待审核 → 推 A 上架）
+    CLONE_TASK_NOT_FOUND = 95001
+    CLONE_TASK_DUPLICATE = 95002                   # 同一对 A/B 已存在任务
+    CLONE_TASK_INVALID_CONFIG = 95003              # 配置非法（adjust_pct 缺失/超界、A==B 等）
+    CLONE_TASK_SOURCE_INVALID = 95004              # 源店铺不可用（不属于本租户/已 inactive）
+    CLONE_SCAN_RUNNING = 95005                     # 扫描进行中（Redis 锁未释放）
+    CLONE_SOURCE_API_FAILED = 95006                # 拉取 B 店数据失败（凭证失效/限流等）
+    CLONE_PENDING_NOT_FOUND = 95007                # 待审核记录不存在
+    CLONE_PENDING_INVALID_STATUS = 95008           # 状态不允许该操作（如 published 不能再 reject）
+    CLONE_PUBLISH_FAILED = 95009                   # 上架到 A 平台失败
+    CLONE_CATEGORY_MAPPING_MISSING = 95010         # 类目映射缺失（跨平台克隆需先建好映射）
+    CLONE_TARGET_SHOP_INACTIVE = 95011             # 目标店铺未激活
+    CLONE_PENDING_NOT_REJECTED = 95012             # restore 仅适用于 status='rejected' 的记录
+    CLONE_AI_REWRITE_FAILED = 95013                # AI 改写失败（已 fallback 到 source 原文，不阻断扫描）
+
 
 ERROR_MESSAGES = {
     ErrorCode.SUCCESS: "成功",
@@ -142,4 +157,17 @@ ERROR_MESSAGES = {
     ErrorCode.SEO_REFRESH_FAILED: "SEO 候选引擎分析失败",
     ErrorCode.SEO_TITLE_GENERATE_FAILED: "AI 生成标题失败",
     ErrorCode.SEO_PRODUCT_NOT_FOUND: "当前店铺找不到该商品 listing",
+    ErrorCode.CLONE_TASK_NOT_FOUND: "克隆任务不存在",
+    ErrorCode.CLONE_TASK_DUPLICATE: "该 A/B 店组合已存在克隆任务",
+    ErrorCode.CLONE_TASK_INVALID_CONFIG: "克隆任务配置非法",
+    ErrorCode.CLONE_TASK_SOURCE_INVALID: "源店铺不可用",
+    ErrorCode.CLONE_SCAN_RUNNING: "扫描正在进行中，请稍后再试",
+    ErrorCode.CLONE_SOURCE_API_FAILED: "拉取源店铺数据失败",
+    ErrorCode.CLONE_PENDING_NOT_FOUND: "待审核记录不存在",
+    ErrorCode.CLONE_PENDING_INVALID_STATUS: "当前状态不允许该操作",
+    ErrorCode.CLONE_PUBLISH_FAILED: "上架到目标平台失败",
+    ErrorCode.CLONE_CATEGORY_MAPPING_MISSING: "类目映射缺失，请先在映射管理中建立 B 平台到 A 平台的对应关系",
+    ErrorCode.CLONE_TARGET_SHOP_INACTIVE: "目标店铺未激活",
+    ErrorCode.CLONE_PENDING_NOT_REJECTED: "仅可恢复已拒绝的记录",
+    ErrorCode.CLONE_AI_REWRITE_FAILED: "AI 改写失败，已使用源商品原文",
 }
