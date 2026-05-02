@@ -2163,30 +2163,24 @@ async def _sync_wb_campaigns(db, shop) -> tuple:
 
 @router.post("/sync/{shop_id}")
 async def manual_sync_shop(
-    shop_id: int,
+    shop=Depends(get_owned_shop),
     db: Session = Depends(get_db),
-    current_user=Depends(get_current_user),
 ):
     """手动同步店铺广告活动列表和状态（不含统计数据）"""
-    from app.models.shop import Shop
     from sqlalchemy import text
     from app.services.data_source.service import is_data_source_enabled, record_sync_run
     from app.utils.moscow_time import utc_now_naive
-
-    shop = db.query(Shop).filter(Shop.id == shop_id).first()
-    if not shop:
-        raise HTTPException(status_code=404, detail="店铺不存在")
 
     # 数据源开关 hook (wb_campaigns / ozon_campaigns)
     _PLATFORM_SOURCE_KEY = {"wb": "wb_campaigns", "ozon": "ozon_campaigns"}
     source_key = _PLATFORM_SOURCE_KEY.get(shop.platform)
     if source_key:
         enabled, skip_reason = is_data_source_enabled(
-            db, shop.tenant_id, shop_id, source_key,
+            db, shop.tenant_id, shop.id, source_key,
         )
         if not enabled:
-            logger.info(f"shop={shop_id} {source_key} 跳过: {skip_reason}")
-            record_sync_run(db, shop.tenant_id, shop_id, source_key,
+            logger.info(f"shop={shop.id} {source_key} 跳过: {skip_reason}")
+            record_sync_run(db, shop.tenant_id, shop.id, source_key,
                            status="skipped", msg=skip_reason or "")
             return {
                 "code": 0,
@@ -2211,7 +2205,7 @@ async def manual_sync_shop(
             ON DUPLICATE KEY UPDATE
                 last_sync_at = :now_utc
         """), {
-            "shop_id": shop_id,
+            "shop_id": shop.id,
             "tenant_id": shop.tenant_id,
             "now_utc": now_utc,
         })
@@ -2219,7 +2213,7 @@ async def manual_sync_shop(
 
         if source_key:
             dur_ms = int((utc_now_naive() - t0).total_seconds() * 1000)
-            record_sync_run(db, shop.tenant_id, shop_id, source_key,
+            record_sync_run(db, shop.tenant_id, shop.id, source_key,
                            status="success", rows=updated, duration_ms=dur_ms,
                            msg=f"updated_campaigns={updated}")
 
@@ -2231,9 +2225,9 @@ async def manual_sync_shop(
     except Exception as e:
         if source_key:
             dur_ms = int((utc_now_naive() - t0).total_seconds() * 1000)
-            record_sync_run(db, shop.tenant_id, shop_id, source_key,
+            record_sync_run(db, shop.tenant_id, shop.id, source_key,
                            status="failed", msg=str(e)[:500], duration_ms=dur_ms)
-        logger.error(f"同步失败 shop_id={shop_id}: {e}")
+        logger.error(f"同步失败 shop_id={shop.id}: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
