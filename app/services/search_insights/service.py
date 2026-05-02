@@ -446,9 +446,14 @@ async def refresh_shop(
             # WB search-texts 实测限流严格（估 3-5 rpm），批量 nmIds 降低调用次数
             WB_BATCH_SIZE = 20          # 单次调用 nmIds 个数上限
             WB_BATCH_PAUSE_S = 20       # 批间 sleep 秒，抵御 429
-            # 早退保护（2026-05-01 修：原跨天累计 → 误把"店铺数据稀疏"判成"quota 烧光"）
-            EMPTY_BATCH_ABORT = 3       # 单天前 N 批连续空 + 当天 0 行 → 跳过该天（不退整体）
             EMPTY_DAYS_ABORT = 3        # 连续 N 整天 0 行 → 推断 quota 真烧光，整体退出
+            # —— 2026-05-02 silent rate-limit detector（老林拍业务层方案）——
+            # WB 第二种限流物种：HTTP 200 + 0 行 + 无 429 + Redis 静默；
+            # 04-28 那套 trip cooldown 抓不到，必须看 input/output ratio。
+            # 文档：memory/reference_wb_silent_rate_limit.md
+            WB_SILENT_BATCH_THRESHOLD = 3   # 连续 N 批 0 行 → 进入 silent 模式
+            WB_SILENT_PAUSE_S = 120         # silent 模式下批间 sleep（30 → 120s 退避）
+            WB_SILENT_DAY_TRIGGER_LIMIT = 5  # 当天 silent 触发累计 N 次 → 放弃当天
 
             nm_to_pid = {}
             for l in listings:
@@ -465,14 +470,19 @@ async def refresh_shop(
                 for d in missing_dates:
                     if quota_break:
                         break
-                    consecutive_empty = 0  # 单天 reset（避免跨天累计误判稀疏 shop）
+                    # 单天 reset（silent_mode/trigger 不跨天累计：晚上的 silent 跟今早的没关系）
+                    consecutive_empty = 0
+                    silent_mode = False
+                    silent_day_triggers = 0
                     d_str = d.isoformat()
                     day_total = 0
+                    day_silent_aborted = False
                     for bi in range(batches_per_day):
                         batch = all_nm_ids[bi * WB_BATCH_SIZE : (bi + 1) * WB_BATCH_SIZE]
-                        # 批间 + 跨天都要 sleep 抵御 429
+                        # 批间 + 跨天都要 sleep 抵御 429；silent 模式下 30s → 120s 退避
+                        pause_s = WB_SILENT_PAUSE_S if silent_mode else WB_BATCH_PAUSE_S
                         if bi > 0 or d != missing_dates[0]:
-                            await asyncio.sleep(WB_BATCH_PAUSE_S)
+                            await asyncio.sleep(pause_s)
                         try:
                             items = await wb.fetch_product_search_texts(
                                 nm_ids=batch,
@@ -502,17 +512,55 @@ async def refresh_shop(
                             continue
                         if not items:
                             consecutive_empty += 1
-                            # 当天 day_total>0 表示 API 在工作（数据只是稀疏），不触发早退
-                            # 仅当"前 N 批连续空 + 当天 0 行"时才跳过该天（不退整体）
-                            if consecutive_empty >= EMPTY_BATCH_ABORT and day_total == 0:
-                                logger.warning(
-                                    f"WB shop={shop.id} date={d_str} 前 {EMPTY_BATCH_ABORT} 批"
-                                    f"连续空 + 0 行，跳过该天（continue next day）"
-                                )
-                                errors.append({"type": "day_empty_skip", "date": d_str,
-                                               "reason": f"前 {EMPTY_BATCH_ABORT} 批连续空 + 当天 0 行"})
-                                break  # 退当天 inner loop，外层继续下一天
+                            # silent rate-limit detector：连续 N 批 0 行 → 进入 silent 模式
+                            # 不直接 break 当天（区别于旧 EMPTY_BATCH_ABORT），先延长 sleep 试试
+                            if consecutive_empty >= WB_SILENT_BATCH_THRESHOLD:
+                                silent_day_triggers += 1
+                                consecutive_empty = 0  # 计数后 reset，避免每批都触发
+                                if not silent_mode:
+                                    silent_mode = True
+                                    logger.warning(
+                                        f"WB silent rate-limit suspected shop={shop.id} "
+                                        f"date={d_str} batch={bi+1}/{batches_per_day} "
+                                        f"连续 {WB_SILENT_BATCH_THRESHOLD} 批 0 行，进入 silent 模式 "
+                                        f"(sleep {WB_BATCH_PAUSE_S}→{WB_SILENT_PAUSE_S}s)"
+                                    )
+                                else:
+                                    logger.warning(
+                                        f"WB silent rate-limit re-triggered shop={shop.id} "
+                                        f"date={d_str} batch={bi+1} silent_count={silent_day_triggers}"
+                                    )
+                                errors.append({
+                                    "type": "silent_rate_limit",
+                                    "silent_quota": True,
+                                    "date": d_str, "at_batch": bi + 1,
+                                    "trigger_count": silent_day_triggers,
+                                    "input_nm_ids": len(all_nm_ids),
+                                    "returned_rows_so_far": day_total,
+                                })
+                                # 当天累计 silent 触发达限 → 放弃当天（不自动重试，清晰报告）
+                                if silent_day_triggers >= WB_SILENT_DAY_TRIGGER_LIMIT:
+                                    logger.warning(
+                                        f"WB silent rate-limit confirmed shop={shop.id} "
+                                        f"date={d_str}: 当天累计 {silent_day_triggers} 次 silent "
+                                        f"触发，放弃当天 (批 {bi+1}/{batches_per_day})"
+                                    )
+                                    errors.append({
+                                        "type": "silent_rate_limit_day_abort",
+                                        "silent_quota": True,
+                                        "date": d_str,
+                                        "trigger_count": silent_day_triggers,
+                                    })
+                                    day_silent_aborted = True
+                                    break  # 退当天 inner loop
                         else:
+                            # 拿到数据：退出 silent 模式
+                            if silent_mode:
+                                logger.info(
+                                    f"WB silent mode exited shop={shop.id} date={d_str} "
+                                    f"batch={bi+1} 拿到 {len(items)} 行，恢复正常 sleep"
+                                )
+                                silent_mode = False
                             consecutive_empty = 0
                         # items 每条含 nm_id → 按 nm_id 分组 upsert
                         grouped = {}
@@ -530,16 +578,21 @@ async def refresh_shop(
                     synced_per_day[d_str] = day_total
                     total_rows += day_total
 
-                    # 跨天兜底：连续 N 整天 0 行 → 推断 quota 真烧光，整体退出（防一直空跑耗 quota）
+                    # 跨天兜底（保留）：连续 N 整天 0 行 → 整体退出
+                    # silent 当天放弃也算"当天 0 行"，会进这个累计；如果连续 3 天全被 silent
+                    # 限制，停手等下个 beat
                     if day_total == 0:
                         consecutive_empty_days += 1
                         if consecutive_empty_days >= EMPTY_DAYS_ABORT:
+                            reason = (
+                                f"{consecutive_empty_days} 整天连续 0 行"
+                                + ("（含 silent rate-limit）" if day_silent_aborted else "")
+                            )
                             logger.warning(
-                                f"WB shop={shop.id} 连续 {consecutive_empty_days} 整天 0 行，"
-                                f"推断 quota 真烧光 / shop 完全无搜索词数据，early exit"
+                                f"WB shop={shop.id} {reason}，整体 early exit"
                             )
                             errors.append({"type": "early_exit", "early_exit": True,
-                                           "reason": f"{consecutive_empty_days} 整天连续 0 行"})
+                                           "reason": reason})
                             quota_break = True
                     else:
                         consecutive_empty_days = 0
