@@ -111,8 +111,7 @@ CREATE TABLE IF NOT EXISTS clone_pending_products (
 
     -- 应用规则后的 A 商品 payload (供用户审核 + 发布)
     proposed_payload JSON NOT NULL
-        COMMENT 'JSON: {title_ru, description_ru, price_rub, stock, images_oss, '
-                'platform_category_id, attributes, _ai_rewrite_failed_*}',
+        COMMENT 'JSON: {title_ru, description_ru, price_rub, stock, images_oss, platform_category_id, attributes, _ai_rewrite_failed_*}',
 
     -- 关联 platform_listings 草稿 (AI 改写复用 SEO 接口的锚点)
     draft_listing_id BIGINT UNSIGNED DEFAULT NULL
