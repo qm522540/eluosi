@@ -324,8 +324,12 @@ def auto_exclude_keywords(self):
         # 数据源开关 hook 缓存 (一个 shop 多个 campaign 共享一次检查)
         shop_gate = {}
         for cfg in configs:
-            shop = db.query(Shop).filter(Shop.id == cfg.shop_id).first()
-            camp = db.query(AdCampaign).filter(AdCampaign.id == cfg.campaign_id).first()
+            shop = db.query(Shop).filter(
+                Shop.id == cfg.shop_id, Shop.tenant_id == cfg.tenant_id,
+            ).first()
+            camp = db.query(AdCampaign).filter(
+                AdCampaign.id == cfg.campaign_id, AdCampaign.tenant_id == cfg.tenant_id,
+            ).first()
             if not shop or not camp or shop.platform != "wb":
                 continue
             # Per-shop hook gate
@@ -395,7 +399,9 @@ def auto_exclude_for_campaign(self, campaign_id: int, tenant_id: int):
         ).first()
         if not cfg:
             return {"error": "自动屏蔽未配置"}
-        shop = db.query(Shop).filter(Shop.id == cfg.shop_id).first()
+        shop = db.query(Shop).filter(
+            Shop.id == cfg.shop_id, Shop.tenant_id == tenant_id,
+        ).first()
         camp = db.query(AdCampaign).filter(
             AdCampaign.id == campaign_id, AdCampaign.tenant_id == tenant_id,
         ).first()
