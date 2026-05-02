@@ -50,7 +50,8 @@ const Optimize = () => {
         setShops(items)
         const urlShopId = Number(searchParams.get('shopId'))
         const urlProductId = Number(searchParams.get('productId'))
-        const preferId = urlShopId && items.find(s => s.id === urlShopId) ? urlShopId : (items[0]?.id || null)
+        // 2026-05-02 老板拍：默认不自动选店铺，让用户自己选；URL 带 shopId 时仍尊重（健康诊断/Tracking 跳转链路保留）
+        const preferId = urlShopId && items.find(s => s.id === urlShopId) ? urlShopId : null
         if (preferId && !shopId) setShopId(preferId)
         if (urlProductId) setProductFilter(urlProductId)
       })
