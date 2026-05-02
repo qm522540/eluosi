@@ -117,21 +117,46 @@ class BaseShopProvider(ABC):
         """按 SKU 拉单条详情"""
 ```
 
-### Phase 1 实现
+### Phase 1 实现 — 按平台分文件 + 工厂 dispatch
+
+与 `app/services/platform/{ozon,wb,yandex}.py` 现有结构对齐，避免单文件 if/elif 臃肿。
+
+```
+app/services/clone/providers/
+  ├── base.py        # BaseShopProvider + ProductSnapshot
+  ├── factory.py     # get_provider(db, source_shop) → BaseShopProvider
+  ├── ozon.py        # OzonSellerProvider(BaseShopProvider)
+  ├── wb.py          # WBSellerProvider(BaseShopProvider)
+  └── yandex.py      # YandexSellerProvider(BaseShopProvider)
+```
 
 ```python
-# app/services/clone/providers/seller_api.py
-class SellerApiProvider(BaseShopProvider):
-    """走 seller API token，B 店必须是 shops 表里的店"""
-    def __init__(self, db: Session, source_shop: Shop): ...
+# factory.py
+def get_provider(db: Session, source_shop: Shop) -> BaseShopProvider:
+    if source_shop.platform == "ozon":
+        return OzonSellerProvider(db, source_shop)
+    elif source_shop.platform == "wb":
+        return WBSellerProvider(db, source_shop)
+    elif source_shop.platform == "yandex":
+        return YandexSellerProvider(db, source_shop)
+    raise ValueError(f"unsupported platform: {source_shop.platform}")
 ```
+
+### 底层 API 客户端约定（强制）
+
+Provider 实现**必须走** `app/services/platform/{ozon,wb,yandex}.py` 暴露的 `*Client`（`OzonClient.list_products` / `WBClient.fetch_product_cards` 等），**不允许**自己写 HTTP / `httpx` 直调。理由：
+- 走 `_request` 才能享受现有 quota cooldown / 重试 / `WBSellerQuotaExhausted` 熔断
+- 绕过会重新撞 04-24 已修的 quota trip 事故
+
+`publish_engine` 推 A 平台上架同样走 `*Client.create_product` / `update_product`，不绕路。
 
 ### Phase 2 占位
 
-```python
-# app/services/clone/providers/public_api.py（Phase 2 实现）
-class PublicApiProvider(BaseShopProvider):
-    """走平台公开商品 API；Ozon 平台只支持 SKU 列表批量"""
+```
+app/services/clone/providers/public/
+  ├── ozon_public.py    # PublicApiProvider — 限制：只能按 SKU 列表批量
+  ├── wb_public.py      # PublicApiProvider — 能列 supplier 全部商品
+  └── yandex_public.py
 ```
 
 ---
@@ -213,6 +238,23 @@ CREATE TABLE `clone_tasks` (
 - `target_shop_id` 必须属于 `tenant_id`（路由层 `get_owned_shop` 守卫）
 - `source_shop_id` 必须属于同一 `tenant_id`（service 层校验，不允许跨租户跟踪）
 
+**⚠ Phase 2 已知问题（先记账，Phase 1 不影响）**：
+
+`uk_target_source` 在 Phase 2 `source_shop_id IS NULL`（公开 API 模式）时 MySQL 允许多个 NULL 共存，导致同 target + 多个不同 `source_external_id` 的任务唯一约束穿透。Phase 2 启动时改造方案：
+
+```sql
+-- 方案 A: 拆 generated column
+ALTER TABLE clone_tasks ADD COLUMN source_key VARCHAR(255) AS (
+  COALESCE(CAST(source_shop_id AS CHAR), CONCAT(source_platform, ':', source_external_id))
+) STORED;
+ALTER TABLE clone_tasks DROP INDEX uk_target_source;
+ALTER TABLE clone_tasks ADD UNIQUE KEY uk_target_source_key (tenant_id, target_shop_id, source_key);
+
+-- 方案 B: source_external_id 加 NOT NULL DEFAULT '' 配合 source_shop_id COALESCE
+```
+
+Phase 2 老张接手时再选方案落地。
+
 ### 3.3 `clone_pending_products` — 待审核商品（核心交互区）
 
 ```sql
@@ -265,6 +307,46 @@ CREATE TABLE `clone_pending_products` (
 - `UNIQUE KEY (task_id, source_sku_id)` 强制：同一 B SKU 只能在某任务下出现一次（决策 5 永久跳过的物理保障）
 - 用户 reject 不删除记录，扫描时如发现 `status='rejected'` 跳过并计入 `clone_logs.detail.skip_rejected`
 - `published` 后该记录历史保留，`clone_published_links` 表是它的"上架后"延续
+
+**`draft_listing_id` 关联的草稿 product 创建约定（关键）**：
+
+每条 pending 入库时**同步新建一条 `products` + 一条 `platform_listings`**（因为 SEO AI 改写接口要求 listing 关联 product）：
+
+```python
+# 1) 新建 products 草稿
+draft_product = Product(
+    tenant_id=task.tenant_id,
+    shop_id=task.target_shop_id,        # 归属 A 店
+    sku=f"clone-pending-{task.id}-{source_sku_id}",  # 占位 SKU，避免与真实 SKU 冲突
+    name_zh=source.title_ru[:200],       # 后续 AI 翻译再回填中文
+    name_ru=source.title_ru,
+    brand=None,
+    local_category_id=mapped_local_cat_id,  # 跨平台克隆时通过 028 映射反查；同平台/缺失留 NULL
+    status='inactive',                   # 与 listing 同步
+    created_at=utc_now_naive(),
+)
+
+# 2) 新建 platform_listings 草稿（参考 §8）
+draft_listing = PlatformListing(
+    tenant_id=task.tenant_id,
+    shop_id=task.target_shop_id,
+    product_id=draft_product.id,
+    ...
+    clone_task_id=task.id,
+    status='inactive',
+)
+```
+
+**草稿 product 的状态机**：
+
+| 阶段 | products.status | platform_listings.status |
+|---|---|---|
+| 抓取入库（pending） | `inactive` | `inactive` |
+| 用户批准 → 推 A 上架成功 | `active` | `active`（同时回填真实 sku） |
+| 用户拒绝 | `deleted` | `deleted` |
+| 用户从拒绝池 restore | `inactive` | `inactive` |
+
+**为什么不复用现有 products**：`(target_shop, source_sku_id)` 没有自然复用键；新建占位最干净，反向追溯成本低。
 
 ### 3.4 `clone_logs` — 克隆日志（扫描 + 审核 + 发布）
 
@@ -336,9 +418,15 @@ CREATE TABLE `clone_published_links` (
 
 ```
 对每个 is_active=1 的 task：
-1. provider = SellerApiProvider(db, source_shop)
-2. snapshots = provider.list_new_products(since=task.last_check_at)
-3. 对每个 snapshot：
+1. provider = factory.get_provider(db, source_shop)   # 工厂 dispatch by platform
+2. since = task.last_check_at or (task.created_at - timedelta(days=7))
+                                  # 首次扫描窗口：任务创建时间往前 7 天
+   snapshots = await provider.list_new_products(since=since)
+
+3. 收集需 AI 改写的候选（避免对每条同步 await 撞 Kimi 限速）
+   ai_rewrite_targets: list[(snapshot, draft_listing_id, mode)] = []
+
+4. 对每个 snapshot：
    a. 查 clone_pending_products(task_id, source_sku_id)
       - 存在且 status='published' → skip (skip_published++)
       - 存在且 status='rejected'  → skip (skip_rejected++)
@@ -350,20 +438,53 @@ CREATE TABLE `clone_published_links` (
    c. 价格规则（按 task.price_mode）：
       - same: target_price = source_price
       - adjust_pct: target_price = source_price * (1 + price_adjust_pct/100)
-   d. INSERT platform_listings（status='inactive', clone_task_id=task.id）→ 拿 draft_listing_id
-   e. 图片处理：oss_client.download_images_batch(images, prefix="clone/{tenant}/{task}/{sku}")
-   f. 标题处理：
-      - title_mode=original → proposed.title_ru = source.title_ru
-      - title_mode=ai_rewrite → proposed.title_ru = await optimize_title(db, draft_listing_id, tenant_id).new_title
-   g. 描述处理：
-      - desc_mode=original → proposed.description_ru = source.description_ru
-      - desc_mode=ai_rewrite → proposed.description_ru = await generate_description(db, draft_listing_id, tenant_id, target_platform).description
-   h. UPDATE platform_listings SET title_ru/description_ru = proposed
-   i. INSERT clone_pending_products(status='pending', source_snapshot, proposed_payload, draft_listing_id)
+   d. INSERT products 草稿（参考 §3.3）→ 拿 draft_product_id
+   e. INSERT platform_listings（status='inactive', clone_task_id=task.id, product_id=draft_product_id）
+      → 拿 draft_listing_id
+   f. 图片处理：await oss_client.download_images_batch(
+        source.images, prefix=f"clone/{tenant_id}/{task_id}/{source_sku_id}"
+      )
+   g. 标题/描述先填 source 原文作为骨架（AI 改写延后批量做）
+   h. 若 title_mode=='ai_rewrite' 或 desc_mode=='ai_rewrite':
+      ai_rewrite_targets.append((snapshot, draft_listing_id, mode))
+   i. INSERT clone_pending_products(status='pending', source_snapshot, proposed_payload=骨架, draft_listing_id)
    j. new++
-4. 写 clone_logs(log_type='scan', detail={found, new, skip_*, skipped_skus})
-5. UPDATE clone_tasks SET last_check_at, last_found_count, last_publish_count, last_skip_count
+
+5. AI 改写批处理（sem=5 并发限流）：
+   sem = asyncio.Semaphore(5)
+   async def rewrite_one(snapshot, listing_id, mode):
+       async with sem:
+           try:
+               if mode in ('title','both'):
+                   r = await optimize_title(db, listing_id, tenant_id)
+                   if r['code'] == 0: proposed.title_ru = r['data']['new_title']
+                   else: proposed['_ai_rewrite_failed_title'] = True   # fallback 保留 source 原文
+               if mode in ('desc','both'):
+                   r = await generate_description(db, listing_id, tenant_id, target_platform)
+                   if r['code'] == 0: proposed.description_ru = r['data']['description']
+                   else: proposed['_ai_rewrite_failed_desc'] = True
+           except Exception as e:
+               logger.error(f"AI rewrite failed listing={listing_id}: {e}")
+               proposed['_ai_rewrite_error'] = str(e)[:200]   # 不阻断扫描
+           UPDATE clone_pending_products SET proposed_payload, UPDATE platform_listings
+   await asyncio.gather(*(rewrite_one(*t) for t in ai_rewrite_targets))
+
+6. 写 clone_logs(log_type='scan', detail={
+     found, new, skip_published, skip_rejected, skip_category_missing,
+     ai_rewrite_total, ai_rewrite_failed,
+     skipped_skus: [...]
+   })
+7. UPDATE clone_tasks SET last_check_at, last_found_count, last_publish_count, last_skip_count
 ```
+
+**AI 失败兜底约定**：
+- 标题/描述任一 AI 调用失败 → fallback 到 source 原文（保证待审记录可用）
+- `proposed_payload._ai_rewrite_failed_title=true` / `_ai_rewrite_failed_desc=true` 标记
+- 前端"待审核商品"页对这种条目挂角标提示，让用户手动改或重发起 AI（点 §5.2.5 PUT edit 重触发）
+- AI 失败不计入 `failed`，整条仍是 `pending`
+
+**首次扫描窗口约定**：`since = task.last_check_at or (task.created_at - 7 days)`。
+任务刚创建首次跑回溯 7 天 B 店上新；后续每日扫描以 `last_check_at` 为水位。
 
 ### 4.2 审核 + 发布流程
 
@@ -389,14 +510,18 @@ clone-publish-pending Beat 每 5 分钟扫一次 status='approved'：
 ```
 clone-daily-scan 中，对每个 task：
 - 若 follow_price_change=1：
+  - source_shop_id 通过 clone_tasks 反查（不在 clone_published_links 冗余存储）
   - 查 clone_published_links（task_id 下所有已发布商品）
-  - provider.get_product_detail(source_sku_id) → 当前 B 价
-  - 应用 price_mode + price_adjust_pct → A 目标价
-  - 与 last_synced_price 比较，差异 > 0.5% 才调
-  - 调 A 平台改价 API（**不走审核**，直接生效）
-  - UPDATE clone_published_links SET last_synced_price, last_synced_at
-  - 写 clone_logs(log_type='price_sync')
+  - 对每条 published_link：
+    - provider.get_product_detail(source_sku_id) → 当前 B 价
+    - 应用 price_mode + price_adjust_pct → A 目标价
+    - 与 last_synced_price 比较，差异 > 0.5% 才调
+    - 调 A 平台改价 API（**不走审核**，直接生效）
+    - UPDATE clone_published_links SET last_synced_price, last_synced_at
+    - 写 clone_logs(log_type='price_sync')
 ```
+
+**source_shop_id 反查**：`clone_published_links` 不冗余存 `source_shop_id`，跟价时通过 `task_id` JOIN `clone_tasks` 拿 `source_shop_id` → 再用工厂 `get_provider(db, source_shop)`。保持单一真相来源。
 
 ---
 
@@ -624,9 +749,33 @@ clone-daily-scan 中，对每个 task：
 业务规则：
 - 仅 `status='pending'` 可 reject
 - UPDATE platform_listings 草稿 SET status='deleted'
-- 该 source_sku_id 永久跳过（决策 5）
+- UPDATE products 草稿 SET status='deleted'
+- 该 source_sku_id 永久跳过（决策 5）；**误拒可走 §5.2.4 restore 恢复**
 
-#### 5.2.4 编辑 proposed_payload（审核前修改）
+⚠ 前端必须挂二次确认弹窗（"确认拒绝？拒绝后该 SKU 永久跳过，仅可通过'已拒绝'列表手动恢复"）。
+
+#### 5.2.4 误拒恢复（restore）
+
+**POST** `/api/v1/clone/pending/{pending_id}/restore`
+
+业务规则（决策 5 兜底，避免 UNIQUE 约束让用户没救）：
+- 仅 `status='rejected'` 可 restore
+- UPDATE clone_pending_products SET status='pending', reject_reason=NULL, reviewed_at=NULL
+- UPDATE platform_listings 草稿 SET status='inactive'
+- UPDATE products 草稿 SET status='inactive'
+- 写 clone_logs(log_type='review', status='success', detail={action: 'restore'})
+
+响应 data：
+
+```json
+{ "id": 101, "status": "pending", "restored_at": "2026-05-02T16:00:00Z" }
+```
+
+错误码：`95007`、`95008`（仅 rejected 可 restore）
+
+**前端入口**：在"待审核商品"页加 status='rejected' 切换 tab，每条挂"恢复审核"按钮。
+
+#### 5.2.5 编辑 proposed_payload（审核前修改）
 
 **PUT** `/api/v1/clone/pending/{pending_id}`
 
@@ -646,7 +795,7 @@ clone-daily-scan 中，对每个 task：
 - 仅 `status='pending'` 可 edit
 - 同步更新 `platform_listings` 草稿对应字段
 
-#### 5.2.5 批量批准 / 拒绝
+#### 5.2.6 批量批准 / 拒绝
 
 **POST** `/api/v1/clone/pending/approve-batch`
 **POST** `/api/v1/clone/pending/reject-batch`
@@ -772,6 +921,8 @@ celery_app.conf.beat_schedule = {
 | 95009 | CLONE_PUBLISH_FAILED | 上架到 A 平台失败 |
 | 95010 | CLONE_CATEGORY_MAPPING_MISSING | 类目映射缺失 |
 | 95011 | CLONE_TARGET_SHOP_INACTIVE | 目标店铺未激活 |
+| 95012 | CLONE_PENDING_NOT_REJECTED | restore 仅适用于 status='rejected' 的记录 |
+| 95013 | CLONE_AI_REWRITE_FAILED | AI 改写失败（已 fallback 到 source 原文，不阻断扫描） |
 
 常量定义位置：`app/utils/errors.py`
 
@@ -786,14 +937,30 @@ celery_app.conf.beat_schedule = {
 | 标题 AI 改写 | `app.services.product.service.optimize_title(db, listing_id, tenant_id)` | 必须先 INSERT 草稿 listing 拿到 listing_id |
 | 描述 AI 改写 | `app.services.product.service.generate_description(db, listing_id, tenant_id, target_platform)` | 同上 |
 
-**调用时机**：在 `_run_scan` 步骤 4.f / 4.g（详见 §4.1）
+**调用时机**：在 `_run_scan` 步骤 5（AI 改写批处理，sem=5 并发）；详见 §4.1
 
-**草稿 listing 入库约定**：
+**草稿 product + listing 入库约定**（必须配套）：
+
 ```python
-draft = PlatformListing(
+# 1) products 草稿（详见 §3.3 状态机）
+draft_product = Product(
     tenant_id=task.tenant_id,
     shop_id=task.target_shop_id,
-    product_id=...,             # 同步 INSERT 一条 products 记录或复用
+    sku=f"clone-pending-{task.id}-{source_sku_id}",   # 占位 SKU
+    name_zh=source.title_ru[:200],                    # 后续 AI 翻译再回填
+    name_ru=source.title_ru,
+    brand=None,
+    local_category_id=mapped_local_cat_id,            # 跨平台映射反查；同平台/缺失留 NULL
+    status='inactive',
+    created_at=utc_now_naive(),
+)
+db.add(draft_product); db.flush()   # 拿 id
+
+# 2) platform_listings 草稿
+draft_listing = PlatformListing(
+    tenant_id=task.tenant_id,
+    shop_id=task.target_shop_id,
+    product_id=draft_product.id,
     platform=target_platform,
     platform_sku_id=f"clone-draft-{uuid4().hex[:8]}",  # 占位，发布后改真实 SKU
     title_ru=source.title_ru,
@@ -802,7 +969,10 @@ draft = PlatformListing(
     clone_task_id=task.id,
     created_at=utc_now_naive(),
 )
+db.add(draft_listing); db.flush()   # 拿 listing.id 喂给 SEO AI 接口
 ```
+
+**为什么不复用现有 products**：`(target_shop, source_sku_id)` 没有自然复用键；新建占位最干净，反向追溯成本低（参考 §3.3 状态机表）。
 
 ---
 
@@ -853,14 +1023,19 @@ draft = PlatformListing(
 |---|---|
 | `app/models/clone.py` | ORM 模型：CloneTask / ClonePendingProduct / CloneLog / ClonePublishedLink |
 | `app/schemas/clone.py` | Pydantic 请求/响应模型 |
-| `app/services/clone/providers/base.py` | `BaseShopProvider` 抽象 + `ProductSnapshot` |
-| `app/services/clone/providers/seller_api.py` | Phase 1 实现（按平台分文件子模块：ozon.py / wb.py / yandex.py） |
-| `app/services/clone/scan_engine.py` | `_run_scan(task_id)` + 类目映射检查 + 价格规则 |
+| `app/services/clone/providers/base.py` | `BaseShopProvider` 抽象 + `ProductSnapshot` dataclass |
+| `app/services/clone/providers/factory.py` | `get_provider(db, source_shop) -> BaseShopProvider` 工厂 dispatch |
+| `app/services/clone/providers/ozon.py` | `OzonSellerProvider` Phase 1 实现 |
+| `app/services/clone/providers/wb.py` | `WBSellerProvider` Phase 1 实现 |
+| `app/services/clone/providers/yandex.py` | `YandexSellerProvider` Phase 1 实现 |
+| `app/services/clone/scan_engine.py` | `_run_scan(task_id)` + 类目映射 + 价格规则 + AI sem=5 |
 | `app/services/clone/publish_engine.py` | `_publish_pending(pending_id)` + A 平台调用 |
 | `app/services/clone/price_sync.py` | `follow_price_change` 跟价逻辑 |
-| `app/services/clone/task_service.py` | CRUD + 启用/停用/scan-now 业务逻辑 |
+| `app/services/clone/task_service.py` | CRUD + 启用/停用/scan-now/approve/reject/**restore** 业务逻辑 |
 | `app/tasks/clone_tasks.py` | Celery 任务：`daily_scan_all_tasks` / `publish_approved_pending` |
 | `app/api/v1/clone.py` | API 路由（本文档所有接口） |
+
+**强制约定（与 §2 重申）**：providers 内**必须**调 `app/services/platform/{ozon,wb,yandex}.py` 暴露的 `*Client.list_products / get_product`；publish_engine 内**必须**调 `*Client.create_product / update_product / update_price`。**不允许**自己写 HTTP / `httpx` 直调，否则绕过 04-24 已修的 quota cooldown 防护，会重新撞 trip 事故。
 
 ### 11.1 接口与函数映射
 
@@ -876,8 +1051,10 @@ draft = PlatformListing(
 | GET /pending | `task_service.list_pending` |
 | POST /pending/{id}/approve | `task_service.approve_pending` |
 | POST /pending/{id}/reject | `task_service.reject_pending` |
+| **POST /pending/{id}/restore** | **`task_service.restore_pending`** |
 | PUT /pending/{id} | `task_service.update_pending_payload` |
 | POST /pending/approve-batch | `task_service.batch_approve` |
+| POST /pending/reject-batch | `task_service.batch_reject` |
 | GET /logs | `task_service.list_logs` |
 | GET /available-shops | `task_service.list_available_shops` |
 | GET /category-coverage/{id} | `task_service.check_category_coverage` |
@@ -905,10 +1082,13 @@ draft = PlatformListing(
 ### 12.2 待审核商品（主战场，每天打开）
 
 - 路径：`/clone/pending`
-- 顶部 task 切换 + status 切换（pending / failed / published 历史）
+- 顶部 task 切换 + status 切换（pending / **rejected** / failed / published 历史）
 - 卡片视图：左侧 B 商品原图 + 标题 + 价 + 描述；右侧 proposed_payload 改写后预览（标 AI 改写过的字段）
 - 行内编辑：点击字段直接改 proposed（调 PUT /pending/{id}）
 - 批量勾选 + 批量批准/拒绝按钮
+- **拒绝二次确认弹窗**："确认拒绝？拒绝后该 SKU 永久跳过，仅可通过'已拒绝'列表手动恢复"（决策 5）
+- **rejected tab** 每条挂"恢复审核"按钮（调 POST /pending/{id}/restore）
+- AI 改写失败的条目（`_ai_rewrite_failed_title=true`）挂角标 → 用户可重新触发 AI 或手动改
 - 类目映射缺失的商品标红 warning，引导用户去"映射管理"页
 
 ### 12.3 克隆日志
@@ -944,3 +1124,4 @@ grep -rn "datetime\.now\b\|datetime\.utcnow\|NOW()\|CURRENT_TIMESTAMP" app/servi
 | 日期 | 版本 | 作者 | 变更 |
 |---|---|---|---|
 | 2026-05-02 | v1 | 老林 | 初稿：Phase 1 自营双店克隆 + Phase 2 公开 API 留口 + 4 张新表 + 1 个 ALTER |
+| 2026-05-02 | v2 | 老林 | 老张 review 9 条采纳：providers 按平台分文件 + factory 工厂；新建草稿 product 状态机；Phase 2 UNIQUE 改造 TODO；首次扫描窗口 7 天；AI sem=5 + 失败 fallback；restore 误拒恢复接口；*Client 不绕路约定；source_shop_id 反查约定 |
