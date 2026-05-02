@@ -18,6 +18,9 @@ import {
   DollarOutlined,
   LineChartOutlined,
   KeyOutlined,
+  CopyOutlined,
+  AuditOutlined,
+  FileSearchOutlined,
 } from '@ant-design/icons'
 import { useAuthStore } from '@/stores/authStore'
 
@@ -67,6 +70,16 @@ const menuItems = [
       { key: '/reports/keywords', icon: <KeyOutlined />, label: '关键词统计' },
       { key: '/reports/search-insights', icon: <SearchOutlined />, label: '搜索词洞察' },
       { key: '/reports', icon: <LineChartOutlined />, label: '综合报表' },
+    ],
+  },
+  {
+    key: 'clone-group',
+    icon: <CopyOutlined />,
+    label: '店铺克隆',
+    children: [
+      { key: '/clone/tasks', icon: <CopyOutlined />, label: '克隆任务' },
+      { key: '/clone/pending', icon: <AuditOutlined />, label: '待审核商品' },
+      { key: '/clone/logs', icon: <FileSearchOutlined />, label: '克隆日志' },
     ],
   },
   {

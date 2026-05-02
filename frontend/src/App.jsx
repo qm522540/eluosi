@@ -12,6 +12,9 @@ import Reports from '@/pages/Reports'
 import KeywordStats from '@/pages/reports/KeywordStats'
 import SearchInsights from '@/pages/reports/SearchInsights'
 import Settings from '@/pages/Settings'
+import CloneTaskList from '@/pages/clone/CloneTaskList'
+import PendingReview from '@/pages/clone/PendingReview'
+import CloneLogs from '@/pages/clone/CloneLogs'
 import AppLayout from '@/components/AppLayout'
 import AuthRoute from '@/components/AuthRoute'
 
@@ -40,6 +43,10 @@ const App = () => {
         <Route path="reports" element={<Reports />} />
         <Route path="reports/keywords" element={<KeywordStats />} />
         <Route path="reports/search-insights" element={<SearchInsights />} />
+        <Route path="clone" element={<Navigate to="/clone/tasks" replace />} />
+        <Route path="clone/tasks" element={<CloneTaskList />} />
+        <Route path="clone/pending" element={<PendingReview />} />
+        <Route path="clone/logs" element={<CloneLogs />} />
         <Route path="settings" element={<Settings />} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
