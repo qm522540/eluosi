@@ -119,7 +119,7 @@ const Tracking = () => {
               <Space direction="vertical" size={4}>
                 <Text>{data?.hint || '等平台订阅开通后，每日凌晨自动拉取'}</Text>
                 <Text type="secondary" style={{ fontSize: 12 }}>
-                  开通订阅后，可在 SEO 管理 → 优化建议 页面点「刷新候选池」手动触发一次同步。
+                  开通订阅后，可在 SEO 管理 → 自然搜索词 页面点「刷新候选池」手动触发一次同步。
                 </Text>
               </Space>
             }
