@@ -282,6 +282,25 @@ def delete_task(db: Session, tenant_id: int, task_id: int) -> dict:
     return {"code": 0, "data": {"id": task.id, "deleted": True}}
 
 
+# ==================== scan-now (调 scan_engine) ====================
+
+async def scan_now(db: Session, tenant_id: int, task_id: int) -> dict:
+    """POST /tasks/{task_id}/scan-now — 同步触发一次扫描
+
+    Phase 1 简化: 不加 Redis 分布式锁 (TODO: 高并发下补 clone:scan:lock:{task_id})。
+    """
+    from app.services.clone.scan_engine import _run_scan
+
+    # 校验任务存在 + 启用
+    task = db.query(CloneTask).filter(
+        CloneTask.id == task_id, CloneTask.tenant_id == tenant_id,
+    ).first()
+    if not task:
+        return {"code": ErrorCode.CLONE_TASK_NOT_FOUND, "msg": "克隆任务不存在"}
+
+    return await _run_scan(db, task_id, tenant_id)
+
+
 # ==================== §5.2 待审核商品 ====================
 
 def list_pending(db: Session, tenant_id: int,

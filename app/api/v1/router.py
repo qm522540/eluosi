@@ -1,6 +1,6 @@
 from fastapi import APIRouter
 
-from app.api.v1 import system, auth, shops, products, ads, finance, notifications, bid_management, category_mapping, keyword_stats, search_insights, seo, data_sources
+from app.api.v1 import system, auth, shops, products, ads, finance, notifications, bid_management, category_mapping, keyword_stats, search_insights, seo, data_sources, clone
 
 api_router = APIRouter()
 
@@ -42,6 +42,9 @@ api_router.include_router(seo.router, prefix="/seo", tags=["SEO优化"])
 
 # 数据源管理（系统设置 → 数据源 Tab：店铺 API 总开关 + 单数据源开关）
 api_router.include_router(data_sources.router, prefix="/data-sources", tags=["数据源管理"])
+
+# 店铺克隆（A 店自动跟踪 B 店上新 → 待审核 → 推 A 上架）
+api_router.include_router(clone.router, prefix="/clone", tags=["店铺克隆"])
 
 # 后续模块:
 # from app.api.v1 import inventory

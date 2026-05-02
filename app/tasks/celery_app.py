@@ -34,6 +34,7 @@ celery_app.conf.update(
         "app.tasks.cluster_oracle_sync",
         "app.tasks.seo_engine_task",
         "app.tasks.manual_trigger_task",
+        "app.tasks.clone_tasks",
     ],
 )
 
@@ -99,6 +100,18 @@ celery_app.conf.beat_schedule = {
     "wb-search-texts-daily": {
         "task": "app.tasks.wb_search_texts_task.sync_wb_search_texts",
         "schedule": crontab(hour=4, minute=0),
+    },
+    # 店铺克隆每日扫描 (MSK 03:30) — 扫所有 is_active=1 任务, 包含 follow_price_change 跟价
+    # 详见 docs/api/store_clone.md §6.1
+    "clone-daily-scan": {
+        "task": "app.tasks.clone_tasks.daily_scan_all_tasks",
+        "schedule": crontab(hour=3, minute=30),
+    },
+    # 店铺克隆已批准的 pending 异步上架 (每 5 分钟扫一次 status='approved')
+    # 详见 docs/api/store_clone.md §6.2
+    "clone-publish-pending": {
+        "task": "app.tasks.clone_tasks.publish_approved_pending",
+        "schedule": crontab(minute="*/5"),
     },
     # WB 顶级搜索集群 oracle 同步 — 2026-04-23 证实 WB cmp API 做了 IP 绑定，
     # 从服务器调会 401（JWT 只在用户浏览器 IP 下有效）。暂停定时，只保留 task
