@@ -120,83 +120,116 @@ const CloneTaskList = () => {
     }
   }
 
+  const PLATFORM_COLOR = { ozon: 'blue', wb: 'magenta', yandex: 'gold' }
+  const renderShop = (s) => {
+    if (!s) return <Text type="secondary">-</Text>
+    return (
+      <Space size={4}>
+        <Tag color={PLATFORM_COLOR[s.platform] || 'default'} style={{ marginInlineEnd: 0 }}>
+          {s.platform}
+        </Tag>
+        <Text ellipsis style={{ maxWidth: 130 }}>{s.name}</Text>
+      </Space>
+    )
+  }
+
   const columns = [
     {
-      title: 'ID', dataIndex: 'id', width: 60,
+      title: 'ID', dataIndex: 'id', width: 60, align: 'center',
     },
     {
-      title: 'A 店（落地）', dataIndex: 'target_shop',
-      render: (s) => s ? `${s.name} (${s.platform})` : '-',
+      title: 'A 店 ← B 店', width: 240,
+      render: (_, t) => (
+        <div style={{ lineHeight: 1.6 }}>
+          <div>{renderShop(t.target_shop)}</div>
+          <div style={{ fontSize: 11, color: '#999' }}>← {renderShop(t.source_shop)}</div>
+        </div>
+      ),
     },
     {
-      title: 'B 店（被跟踪）', dataIndex: 'source_shop',
-      render: (s) => s ? `${s.name} (${s.platform})` : '-',
-    },
-    {
-      title: '状态', dataIndex: 'is_active', width: 80,
+      title: '状态', dataIndex: 'is_active', width: 70, align: 'center',
       render: (v) => v ? <Tag color="success">启用</Tag> : <Tag>停用</Tag>,
     },
     {
-      title: '配置', width: 220,
+      title: '配置', width: 200,
       render: (_, t) => (
-        <Space size={4} wrap>
-          <Tag>{t.title_mode === 'ai_rewrite' ? '标题AI' : '标题原文'}</Tag>
-          <Tag>{t.desc_mode === 'ai_rewrite' ? '描述AI' : '描述原文'}</Tag>
-          <Tag>{t.price_mode === 'same' ? '同价' : `${t.price_adjust_pct >= 0 ? '+' : ''}${t.price_adjust_pct}%`}</Tag>
-          {t.follow_price_change ? <Tag color="blue">跟价</Tag> : null}
+        <Space size={[4, 2]} wrap>
+          <Tooltip title={t.title_mode === 'ai_rewrite' ? '标题：AI 改写' : '标题：保留原文'}>
+            <Tag color={t.title_mode === 'ai_rewrite' ? 'purple' : 'default'}>
+              标题{t.title_mode === 'ai_rewrite' ? 'AI' : '原'}
+            </Tag>
+          </Tooltip>
+          <Tooltip title={t.desc_mode === 'ai_rewrite' ? '描述：AI 改写' : '描述：保留原文'}>
+            <Tag color={t.desc_mode === 'ai_rewrite' ? 'purple' : 'default'}>
+              描述{t.desc_mode === 'ai_rewrite' ? 'AI' : '原'}
+            </Tag>
+          </Tooltip>
+          <Tooltip title={t.price_mode === 'same' ? '价格：同 B 店' : `价格：B 店 × (1${t.price_adjust_pct >= 0 ? '+' : ''}${t.price_adjust_pct}%)`}>
+            <Tag color={t.price_mode === 'same' ? 'default' : 'orange'}>
+              {t.price_mode === 'same' ? '同价' : `${t.price_adjust_pct >= 0 ? '+' : ''}${t.price_adjust_pct}%`}
+            </Tag>
+          </Tooltip>
+          {t.follow_price_change && (
+            <Tooltip title="B 店改价后 A 店自动跟改，不走审核">
+              <Tag color="blue">跟价</Tag>
+            </Tooltip>
+          )}
         </Space>
       ),
     },
     {
-      title: '上次扫描', width: 240,
+      title: '上次扫描', width: 170,
       render: (_, t) => (
-        <div>
+        <div style={{ lineHeight: 1.5 }}>
           <Text type="secondary" style={{ fontSize: 12 }}>
-            {t.last_check_at ? new Date(t.last_check_at).toLocaleString() : '从未'}
+            {t.last_check_at ? new Date(t.last_check_at).toLocaleString('zh-CN', { hour12: false }) : '从未'}
           </Text>
           {t.last_check_at && (
-            <div style={{ fontSize: 12 }}>
-              <Tag color="green" style={{ marginInlineEnd: 4 }}>新 {t.last_publish_count}</Tag>
-              <Tag style={{ marginInlineEnd: 4 }}>跳 {t.last_skip_count}</Tag>
+            <div style={{ fontSize: 11, marginTop: 2 }}>
+              <Text type="success">新 {t.last_publish_count}</Text>
+              <Text type="secondary"> · 跳 {t.last_skip_count}</Text>
             </div>
           )}
         </div>
       ),
     },
     {
-      title: '待审 / 已发布', width: 130,
+      title: '待审 / 已发', width: 110, align: 'center',
       render: (_, t) => (
-        <Space>
-          <Tooltip title="点查看待审">
-            <Button type="link" size="small"
+        <Space size={4}>
+          <Tooltip title="点查看待审记录">
+            <Button type="link" size="small" style={{ padding: '0 4px' }}
               onClick={() => navigate(`/clone/pending?task_id=${t.id}`)}>
-              待审 {t.pending_count || 0}
+              {t.pending_count || 0}
             </Button>
           </Tooltip>
-          <Text type="secondary">/ {t.published_count || 0}</Text>
+          <Text type="secondary">/</Text>
+          <Text>{t.published_count || 0}</Text>
         </Space>
       ),
     },
     {
-      title: '操作', width: 280, fixed: 'right',
+      title: '操作', width: 170, fixed: 'right', align: 'center',
       render: (_, t) => (
-        <Space size={4}>
-          <Button size="small"
-            icon={t.is_active ? <PauseCircleOutlined /> : <PlayCircleOutlined />}
-            onClick={() => handleToggleActive(t)}>
-            {t.is_active ? '停用' : '启用'}
-          </Button>
-          <Button size="small" type="primary" icon={<ThunderboltOutlined />}
-            loading={scanningId === t.id}
-            onClick={() => handleScanNow(t)}>
-            立即扫描
-          </Button>
-          <Button size="small" icon={<EyeOutlined />}
-            onClick={() => navigate(`/clone/logs?task_id=${t.id}`)}>
-            日志
-          </Button>
+        <Space size={2}>
+          <Tooltip title={t.is_active ? '停用' : '启用'}>
+            <Button size="small" type="text"
+              icon={t.is_active ? <PauseCircleOutlined /> : <PlayCircleOutlined />}
+              onClick={() => handleToggleActive(t)} />
+          </Tooltip>
+          <Tooltip title="立即扫描">
+            <Button size="small" type="primary" icon={<ThunderboltOutlined />}
+              loading={scanningId === t.id}
+              onClick={() => handleScanNow(t)} />
+          </Tooltip>
+          <Tooltip title="查看日志">
+            <Button size="small" type="text" icon={<EyeOutlined />}
+              onClick={() => navigate(`/clone/logs?task_id=${t.id}`)} />
+          </Tooltip>
           <Popconfirm title="软删该任务？历史记录保留" onConfirm={() => handleDelete(t)}>
-            <Button size="small" danger icon={<DeleteOutlined />} />
+            <Tooltip title="删除">
+              <Button size="small" type="text" danger icon={<DeleteOutlined />} />
+            </Tooltip>
           </Popconfirm>
         </Space>
       ),
@@ -215,7 +248,8 @@ const CloneTaskList = () => {
       >
         <Table
           rowKey="id" dataSource={tasks} columns={columns}
-          loading={loading} scroll={{ x: 1200 }}
+          loading={loading} scroll={{ x: 1020 }}
+          size="middle"
           pagination={{ pageSize: 20 }}
         />
       </Card>
