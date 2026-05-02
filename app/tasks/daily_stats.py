@@ -10,7 +10,7 @@
 """
 
 import asyncio
-from datetime import datetime, date, timedelta, timezone
+from datetime import date, timedelta
 
 from app.utils.moscow_time import moscow_today, utc_now_naive
 

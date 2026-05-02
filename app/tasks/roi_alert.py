@@ -10,8 +10,6 @@
 - 花费 > 日预算80% 且 ROAS < 1.5 → 严重
 """
 
-from datetime import datetime, date, timedelta, timezone
-
 from app.utils.moscow_time import moscow_today, utc_now_naive
 from decimal import Decimal
 

@@ -5,7 +5,6 @@
 """
 
 import asyncio
-from datetime import datetime, timezone
 
 from app.tasks.celery_app import celery_app
 from app.database import SessionLocal
