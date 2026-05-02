@@ -104,7 +104,7 @@ const KeywordRollupTab = ({ shops = [], shopId, onShopChange, onJumpToProduct })
         ...crossShopIds.map(Number),
       ]))
       const res = await getKeywordRollupProducts(shopIds[0], {
-        keyword: kw, days, limit: 50, shop_ids: allSids.join(','),
+        keyword: kw, days, limit: 200, shop_ids: allSids.join(','),
       })
       if (res.code === 0) {
         setExpanded(prev => ({ ...prev, [kw]: { loading: false, items: res.data?.items || [] } }))
