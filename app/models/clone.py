@@ -72,6 +72,10 @@ class CloneTask(Base):
     )
     default_stock: Mapped[int] = mapped_column(Integer, nullable=False, default=999)
     follow_price_change: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=0)
+    follow_status_change: Mapped[int] = mapped_column(
+        SmallInteger, nullable=False, default=0,
+        comment="是否跟 B 店上下架 (migration 063); status_sync beat 处理",
+    )
 
     category_strategy: Mapped[str] = mapped_column(
         Enum("same_platform", "use_local_map", "reject_if_missing",

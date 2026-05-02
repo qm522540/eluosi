@@ -132,6 +132,18 @@ const CloneTaskList = () => {
     }
   }
 
+  const handleToggleFollowStatus = async (task, value) => {
+    try {
+      await cloneApi.updateTask(task.id, { follow_status_change: value })
+      message.success(value
+        ? '已开启跟上下架（B 下/上 → A 同步, status_sync beat 处理）'
+        : '已关闭跟上下架')
+      loadTasks()
+    } catch (e) {
+      message.error(e.message || '操作失败')
+    }
+  }
+
   const handleDelete = async (task) => {
     try {
       await cloneApi.deleteTask(task.id)
@@ -200,6 +212,18 @@ const CloneTaskList = () => {
                 onChange={(v) => handleToggleFollowPrice(t, v)} />
               <span style={{ fontSize: 12, color: t.follow_price_change ? '#1890ff' : '#999' }}>
                 跟价
+              </span>
+            </span>
+          </Tooltip>
+          <Tooltip title={t.follow_status_change
+            ? 'B 上下架 → A 自动跟. 当前阶段 A: DB 字段已生效, status_sync beat 内核占位 (等 Ozon API 端点)'
+            : '开启后, B 下架→A 下架, B 重上→A 已克隆过的同步上'}>
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+              <Switch size="small"
+                checked={!!t.follow_status_change}
+                onChange={(v) => handleToggleFollowStatus(t, v)} />
+              <span style={{ fontSize: 12, color: t.follow_status_change ? '#1890ff' : '#999' }}>
+                跟上下架
               </span>
             </span>
           </Tooltip>

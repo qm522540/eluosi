@@ -34,6 +34,7 @@ class CloneTaskCreate(BaseModel):
 
     default_stock: int = Field(999, ge=0, le=999999)
     follow_price_change: bool = False
+    follow_status_change: bool = False  # 11.3.2 跟上下架, status_sync beat 处理
 
     category_strategy: Literal["same_platform", "use_local_map", "reject_if_missing"] = "use_local_map"
 
@@ -58,6 +59,7 @@ class CloneTaskUpdate(BaseModel):
 
     default_stock: Optional[int] = Field(None, ge=0, le=999999)
     follow_price_change: Optional[bool] = None
+    follow_status_change: Optional[bool] = None  # 11.3.2
 
     category_strategy: Optional[Literal["same_platform", "use_local_map", "reject_if_missing"]] = None
 

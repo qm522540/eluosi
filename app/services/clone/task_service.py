@@ -37,6 +37,7 @@ def _task_to_dict(task: CloneTask, db: Optional[Session] = None,
         "price_adjust_pct": float(task.price_adjust_pct) if task.price_adjust_pct is not None else None,
         "default_stock": task.default_stock,
         "follow_price_change": bool(task.follow_price_change),
+        "follow_status_change": bool(task.follow_status_change),  # 11.3.2
         "category_strategy": task.category_strategy,
         "last_check_at": task.last_check_at.isoformat() + "Z" if task.last_check_at else None,
         "last_found_count": task.last_found_count,
@@ -146,6 +147,7 @@ def create_task(db: Session, tenant_id: int, data: dict) -> dict:
         price_adjust_pct=data.get("price_adjust_pct"),
         default_stock=data.get("default_stock", 999),
         follow_price_change=1 if data.get("follow_price_change") else 0,
+        follow_status_change=1 if data.get("follow_status_change") else 0,  # 11.3.2
         category_strategy=data.get("category_strategy", "use_local_map"),
     )
     db.add(task)
@@ -224,11 +226,12 @@ def update_task(db: Session, tenant_id: int, task_id: int, data: dict) -> dict:
     # 仅更新传入的字段
     mutable = {
         "title_mode", "desc_mode", "price_mode", "price_adjust_pct",
-        "default_stock", "follow_price_change", "category_strategy",
+        "default_stock", "follow_price_change", "follow_status_change",
+        "category_strategy",
     }
     for k, v in data.items():
         if k in mutable and v is not None:
-            if k == "follow_price_change":
+            if k in ("follow_price_change", "follow_status_change"):
                 v = 1 if v else 0
             setattr(task, k, v)
     db.commit()
