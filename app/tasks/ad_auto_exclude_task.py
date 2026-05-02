@@ -354,7 +354,7 @@ def auto_exclude_keywords(self):
                 cfg.last_run_saved = round(saved * 30, 2)  # 月省 = 日省 ×30
                 db.commit()
                 dur_ms = int((utc_now_naive() - t0).total_seconds() * 1000)
-                rec_status = "failed" if err else ("partial" if excluded == 0 else "success")
+                rec_status = "failed" if err else "success"
                 record_sync_run(db, shop.tenant_id, shop.id, "wb_ad_auto_exclude",
                                status=rec_status, rows=excluded, duration_ms=dur_ms,
                                msg=str(err)[:500] if err else f"saved/day={saved:.2f}")
