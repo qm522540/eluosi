@@ -285,7 +285,9 @@ const AiTitleModal = ({
                   {selectedCandidateIds.size === preview.candidates.length ? '全不选' : '全选'}
                 </Button>
               </Space>
-              <Space size={[6, 6]} wrap>
+              {/* 2026-05-02 老板拍：Antd Space wrap 在 modal 1100px 内不触发换行,
+                  导致 3 个候选词挤一行。改 CSS Grid auto-fill 强制每行多列对齐 */}
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: 6 }}>
                 {preview.candidates.map(c => {
                   const orders = (c.organic_orders || 0) + (c.paid_orders || 0)
                   return (
@@ -293,6 +295,7 @@ const AiTitleModal = ({
                       key={'cand-' + c.id}
                       checked={selectedCandidateIds.has(c.id)}
                       onChange={toggleSet(selectedCandidateIds, setSelectedCandidateIds).bind(null, c.id)}
+                      style={{ marginInlineStart: 0 }}
                     >
                       <Tooltip title={`score ${c.score?.toFixed?.(1) || '-'} / 自然曝光 ${c.organic_impressions} / 订单 ${orders}`}>
                         <span style={{ fontSize: 11, display: 'inline-block', lineHeight: 1.3 }}>
@@ -310,7 +313,7 @@ const AiTitleModal = ({
                     </Checkbox>
                   )
                 })}
-              </Space>
+              </div>
             </div>
           )}
 
@@ -331,7 +334,7 @@ const AiTitleModal = ({
                   {preview.category_top_keywords.every(k => selectedCategoryKeywords.has(k.keyword)) ? '全不选' : '全选'}
                 </Button>
               </Space>
-              <Space size={[6, 6]} wrap>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: 6 }}>
                 {preview.category_top_keywords.map(k => {
                   const cross = k.looks_cross_category
                   return (
@@ -339,6 +342,7 @@ const AiTitleModal = ({
                       key={'cat-' + k.keyword}
                       checked={selectedCategoryKeywords.has(k.keyword)}
                       onChange={toggleSet(selectedCategoryKeywords, setSelectedCategoryKeywords).bind(null, k.keyword)}
+                      style={{ marginInlineStart: 0 }}
                     >
                       <Tooltip title={cross
                         ? '⚠️ 看起来含其他类目主词 (戒指/项链/胸针 等), 默认未勾; 若你确认本商品同样适用可手动勾上'
@@ -361,7 +365,7 @@ const AiTitleModal = ({
                     </Checkbox>
                   )
                 })}
-              </Space>
+              </div>
             </div>
           )}
 
