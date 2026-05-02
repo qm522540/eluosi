@@ -482,8 +482,12 @@ const CloneTaskList = () => {
         okButtonProps={{ disabled: previewState.selectedSkus.size === 0 }}
         cancelText="取消"
         onOk={handleConfirmClone}
-        onCancel={() => !previewState.confirming && setPreviewState(s => ({ ...s, open: false }))}
+        onCancel={() => !previewState.confirming && setPreviewState({
+          open: false, task: null, candidates: [], stats: {},
+          selectedSkus: new Set(), confirming: false,
+        })}
         maskClosable={!previewState.confirming}
+        destroyOnClose
       >
         <div style={{ background: '#f5f5f5', padding: 10, marginBottom: 10, fontSize: 13, borderRadius: 4 }}>
           <Space split={<span style={{ color: '#ddd' }}>|</span>} wrap>
