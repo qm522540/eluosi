@@ -41,6 +41,124 @@ def _aggregate_stock(p: dict) -> int:
     )
 
 
+def _to_int(v) -> int:
+    try:
+        return int(float(v)) if v not in (None, "", 0) else 0
+    except (TypeError, ValueError):
+        return 0
+
+
+# Ozon 视频在 complex_attributes 里, attr_id=21841 (URL list) / 21837 (封面 URL)
+OZON_VIDEO_ATTR_ID = 21841
+OZON_VIDEO_COVER_ATTR_ID = 21837
+
+
+def _extract_videos_from_complex(complex_attrs: list) -> tuple[list, str]:
+    """从 /v4/info/attributes 的 complex_attributes 里挖视频 URL list 和封面 URL.
+
+    complex_attributes 结构: [{id, complex_id, values:[{value, dictionary_value_id}]}, ...]
+    """
+    videos: list = []
+    cover = ""
+    for ca in complex_attrs or []:
+        try:
+            aid = int(ca.get("id") or 0)
+        except (TypeError, ValueError):
+            continue
+        for v in ca.get("values") or []:
+            url = (v.get("value") if isinstance(v, dict) else v) or ""
+            url = str(url).strip()
+            if not url:
+                continue
+            if aid == OZON_VIDEO_ATTR_ID:
+                videos.append(url)
+            elif aid == OZON_VIDEO_COVER_ATTR_ID and not cover:
+                cover = url
+    return videos, cover
+
+
+def _build_snapshot(*, offer_id: str, info: dict, full_attr: dict, description: str) -> ProductSnapshot:
+    """组装 ProductSnapshot — 老板 2026-05-03 BUG 修法:
+    - barcode / depth / width / height / weight / color_image 从 /v4/info/attributes 顶层取
+      (不是 /v3/info/list, 那个根本不返这些字段)
+    - 视频从 complex_attributes 里挖 attr_id=21841 (URL list) + 21837 (封面)
+    - attributes 直接透传 (provider 层不归一化, publish_engine 处理 dictionary_value_id)
+    """
+    desc_cat_id = info.get("description_category_id")
+    platform_category_id = str(desc_cat_id) if desc_cat_id else ""
+
+    images = info.get("images") or []
+    primary = info.get("primary_image")
+    if isinstance(primary, list):
+        primary = primary[0] if primary else None
+    if primary and primary not in images:
+        images = [primary] + list(images)
+
+    type_id_val = info.get("type_id")
+    type_id_str = str(type_id_val) if type_id_val else ""
+
+    # 物流字段 — Ozon /v4/info/attributes 顶层真有 barcode / depth / width / height / weight
+    # /v3/info/list 顶层没有! 老板 BUG 修关键: 之前从 info 取, 永远是 0
+    barcode_val = (full_attr.get("barcode") or "").strip()
+    if not barcode_val:
+        barcodes_list = full_attr.get("barcodes") or []
+        if barcodes_list:
+            barcode_val = str(barcodes_list[0]).strip()
+    barcode_val = barcode_val[:50]
+
+    depth = _to_int(full_attr.get("depth"))
+    width = _to_int(full_attr.get("width"))
+    height = _to_int(full_attr.get("height"))
+    weight = _to_int(full_attr.get("weight"))
+
+    # 单位换算 — Ozon 后台允许 mm/cm/m, g/kg, 我们统一存 mm + g
+    dim_unit = (full_attr.get("dimension_unit") or "mm").lower()
+    if dim_unit == "cm":
+        depth, width, height = depth * 10, width * 10, height * 10
+    elif dim_unit == "m":
+        depth, width, height = depth * 1000, width * 1000, height * 1000
+    weight_unit = (full_attr.get("weight_unit") or "g").lower()
+    if weight_unit == "kg":
+        weight = weight * 1000
+
+    # 视频 — 在 complex_attributes 里 (老板 BUG 7 真正修法)
+    videos, video_cover = _extract_videos_from_complex(full_attr.get("complex_attributes") or [])
+    if not video_cover:
+        video_cover = (full_attr.get("color_image") or "").strip()
+
+    # attributes — 优先用 /v4/info/attributes 的 attributes (字段全, 含 dictionary_value_id)
+    attributes = full_attr.get("attributes") or []
+    # complex_attributes 里除了视频也可能有别的多层属性 (变体 SKU 等), 一并透传给 publish
+    # publish_engine 的归一化逻辑接受 complex_id, 直接合并即可
+    complex_extra = [ca for ca in (full_attr.get("complex_attributes") or [])
+                     if int(ca.get("id") or 0) not in (OZON_VIDEO_ATTR_ID, OZON_VIDEO_COVER_ATTR_ID)]
+    if complex_extra:
+        attributes = list(attributes) + complex_extra
+
+    return ProductSnapshot(
+        source_platform="ozon",
+        source_sku_id=offer_id,
+        title_ru=(info.get("name") or "")[:500],
+        description_ru=description,
+        price_rub=_to_decimal(info.get("price")),
+        old_price_rub=_to_decimal(info.get("old_price")) if info.get("old_price") else None,
+        stock=_aggregate_stock(info),
+        images=images,
+        platform_category_id=platform_category_id,
+        platform_category_name="",
+        type_id=type_id_str,
+        attributes=attributes,
+        barcode=barcode_val,
+        depth_mm=depth,
+        width_mm=width,
+        height_mm=height,
+        weight_g=weight,
+        videos=videos,
+        video_cover=video_cover,
+        raw=info,
+    )
+
+
 class OzonSellerProvider(BaseShopProvider):
     """Ozon Seller API 实现"""
 
@@ -108,64 +226,17 @@ class OzonSellerProvider(BaseShopProvider):
         snapshots: List[ProductSnapshot] = []
         for pid in product_ids:
             info = info_map.get(pid) or {}
+            full_attr = attributes_map.get(pid) or {}      # /v4/product/info/attributes 完整 item
             offer_id = str(info.get("offer_id") or "")
             if not offer_id:
                 logger.warning(f"Ozon product_id={pid} 缺 offer_id, 跳过")
                 continue
 
-            desc_cat_id = info.get("description_category_id")
-            platform_category_id = str(desc_cat_id) if desc_cat_id else ""
-
-            images = info.get("images") or []
-            # 部分 Ozon 商品 primary_image 是 list, 取首个并去重塞 images 头
-            primary = info.get("primary_image")
-            if isinstance(primary, list):
-                primary = primary[0] if primary else None
-            if primary and primary not in images:
-                images = [primary] + list(images)
-
-            type_id_val = info.get("type_id")
-            type_id_str = str(type_id_val) if type_id_val else ""
-
-            # 物流字段 (老板 2026-05-03 报 BUG: 之前 hardcode 占位)
-            # Ozon /v3/product/info/list 顶层有 barcodes / depth / width / height / weight 字段
-            barcodes_list = info.get("barcodes") or []
-            barcode_val = (str(barcodes_list[0])[:50] if barcodes_list else "")
-
-            def _to_int(v):
-                try:
-                    return int(float(v)) if v not in (None, "", 0) else 0
-                except (TypeError, ValueError):
-                    return 0
-
-            # 视频字段 — Ozon info 可能有 'video' (单 URL) 或 'videos' (list)
-            video_list = info.get("videos") or []
-            if not video_list and info.get("video"):
-                video_list = [info.get("video")]
-            video_cover_val = info.get("video_cover") or info.get("color_image") or ""
-
-            snapshots.append(ProductSnapshot(
-                source_platform="ozon",
-                source_sku_id=offer_id,             # Ozon 用 offer_id 作 B 平台 SKU
-                title_ru=(info.get("name") or "")[:500],
-                description_ru=descriptions.get(pid, "") or "",
-                price_rub=_to_decimal(info.get("price")),
-                old_price_rub=_to_decimal(info.get("old_price")) if info.get("old_price") else None,
-                stock=_aggregate_stock(info),
-                images=images,
-                platform_category_id=platform_category_id,
-                platform_category_name="",          # info/list 不返, scan_engine 走 028 反查
-                type_id=type_id_str,                # Ozon /v3/product/import 必填
-                attributes=attributes_map.get(pid) or [],
-                # 物流字段 — Ozon import 必填, 没拉到留 0 由 publish_engine 占位兜底
-                barcode=barcode_val,
-                depth_mm=_to_int(info.get("depth")),
-                width_mm=_to_int(info.get("width")),
-                height_mm=_to_int(info.get("height")),
-                weight_g=_to_int(info.get("weight")),
-                videos=[str(v) for v in video_list if v],
-                video_cover=str(video_cover_val) if video_cover_val else "",
-                raw=info,
+            snapshots.append(_build_snapshot(
+                offer_id=offer_id,
+                info=info,
+                full_attr=full_attr,
+                description=descriptions.get(pid, "") or "",
             ))
 
         return snapshots, next_cursor
@@ -202,51 +273,9 @@ class OzonSellerProvider(BaseShopProvider):
         descriptions = await client.fetch_product_descriptions_batch([int(pid)])
         attributes_map = await client.fetch_product_attributes_batch([int(pid)])
 
-        images = info.get("images") or []
-        primary = info.get("primary_image")
-        if isinstance(primary, list):
-            primary = primary[0] if primary else None
-        if primary and primary not in images:
-            images = [primary] + list(images)
-
-        type_id_val = info.get("type_id")
-        type_id_str = str(type_id_val) if type_id_val else ""
-
-        # 物流字段 (跟 list_products 同步)
-        barcodes_list = info.get("barcodes") or []
-        barcode_val = (str(barcodes_list[0])[:50] if barcodes_list else "")
-
-        def _to_int(v):
-            try:
-                return int(float(v)) if v not in (None, "", 0) else 0
-            except (TypeError, ValueError):
-                return 0
-
-        # 视频
-        video_list = info.get("videos") or []
-        if not video_list and info.get("video"):
-            video_list = [info.get("video")]
-        video_cover_val = info.get("video_cover") or info.get("color_image") or ""
-
-        return ProductSnapshot(
-            source_platform="ozon",
-            source_sku_id=str(info.get("offer_id") or source_sku_id),
-            title_ru=(info.get("name") or "")[:500],
-            description_ru=descriptions.get(int(pid), "") or "",
-            price_rub=_to_decimal(info.get("price")),
-            old_price_rub=_to_decimal(info.get("old_price")) if info.get("old_price") else None,
-            stock=_aggregate_stock(info),
-            images=images,
-            platform_category_id=str(info.get("description_category_id") or ""),
-            platform_category_name="",
-            type_id=type_id_str,
-            attributes=attributes_map.get(int(pid)) or [],
-            barcode=barcode_val,
-            depth_mm=_to_int(info.get("depth")),
-            width_mm=_to_int(info.get("width")),
-            height_mm=_to_int(info.get("height")),
-            weight_g=_to_int(info.get("weight")),
-            videos=[str(v) for v in video_list if v],
-            video_cover=str(video_cover_val) if video_cover_val else "",
-            raw=info,
+        return _build_snapshot(
+            offer_id=str(info.get("offer_id") or source_sku_id),
+            info=info,
+            full_attr=attributes_map.get(int(pid)) or {},
+            description=descriptions.get(int(pid), "") or "",
         )

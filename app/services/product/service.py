@@ -887,7 +887,8 @@ def _sync_ozon_products(db: Session, shop, tenant_id: int) -> dict:
         ozon_description = desc_map.get(int(pid)) if isinstance(desc_map, dict) else None
         # 属性 (v4/product/info/attributes 批量拉的) — 拼成 [{id, name_ru, name_zh, value_ru}, ...]
         # AI 描述生成靠这字段拼 prompt; 没映射的 attr_id 留 name 空, AI 从 value 推
-        ozon_raw_attrs = attrs_map.get(int(pid)) if isinstance(attrs_map, dict) else None
+        # 2026-05-03 fetch_product_attributes_batch 改返 full item dict, 这里取 .attributes
+        ozon_raw_attrs = (attrs_map.get(int(pid)) or {}).get("attributes") if isinstance(attrs_map, dict) else None
         ozon_variant_attrs = None
         if ozon_raw_attrs:
             tmp = []

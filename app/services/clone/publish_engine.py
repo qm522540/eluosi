@@ -322,16 +322,16 @@ async def _publish_to_ozon(
     if description:
         attributes.append({"id": OZON_ATTR_DESC, "values": [{"value": description}]})
 
-    # 视频 (BUG 7) — Ozon 视频是 attribute 形式 (attr_id=21841 视频/21837 封面),
-    # 跟 import 一起传, 不需要单独 API. 老板拍"一起做好" 2026-05-03 凌晨.
-    # B 店 attributes 透传时可能已含 21841/21837, 这里覆盖以确保用我们采集到的最新值.
+    # 视频 (BUG 7) — Ozon 视频是 complex attribute (id=21841 视频/21837 封面 + complex_id=100001),
+    # 跟 import 一起传, 不需要单独 API. 注: 必须带 complex_id=100001, 否则 Ozon 视为普通
+    # attribute 静默丢弃. 实测 B 店采集 complex_attributes[].complex_id == 100001.
     src_videos = payload.get("videos") or []
     src_video_cover = (payload.get("video_cover") or "").strip()
     if src_videos:
         attributes = [a for a in attributes if a["id"] != OZON_ATTR_VIDEO]
-        # Ozon 视频 attribute 接受多 value, 每个 value 一个 URL
         attributes.append({
             "id": OZON_ATTR_VIDEO,
+            "complex_id": 100001,
             "values": [{"value": str(v)} for v in src_videos if v],
         })
         logger.info(f"publish offer={new_offer_id} 视频塞 import: {len(src_videos)} 个")
@@ -339,6 +339,7 @@ async def _publish_to_ozon(
         attributes = [a for a in attributes if a["id"] != OZON_ATTR_VIDEO_COVER]
         attributes.append({
             "id": OZON_ATTR_VIDEO_COVER,
+            "complex_id": 100001,
             "values": [{"value": src_video_cover}],
         })
 

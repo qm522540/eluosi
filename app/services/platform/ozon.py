@@ -816,14 +816,18 @@ class OzonClient(BasePlatformClient):
     async def fetch_product_attributes_batch(
         self, product_ids: list, batch_size: int = 100,
     ) -> dict:
-        """批量拉商品属性,返回 {product_id: [{id, values:[{value}]}, ...]}。
+        """批量拉商品属性,返回 {product_id: full_item_dict}。
 
         API: POST /v4/product/info/attributes
-        body: {"filter": {"product_id": [...], "visibility": "ALL"}, "limit": 100, "last_id": ""}
-        每次最多 1000 product_id,但属性大时返回包很大,按 100 一批稳。
+        返回的 item 顶层有: attributes / complex_attributes / barcode / barcodes /
+        depth / width / height / weight / weight_unit / dimension_unit / color_image /
+        pdf_list / images / primary_image / model_info / 等。
+
+        老板 2026-05-03 报 BUG: 之前只 extract 了 attributes 子字段, 把 barcode /
+        dimensions / weight / video (complex_attributes 里 attr_id=21841) 全丢了,
+        导致克隆上架后这些字段都空。修法是直接返回 full item, 调用方按需取。
 
         部分失败 (网络 / 单批 5xx) 不抛,继续其余批次。
-        AI 描述生成靠这字段,所以对接调用方应在 sync 时调一次。
         """
         if not product_ids:
             return {}
@@ -846,9 +850,7 @@ class OzonClient(BasePlatformClient):
                         pid = it.get("id") or it.get("product_id")
                         if not pid:
                             continue
-                        attrs = it.get("attributes") or []
-                        if attrs:
-                            results[int(pid)] = attrs
+                        results[int(pid)] = it
                     next_id = (resp or {}).get("last_id") or ""
                     if not next_id or next_id == last_id:
                         break
