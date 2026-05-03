@@ -78,6 +78,29 @@ class WBSellerQuotaExhausted(BaseException):
     """
     pass
 
+
+class WBSellerRateLimit429Exhausted(BaseException):
+    """端点级 429 burnout 信号 — `_request` 内置 5/10/15s 重试 3 次仍 429。
+
+    silent-detector v2 物种识别修法（5-2 实战发现）：
+    - 旧行为：`_request` 重试 3 次失败 → 静默 `return {}` → 调用方拿空列表
+    - 后果：search_insights silent-detector 把"端点级 429 burnout"误判为"真 silent"，
+      sleep 120s 退避对 429 burnout 无效（恢复时间 > 120s），白白浪费 quota
+    - 新行为：3 次失败 → 抛本异常 → 调用方按物种分流处理
+
+    跟 WBSellerQuotaExhausted 的区别：
+    - WBSellerQuotaExhausted: seller 级"global limiter, per seller" → trip 1h 冷却
+    - 本异常: 端点级普通 429 burnout → 短期 (分钟级) 退避通常就能恢复
+
+    继承 BaseException 同上理由：让 `except Exception: return []` 兜底网放行，
+    避免被吞导致上层 silent-detector 重新误判。
+
+    上游处理建议：
+    - search_insights.refresh_shop: 立即 quota_break 整体退出，别 sleep 浪费
+    - 别的 fetch_xxx 调用方：视场景 catch（大多直接放行让 base 网兜）
+    """
+    pass
+
 # 模块级 Redis client（lazy-init 单例），避免每次 PATCH bids 都创建新连接。
 # redis-py 的 Redis 对象本身维护 ConnectionPool,单例就够用。
 _redis_client = None
@@ -289,7 +312,12 @@ class WBClient(BasePlatformClient):
                     request=e.request, response=e.response,
                 )
 
-        return {}
+        # for 循环跑完 = 3 次都 429 退避失败 (line 250-257 continue 路径)。
+        # 旧行为静默 `return {}`,会让 silent-detector 把端点级 429 burnout 误判为真 silent。
+        # 改抛 WBSellerRateLimit429Exhausted,调用方按物种分流。
+        raise WBSellerRateLimit429Exhausted(
+            f"WB API 429 重试 {max_retries} 次仍失败 shop_id={self.shop_id} url={url}"
+        )
 
     # ==================== 连接测试 ====================
 

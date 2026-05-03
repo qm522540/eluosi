@@ -19,7 +19,7 @@ from sqlalchemy.orm import Session
 
 from app.services.platform.base import SubscriptionRequiredError
 from app.services.platform.wb import (
-    WBClient, WBSellerQuotaExhausted,
+    WBClient, WBSellerQuotaExhausted, WBSellerRateLimit429Exhausted,
     _get_redis_client, quota_circuit_key_for_shop, quota_circuit_key_for_seller,
 )
 from app.services.platform.ozon import OzonClient
@@ -473,7 +473,10 @@ async def refresh_shop(
             # 04-28 那套 trip cooldown 抓不到，必须看 input/output ratio。
             # 文档：memory/reference_wb_silent_rate_limit.md
             WB_SILENT_BATCH_THRESHOLD = 3   # 连续 N 批 0 行 → 进入 silent 模式
-            WB_SILENT_PAUSE_S = 120         # silent 模式下批间 sleep（30 → 120s 退避）
+            WB_SILENT_PAUSE_S = 300         # silent 模式下批间 sleep（30 → 300s 退避）
+            # 5-2 PT.Gril 实战：v1 用 120s 对真 silent 不够长，调到 300s 给恢复窗口；
+            # v2 物种识别修法：429 burnout 会单独走 WBSellerRateLimit429Exhausted 分支
+            # 直接 quota_break，不再用 silent sleep 浪费 quota。
             WB_SILENT_DAY_TRIGGER_LIMIT = 5  # 当天 silent 触发累计 N 次 → 放弃当天
 
             nm_to_pid = {}
@@ -520,6 +523,20 @@ async def refresh_shop(
                                 f"date={d_str} batch={bi+1}/{batches_per_day}: {e}"
                             )
                             errors.append({"type": "quota", "quota_exhausted": True,
+                                           "date": d_str, "at_batch": bi + 1,
+                                           "reason": str(e)[:200]})
+                            quota_break = True
+                            break
+                        except WBSellerRateLimit429Exhausted as e:
+                            # silent-detector v2 物种识别修法：端点级 429 burnout
+                            # 跟"真 silent (HTTP 200 + 0 行)"区分，sleep 多久都没用，
+                            # 直接 quota_break 整体退出，避免浪费 quota。
+                            logger.warning(
+                                f"WB 429 burnout shop={shop.id} date={d_str} "
+                                f"batch={bi+1}/{batches_per_day}: {e} → 整体退出"
+                            )
+                            errors.append({"type": "rate_limit_429_burnout",
+                                           "rate_limit_burnout": True,
                                            "date": d_str, "at_batch": bi + 1,
                                            "reason": str(e)[:200]})
                             quota_break = True
