@@ -474,6 +474,51 @@ def publish_pending_now(db: Session, tenant_id: int, pending_id: int,
     }}
 
 
+async def publish_pending_sync(db: Session, tenant_id: int, pending_id: int,
+                               user_id: Optional[int] = None) -> dict:
+    """同步发布 — 直接 await _publish_pending, 不走 Celery 排队.
+
+    老板拍: 单条点"确认发布"就要立刻看到结果, 不接受"几秒后才执行"的体感.
+    单条 publish 含 OSS 下图 ≈ 20-30 秒, 在 nginx 60s timeout 内.
+    批量发布 (N 件 × 30s) 必然超 timeout, 仍走 Celery 异步.
+    """
+    p = db.query(ClonePendingProduct).filter(
+        ClonePendingProduct.id == pending_id,
+        ClonePendingProduct.tenant_id == tenant_id,
+    ).first()
+    if not p:
+        return {"code": ErrorCode.CLONE_PENDING_NOT_FOUND, "msg": "待审核记录不存在"}
+    if p.status not in ("pending", "failed"):
+        return {"code": ErrorCode.CLONE_PENDING_INVALID_STATUS,
+                "msg": f"当前状态 {p.status} 不允许发布"}
+
+    task = db.query(CloneTask).filter(
+        CloneTask.id == p.task_id, CloneTask.tenant_id == tenant_id,
+    ).first()
+    if not task:
+        return {"code": ErrorCode.CLONE_TASK_NOT_FOUND, "msg": "克隆任务不存在"}
+    if not task.is_active:
+        return {"code": ErrorCode.CLONE_TASK_NOT_FOUND,
+                "msg": "克隆任务已停用 — 请到「克隆任务」启用后再发布"}
+
+    # 标 approved 后直接 await publish_engine, 不经 Celery
+    p.status = "approved"
+    p.reviewed_at = utc_now_naive()
+    p.reviewed_by = user_id
+    db.commit()
+
+    db.add(CloneLog(
+        tenant_id=tenant_id, task_id=p.task_id,
+        log_type="review", status="success",
+        detail={"action": "publish_sync", "pending_id": pending_id},
+    ))
+    db.commit()
+
+    from app.services.clone.publish_engine import _publish_pending
+    r = await _publish_pending(db, pending_id)
+    return r
+
+
 def batch_publish_pending(db: Session, tenant_id: int, ids: List[int],
                           user_id: Optional[int] = None) -> dict:
     """POST /pending/publish-batch — 批量发布"""

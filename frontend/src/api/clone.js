@@ -54,6 +54,10 @@ export const batchReject = (ids, reject_reason) =>
 // 简化设计: 待审核页"发布"按钮直接触发 — 单条 / 批量
 export const publishPending = (id) => request.post(`${BASE}/pending/${id}/publish`)
 
+// 同步发布 — 单条用; 后端直接 await publish_engine, 立刻拿到上架结果 (耗时 20-30 秒)
+export const publishPendingSync = (id) =>
+  request.post(`${BASE}/pending/${id}/publish-sync`, null, { timeout: 90000 })
+
 export const batchPublish = (ids) =>
   request.post(`${BASE}/pending/publish-batch`, { ids })
 

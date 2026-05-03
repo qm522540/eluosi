@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import {
   Card, Tabs, List, Button, Space, Tag, Image, Modal, Input, message,
-  Empty, Typography, Select, Checkbox, Tooltip,
+  Empty, Typography, Select, Checkbox, Tooltip, Spin,
 } from 'antd'
 import {
   CheckOutlined, EditOutlined,
@@ -61,7 +61,7 @@ const PendingReview = () => {
             将要发布: <strong>{title.length > 60 ? title.slice(0, 60) + '...' : title}</strong>
           </p>
           <p style={{ color: '#fa8c16', marginBottom: 4 }}>
-            ⚠️ 发布后会立即推送到 Ozon, <strong>1 分钟内</strong>真上架
+            ⚠️ 点确认后立刻推送到 Ozon, 含图片下载约 <strong>20-30 秒</strong>
           </p>
           <p style={{ color: '#999', fontSize: 13, marginBottom: 0 }}>
             撤架需到 Ozon 后台手动下架, 系统这边无法回滚
@@ -72,12 +72,32 @@ const PendingReview = () => {
       okButtonProps: { type: 'primary' },
       cancelText: '取消',
       onOk: async () => {
+        const loadingModal = Modal.info({
+          title: '正在发布到 Ozon...',
+          icon: null,
+          width: 420,
+          okButtonProps: { style: { display: 'none' } },
+          closable: false,
+          maskClosable: false,
+          content: (
+            <div style={{ textAlign: 'center', padding: '24px 0' }}>
+              <Spin size="large" />
+              <div style={{ marginTop: 16, color: '#595959', lineHeight: 1.7 }}>
+                下载图片到 OSS + 调 Ozon /v3/product/import<br />
+                通常 <strong>20-30 秒</strong>, 请稍候...
+              </div>
+            </div>
+          ),
+        })
         try {
-          await cloneApi.publishPending(id)
-          message.success('已加入上架队列, 1 分钟内自动上架到平台')
+          await cloneApi.publishPendingSync(id)
+          loadingModal.destroy()
+          message.success('已上架到 Ozon')
           load()
         } catch (e) {
+          loadingModal.destroy()
           message.error(e.message || '发布失败')
+          load()
         }
       },
     })
@@ -91,10 +111,10 @@ const PendingReview = () => {
       content: (
         <div style={{ lineHeight: 1.7 }}>
           <p style={{ color: '#fa8c16', marginBottom: 4 }}>
-            ⚠️ 发布后立即推送到 Ozon, <strong>1 分钟内</strong>真上架
+            ⚠️ 后台立刻开始排队上架到 Ozon, 每件约 <strong>20-30 秒</strong>
           </p>
           <p style={{ color: '#999', fontSize: 13, marginBottom: 0 }}>
-            撤架需到 Ozon 后台逐条手动下架, 系统无法回滚
+            批量异步执行 (不卡 UI); 撤架需到 Ozon 后台逐条手动下架
           </p>
         </div>
       ),
@@ -105,7 +125,7 @@ const PendingReview = () => {
         try {
           const r = await cloneApi.batchPublish(Array.from(selected))
           message.success(
-            `批量发布: 成功 ${r.data.success} / 失败 ${r.data.failed}, 1 分钟内自动上架`,
+            `已加入上架队列: ${r.data.success} 件; 后台陆续推送, 刷新查"已发布"看进度`,
           )
           setSelected(new Set())
           load()

@@ -215,8 +215,26 @@ def publish_pending_route(
     tenant_id: int = Depends(get_tenant_id),
     current_user: dict = Depends(get_current_user),
 ):
-    """简化设计: 待审核页直接发布 — 标 approved + 立刻触发 Celery."""
+    """简化设计: 待审核页直接发布 — 标 approved + 立刻触发 Celery.
+    保留兼容; 单条发布前端走 /publish-sync 立即出结果.
+    """
     r = task_service.publish_pending_now(
+        db, tenant_id, pending_id, current_user.get("user_id"),
+    )
+    if r.get("code") == 0:
+        return success(r["data"])
+    return error(r["code"], r.get("msg"))
+
+
+@router.post("/pending/{pending_id}/publish-sync")
+async def publish_pending_sync_route(
+    pending_id: int,
+    db: Session = Depends(get_db),
+    tenant_id: int = Depends(get_tenant_id),
+    current_user: dict = Depends(get_current_user),
+):
+    """同步发布 — 单条用; 直接 await publish_engine, 立刻返回上架结果."""
+    r = await task_service.publish_pending_sync(
         db, tenant_id, pending_id, current_user.get("user_id"),
     )
     if r.get("code") == 0:
