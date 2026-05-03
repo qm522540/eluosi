@@ -39,6 +39,7 @@ def _task_to_dict(task: CloneTask, db: Optional[Session] = None,
         "follow_price_change": bool(task.follow_price_change),
         "follow_status_change": bool(task.follow_status_change),  # 11.3.2
         "category_strategy": task.category_strategy,
+        "target_brand": task.target_brand,  # migration 064
         "last_check_at": task.last_check_at.isoformat() + "Z" if task.last_check_at else None,
         "last_found_count": task.last_found_count,
         "last_publish_count": task.last_publish_count,
@@ -149,6 +150,7 @@ def create_task(db: Session, tenant_id: int, data: dict) -> dict:
         follow_price_change=1 if data.get("follow_price_change") else 0,
         follow_status_change=1 if data.get("follow_status_change") else 0,  # 11.3.2
         category_strategy=data.get("category_strategy", "use_local_map"),
+        target_brand=(data.get("target_brand") or None),  # migration 064; 空串归一为 NULL
     )
     db.add(task)
     db.commit()
@@ -227,13 +229,22 @@ def update_task(db: Session, tenant_id: int, task_id: int, data: dict) -> dict:
     mutable = {
         "title_mode", "desc_mode", "price_mode", "price_adjust_pct",
         "default_stock", "follow_price_change", "follow_status_change",
-        "category_strategy",
+        "category_strategy", "target_brand",
     }
     for k, v in data.items():
-        if k in mutable and v is not None:
-            if k in ("follow_price_change", "follow_status_change"):
-                v = 1 if v else 0
-            setattr(task, k, v)
+        if k not in mutable:
+            continue
+        if k in ("follow_price_change", "follow_status_change"):
+            # bool 字段允许 False, 不能用 v is not None 之外的判空
+            if v is None:
+                continue
+            v = 1 if v else 0
+        elif k == "target_brand":
+            # 空串显式存 NULL; 用户清空 = 关闭品牌替换
+            v = (v.strip() if isinstance(v, str) else v) or None
+        elif v is None:
+            continue
+        setattr(task, k, v)
     db.commit()
     db.refresh(task)
     return {"code": 0, "data": _task_to_dict(task, db, include_shop_info=True)}

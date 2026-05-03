@@ -38,6 +38,11 @@ class CloneTaskCreate(BaseModel):
 
     category_strategy: Literal["same_platform", "use_local_map", "reject_if_missing"] = "use_local_map"
 
+    target_brand: Optional[str] = Field(
+        None, max_length=100,
+        description="A 店品牌名; publish 时覆盖 attr_id=85 + 标题/描述去 B 店原品牌; 留空=保留 B 店品牌",
+    )
+
     is_active: bool = False
 
     @model_validator(mode="after")
@@ -62,6 +67,8 @@ class CloneTaskUpdate(BaseModel):
     follow_status_change: Optional[bool] = None  # 11.3.2
 
     category_strategy: Optional[Literal["same_platform", "use_local_map", "reject_if_missing"]] = None
+
+    target_brand: Optional[str] = Field(None, max_length=100)
 
     @model_validator(mode="after")
     def _check_pct(self):

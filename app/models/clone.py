@@ -83,6 +83,12 @@ class CloneTask(Base):
         nullable=False, default="use_local_map",
     )
 
+    # migration 064: A 店品牌名 — publish 时覆盖品牌属性 + 标题去 B 店原品牌
+    target_brand: Mapped[Optional[str]] = mapped_column(
+        String(100), nullable=True,
+        comment="A 店品牌; publish 时覆盖 attr_id=85 + 标题/描述去 B 店品牌; NULL=保留原值",
+    )
+
     # 运行状态
     last_check_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     last_found_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)

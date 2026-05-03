@@ -14,6 +14,7 @@ Ozon /v3/product/import 必填字段 (B 店 ProductSnapshot 缺的, 用合理占
 用户上架后必须到 Ozon 后台补全 dimensions/weight, 否则 Ozon 会下架。
 """
 
+import re
 import uuid
 from typing import Optional
 
@@ -31,9 +32,79 @@ from app.utils.moscow_time import utc_now_naive
 logger = setup_logger("clone.publish_engine")
 
 
+# ==================== 品牌处理 (migration 064) ====================
+
+# Ozon 通用属性 ID
+OZON_ATTR_BRAND = 85          # Бренд (品牌)
+OZON_ATTR_NAME = 4180         # Название (商品名)
+OZON_ATTR_DESC = 4191         # Аннотация (描述)
+
+
+def _extract_b_brand(attributes: list) -> Optional[str]:
+    """从 B 店 attributes 抽出品牌字符串 (attr_id=85)
+
+    attributes 结构: [{id|attr_id, values: [{value} | str]}, ...]
+    返回首个非空值, 没有返 None
+    """
+    for a in attributes or []:
+        try:
+            aid = int(a.get("id") or a.get("attr_id") or 0)
+        except (TypeError, ValueError):
+            continue
+        if aid != OZON_ATTR_BRAND:
+            continue
+        for v in a.get("values") or []:
+            val = v.get("value") if isinstance(v, dict) else v
+            if val and str(val).strip():
+                return str(val).strip()
+    return None
+
+
+def _strip_brand_from_text(text: str, brand: str) -> str:
+    """从 title/description 里去除指定品牌名字符串 (大小写不敏感)
+
+    - re.escape 防 brand 含正则特殊字符 (Pt.Girl 的点)
+    - 不强制 \\b 词边界, 因为俄/英混排时 \\b 对 Cyrillic 不可靠
+    - 多空格清理
+    """
+    if not text or not brand:
+        return text
+    pattern = re.compile(re.escape(brand), re.IGNORECASE)
+    cleaned = pattern.sub("", text)
+    cleaned = re.sub(r"\s{2,}", " ", cleaned).strip()
+    cleaned = re.sub(r"^[\s,;:.\-—–·]+", "", cleaned).strip()
+    return cleaned
+
+
+def _override_brand_in_attributes(attributes: list, target_brand: str) -> list:
+    """把 attributes 里的 attr_id=85 (Бренд) 强制覆盖为 target_brand;
+    若 attributes 不含 attr_id=85, 主动追加一条
+    """
+    out = []
+    found = False
+    for a in attributes:
+        try:
+            aid = int(a.get("id") or 0)
+        except (TypeError, ValueError):
+            out.append(a)
+            continue
+        if aid == OZON_ATTR_BRAND:
+            out.append({"id": OZON_ATTR_BRAND, "values": [{"value": target_brand}]})
+            found = True
+        else:
+            out.append(a)
+    if not found:
+        out.append({"id": OZON_ATTR_BRAND, "values": [{"value": target_brand}]})
+    return out
+
+
 # ==================== Ozon 上架 ====================
 
-async def _publish_to_ozon(target_shop: Shop, payload: dict) -> dict:
+async def _publish_to_ozon(
+    target_shop: Shop, payload: dict,
+    source_offer_id: Optional[str] = None,
+    target_brand: Optional[str] = None,
+) -> dict:
     """调 Ozon /v3/product/import 异步上架
 
     Returns: {"code": 0, "data": {"task_id": ..., "offer_id": ...}}
@@ -52,8 +123,11 @@ async def _publish_to_ozon(target_shop: Shop, payload: dict) -> dict:
         perf_client_secret=target_shop.perf_client_secret or "",
     )
 
-    # 新 offer_id (我们生成, Ozon 接受任意字符串作商家 SKU)
-    new_offer_id = f"clone-{uuid.uuid4().hex[:12]}"
+    # offer_id 策略 (migration 064 后):
+    #   1. 优先用 source_offer_id (B 店原 offer_id) — 老板要求"本地编码默认一样"
+    #   2. 没传或冲突时降级 clone-{uuid} (Ozon 接受任意字符串作商家 SKU)
+    # Ozon offer_id 是 per-shop unique, A/B 不同店复用 B 店 offer_id 不冲突
+    new_offer_id = (source_offer_id or "").strip() or f"clone-{uuid.uuid4().hex[:12]}"
 
     title = (payload.get("title_ru") or "").strip()[:500]
     description = (payload.get("description_ru") or "").strip()[:6000]
@@ -94,11 +168,23 @@ async def _publish_to_ozon(target_shop: Shop, payload: dict) -> dict:
         if normalized_vals:
             attributes.append({"id": attr_id, "values": normalized_vals})
 
+    # migration 064: 品牌处理 (要在 4180/4191 兜底前做, 因为 title/desc 可能被改)
+    #   1. 抽出 B 店原品牌 (attr_id=85)
+    #   2. target_brand 不空: 覆盖 attr_id=85 + 从 title/desc 去 B 店原品牌
+    #   3. target_brand 空: 保留 attributes 不动 (兼容老任务)
+    b_brand = _extract_b_brand(attributes)
+    if target_brand:
+        if b_brand and b_brand.lower() != target_brand.lower():
+            title = _strip_brand_from_text(title, b_brand)
+            description = _strip_brand_from_text(description, b_brand)
+        attributes = _override_brand_in_attributes(attributes, target_brand)
+
     # 必填属性兜底 (4180 名称, 4191 描述; Ozon import 不要求重复传, 但显式传更稳)
-    if not any(a["id"] == 4180 for a in attributes):
-        attributes.append({"id": 4180, "values": [{"value": title}]})
-    if description and not any(a["id"] == 4191 for a in attributes):
-        attributes.append({"id": 4191, "values": [{"value": description}]})
+    # 用最终处理过的 title/description, 不是原始 payload 的
+    attributes = [a for a in attributes if a["id"] not in (OZON_ATTR_NAME, OZON_ATTR_DESC)]
+    attributes.append({"id": OZON_ATTR_NAME, "values": [{"value": title}]})
+    if description:
+        attributes.append({"id": OZON_ATTR_DESC, "values": [{"value": description}]})
 
     item = {
         "offer_id": new_offer_id,
@@ -215,7 +301,11 @@ async def _publish_pending(db: Session, pending_id: int) -> dict:
 
     # 按平台 dispatch
     if target_shop.platform == "ozon":
-        r = await _publish_to_ozon(target_shop, payload)
+        r = await _publish_to_ozon(
+            target_shop, payload,
+            source_offer_id=pending.source_sku_id,        # migration 064: A 店 offer_id 默认复用 B 店
+            target_brand=(task.target_brand or None),     # migration 064: 品牌替换
+        )
     elif target_shop.platform == "wb":
         r = {"code": ErrorCode.CLONE_PUBLISH_FAILED,
              "msg": "WB 上架 Phase 1 未实现"}

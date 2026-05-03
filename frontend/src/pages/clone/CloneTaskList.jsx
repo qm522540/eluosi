@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
-  Card, Table, Button, Space, Tag, Modal, Form, Select, InputNumber,
+  Card, Table, Button, Space, Tag, Modal, Form, Select, InputNumber, Input,
   Switch, message, Popconfirm, Tooltip, Typography, Checkbox, Image, Badge,
 } from 'antd'
 import {
@@ -99,6 +99,7 @@ const CloneTaskList = () => {
       price_mode: task.price_mode || 'same',
       price_adjust_pct: task.price_adjust_pct ?? 0,
       default_stock: task.default_stock ?? 999,
+      target_brand: task.target_brand || '',
       follow_price_change: !!task.follow_price_change,
       follow_status_change: !!task.follow_status_change,
       category_strategy: task.category_strategy || 'use_local_map',
@@ -539,6 +540,11 @@ const CloneTaskList = () => {
           <Form.Item name="default_stock" label="A 店默认库存">
             <InputNumber min={0} max={999999} style={{ width: '100%' }} />
           </Form.Item>
+          <Form.Item name="target_brand"
+            label="A 店品牌名（克隆时自动替换 B 店原品牌 + 标题/描述去 B 店品牌名）"
+            extra="留空 = 保留 B 店原品牌；填了之后, 商品属性的「品牌」字段强制覆盖, 标题/描述里的 B 店原品牌名也会被去除">
+            <Input placeholder="例: Sharino / 你自己 A 店的品牌名" maxLength={100} />
+          </Form.Item>
           <Form.Item name="follow_price_change" label="跟价（B 改价后 A 自动调价，不走审核）"
             valuePropName="checked">
             <Switch />
@@ -626,6 +632,11 @@ const CloneTaskList = () => {
           </Form.Item>
           <Form.Item name="default_stock" label="A 店默认库存">
             <InputNumber min={0} max={999999} style={{ width: '100%' }} />
+          </Form.Item>
+          <Form.Item name="target_brand"
+            label="A 店品牌名（克隆时自动替换 B 店原品牌 + 标题/描述去 B 店品牌名）"
+            extra="留空 = 保留 B 店原品牌；填了之后, 后续 publish 的商品品牌强制覆盖为这个值">
+            <Input placeholder="例: Sharino / 你自己 A 店的品牌名" maxLength={100} />
           </Form.Item>
           <Form.Item name="follow_price_change" label="跟价（B 改价后 A 自动调价，不走审核）"
             valuePropName="checked">
