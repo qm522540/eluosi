@@ -63,6 +63,12 @@ def sync_wb_search_texts(self):
                 continue
 
             t0 = utc_now_naive()
+            # 起步即写 "running" — 单店 WB search-texts 跑 3-5 min, 期间 worker 若重启
+            # (memory / max-tasks-per-child / SIGTERM 等), Python 进程直接死 except 都跑不到,
+            # DB last_sync 会 stale 在上一次状态. 起步 record 后 worker 中断时 UI 显示
+            # "运行中" 是真实状态, 跑完用 success/failed/... 覆盖.
+            record_sync_run(db, shop.tenant_id, shop.id, "wb_search_texts",
+                           status="running", msg="同步进行中…")
             try:
                 r = _run_async(refresh_shop(db, shop.tenant_id, shop, days=7))
                 code = r.get("code", 0)

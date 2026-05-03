@@ -23,6 +23,9 @@ const STATUS_CONFIG = {
   partial: { color: 'warning', text: '部分成功', icon: <ExclamationCircleOutlined /> },
   failed: { color: 'error', text: '失败', icon: <CloseCircleFilled /> },
   skipped: { color: 'default', text: '已跳过', icon: <PauseCircleOutlined /> },
+  // running: 任务起步即写, 跑完用 success/failed/... 覆盖. 中途 worker 重启时 DB
+  // 留 running, 让 UI 显示"运行中" 而不是 stale 老状态(老板报 5-3 见过 5-2 的跳过).
+  running: { color: 'processing', text: '运行中', icon: <SyncOutlined spin /> },
 }
 
 const CATEGORY_TAG = {
