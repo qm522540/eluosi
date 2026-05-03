@@ -133,6 +133,12 @@ async def _publish_to_ozon(
     description = (payload.get("description_ru") or "").strip()[:6000]
     images = payload.get("images_oss") or []
     price = float(payload.get("price_rub") or 0)
+    # 老板拍: 折扣价 — 用户在编辑 Modal 配; 没配则等于平台价 (无折扣展示)
+    discount_raw = payload.get("discount_price_rub")
+    try:
+        discount_price = float(discount_raw) if discount_raw not in (None, "", 0) else 0.0
+    except (TypeError, ValueError):
+        discount_price = 0.0
     cat_id = payload.get("platform_category_id")
     type_id_raw = payload.get("type_id") or ""
     try:
@@ -191,7 +197,10 @@ async def _publish_to_ozon(
         "name": title,
         "description_category_id": int(cat_id),
         "type_id": type_id,              # 必填, 见上方 type_id_raw 校验
-        "price": str(price),
+        # Ozon 语义: price = 当前售价 (实付), old_price = 划线价 (原价显示)
+        # 没配折扣 → price = old_price = 平台价, 无划线
+        # 配了折扣 (0 < discount < price) → price = 折扣价, old_price = 平台价
+        "price": str(discount_price if 0 < discount_price < price else price),
         "old_price": str(price),
         "vat": "0",                      # 占位, 用户后台改
         "currency_code": "RUB",

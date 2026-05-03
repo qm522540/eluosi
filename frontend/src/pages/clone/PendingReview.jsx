@@ -157,13 +157,35 @@ const PendingReview = () => {
       title_ru: item.proposed?.title_ru || '',
       description_ru: item.proposed?.description_ru || '',
       price_rub: item.proposed?.price_rub || 0,
+      // 折扣价默认空, 用户想配才填; publish 时若 0<discount<price 则按折扣价上架
+      discount_price_rub: item.proposed?.discount_price_rub || '',
       stock: item.proposed?.stock || 0,
+      // 本店 SKU = A 店 product.sku + Ozon offer_id; 默认 = B 平台 SKU
+      target_sku: item.proposed?.target_sku || item.source?.sku_id || '',
     })
   }
 
   const submitEdit = async () => {
+    // target_sku 必填校验
+    if (!(editForm.target_sku || '').trim()) {
+      message.error('本店 SKU 不能为空')
+      return
+    }
+    // 折扣价校验: 不能超平台价 (业务上没意义)
+    const price = Number(editForm.price_rub) || 0
+    const discount = Number(editForm.discount_price_rub) || 0
+    if (discount > 0 && discount >= price) {
+      message.error('折扣价必须小于平台价格')
+      return
+    }
     try {
-      await cloneApi.updatePendingPayload(editTarget.id, editForm)
+      // 折扣空字符串归一为 null (避免 "0" / "" 混淆 publish_engine)
+      const payload = {
+        ...editForm,
+        target_sku: editForm.target_sku.trim(),
+        discount_price_rub: discount > 0 ? discount : null,
+      }
+      await cloneApi.updatePendingPayload(editTarget.id, payload)
       message.success('已保存')
       setEditTarget(null)
       load()
@@ -323,6 +345,12 @@ const PendingReview = () => {
         {editTarget && (
           <Space direction="vertical" style={{ width: '100%' }}>
             <div>
+              <Text type="secondary">本店 SKU (= 平台卖家编码)</Text>
+              <Input value={editForm.target_sku} maxLength={50}
+                placeholder="发布到平台时用的 SKU; 默认跟 B 平台 SKU 一样"
+                onChange={e => setEditForm(s => ({ ...s, target_sku: e.target.value }))} />
+            </div>
+            <div>
               <Text type="secondary">标题（RU）</Text>
               <Input.TextArea rows={2}
                 value={editForm.title_ru}
@@ -334,18 +362,28 @@ const PendingReview = () => {
                 value={editForm.description_ru}
                 onChange={e => setEditForm(s => ({ ...s, description_ru: e.target.value }))} />
             </div>
-            <Space>
+            <Space size="middle">
               <div>
-                <Text type="secondary">价格 ₽</Text>
-                <Input type="number" value={editForm.price_rub}
+                <Text type="secondary">平台价格 ₽ <span style={{ color: '#999', fontSize: 11 }}>(划线原价)</span></Text>
+                <Input type="number" min={0} value={editForm.price_rub}
                   onChange={e => setEditForm(s => ({ ...s, price_rub: Number(e.target.value) }))} />
               </div>
               <div>
+                <Text type="secondary">折扣价格 ₽ <span style={{ color: '#999', fontSize: 11 }}>(实际售价, 留空=无折扣)</span></Text>
+                <Input type="number" min={0} value={editForm.discount_price_rub}
+                  placeholder="留空 = 不打折"
+                  onChange={e => setEditForm(s => ({ ...s, discount_price_rub: e.target.value }))} />
+              </div>
+              <div>
                 <Text type="secondary">库存</Text>
-                <Input type="number" value={editForm.stock}
+                <Input type="number" min={0} value={editForm.stock}
                   onChange={e => setEditForm(s => ({ ...s, stock: Number(e.target.value) }))} />
               </div>
             </Space>
+            <Text type="secondary" style={{ fontSize: 12 }}>
+              发布后 Ozon 上展示: <strong>实际售价 = 折扣价</strong>(留空时 = 平台价); <strong>划线原价 = 平台价</strong>。
+              填了折扣价才会出划线效果。
+            </Text>
           </Space>
         )}
       </Modal>
