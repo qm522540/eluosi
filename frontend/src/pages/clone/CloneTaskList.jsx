@@ -7,7 +7,7 @@ import {
 import {
   PlusOutlined, ThunderboltOutlined, EyeOutlined, DeleteOutlined,
   PlayCircleOutlined, PauseCircleOutlined, CheckCircleOutlined,
-  ArrowLeftOutlined, ClockCircleOutlined,
+  ArrowLeftOutlined, ClockCircleOutlined, EditOutlined,
 } from '@ant-design/icons'
 
 // 简单相对时间 helper
@@ -37,6 +37,10 @@ const CloneTaskList = () => {
   const [form] = Form.useForm()
   const [submitting, setSubmitting] = useState(false)
   const [scanningId, setScanningId] = useState(null)
+  // 编辑任务 Modal
+  const [editTask, setEditTask] = useState(null)
+  const [editForm] = Form.useForm()
+  const [editSubmitting, setEditSubmitting] = useState(false)
   // 11.2 扫描预览 Modal
   const [previewState, setPreviewState] = useState({
     open: false, task: null, candidates: [], stats: {}, selectedSkus: new Set(),
@@ -84,6 +88,41 @@ const CloneTaskList = () => {
       message.error(e.message || '创建失败')
     } finally {
       setSubmitting(false)
+    }
+  }
+
+  const handleOpenEdit = (task) => {
+    setEditTask(task)
+    editForm.setFieldsValue({
+      title_mode: task.title_mode || 'original',
+      desc_mode: task.desc_mode || 'original',
+      price_mode: task.price_mode || 'same',
+      price_adjust_pct: task.price_adjust_pct ?? 0,
+      default_stock: task.default_stock ?? 999,
+      follow_price_change: !!task.follow_price_change,
+      follow_status_change: !!task.follow_status_change,
+      category_strategy: task.category_strategy || 'use_local_map',
+    })
+  }
+
+  const handleSubmitEdit = async (values) => {
+    if (!editTask) return
+    setEditSubmitting(true)
+    try {
+      // price_adjust_pct 仅 adjust_pct 模式下传; same 模式保持原值无所谓但语义干净
+      const payload = { ...values }
+      if (payload.price_mode === 'same') {
+        payload.price_adjust_pct = 0
+      }
+      await cloneApi.updateTask(editTask.id, payload)
+      message.success('已保存')
+      setEditTask(null)
+      editForm.resetFields()
+      loadTasks()
+    } catch (e) {
+      message.error(e.message || '保存失败')
+    } finally {
+      setEditSubmitting(false)
     }
   }
 
@@ -380,7 +419,7 @@ const CloneTaskList = () => {
       },
     },
     {
-      title: '操作', width: 170, fixed: 'right', align: 'center',
+      title: '操作', width: 210, fixed: 'right', align: 'center',
       render: (_, t) => (
         <Space size={2}>
           <Tooltip title={t.is_active ? '停用' : '启用'}>
@@ -392,6 +431,10 @@ const CloneTaskList = () => {
             <Button size="small" type="primary" icon={<ThunderboltOutlined />}
               loading={scanningId === t.id}
               onClick={() => handleScanNow(t)} />
+          </Tooltip>
+          <Tooltip title="编辑">
+            <Button size="small" type="text" icon={<EditOutlined />}
+              onClick={() => handleOpenEdit(t)} />
           </Tooltip>
           <Tooltip title="查看日志">
             <Button size="small" type="text" icon={<EyeOutlined />}
@@ -509,6 +552,98 @@ const CloneTaskList = () => {
           </Form.Item>
           <Text type="secondary" style={{ fontSize: 12 }}>
             创建后默认未启用，请在列表中手动启用。跨平台克隆需先在「映射管理」建好类目映射。
+          </Text>
+        </Form>
+      </Modal>
+
+      {/* 编辑任务 Modal — A/B 店锁定, 仅改策略字段 */}
+      <Modal
+        title={
+          <Space>
+            <EditOutlined />
+            <span>编辑克隆任务</span>
+            {editTask && (
+              <Tag>#{editTask.id} {editTask.target_shop?.name} ← {editTask.source_shop?.name}</Tag>
+            )}
+          </Space>
+        }
+        open={!!editTask}
+        onOk={() => editForm.submit()}
+        onCancel={() => { setEditTask(null); editForm.resetFields() }}
+        confirmLoading={editSubmitting}
+        width={600}
+        destroyOnClose
+      >
+        <Form form={editForm} layout="vertical" onFinish={handleSubmitEdit}>
+          <Form.Item label="A 店 ← B 店">
+            <div style={{
+              padding: '4px 11px', background: '#fafafa',
+              border: '1px solid #d9d9d9', borderRadius: 4, color: '#595959',
+            }}>
+              {editTask && (
+                <Space size={6}>
+                  {renderShop(editTask.target_shop)}
+                  <ArrowLeftOutlined style={{ color: '#bfbfbf' }} />
+                  {renderShop(editTask.source_shop)}
+                </Space>
+              )}
+              <Text type="secondary" style={{ fontSize: 12, marginLeft: 8 }}>
+                （店铺配对锁定，无法修改）
+              </Text>
+            </div>
+          </Form.Item>
+          <Form.Item name="title_mode" label="标题处理">
+            <Select options={[
+              { value: 'original', label: '保留 B 店原标题' },
+              { value: 'ai_rewrite', label: 'AI 改写（复用 SEO 引擎）' },
+            ]} />
+          </Form.Item>
+          <Form.Item name="desc_mode" label="描述处理">
+            <Select options={[
+              { value: 'original', label: '保留 B 店原描述' },
+              { value: 'ai_rewrite', label: 'AI 改写（复用 SEO 引擎）' },
+            ]} />
+          </Form.Item>
+          <Form.Item name="price_mode" label="价格策略">
+            <Select options={[
+              { value: 'same', label: '同 B 价' },
+              { value: 'adjust_pct', label: '按百分比调价（如 +10% / -5%）' },
+            ]} />
+          </Form.Item>
+          <Form.Item noStyle shouldUpdate>
+            {({ getFieldValue }) =>
+              getFieldValue('price_mode') === 'adjust_pct' ? (
+                <Form.Item name="price_adjust_pct" label="价格调整百分比"
+                  rules={[
+                    { required: true, message: '请输入百分比' },
+                    { type: 'number', min: -50, max: 200 },
+                  ]}>
+                  <InputNumber min={-50} max={200} step={1}
+                    addonAfter="%" style={{ width: '100%' }} />
+                </Form.Item>
+              ) : null
+            }
+          </Form.Item>
+          <Form.Item name="default_stock" label="A 店默认库存">
+            <InputNumber min={0} max={999999} style={{ width: '100%' }} />
+          </Form.Item>
+          <Form.Item name="follow_price_change" label="跟价（B 改价后 A 自动调价，不走审核）"
+            valuePropName="checked">
+            <Switch />
+          </Form.Item>
+          <Form.Item name="follow_status_change" label="跟上下架（B 上下架 → A 自动跟）"
+            valuePropName="checked">
+            <Switch />
+          </Form.Item>
+          <Form.Item name="category_strategy" label="跨平台类目映射策略">
+            <Select options={[
+              { value: 'use_local_map', label: '走本地映射库（缺失即跳过）' },
+              { value: 'reject_if_missing', label: '映射缺失即拒（同上）' },
+              { value: 'same_platform', label: '同平台直接复用（仅同平台）' },
+            ]} />
+          </Form.Item>
+          <Text type="secondary" style={{ fontSize: 12 }}>
+            修改即时生效。改"价格策略"只影响后续新立项, 已发布商品不会回写改价 (除非开了「跟价」+ B 店真实改价).
           </Text>
         </Form>
       </Modal>
