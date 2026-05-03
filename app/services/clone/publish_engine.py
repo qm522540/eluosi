@@ -174,14 +174,20 @@ async def _publish_to_ozon(
     source_offer_id: Optional[str] = None,
     target_brand: Optional[str] = None,
     default_hs_code: Optional[str] = None,
+    cached_brand_dict_id: Optional[int] = None,
 ) -> dict:
     """调 Ozon /v3/product/import 异步上架
 
-    Returns: {"code": 0, "data": {"task_id": ..., "offer_id": ...}}
+    Returns: {"code": 0, "data": {"task_id": ..., "offer_id": ...,
+                                  "brand_dict_id_resolved": Optional[int]}}
             或 {"code": <err>, "msg": ...}
 
     Ozon import 是异步任务: 返回 task_id 后用户上架可能需 1-5 分钟生效。
     我们记 task_id 到日志, 真 platform_sku_id 通过下次 sync_products 回填。
+
+    cached_brand_dict_id: migration 066 — 调用方传 task.target_brand_dict_id, 命中
+    跳过 Ozon 字典反查; 命中失败/没传时走原 resolve 路径, 成功后通过返回值
+    `brand_dict_id_resolved` 让调用方持久化.
     """
     from app.services.platform.ozon import OzonClient, OZON_SELLER_API
 
@@ -267,18 +273,29 @@ async def _publish_to_ozon(
 
     # migration 064 v3 (老板 BUG 3): target_brand 真换品牌 — 反查 Ozon 品牌字典
     # 拿 dictionary_value_id, 命中才覆盖 attr_id=85; 未命中保留 B 店原品牌 + 警告
+    # migration 066: cached_brand_dict_id 命中跳过 70k 字典扫描 (秒回)
     b_brand = _extract_b_brand(attributes)
     if target_brand and b_brand and b_brand.lower() != target_brand.lower():
         title = _strip_brand_from_text(title, b_brand)
         description = _strip_brand_from_text(description, b_brand)
+    brand_dict_id_resolved: Optional[int] = None    # 给调用方持久化用
     if target_brand:
-        try:
-            brand_dict_id = await _resolve_brand_dictionary_id(
-                client, int(cat_id), int(type_id), target_brand,
+        if cached_brand_dict_id:
+            brand_dict_id = int(cached_brand_dict_id)
+            logger.info(
+                f"target_brand dict_id 缓存命中 offer={new_offer_id} brand={target_brand} "
+                f"dict_id={brand_dict_id} (跳过 Ozon 字典反查)"
             )
-        except Exception as e:
-            logger.error(f"resolve_brand_dictionary_id 异常 brand={target_brand}: {e}")
-            brand_dict_id = None
+        else:
+            try:
+                brand_dict_id = await _resolve_brand_dictionary_id(
+                    client, int(cat_id), int(type_id), target_brand,
+                )
+            except Exception as e:
+                logger.error(f"resolve_brand_dictionary_id 异常 brand={target_brand}: {e}")
+                brand_dict_id = None
+            if brand_dict_id:
+                brand_dict_id_resolved = brand_dict_id   # 供调用方写回 task
         if brand_dict_id:
             # 覆盖 attr_id=85 — 同时给 dictionary_value_id 和 value, Ozon 才接受
             attributes = [a for a in attributes if a.get("id") != OZON_ATTR_BRAND]
@@ -403,6 +420,7 @@ async def _publish_to_ozon(
     return {"code": 0, "data": {
         "task_id": task_id_resp,
         "offer_id": new_offer_id,
+        "brand_dict_id_resolved": brand_dict_id_resolved,   # migration 066 持久化用
     }}
 
 
@@ -511,6 +529,7 @@ async def _publish_pending(db: Session, pending_id: int,
             source_offer_id=a_shop_sku,                   # 实际是 A 店 offer_id, 命名延续旧参数
             target_brand=(task.target_brand or None),     # migration 064: 品牌替换
             default_hs_code=(task.default_hs_code or None),  # migration 065: HS 兜底注入
+            cached_brand_dict_id=task.target_brand_dict_id,  # migration 066: 品牌 dict_id 缓存
         )
     elif target_shop.platform == "wb":
         r = {"code": ErrorCode.CLONE_PUBLISH_FAILED,
@@ -542,6 +561,16 @@ async def _publish_pending(db: Session, pending_id: int,
     # 成功
     new_offer_id = r["data"]["offer_id"]
     task_id_resp = r["data"]["task_id"]
+
+    # migration 066: 品牌 dict_id 首次 resolve 成功 → 写回 task 持久化
+    # 下次同 task 的 publish 直接读 task.target_brand_dict_id 跳过 70k 字典扫描
+    new_dict_id = r["data"].get("brand_dict_id_resolved")
+    if new_dict_id and task.target_brand_dict_id != new_dict_id:
+        task.target_brand_dict_id = int(new_dict_id)
+        logger.info(
+            f"target_brand dict_id 持久化 task={task.id} brand={task.target_brand!r} "
+            f"dict_id={new_dict_id}"
+        )
 
     # 1) 草稿 listing 转 active + 回填真实 SKU (但 Ozon import 是异步, 真 platform_product_id
     #    需要下次 sync_products 才回填; 我们先标 active + offer_id 占位)

@@ -41,6 +41,7 @@ def _task_to_dict(task: CloneTask, db: Optional[Session] = None,
         "category_strategy": task.category_strategy,
         "target_brand": task.target_brand,  # migration 064
         "default_hs_code": task.default_hs_code,  # migration 065
+        "target_brand_dict_id": task.target_brand_dict_id,  # migration 066 (resolve 持久化, 只读)
         "last_check_at": task.last_check_at.isoformat() + "Z" if task.last_check_at else None,
         "last_found_count": task.last_found_count,
         "last_publish_count": task.last_publish_count,
@@ -244,6 +245,9 @@ def update_task(db: Session, tenant_id: int, task_id: int, data: dict) -> dict:
         elif k in ("target_brand", "default_hs_code"):
             # 空串显式存 NULL; 用户清空 = 关闭注入
             v = (v.strip() if isinstance(v, str) else v) or None
+            # migration 066: target_brand 字符串变化时清掉 dict_id 触发重 resolve
+            if k == "target_brand" and (v or "") != (task.target_brand or ""):
+                task.target_brand_dict_id = None
         elif v is None:
             continue
         setattr(task, k, v)

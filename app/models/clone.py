@@ -96,6 +96,13 @@ class CloneTask(Base):
         comment="默认 HS 编码; publish 时若 B 店 attributes 缺 attr_id=22232 则强制注入",
     )
 
+    # migration 066: target_brand 在 Ozon 字典里 resolve 成功后持久化 dict_id,
+    # 下次 publish 直接读字段, 不再扫 70k 条字典. update_task 改 target_brand 时清空.
+    target_brand_dict_id: Mapped[Optional[int]] = mapped_column(
+        BigInteger, nullable=True,
+        comment="Ozon 品牌字典 ID (dictionary_value_id); 首次 resolve 后持久化",
+    )
+
     # 运行状态
     last_check_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     last_found_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
