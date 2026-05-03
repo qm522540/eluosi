@@ -428,7 +428,10 @@ def shop_candidates_rollup(
     keyword: str = Query("", description="关键词模糊筛"),
     hide_covered: bool = Query(True, description="隐藏已在标题/属性的候选"),
     sort: str = Query("score_desc", description="score_desc / orders_desc / impr_desc / products_desc"),
-    limit: int = Query(200, ge=10, le=500),
+    # 前端 CandidatesRollupTable 当前传 limit=500 (跨多店合并需要拉够),
+    # le 给到 1000 留 2x 冗余,避免将来前端调高撞 422 (SEO 家族第 4 处:
+    # 前端 limit / 后端 Query le 一致性 sub-pattern,继 23227f0+799ba79 之后)
+    limit: int = Query(200, ge=10, le=1000),
     db: Session = Depends(get_db),
     tenant_id: int = Depends(get_tenant_id),
     shop=Depends(get_owned_shop),
