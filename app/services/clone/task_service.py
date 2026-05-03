@@ -415,6 +415,78 @@ def approve_pending(db: Session, tenant_id: int, pending_id: int,
     }}
 
 
+def publish_pending_now(db: Session, tenant_id: int, pending_id: int,
+                        user_id: Optional[int] = None) -> dict:
+    """POST /pending/{id}/publish — 用户在待审核页直接点"发布",
+    pending 标 approved 后立即触发 Celery, 不等 beat 周期.
+
+    简化设计 (老板拍): 砍掉 batch_approve / batch_reject 的中间环节.
+    "待审核" 就是决策中心 — 点发布 = 上架; 不点 = 留着; 想重抓 = 批量彻底删.
+    """
+    p = db.query(ClonePendingProduct).filter(
+        ClonePendingProduct.id == pending_id,
+        ClonePendingProduct.tenant_id == tenant_id,
+    ).first()
+    if not p:
+        return {"code": ErrorCode.CLONE_PENDING_NOT_FOUND, "msg": "待审核记录不存在"}
+    if p.status not in ("pending", "failed"):
+        return {"code": ErrorCode.CLONE_PENDING_INVALID_STATUS,
+                "msg": f"当前状态 {p.status} 不允许发布"}
+
+    task = db.query(CloneTask).filter(
+        CloneTask.id == p.task_id, CloneTask.tenant_id == tenant_id,
+    ).first()
+    if not task:
+        return {"code": ErrorCode.CLONE_TASK_NOT_FOUND, "msg": "克隆任务不存在"}
+    if not task.is_active:
+        return {"code": ErrorCode.CLONE_TASK_NOT_FOUND,
+                "msg": "克隆任务已停用 — 请到「克隆任务」启用后再发布"}
+
+    p.status = "approved"
+    p.reviewed_at = utc_now_naive()
+    p.reviewed_by = user_id
+    db.commit()
+
+    # 立即触发 Celery (不等 beat 周期); beat 仍兜底处理批量积压
+    try:
+        from app.tasks.clone_tasks import publish_approved_pending
+        publish_approved_pending.delay()
+    except Exception as e:
+        logger.warning(f"publish 触发 Celery 失败 pending={pending_id}: {e}, 等 beat 兜底")
+
+    db.add(CloneLog(
+        tenant_id=tenant_id, task_id=p.task_id,
+        log_type="review", status="success",
+        detail={"action": "publish_now", "pending_id": pending_id},
+    ))
+    db.commit()
+    return {"code": 0, "data": {
+        "id": p.id, "status": "approved",
+        "queued_at": p.reviewed_at.isoformat() + "Z",
+        "msg": "已加入上架队列, 1 分钟内完成",
+    }}
+
+
+def batch_publish_pending(db: Session, tenant_id: int, ids: List[int],
+                          user_id: Optional[int] = None) -> dict:
+    """POST /pending/publish-batch — 批量发布"""
+    results = []
+    success = failed = 0
+    for pid in ids:
+        r = publish_pending_now(db, tenant_id, pid, user_id)
+        if r["code"] == 0:
+            success += 1
+            results.append({"id": pid, "status": "queued"})
+        else:
+            failed += 1
+            results.append({"id": pid, "status": "failed",
+                            "error_code": r["code"], "error_msg": r.get("msg")})
+    return {"code": 0, "data": {
+        "total": len(ids), "success": success, "failed": failed,
+        "results": results,
+    }}
+
+
 def reject_pending(db: Session, tenant_id: int, pending_id: int,
                    reject_reason: Optional[str] = None,
                    user_id: Optional[int] = None) -> dict:

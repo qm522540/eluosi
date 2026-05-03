@@ -48,6 +48,12 @@ export const batchApprove = (ids) =>
 export const batchReject = (ids, reject_reason) =>
   request.post(`${BASE}/pending/reject-batch`, { ids, reject_reason })
 
+// 简化设计: 待审核页"发布"按钮直接触发 — 单条 / 批量
+export const publishPending = (id) => request.post(`${BASE}/pending/${id}/publish`)
+
+export const batchPublish = (ids) =>
+  request.post(`${BASE}/pending/publish-batch`, { ids })
+
 // 物理 DELETE 3 表 (pending + listing + product) - 不可逆, 删后下次扫描重新采
 export const batchDeletePending = (ids) =>
   request.post(`${BASE}/pending/delete-batch`, { ids })

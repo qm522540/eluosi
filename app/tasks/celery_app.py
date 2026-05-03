@@ -107,11 +107,12 @@ celery_app.conf.beat_schedule = {
         "task": "app.tasks.clone_tasks.daily_scan_all_tasks",
         "schedule": crontab(hour=3, minute=30),
     },
-    # 店铺克隆已批准的 pending 异步上架 (每 5 分钟扫一次 status='approved')
-    # 详见 docs/api/store_clone.md §6.2
+    # 店铺克隆已批准的 pending 异步上架 (每 1 分钟扫一次 status='approved')
+    # 简化设计后兜底用; 用户点"发布"时会立刻 publish_approved_pending.delay() 触发,
+    # 这里 1 分钟 beat 处理积压 + 失败重试场景.
     "clone-publish-pending": {
         "task": "app.tasks.clone_tasks.publish_approved_pending",
-        "schedule": crontab(minute="*/5"),
+        "schedule": crontab(minute="*/1"),
     },
     # WB 顶级搜索集群 oracle 同步 — 2026-04-23 证实 WB cmp API 做了 IP 绑定，
     # 从服务器调会 401（JWT 只在用户浏览器 IP 下有效）。暂停定时，只保留 task

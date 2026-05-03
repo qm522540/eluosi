@@ -5,7 +5,7 @@ import {
   Empty, Typography, Select, Checkbox, Tooltip,
 } from 'antd'
 import {
-  CheckOutlined, CloseOutlined, RedoOutlined, EditOutlined,
+  CheckOutlined, EditOutlined,
   WarningOutlined, DeleteOutlined,
 } from '@ant-design/icons'
 import * as cloneApi from '@/api/clone'
@@ -49,89 +49,26 @@ const PendingReview = () => {
   useEffect(() => { loadTasks() }, [])
   useEffect(() => { load(); setSelected(new Set()) }, [taskId, status])
 
-  const handleApprove = async (id) => {
+  const handlePublish = async (id) => {
     try {
-      const r = await cloneApi.approvePending(id)
-      if (r?.data?.task_inactive) {
-        message.warning(
-          '已批准, 但克隆任务处于停用状态 — 暂存中, 请到「克隆任务」启用任务后才会真上架',
-          6,
-        )
-      } else {
-        message.success('已批准，等待 publish-pending beat 异步上架（每 5 分钟）')
-      }
+      await cloneApi.publishPending(id)
+      message.success('已加入上架队列, 1 分钟内自动上架到平台')
       load()
     } catch (e) {
-      message.error(e.message || '批准失败')
+      message.error(e.message || '发布失败')
     }
   }
 
-  const handleReject = async (id) => {
-    Modal.confirm({
-      title: '确认拒绝？',
-      content: '拒绝后该 SKU 永久跳过，仅可通过「已拒绝」列表手动恢复。',
-      okText: '确认拒绝', okButtonProps: { danger: true },
-      onOk: async () => {
-        const reason = prompt('拒绝原因（可选）：') || ''
-        try {
-          await cloneApi.rejectPending(id, reason)
-          message.success('已拒绝')
-          load()
-        } catch (e) {
-          message.error(e.message || '拒绝失败')
-        }
-      },
-    })
-  }
-
-  const handleRestore = async (id) => {
-    try {
-      await cloneApi.restorePending(id)
-      message.success('已恢复到待审核')
-      load()
-    } catch (e) {
-      message.error(e.message || '恢复失败')
-    }
-  }
-
-  const handleBatchApprove = async () => {
+  const handleBatchPublish = async () => {
     if (selected.size === 0) return
     try {
-      const r = await cloneApi.batchApprove(Array.from(selected))
-      if (r?.data?.any_task_inactive) {
-        message.warning(
-          `批量批准: 成功 ${r.data.success} / 失败 ${r.data.failed} — 部分克隆任务停用, ` +
-          '已批准 pending 暂存中, 启用任务后下次 beat (5 分钟) 才会真上架',
-          6,
-        )
-      } else {
-        message.success(`批量批准: 成功 ${r.data.success} / 失败 ${r.data.failed}`)
-      }
+      const r = await cloneApi.batchPublish(Array.from(selected))
+      message.success(`批量发布: 成功 ${r.data.success} / 失败 ${r.data.failed}, 1 分钟内自动上架`)
       setSelected(new Set())
       load()
     } catch (e) {
-      message.error(e.message || '批量批准失败')
+      message.error(e.message || '批量发布失败')
     }
-  }
-
-  const handleBatchReject = async () => {
-    if (selected.size === 0) return
-    Modal.confirm({
-      title: `确认批量拒绝 ${selected.size} 条？`,
-      content: '拒绝后这些 SKU 永久跳过，可在「已拒绝」列表恢复',
-      okButtonProps: { danger: true },
-      onOk: async () => {
-        const reason = prompt('拒绝原因（可选）：') || ''
-        try {
-          const r = await cloneApi.batchReject(Array.from(selected), reason)
-          message.success(`批量拒绝: 成功 ${r.data.success} / 失败 ${r.data.failed}`)
-          setSelected(new Set())
-          load()
-        } catch (e) {
-          message.error(e.message || '批量拒绝失败')
-        }
-      },
-    })
   }
 
   const handleBatchDelete = async () => {
@@ -212,15 +149,10 @@ const PendingReview = () => {
       <List.Item
         style={{ padding: 16, background: catMissing ? '#fff2e8' : 'inherit' }}
         actions={status === 'pending' ? [
-          <Button key="approve" type="primary" icon={<CheckOutlined />} size="small"
-            onClick={() => handleApprove(item.id)}>批准</Button>,
+          <Button key="publish" type="primary" icon={<CheckOutlined />} size="small"
+            onClick={() => handlePublish(item.id)}>发布</Button>,
           <Button key="edit" icon={<EditOutlined />} size="small"
             onClick={() => openEdit(item)}>编辑</Button>,
-          <Button key="reject" danger icon={<CloseOutlined />} size="small"
-            onClick={() => handleReject(item.id)}>拒绝</Button>,
-        ] : status === 'rejected' ? [
-          <Button key="restore" icon={<RedoOutlined />} size="small"
-            onClick={() => handleRestore(item.id)}>恢复审核</Button>,
         ] : []}
       >
         {status === 'pending' && (
@@ -297,36 +229,29 @@ const PendingReview = () => {
         <Tabs activeKey={status} onChange={setStatus}
           items={[
             { key: 'pending', label: '待审核' },
-            { key: 'approved', label: '已批准（待上架）' },
-            { key: 'rejected', label: '已拒绝（可恢复）' },
             { key: 'published', label: '已发布' },
             { key: 'failed', label: '上架失败' },
           ]} />
 
-        {(status === 'pending' || status === 'rejected' || status === 'failed') && items.length > 0 && (
+        {(status === 'pending' || status === 'failed') && items.length > 0 && (
           <Space style={{ marginBottom: 12 }} wrap>
             <Checkbox
               checked={selected.size === items.length && items.length > 0}
               indeterminate={selected.size > 0 && selected.size < items.length}
               onChange={toggleSelectAll}>全选</Checkbox>
             {status === 'pending' && (
-              <>
-                <Button type="primary" icon={<CheckOutlined />}
-                  disabled={selected.size === 0} onClick={handleBatchApprove}>
-                  批量批准 ({selected.size})
-                </Button>
-                <Button danger icon={<CloseOutlined />}
-                  disabled={selected.size === 0} onClick={handleBatchReject}>
-                  批量拒绝 ({selected.size})
-                </Button>
-              </>
+              <Button type="primary" icon={<CheckOutlined />}
+                disabled={selected.size === 0} onClick={handleBatchPublish}>
+                批量发布 ({selected.size})
+              </Button>
             )}
             <Button danger icon={<DeleteOutlined />}
               disabled={selected.size === 0} onClick={handleBatchDelete}>
               彻底删除 ({selected.size})
             </Button>
             <span style={{ color: '#999', fontSize: 12 }}>
-              彻底删除 = 物理删 3 表, 不可恢复; 删后下次扫描重新采
+              不发也不删 = 留在待审核, 下次扫描会自动跳过 (永不重抓);
+              彻底删除 = 物理删, 下次扫描重新采
             </span>
           </Space>
         )}

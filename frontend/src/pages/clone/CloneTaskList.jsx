@@ -76,11 +76,12 @@ const CloneTaskList = () => {
   const handleCreate = async (values) => {
     setSubmitting(true)
     try {
+      // 简化设计 (老板拍): 创建即启用, 省"先创建再启用"一步
       await cloneApi.createTask({
         ...values,
-        is_active: false,
+        is_active: true,
       })
-      message.success('任务已创建（默认未启用，请手动启用）')
+      message.success('任务已创建并启用，可点 ⚡ 立即扫描')
       setCreateOpen(false)
       form.resetFields()
       loadTasks()
