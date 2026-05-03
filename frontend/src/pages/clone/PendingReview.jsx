@@ -51,8 +51,15 @@ const PendingReview = () => {
 
   const handleApprove = async (id) => {
     try {
-      await cloneApi.approvePending(id)
-      message.success('已批准，等待 publish-pending beat 异步上架（每 5 分钟）')
+      const r = await cloneApi.approvePending(id)
+      if (r?.data?.task_inactive) {
+        message.warning(
+          '已批准, 但克隆任务处于停用状态 — 暂存中, 请到「克隆任务」启用任务后才会真上架',
+          6,
+        )
+      } else {
+        message.success('已批准，等待 publish-pending beat 异步上架（每 5 分钟）')
+      }
       load()
     } catch (e) {
       message.error(e.message || '批准失败')
@@ -91,7 +98,15 @@ const PendingReview = () => {
     if (selected.size === 0) return
     try {
       const r = await cloneApi.batchApprove(Array.from(selected))
-      message.success(`批量批准: 成功 ${r.data.success} / 失败 ${r.data.failed}`)
+      if (r?.data?.any_task_inactive) {
+        message.warning(
+          `批量批准: 成功 ${r.data.success} / 失败 ${r.data.failed} — 部分克隆任务停用, ` +
+          '已批准 pending 暂存中, 启用任务后下次 beat (5 分钟) 才会真上架',
+          6,
+        )
+      } else {
+        message.success(`批量批准: 成功 ${r.data.success} / 失败 ${r.data.failed}`)
+      }
       setSelected(new Set())
       load()
     } catch (e) {

@@ -381,14 +381,16 @@ def approve_pending(db: Session, tenant_id: int, pending_id: int,
         return {"code": ErrorCode.CLONE_PENDING_INVALID_STATUS,
                 "msg": f"当前状态 {p.status} 不允许 approve"}
 
-    # 方案 A: 检查任务未删/未停 (避免幽灵 pending 触发 publish 上架)
+    # 方案 A v2: task 不存在拦截 (理论上 FK 保证不会发生, 但防御性);
+    # is_active=0 不再拦截 approve — 用户手动操作不存在"幽灵"问题.
+    # publish-pending beat 端仍 JOIN is_active=1, 任务停用 → approved 暂存 →
+    # 重新启用后下次 beat 自动接管上架. 这是合理的"暂存"语义.
     task = db.query(CloneTask).filter(
         CloneTask.id == p.task_id, CloneTask.tenant_id == tenant_id,
     ).first()
-    if not task or not task.is_active:
+    if not task:
         return {"code": ErrorCode.CLONE_TASK_NOT_FOUND,
-                "msg": "克隆任务已删除或停用, 不能批准 pending. "
-                       "请先到「克隆任务」列表启用任务后再批准."}
+                "msg": "克隆任务不存在"}
 
     p.status = "approved"
     p.reviewed_at = utc_now_naive()
@@ -399,12 +401,17 @@ def approve_pending(db: Session, tenant_id: int, pending_id: int,
     db.add(CloneLog(
         tenant_id=tenant_id, task_id=p.task_id,
         log_type="review", status="success",
-        detail={"action": "approve", "pending_id": pending_id},
+        detail={
+            "action": "approve", "pending_id": pending_id,
+            "task_inactive": not bool(task.is_active),  # 用于前端给"暂存"提示
+        },
     ))
     db.commit()
     return {"code": 0, "data": {
         "id": p.id, "status": "approved",
         "queued_at": p.reviewed_at.isoformat() + "Z",
+        # 任务停用时, pending 进 approved 但 publish beat 不会拉, 等启用后才上架
+        "task_inactive": not bool(task.is_active),
     }}
 
 
@@ -538,11 +545,14 @@ def batch_approve(db: Session, tenant_id: int, ids: List[int],
     """POST /pending/approve-batch — 部分成功语义"""
     results = []
     success = failed = 0
+    any_task_inactive = False
     for pid in ids:
         r = approve_pending(db, tenant_id, pid, user_id)
         if r["code"] == 0:
             success += 1
             results.append({"id": pid, "status": "approved"})
+            if (r.get("data") or {}).get("task_inactive"):
+                any_task_inactive = True
         else:
             failed += 1
             results.append({"id": pid, "status": "failed",
@@ -550,6 +560,8 @@ def batch_approve(db: Session, tenant_id: int, ids: List[int],
     return {"code": 0, "data": {
         "total": len(ids), "success": success, "failed": failed,
         "results": results,
+        # 任一 pending 所属 task 为 is_active=0 时给前端暂存提示
+        "any_task_inactive": any_task_inactive,
     }}
 
 
