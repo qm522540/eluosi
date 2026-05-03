@@ -251,7 +251,7 @@ async def keyword_campaigns(
     """), params).fetchall()
 
     campaigns = []
-    shop = db.query(Shop).filter(Shop.id == shop_id).first()
+    shop = db.query(Shop).filter(Shop.id == shop_id, Shop.tenant_id == tenant_id).first()
 
     for r in rows:
         camp = db.query(AdCampaign).filter(AdCampaign.id == r.campaign_id).first()
@@ -368,7 +368,7 @@ async def exclude_keyword(
     if not camp:
         return error(50001, "活动不存在")
 
-    shop = db.query(Shop).filter(Shop.id == req.shop_id).first()
+    shop = db.query(Shop).filter(Shop.id == req.shop_id, Shop.tenant_id == tenant_id).first()
     if not shop:
         return error(30001, "店铺不存在")
 
