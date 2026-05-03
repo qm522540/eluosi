@@ -1,8 +1,9 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Table, Tag, Tooltip, Button, Drawer, Space, Typography, Avatar, message } from 'antd'
-import { ArrowUpOutlined, ArrowDownOutlined, MinusOutlined, WarningOutlined, RobotOutlined } from '@ant-design/icons'
+import { Table, Tag, Tooltip, Button, Drawer, Space, Typography, Avatar, message, Modal, Input } from 'antd'
+import { ArrowUpOutlined, ArrowDownOutlined, MinusOutlined, WarningOutlined, RobotOutlined, EditOutlined } from '@ant-design/icons'
 import { getKeywordTrackingSkus } from '@/api/seo'
+import { translateKeywords, updateTranslation } from '@/api/keyword_stats'
 
 const { Text, Paragraph } = Typography
 
@@ -38,6 +39,44 @@ const TrackingTable = ({ shopId, data, loading, pagination, onPaginationChange, 
   const [drawerLoading, setDrawerLoading] = useState(false)
   const [drawerQuery, setDrawerQuery] = useState(null)
   const [drawerData, setDrawerData] = useState(null)
+  const [kwTranslations, setKwTranslations] = useState({})
+
+  // data 变化时批量翻译当前页核心词（命中 ru_zh_dict 共享缓存瞬间返回）
+  useEffect(() => {
+    const kws = (data || []).map(it => it.query_text).filter(Boolean)
+    if (kws.length === 0) return
+    translateKeywords(kws).then(tr => {
+      setKwTranslations(prev => ({ ...prev, ...(tr.data || {}) }))
+    }).catch(() => {})
+  }, [data])
+
+  const handleEditTranslation = (v) => {
+    const zh = kwTranslations[v] || ''
+    Modal.confirm({
+      title: '编辑中文翻译',
+      icon: null,
+      content: (
+        <div style={{ marginTop: 12 }}>
+          <div style={{ fontSize: 12, color: '#999', marginBottom: 6 }}>俄文：{v}</div>
+          <Input id={`seo-tracking-tr-input-${v}`} defaultValue={zh} placeholder="输入中文翻译" />
+          <div style={{ fontSize: 11, color: '#bbb', marginTop: 6 }}>
+            手动修改后标记为 manual，之后 AI 不会覆盖此翻译
+          </div>
+        </div>
+      ),
+      onOk: async () => {
+        const newVal = document.getElementById(`seo-tracking-tr-input-${v}`)?.value?.trim()
+        if (!newVal) return
+        try {
+          await updateTranslation(v, newVal)
+          setKwTranslations(prev => ({ ...prev, [v]: newVal }))
+          message.success('翻译已更新')
+        } catch (e) {
+          message.error(e?.response?.data?.msg || '更新失败')
+        }
+      },
+    })
+  }
 
   const openDrawer = async (query_text) => {
     setDrawerOpen(true)
@@ -73,12 +112,25 @@ const TrackingTable = ({ shopId, data, loading, pagination, onPaginationChange, 
       title: '核心词',
       dataIndex: 'query_text',
       width: 260,
-      render: (v, r) => (
-        <Space direction="vertical" size={0}>
-          <Text style={{ fontSize: 13, fontWeight: 500 }}>{v}</Text>
-          <Text type="secondary" style={{ fontSize: 11 }}>涉及 {r.skus_involved} 商品</Text>
-        </Space>
-      ),
+      render: (v, r) => {
+        const zh = kwTranslations[v]
+        const hasZh = zh && zh !== v
+        return (
+          <Space direction="vertical" size={0}>
+            <Text style={{ fontSize: 13, fontWeight: 500 }}>{v}</Text>
+            <Space size={4} style={{ alignItems: 'center' }}>
+              <Text style={{ fontSize: 11, color: '#999' }}>
+                {hasZh ? zh : <span style={{ color: '#ccc' }}>翻译中...</span>}
+              </Text>
+              <EditOutlined
+                style={{ fontSize: 10, color: '#bbb', cursor: 'pointer' }}
+                onClick={() => handleEditTranslation(v)}
+              />
+            </Space>
+            <Text type="secondary" style={{ fontSize: 11 }}>涉及 {r.skus_involved} 商品</Text>
+          </Space>
+        )
+      },
     },
     {
       title: '本期曝光',
