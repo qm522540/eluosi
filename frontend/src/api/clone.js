@@ -48,6 +48,10 @@ export const batchApprove = (ids) =>
 export const batchReject = (ids, reject_reason) =>
   request.post(`${BASE}/pending/reject-batch`, { ids, reject_reason })
 
+// 物理 DELETE 3 表 (pending + listing + product) - 不可逆, 删后下次扫描重新采
+export const batchDeletePending = (ids) =>
+  request.post(`${BASE}/pending/delete-batch`, { ids })
+
 // ==================== §5.3 日志 ====================
 
 export const listLogs = (params) => request.get(`${BASE}/logs`, { params })

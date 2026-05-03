@@ -563,6 +563,95 @@ def batch_reject(db: Session, tenant_id: int, ids: List[int],
     }}
 
 
+def batch_delete_pending(db: Session, tenant_id: int, ids: List[int]) -> dict:
+    """POST /pending/delete-batch — 物理 DELETE 3 张表 (pending + listing + product)
+
+    与 reject (软删 + 永久跳过 + 可恢复) 不同, 此接口是**真删**:
+    - 物理 DELETE clone_pending_products / platform_listings / products 三表关联行
+    - 删后下次扫描遇到同 SKU 不再被去重跳过, 会重新作为新候选立项 ("重新采")
+
+    限制 (避免破坏正在进行的流程或线上 Ozon 数据):
+    - 只允许 status in ('pending', 'rejected', 'failed')
+    - 'approved' 不允许 (publish beat 5 分钟内会推上架)
+    - 'published' 不允许 (Ozon 上已存在, 物理删本地数据 listing 会变成孤儿)
+
+    OSS 图片暂不清理 (留待 weekly cleanup beat 或 §11.6 daily 重构时统一处理).
+    """
+    if not ids:
+        return {"code": 0, "data": {
+            "deleted_pending": 0, "deleted_listing": 0, "deleted_product": 0,
+            "skipped": [], "skipped_count": 0,
+        }}
+
+    pendings = db.query(ClonePendingProduct).filter(
+        ClonePendingProduct.id.in_(ids),
+        ClonePendingProduct.tenant_id == tenant_id,
+    ).all()
+
+    deleted_pending = deleted_listing = deleted_product = 0
+    skipped: list = []
+    ALLOWED_STATUSES = {"pending", "rejected", "failed"}
+
+    for p in pendings:
+        if p.status not in ALLOWED_STATUSES:
+            skipped.append({
+                "id": p.id, "status": p.status,
+                "reason": "状态不允许删 (仅 pending/rejected/failed 可删)",
+            })
+            continue
+
+        # 收集关联 listing + product (按依赖反向删)
+        product_id = None
+        if p.draft_listing_id:
+            listing = db.query(PlatformListing).filter(
+                PlatformListing.id == p.draft_listing_id,
+                PlatformListing.tenant_id == tenant_id,
+            ).first()
+            if listing:
+                product_id = listing.product_id
+                db.delete(listing)
+                deleted_listing += 1
+        if product_id:
+            product = db.query(Product).filter(
+                Product.id == product_id,
+                Product.tenant_id == tenant_id,
+            ).first()
+            if product:
+                db.delete(product)
+                deleted_product += 1
+        db.delete(p)
+        deleted_pending += 1
+
+    db.commit()
+
+    # 写日志 (审计可追溯)
+    if deleted_pending > 0:
+        first_p = pendings[0] if pendings else None
+        task_id_for_log = first_p.task_id if first_p else None
+        db.add(CloneLog(
+            tenant_id=tenant_id, task_id=task_id_for_log,
+            log_type="review", status="success",
+            rows_affected=deleted_pending,
+            detail={
+                "action": "batch_delete",
+                "deleted_pending": deleted_pending,
+                "deleted_listing": deleted_listing,
+                "deleted_product": deleted_product,
+                "skipped_count": len(skipped),
+                "ids": ids[:100],
+            },
+        ))
+        db.commit()
+
+    return {"code": 0, "data": {
+        "deleted_pending": deleted_pending,
+        "deleted_listing": deleted_listing,
+        "deleted_product": deleted_product,
+        "skipped": skipped,
+        "skipped_count": len(skipped),
+    }}
+
+
 # ==================== §5.3 日志 ====================
 
 def list_logs(db: Session, tenant_id: int,

@@ -6,7 +6,7 @@ import {
 } from 'antd'
 import {
   CheckOutlined, CloseOutlined, RedoOutlined, EditOutlined,
-  WarningOutlined,
+  WarningOutlined, DeleteOutlined,
 } from '@ant-design/icons'
 import * as cloneApi from '@/api/clone'
 
@@ -114,6 +114,41 @@ const PendingReview = () => {
           load()
         } catch (e) {
           message.error(e.message || '批量拒绝失败')
+        }
+      },
+    })
+  }
+
+  const handleBatchDelete = async () => {
+    if (selected.size === 0) return
+    Modal.confirm({
+      title: `确认彻底删除 ${selected.size} 条？(不可恢复)`,
+      content: (
+        <div>
+          <p style={{ color: '#cf1322' }}>
+            <strong>物理删除</strong> 3 张表 (pending + 草稿 listing + 草稿 product),
+            不可恢复.
+          </p>
+          <p>删后下次扫描遇到同 SKU 会<strong>重新作为新候选立项</strong> (重新采).</p>
+          <p style={{ color: '#999', fontSize: 12 }}>
+            限制: 仅 pending / 已拒绝 / 上架失败 状态可删. 已批准/已发布的不允许.
+          </p>
+        </div>
+      ),
+      okText: '确认彻底删除',
+      okButtonProps: { danger: true },
+      onOk: async () => {
+        try {
+          const r = await cloneApi.batchDeletePending(Array.from(selected))
+          const d = r.data
+          message.success(
+            `彻底删除: ${d.deleted_pending} 条 pending` +
+            (d.skipped_count > 0 ? ` (跳过 ${d.skipped_count} 条状态不允许)` : '')
+          )
+          setSelected(new Set())
+          load()
+        } catch (e) {
+          message.error(e.message || '彻底删除失败')
         }
       },
     })
@@ -253,20 +288,31 @@ const PendingReview = () => {
             { key: 'failed', label: '上架失败' },
           ]} />
 
-        {status === 'pending' && items.length > 0 && (
-          <Space style={{ marginBottom: 12 }}>
+        {(status === 'pending' || status === 'rejected' || status === 'failed') && items.length > 0 && (
+          <Space style={{ marginBottom: 12 }} wrap>
             <Checkbox
               checked={selected.size === items.length && items.length > 0}
               indeterminate={selected.size > 0 && selected.size < items.length}
               onChange={toggleSelectAll}>全选</Checkbox>
-            <Button type="primary" icon={<CheckOutlined />}
-              disabled={selected.size === 0} onClick={handleBatchApprove}>
-              批量批准 ({selected.size})
+            {status === 'pending' && (
+              <>
+                <Button type="primary" icon={<CheckOutlined />}
+                  disabled={selected.size === 0} onClick={handleBatchApprove}>
+                  批量批准 ({selected.size})
+                </Button>
+                <Button danger icon={<CloseOutlined />}
+                  disabled={selected.size === 0} onClick={handleBatchReject}>
+                  批量拒绝 ({selected.size})
+                </Button>
+              </>
+            )}
+            <Button danger icon={<DeleteOutlined />}
+              disabled={selected.size === 0} onClick={handleBatchDelete}>
+              彻底删除 ({selected.size})
             </Button>
-            <Button danger icon={<CloseOutlined />}
-              disabled={selected.size === 0} onClick={handleBatchReject}>
-              批量拒绝 ({selected.size})
-            </Button>
+            <span style={{ color: '#999', fontSize: 12 }}>
+              彻底删除 = 物理删 3 表, 不可恢复; 删后下次扫描重新采
+            </span>
           </Space>
         )}
 

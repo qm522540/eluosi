@@ -272,6 +272,22 @@ def batch_reject_pending(
     return error(r["code"], r.get("msg"))
 
 
+@router.post("/pending/delete-batch")
+def batch_delete_pending_route(
+    body: BatchActionRequest,
+    db: Session = Depends(get_db),
+    tenant_id: int = Depends(get_tenant_id),
+):
+    """物理 DELETE 3 张表 (pending + listing + product) — 不可逆.
+    删后下次扫描遇到同 SKU 不再去重跳过, 重新作为新候选立项.
+    限制: 只允许 status in (pending/rejected/failed); approved/published 拒绝.
+    """
+    r = task_service.batch_delete_pending(db, tenant_id, body.ids)
+    if r.get("code") == 0:
+        return success(r["data"])
+    return error(r["code"], r.get("msg"))
+
+
 # ==================== §5.3 日志 ====================
 
 @router.get("/logs")
