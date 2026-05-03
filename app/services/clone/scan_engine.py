@@ -43,8 +43,9 @@ LIST_PAGE_SIZE = 100
 AI_REWRITE_SEMAPHORE = 5
 
 # 11.2 优化: scan-preview 把拉到的候选 snapshot 缓存到 Redis,
-# scan-now 命中缓存可跳过整段 list_products 分页(28~30 秒 → 1 秒级).
-PREVIEW_CACHE_TTL = 300  # 5 分钟, 跟 nginx idle timeout 同量级
+# scan-now / 后续 preview 命中缓存可跳过整段 list_products 分页(28~30 秒 → 1 秒级).
+# TTL 老板拍 15 分钟 — 同 task 反复操作期内秒回, 过期后才重新拉 API
+PREVIEW_CACHE_TTL = 900  # 15 分钟
 
 
 # ==================== 11.2 Preview 快照缓存 ====================
@@ -114,6 +115,36 @@ def _save_preview_cache(tenant_id: int, task_id: int,
         )
     except Exception as e:
         logger.warning(f"_save_preview_cache 写 Redis 失败 task={task_id}: {e}")
+
+
+def _load_all_cached_snapshots(tenant_id: int, task_id: int) -> Optional[tuple[list[ProductSnapshot], int]]:
+    """取 preview 缓存的全部候选 snapshot, 给 _scan_preview 自身复用.
+
+    Returns:
+        - (snapshots, cached_age_seconds) 命中时
+        - None 缓存不存在或读 Redis 失败
+
+    跟 _load_preview_cache 区别: 这个不按 selected_skus 过滤, 返回全部.
+    """
+    try:
+        from app.services.platform.wb import _get_redis_client
+        r = _get_redis_client()
+        key = _preview_cache_key(tenant_id, task_id)
+        raw = r.get(key)
+        if not raw:
+            return None
+        ttl = r.ttl(key)
+        age = max(0, PREVIEW_CACHE_TTL - (ttl if ttl and ttl > 0 else 0))
+        payload = json.loads(raw)
+        snaps = [_jsonable_to_snapshot(d) for d in payload.values()]
+        logger.info(
+            f"_load_all_cached_snapshots task={task_id} 命中 {len(snaps)} 件 "
+            f"(缓存年龄 {age}s)"
+        )
+        return snaps, age
+    except Exception as e:
+        logger.warning(f"_load_all_cached_snapshots 读 Redis 失败 task={task_id}: {e}")
+        return None
 
 
 def _load_preview_cache(tenant_id: int, task_id: int,
@@ -696,24 +727,40 @@ async def _scan_preview(db: Session, task_id: int, tenant_id: int) -> dict:
         if s and not s.startswith(('clone-pending-', 'clone-draft-')):
             a_existing_skus.add(s)
 
-    try:
-        provider = get_provider(db, source_shop)
-    except Exception as e:
-        logger.error(f"_scan_preview get_provider 失败 task={task_id}: {e}")
-        from app.utils.errors import ErrorCode
-        return {"code": ErrorCode.CLONE_SOURCE_API_FAILED, "msg": str(e)[:200]}
+    # 11.2 优化: 先查缓存, 命中则跳过整段 list_products (28~30 秒 → 1-3 秒)
+    from_cache = False
+    cache_age_seconds = 0
+    cached_result = _load_all_cached_snapshots(tenant_id, task_id)
+    if cached_result is not None:
+        cached_snaps_list, cache_age_seconds = cached_result
+        from_cache = True
+    else:
+        cached_snaps_list = None
+
+    if not from_cache:
+        try:
+            provider = get_provider(db, source_shop)
+        except Exception as e:
+            logger.error(f"_scan_preview get_provider 失败 task={task_id}: {e}")
+            from app.utils.errors import ErrorCode
+            return {"code": ErrorCode.CLONE_SOURCE_API_FAILED, "msg": str(e)[:200]}
 
     cursor: Optional[str] = None
     while True:
-        try:
-            snapshots, cursor = await provider.list_products(cursor=cursor, limit=LIST_PAGE_SIZE)
-        except NotImplementedError as e:
-            from app.utils.errors import ErrorCode
-            return {"code": ErrorCode.CLONE_SOURCE_API_FAILED, "msg": str(e)[:200]}
-        except Exception as e:
-            logger.error(f"_scan_preview list_products 失败 task={task_id}: {e}")
-            from app.utils.errors import ErrorCode
-            return {"code": ErrorCode.CLONE_SOURCE_API_FAILED, "msg": str(e)[:200]}
+        if from_cache:
+            # 命中缓存: 一次性塞所有 snap, 跳出分页循环
+            snapshots = cached_snaps_list
+            cursor = None
+        else:
+            try:
+                snapshots, cursor = await provider.list_products(cursor=cursor, limit=LIST_PAGE_SIZE)
+            except NotImplementedError as e:
+                from app.utils.errors import ErrorCode
+                return {"code": ErrorCode.CLONE_SOURCE_API_FAILED, "msg": str(e)[:200]}
+            except Exception as e:
+                logger.error(f"_scan_preview list_products 失败 task={task_id}: {e}")
+                from app.utils.errors import ErrorCode
+                return {"code": ErrorCode.CLONE_SOURCE_API_FAILED, "msg": str(e)[:200]}
 
         if not snapshots:
             break
@@ -801,8 +848,10 @@ async def _scan_preview(db: Session, task_id: int, tenant_id: int) -> dict:
         if not cursor:
             break
 
-    # 11.2 优化: 把候选 snapshot 写 Redis, scan-now 命中可跳过 list_products
-    _save_preview_cache(tenant_id, task_id, candidate_snapshots)
+    # 11.2 优化: 现拉到的候选写 Redis 给 scan-now / 后续 preview 复用;
+    # 命中缓存的本次 preview 不重写, 让原 TTL 倒计时正常推进
+    if not from_cache:
+        _save_preview_cache(tenant_id, task_id, candidate_snapshots)
 
     duration_ms = int((utc_now_naive() - t0).total_seconds() * 1000)
     return {"code": 0, "data": {
@@ -815,4 +864,8 @@ async def _scan_preview(db: Session, task_id: int, tenant_id: int) -> dict:
         "candidates": candidates,
         "skipped_skus_sample": skipped_skus[:50],
         "duration_ms": duration_ms,
+        # 11.2 优化: 给前端展示"是否走缓存"
+        "from_cache": from_cache,
+        "cache_age_seconds": cache_age_seconds if from_cache else 0,
+        "cache_ttl_seconds": PREVIEW_CACHE_TTL,
     }}

@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
   Card, Table, Button, Space, Tag, Modal, Form, Select, InputNumber, Input,
-  Switch, message, Popconfirm, Tooltip, Typography, Checkbox, Image, Badge,
+  Switch, message, Popconfirm, Tooltip, Typography, Checkbox, Image, Badge, Spin,
 } from 'antd'
 import {
   PlusOutlined, ThunderboltOutlined, EyeOutlined, DeleteOutlined,
@@ -143,10 +143,29 @@ const CloneTaskList = () => {
   }
 
   // 11.2: 第一步 — 调 scan-preview 拿候选清单, 弹勾选 Modal
+  // 进度可视化: 先弹 Spin Modal, 后端返回后关闭再展示结果
   const handleScanNow = async (task) => {
     setScanningId(task.id)
+    const progressModal = Modal.info({
+      title: '正在扫描被克隆店铺...',
+      icon: null,
+      width: 460,
+      okButtonProps: { style: { display: 'none' } },
+      closable: false,
+      maskClosable: false,
+      content: (
+        <div style={{ textAlign: 'center', padding: '24px 0' }}>
+          <Spin size="large" />
+          <div style={{ marginTop: 16, color: '#595959', lineHeight: 1.7 }}>
+            首次扫描需 <strong>~30 秒</strong>拉取 B 店全部商品<br />
+            <span style={{ color: '#1677ff' }}>15 分钟内</span>重复操作直接用本地缓存秒回
+          </div>
+        </div>
+      ),
+    })
     try {
       const r = await cloneApi.scanPreview(task.id)
+      progressModal.destroy()
       const d = r.data
       const candidates = d.candidates || []
       const stats = {
@@ -157,6 +176,8 @@ const CloneTaskList = () => {
         skip_rejected: d.skip_rejected || 0,
         skip_category_missing: d.skip_category_missing || 0,
         duration_ms: d.duration_ms || 0,
+        from_cache: !!d.from_cache,
+        cache_age_seconds: d.cache_age_seconds || 0,
       }
       if (candidates.length === 0) {
         // 没新候选, 直接显示统计
@@ -165,7 +186,14 @@ const CloneTaskList = () => {
           width: 460,
           content: (
             <div>
-              <p>共扫描 B 店商品: <strong>{stats.found}</strong> 件</p>
+              <p>
+                共扫描 B 店商品: <strong>{stats.found}</strong> 件
+                {stats.from_cache && (
+                  <Tag color="cyan" style={{ marginLeft: 8 }}>
+                    用 {Math.floor(stats.cache_age_seconds / 60)} 分钟前缓存
+                  </Tag>
+                )}
+              </p>
               <div style={{ background: '#fafafa', padding: 8, marginTop: 8, fontSize: 13 }}>
                 <div style={{ marginBottom: 4, color: '#666' }}>全部跳过原因:</div>
                 <p style={{ margin: '2px 0' }}>· 已在审核队列: {stats.skip_pending}</p>
@@ -187,6 +215,7 @@ const CloneTaskList = () => {
         confirming: false,
       })
     } catch (e) {
+      progressModal.destroy()
       message.error(e.message || '扫描预览失败')
     } finally {
       setScanningId(null)
@@ -693,6 +722,13 @@ const CloneTaskList = () => {
             <span>已发布 {previewState.stats.skip_published || 0}</span>
             <span>类目缺 {previewState.stats.skip_category_missing || 0}</span>
             <span style={{ color: '#999' }}>耗时 {previewState.stats.duration_ms || 0} ms</span>
+            {previewState.stats.from_cache ? (
+              <Tag color="cyan" style={{ marginInlineEnd: 0 }}>
+                ✓ 用 {Math.floor((previewState.stats.cache_age_seconds || 0) / 60)} 分钟前缓存
+              </Tag>
+            ) : (
+              <Tag color="orange" style={{ marginInlineEnd: 0 }}>现拉 API</Tag>
+            )}
           </Space>
         </div>
         <Table
