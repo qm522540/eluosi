@@ -76,9 +76,16 @@ def run_bid_management(self):
             try:
                 result = _process_shop(db, shop)
                 dur_ms = int((utc_now_naive() - t0).total_seconds() * 1000)
+                mode = str((result or {}).get("mode", ""))
+                # mode 字面给 UI "最近同步" 文案显示, 中文化避免 "none" 误导用户
+                _MODE_LABEL = {
+                    "time_pricing": "分时调价",
+                    "ai": "AI 调价",
+                    "none": "未启用任何模式",
+                }
                 record_sync_run(db, shop.tenant_id, shop.id, source_key,
                                status="success", duration_ms=dur_ms,
-                               msg=str((result or {}).get("mode", ""))[:500])
+                               msg=_MODE_LABEL.get(mode, mode)[:500])
                 results.append({
                     "shop_id": shop.id,
                     "shop_name": shop.name,
