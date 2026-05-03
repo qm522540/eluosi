@@ -33,7 +33,10 @@ const { RangePicker } = DatePicker
 // 2026-04-25 老林：seller A+B 双 24h MANUAL HOLD #3 —— 24h+ 静默实证 WB quota 仍锁
 // 任何 WB endpoint 调用都会被 Redis pre-check 拦下，但前端按钮点了仍会跳错误消息丑
 // 解 hold 时改 false（同时取消 celery_app.py 中 2a3452b 的 5 个 WB beat 注释）
-const WB_QUOTA_SILENT_MODE = true
+// 2026-05-03 老张恢复：celery WB beat 早已解开 (celery_app.py 33/66/72/98 在跑) +
+// 用户截图实证 PT.Gril 各 WB 数据源运行中 + 出价管理 10:06 刚成功 + silent-detector v2
+// (4e37d51) 已部署兜底，硬关已 stale 8 天。改回 false。下次再撞 quota 锁直接改 true 即可。
+const WB_QUOTA_SILENT_MODE = false
 const WB_SILENT_TIP = 'WB quota 锁期超 24h，已进入静默期暂停所有 WB 主动调用。等 B/C/D 路径决策（换账号 / 联系客服 / 继续等）后再恢复。'
 
 // ==================== 平台配置 ====================
