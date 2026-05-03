@@ -256,6 +256,7 @@ async def _publish_pending(db: Session, pending_id: int) -> dict:
         ).first()
         if listing:
             listing.status = "active"
+            listing.publish_status = "published"  # 修小瑕疵: publish 成功后字段语义对齐
             listing.platform_sku_id = new_offer_id
             if listing.product_id:
                 product = db.query(Product).filter(
