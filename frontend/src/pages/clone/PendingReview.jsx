@@ -49,26 +49,71 @@ const PendingReview = () => {
   useEffect(() => { loadTasks() }, [])
   useEffect(() => { load(); setSelected(new Set()) }, [taskId, status])
 
-  const handlePublish = async (id) => {
-    try {
-      await cloneApi.publishPending(id)
-      message.success('已加入上架队列, 1 分钟内自动上架到平台')
-      load()
-    } catch (e) {
-      message.error(e.message || '发布失败')
-    }
+  const handlePublish = (id) => {
+    const item = items.find(i => i.id === id)
+    const title = item?.proposed?.title_ru || item?.source?.title_ru || `pending #${id}`
+    Modal.confirm({
+      title: '确认发布到平台？',
+      width: 500,
+      content: (
+        <div style={{ lineHeight: 1.7 }}>
+          <p style={{ marginBottom: 8 }}>
+            将要发布: <strong>{title.length > 60 ? title.slice(0, 60) + '...' : title}</strong>
+          </p>
+          <p style={{ color: '#fa8c16', marginBottom: 4 }}>
+            ⚠️ 发布后会立即推送到 Ozon, <strong>1 分钟内</strong>真上架
+          </p>
+          <p style={{ color: '#999', fontSize: 13, marginBottom: 0 }}>
+            撤架需到 Ozon 后台手动下架, 系统这边无法回滚
+          </p>
+        </div>
+      ),
+      okText: '确认发布',
+      okButtonProps: { type: 'primary' },
+      cancelText: '取消',
+      onOk: async () => {
+        try {
+          await cloneApi.publishPending(id)
+          message.success('已加入上架队列, 1 分钟内自动上架到平台')
+          load()
+        } catch (e) {
+          message.error(e.message || '发布失败')
+        }
+      },
+    })
   }
 
-  const handleBatchPublish = async () => {
+  const handleBatchPublish = () => {
     if (selected.size === 0) return
-    try {
-      const r = await cloneApi.batchPublish(Array.from(selected))
-      message.success(`批量发布: 成功 ${r.data.success} / 失败 ${r.data.failed}, 1 分钟内自动上架`)
-      setSelected(new Set())
-      load()
-    } catch (e) {
-      message.error(e.message || '批量发布失败')
-    }
+    Modal.confirm({
+      title: `确认批量发布 ${selected.size} 件商品？`,
+      width: 480,
+      content: (
+        <div style={{ lineHeight: 1.7 }}>
+          <p style={{ color: '#fa8c16', marginBottom: 4 }}>
+            ⚠️ 发布后立即推送到 Ozon, <strong>1 分钟内</strong>真上架
+          </p>
+          <p style={{ color: '#999', fontSize: 13, marginBottom: 0 }}>
+            撤架需到 Ozon 后台逐条手动下架, 系统无法回滚
+          </p>
+        </div>
+      ),
+      okText: `确认发布 ${selected.size} 件`,
+      okButtonProps: { type: 'primary' },
+      cancelText: '取消',
+      onOk: async () => {
+        try {
+          const r = await cloneApi.batchPublish(Array.from(selected))
+          message.success(
+            `批量发布: 成功 ${r.data.success} / 失败 ${r.data.failed}, 1 分钟内自动上架`,
+          )
+          setSelected(new Set())
+          load()
+        } catch (e) {
+          message.error(e.message || '批量发布失败')
+        }
+      },
+    })
   }
 
   const handleBatchDelete = async () => {
