@@ -350,14 +350,22 @@ def list_pending(db: Session, tenant_id: int,
                  category_mapping_status: Optional[str] = None,
                  keyword: Optional[str] = None,
                  page: int = 1, size: int = 20) -> dict:
-    """GET /pending — 待审核列表"""
+    """GET /pending — 待审核列表
+
+    status 支持逗号分隔多值: 'approved,published' → IN 查询; 给前端
+    "已发布" tab 同时显示发布中(approved) + 已上架(published) 状态用.
+    """
     q = db.query(ClonePendingProduct).filter(
         ClonePendingProduct.tenant_id == tenant_id,
     )
     if task_id is not None:
         q = q.filter(ClonePendingProduct.task_id == task_id)
     if status:
-        q = q.filter(ClonePendingProduct.status == status)
+        statuses = [s.strip() for s in status.split(",") if s.strip()]
+        if len(statuses) == 1:
+            q = q.filter(ClonePendingProduct.status == statuses[0])
+        elif len(statuses) > 1:
+            q = q.filter(ClonePendingProduct.status.in_(statuses))
     if category_mapping_status:
         q = q.filter(ClonePendingProduct.category_mapping_status == category_mapping_status)
     if keyword:

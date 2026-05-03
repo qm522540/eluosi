@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import {
   Card, Tabs, List, Button, Space, Tag, Image, Modal, Input, message,
-  Empty, Typography, Select, Checkbox, Tooltip, Spin,
+  Empty, Typography, Select, Checkbox, Tooltip, Spin, Progress,
 } from 'antd'
 import {
   CheckOutlined, EditOutlined,
@@ -23,17 +23,19 @@ const PendingReview = () => {
   const [editTarget, setEditTarget] = useState(null)
   const [editForm, setEditForm] = useState({})
 
-  const load = async () => {
-    setLoading(true)
+  const load = async (silent = false) => {
+    if (!silent) setLoading(true)
     try {
-      const params = { status, page: 1, size: 50 }
+      // "已发布" tab 同时拉 approved (发布中) + published (已上架) 让用户看进度
+      const queryStatus = status === 'published' ? 'approved,published' : status
+      const params = { status: queryStatus, page: 1, size: 50 }
       if (taskId) params.task_id = taskId
       const r = await cloneApi.listPending(params)
       setItems(r.data?.items || [])
     } catch (e) {
-      message.error(e.message || '加载待审核失败')
+      if (!silent) message.error(e.message || '加载待审核失败')
     } finally {
-      setLoading(false)
+      if (!silent) setLoading(false)
     }
   }
 
@@ -48,6 +50,16 @@ const PendingReview = () => {
 
   useEffect(() => { loadTasks() }, [])
   useEffect(() => { load(); setSelected(new Set()) }, [taskId, status])
+
+  // "已发布" tab 有 approved (发布中) 项时, 每 5 秒静默 poll 一次直到全 published;
+  // 切到别的 tab 或 cleanup 时停止
+  useEffect(() => {
+    if (status !== 'published') return
+    const hasApproved = items.some(i => i.status === 'approved')
+    if (!hasApproved) return
+    const timer = setInterval(() => load(true), 5000)
+    return () => clearInterval(timer)
+  }, [status, items])
 
   const handlePublish = (id) => {
     const item = items.find(i => i.id === id)
@@ -231,15 +243,27 @@ const PendingReview = () => {
     const prop = item.proposed || {}
     const aiFailed = prop._ai_rewrite_failed_title || prop._ai_rewrite_failed_desc
     const catMissing = item.category_mapping_status === 'missing'
+    // "已发布" tab 同时含 approved (发布中) + published (上架完成); 给状态徽章
+    const isApproving = item.status === 'approved'
+    const rowBg = isApproving
+      ? '#e6f4ff'
+      : catMissing ? '#fff2e8' : 'inherit'
 
     return (
       <List.Item
-        style={{ padding: 16, background: catMissing ? '#fff2e8' : 'inherit' }}
+        style={{ padding: 16, background: rowBg }}
         actions={status === 'pending' ? [
           <Button key="publish" type="primary" icon={<CheckOutlined />} size="small"
             onClick={() => handlePublish(item.id)}>发布</Button>,
           <Button key="edit" icon={<EditOutlined />} size="small"
             onClick={() => openEdit(item)}>编辑</Button>,
+        ] : isApproving ? [
+          <Tag key="status" icon={<Spin size="small" />} color="processing"
+            style={{ padding: '4px 10px' }}>正在发布到 Ozon...</Tag>,
+        ] : item.status === 'published' ? [
+          <Tag key="status" color="success" style={{ padding: '4px 10px' }}>
+            ✓ 已上架
+          </Tag>,
         ] : []}
       >
         {status === 'pending' && (
@@ -319,6 +343,33 @@ const PendingReview = () => {
             { key: 'published', label: '已发布' },
             { key: 'failed', label: '上架失败' },
           ]} />
+
+        {status === 'published' && items.length > 0 && (() => {
+          const approving = items.filter(i => i.status === 'approved').length
+          const published = items.filter(i => i.status === 'published').length
+          const total = approving + published
+          const percent = total > 0 ? Math.round(published * 100 / total) : 100
+          if (approving === 0) return null
+          return (
+            <div style={{
+              marginBottom: 12, padding: 12, background: '#f0f7ff',
+              border: '1px solid #91caff', borderRadius: 4,
+            }}>
+              <Space direction="vertical" size={6} style={{ width: '100%' }}>
+                <Space>
+                  <Spin size="small" />
+                  <Text strong>正在发布中...</Text>
+                  <Text type="secondary">每件含图片下载约 20-30 秒, 每 5 秒自动刷新</Text>
+                </Space>
+                <Progress
+                  percent={percent}
+                  format={() => `${published} / ${total} 件已上架`}
+                  strokeColor={{ from: '#108ee9', to: '#87d068' }}
+                />
+              </Space>
+            </div>
+          )
+        })()}
 
         {(status === 'pending' || status === 'failed') && items.length > 0 && (
           <Space style={{ marginBottom: 12 }} wrap>
