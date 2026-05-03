@@ -387,6 +387,7 @@ async def _run_scan(
                 "images_oss": oss_urls,
                 "platform_category_id": target_cat_id or "",
                 "platform_category_name": snap.platform_category_name,
+                "type_id": snap.type_id,  # Ozon /v3/product/import 必填
                 "attributes": snap.attributes,
             }
 
@@ -408,6 +409,7 @@ async def _run_scan(
                         "images": snap.images,
                         "platform_category_id": snap.platform_category_id,
                         "platform_category_name": snap.platform_category_name,
+                        "type_id": snap.type_id,  # Ozon /v3/product/import 必填
                         "attributes": snap.attributes,
                     },
                     proposed_payload=proposed,
@@ -658,6 +660,7 @@ async def _scan_preview(db: Session, task_id: int, tenant_id: int) -> dict:
                 "images": list(snap.images or [])[:5],  # 缩略图最多 5 张
                 "category_status": mapping_status,
                 "target_category_id": target_cat_id,
+                "type_id": snap.type_id,
                 "source_platform": snap.source_platform,
                 "local_sku_b": b_local_sku,
             })

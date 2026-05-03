@@ -30,6 +30,7 @@ class ProductSnapshot:
     images: List[str] = field(default_factory=list)              # 图片 URL 列表
     platform_category_id: str = ""                                # B 平台分类 ID
     platform_category_name: str = ""
+    type_id: str = ""                                              # Ozon 商品类型 ID (description_category 下的子 type, import 必填)
     attributes: List[dict] = field(default_factory=list)         # [{key, value, ...}]
     raw: dict = field(default_factory=dict)                       # 原始 API 响应 (debug)
     detected_at: Optional[datetime] = None                        # utc_now_naive() 由 scan_engine 注入

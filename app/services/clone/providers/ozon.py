@@ -124,6 +124,9 @@ class OzonSellerProvider(BaseShopProvider):
             if primary and primary not in images:
                 images = [primary] + list(images)
 
+            type_id_val = info.get("type_id")
+            type_id_str = str(type_id_val) if type_id_val else ""
+
             snapshots.append(ProductSnapshot(
                 source_platform="ozon",
                 source_sku_id=offer_id,             # Ozon 用 offer_id 作 B 平台 SKU
@@ -134,6 +137,7 @@ class OzonSellerProvider(BaseShopProvider):
                 images=images,
                 platform_category_id=platform_category_id,
                 platform_category_name="",          # info/list 不返, scan_engine 走 028 反查
+                type_id=type_id_str,                # Ozon /v3/product/import 必填
                 attributes=attributes_map.get(pid) or [],
                 raw=info,
             ))
@@ -179,6 +183,9 @@ class OzonSellerProvider(BaseShopProvider):
         if primary and primary not in images:
             images = [primary] + list(images)
 
+        type_id_val = info.get("type_id")
+        type_id_str = str(type_id_val) if type_id_val else ""
+
         return ProductSnapshot(
             source_platform="ozon",
             source_sku_id=str(info.get("offer_id") or source_sku_id),
@@ -189,6 +196,7 @@ class OzonSellerProvider(BaseShopProvider):
             images=images,
             platform_category_id=str(info.get("description_category_id") or ""),
             platform_category_name="",
+            type_id=type_id_str,
             attributes=attributes_map.get(int(pid)) or [],
             raw=info,
         )

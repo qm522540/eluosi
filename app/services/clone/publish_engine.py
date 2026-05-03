@@ -60,9 +60,17 @@ async def _publish_to_ozon(target_shop: Shop, payload: dict) -> dict:
     images = payload.get("images_oss") or []
     price = float(payload.get("price_rub") or 0)
     cat_id = payload.get("platform_category_id")
+    type_id_raw = payload.get("type_id") or ""
+    try:
+        type_id = int(type_id_raw) if type_id_raw else 0
+    except (TypeError, ValueError):
+        type_id = 0
     if not (title and cat_id and price > 0):
         return {"code": ErrorCode.CLONE_PUBLISH_FAILED,
                 "msg": "缺必填字段 (title / category_id / price)"}
+    if type_id <= 0:
+        return {"code": ErrorCode.CLONE_PUBLISH_FAILED,
+                "msg": "缺 type_id (Ozon /v3/product/import 必填) — 旧版 scan 未采集, 见 publish_engine fallback 反查"}
 
     # 把 attributes (B 店原属性) 透传 — Ozon import 接受 [{id, values:[{value}]}, ...]
     attributes = []
@@ -96,6 +104,7 @@ async def _publish_to_ozon(target_shop: Shop, payload: dict) -> dict:
         "offer_id": new_offer_id,
         "name": title,
         "description_category_id": int(cat_id),
+        "type_id": type_id,              # 必填, 见上方 type_id_raw 校验
         "price": str(price),
         "old_price": str(price),
         "vat": "0",                      # 占位, 用户后台改
@@ -155,6 +164,35 @@ async def _publish_pending(db: Session, pending_id: int) -> dict:
 
     t0 = utc_now_naive()
     payload = pending.proposed_payload or {}
+
+    # type_id fallback: 兼容旧版 scan 未采集 type_id 的现有 pending
+    # 调 source_shop 的 Ozon API 现拉 type_id, 写回 proposed_payload
+    if not payload.get("type_id") and target_shop.platform == "ozon":
+        source_shop = db.query(Shop).filter(Shop.id == task.source_shop_id).first()
+        if source_shop and source_shop.platform == "ozon":
+            try:
+                from app.services.platform.ozon import OzonClient, OZON_SELLER_API
+                sclient = OzonClient(
+                    shop_id=source_shop.id,
+                    api_key=source_shop.api_key,
+                    client_id=source_shop.client_id,
+                    perf_client_id=source_shop.perf_client_id or "",
+                    perf_client_secret=source_shop.perf_client_secret or "",
+                )
+                src_url = f"{OZON_SELLER_API}/v3/product/info/list"
+                src_r = await sclient._request("POST", src_url, json={
+                    "offer_id": [pending.source_sku_id], "product_id": [], "sku": [],
+                })
+                src_items = (src_r or {}).get("result", {}).get("items") or src_r.get("items", [])
+                if src_items:
+                    src_type_id = src_items[0].get("type_id")
+                    if src_type_id:
+                        payload = {**payload, "type_id": str(src_type_id)}
+                        pending.proposed_payload = payload
+                        db.commit()
+                        logger.info(f"type_id fallback 反查成功 pending={pending.id}: {src_type_id}")
+            except Exception as e:
+                logger.error(f"type_id fallback 反查失败 pending={pending.id}: {e}")
 
     # 草稿期 images_oss 是 B 店原图 URL, 这里下载到 OSS 后写回
     # (扫描不下图: 否则 385 件全量 × 串行 25s/件 = 2.5h, 同步触发必 timeout;
