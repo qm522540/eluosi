@@ -1108,19 +1108,23 @@ class OzonClient(BasePlatformClient):
 
     async def fetch_attribute_values(
         self, description_category_id: int, type_id: int, attribute_id: int,
-        limit: int = 500, language: str = "DEFAULT"
+        limit: int = 500, language: str = "DEFAULT", max_pages: int = 200,
     ) -> list:
         """拉取 Ozon 属性的枚举值（按字典）
 
         返回格式：[{id, value, info?, picture?}, ...]
-        支持 last_value_id 游标分页，这里一次拉到尽（limit=500）
+        支持 last_value_id 游标分页, 拉到 has_next=false 或 max_pages 截断为止.
         API: POST /v1/description-category/attribute/values
+
+        max_pages 默认 200 (× limit=500 = 10 万条) — 老板 2026-05-04 凌晨发现
+        Ozon 耳环类目品牌字典 70219 条, 之前 cap=20 页只拿前 1 万条把后面的真实
+        品牌 (含 Shariko id=972824177) 截掉了, 反查永远命中失败.
         """
         try:
             url = f"{OZON_SELLER_API}/v1/description-category/attribute/values"
             all_values = []
             last_value_id = 0
-            for _ in range(20):  # 最多 20 页 = 1 万枚举值
+            for _ in range(max_pages):
                 payload = {
                     "description_category_id": description_category_id,
                     "type_id": type_id,
