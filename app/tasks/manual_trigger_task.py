@@ -17,8 +17,10 @@
 from __future__ import annotations
 
 import asyncio
+import uuid
 from typing import Optional
 
+from app.config import settings
 from app.database import SessionLocal
 from app.models.shop import Shop
 from app.services.data_source.catalog import DATA_SOURCES
@@ -28,6 +30,34 @@ from app.utils.logger import setup_logger
 from app.utils.moscow_time import utc_now_naive
 
 logger = setup_logger("tasks.manual_trigger")
+
+# ==================== 并发触发锁 ====================
+# 用户连点 N 次"更新" 或 (定时任务+手动) 同时跑 → N 个 celery 任务并发拉同一日数据
+# → SELECT-then-INSERT 竞态 → ad_stats 重复行污染 (实证 5-3: 8457 行有 4335 重复).
+#
+# 修法: 同 (shop_id, source_key) 一锁, 5 分钟 TTL. 已有任务在跑时拒绝二次触发.
+# 绝对安全保证:
+#   1. Redis 故障降级 — Redis 不可用时记 warning 但允许执行 (业务连续性 > 防重复)
+#   2. Lua 原子释放 — 只删自己的 token, 防 TTL 过期后别人重抢时被误删
+#   3. 5 分钟 TTL 兜底 — 单店同步通常 1-3 min, worker 崩溃时锁 5 min 后自然过期
+_LOCK_TTL_SECONDS = 300
+_LOCK_RELEASE_LUA = """
+if redis.call('GET', KEYS[1]) == ARGV[1] then
+    return redis.call('DEL', KEYS[1])
+else
+    return 0
+end
+"""
+
+
+def _get_redis_client():
+    """统一 Redis client 获取入口, 失败返 None 让调用方降级"""
+    try:
+        import redis as redis_lib
+        return redis_lib.Redis.from_url(settings.REDIS_URL, decode_responses=True)
+    except Exception as e:
+        logger.warning(f"Redis client 创建失败, 降级允许并发: {e}")
+        return None
 
 
 def _run_async(coro):
@@ -77,7 +107,41 @@ def manual_trigger_one(self, shop_id: int, tenant_id: int, source_key: str) -> d
         return {"error": f"未知数据源: {source_key}"}
 
     db = SessionLocal()
+    redis_client = None
+    lock_key = f"manual_trigger_lock:{shop_id}:{source_key}"
+    lock_token = str(uuid.uuid4())
+    acquired = False
+
     try:
+        # ===== 并发锁 (绝对安全: Redis 故障时降级允许执行) =====
+        redis_client = _get_redis_client()
+        if redis_client is not None:
+            try:
+                acquired = bool(redis_client.set(
+                    lock_key, lock_token, nx=True, ex=_LOCK_TTL_SECONDS,
+                ))
+                if not acquired:
+                    logger.info(
+                        f"manual_trigger {source_key} shop={shop_id} 已有任务在跑, "
+                        f"拒绝重复触发 (lock_key={lock_key})"
+                    )
+                    record_sync_run(
+                        db, tenant_id, shop_id, source_key,
+                        status="skipped",
+                        msg="另一个同步任务正在执行 (~5 min), 请等其完成"
+                    )
+                    return {"skipped": "concurrent_run_blocked"}
+            except Exception as e:
+                logger.warning(
+                    f"Redis lock 获取失败, 降级允许执行 shop={shop_id} {source_key}: {e}"
+                )
+                acquired = False
+
+        # 起步即 record "running" — worker 中断时 UI 显示真实状态而不是 stale 老状态.
+        # _wrap 内 work_fn 跑完会用 success/failed/skipped 覆盖 running.
+        record_sync_run(db, tenant_id, shop_id, source_key,
+                       status="running", msg="同步进行中…")
+
         shop = db.query(Shop).filter(
             Shop.id == shop_id, Shop.tenant_id == tenant_id,
         ).first()
@@ -176,4 +240,12 @@ def manual_trigger_one(self, shop_id: int, tenant_id: int, source_key: str) -> d
         return {"error": f"source_key {source_key} 暂不支持手动触发"}
 
     finally:
+        # Lua 原子释放: 只删自己的 token, 防 TTL 过期后别人重抢时被误删
+        if acquired and redis_client is not None:
+            try:
+                redis_client.eval(_LOCK_RELEASE_LUA, 1, lock_key, lock_token)
+            except Exception as e:
+                logger.warning(
+                    f"Redis lock 释放失败, 等 TTL 自然过期 shop={shop_id} {source_key}: {e}"
+                )
         db.close()
