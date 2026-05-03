@@ -370,6 +370,15 @@ def approve_pending(db: Session, tenant_id: int, pending_id: int,
         return {"code": ErrorCode.CLONE_PENDING_INVALID_STATUS,
                 "msg": f"当前状态 {p.status} 不允许 approve"}
 
+    # 方案 A: 检查任务未删/未停 (避免幽灵 pending 触发 publish 上架)
+    task = db.query(CloneTask).filter(
+        CloneTask.id == p.task_id, CloneTask.tenant_id == tenant_id,
+    ).first()
+    if not task or not task.is_active:
+        return {"code": ErrorCode.CLONE_TASK_NOT_FOUND,
+                "msg": "克隆任务已删除或停用, 不能批准 pending. "
+                       "请先到「克隆任务」列表启用任务后再批准."}
+
     p.status = "approved"
     p.reviewed_at = utc_now_naive()
     p.reviewed_by = user_id

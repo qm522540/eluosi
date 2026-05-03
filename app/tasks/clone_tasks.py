@@ -102,8 +102,13 @@ def publish_approved_pending():
     t0 = utc_now_naive()
     db = SessionLocal()
     try:
-        approved = db.query(ClonePendingProduct).filter(
+        # 方案 A: JOIN clone_tasks 过滤 is_active=1
+        # — 删任务后已 approved 的 pending 不再被推上架 (避免幽灵上架到 Ozon)
+        approved = db.query(ClonePendingProduct).join(
+            CloneTask, ClonePendingProduct.task_id == CloneTask.id,
+        ).filter(
             ClonePendingProduct.status == "approved",
+            CloneTask.is_active == 1,
         ).limit(50).all()
         total = len(approved)
         ok = failed = 0
