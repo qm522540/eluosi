@@ -40,6 +40,7 @@ OZON_ATTR_NAME = 4180         # Название (商品名)
 OZON_ATTR_DESC = 4191         # Аннотация (描述)
 OZON_ATTR_VIDEO = 21841       # Видео (视频 URL list, 老板拍 BUG 7)
 OZON_ATTR_VIDEO_COVER = 21837 # Обложка видео (视频封面 URL)
+OZON_ATTR_HS_CODE = 22232     # ТН ВЭД коды ЕАЭС (HS 编码, 必填; 老板 2026-05-03 报"最重要")
 
 # 老板拍 (BUG 5): 克隆时跳过这些 attr — 让 Ozon 后台显示空让用户填.
 # 4389 = Страна-производитель (制造国); 4451 = 原产国 (老 attr_id);
@@ -192,6 +193,7 @@ async def _publish_to_ozon(
     target_shop: Shop, payload: dict,
     source_offer_id: Optional[str] = None,
     target_brand: Optional[str] = None,
+    default_hs_code: Optional[str] = None,
 ) -> dict:
     """调 Ozon /v3/product/import 异步上架
 
@@ -321,6 +323,21 @@ async def _publish_to_ozon(
     attributes.append({"id": OZON_ATTR_NAME, "values": [{"value": title}]})
     if description:
         attributes.append({"id": OZON_ATTR_DESC, "values": [{"value": description}]})
+
+    # HS 编码 (BUG 4 老板"最重要") — Ozon attr_id=22232 ТН ВЭД 必填.
+    # 优先用 B 店原值, B 店缺时用 task.default_hs_code 注入. 都没有则警告.
+    has_hs = any(a["id"] == OZON_ATTR_HS_CODE for a in attributes)
+    if not has_hs and default_hs_code:
+        attributes.append({
+            "id": OZON_ATTR_HS_CODE,
+            "values": [{"value": str(default_hs_code).strip()}],
+        })
+        logger.info(f"publish offer={new_offer_id} HS 编码注入: {default_hs_code}")
+    elif not has_hs:
+        logger.warning(
+            f"publish offer={new_offer_id}: B 店无 HS 编码 (attr_id=22232) 且 task 未配 default_hs_code, "
+            f"Ozon 必填会拒收! 老板需到 clone_tasks.default_hs_code 填默认值 (饰品=711719000)"
+        )
 
     # 视频 (BUG 7) — Ozon 视频是 complex attribute (id=21841 视频/21837 封面 + complex_id=100001),
     # 跟 import 一起传, 不需要单独 API. 注: 必须带 complex_id=100001, 否则 Ozon 视为普通
@@ -496,6 +513,7 @@ async def _publish_pending(db: Session, pending_id: int) -> dict:
             target_shop, payload,
             source_offer_id=a_shop_sku,                   # 实际是 A 店 offer_id, 命名延续旧参数
             target_brand=(task.target_brand or None),     # migration 064: 品牌替换
+            default_hs_code=(task.default_hs_code or None),  # migration 065: HS 兜底注入
         )
     elif target_shop.platform == "wb":
         r = {"code": ErrorCode.CLONE_PUBLISH_FAILED,

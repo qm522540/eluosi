@@ -43,6 +43,11 @@ class CloneTaskCreate(BaseModel):
         description="A 店品牌名; publish 时覆盖 attr_id=85 + 标题/描述去 B 店原品牌; 留空=保留 B 店品牌",
     )
 
+    default_hs_code: Optional[str] = Field(
+        None, max_length=30,
+        description="默认 HS 编码 (ТН ВЭД), Ozon 必填; B 店 attributes 缺 attr_id=22232 时注入. 饰品=711719000",
+    )
+
     is_active: bool = False
 
     @model_validator(mode="after")
@@ -69,6 +74,7 @@ class CloneTaskUpdate(BaseModel):
     category_strategy: Optional[Literal["same_platform", "use_local_map", "reject_if_missing"]] = None
 
     target_brand: Optional[str] = Field(None, max_length=100)
+    default_hs_code: Optional[str] = Field(None, max_length=30)
 
     @model_validator(mode="after")
     def _check_pct(self):

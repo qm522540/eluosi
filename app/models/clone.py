@@ -89,6 +89,13 @@ class CloneTask(Base):
         comment="A 店品牌; publish 时覆盖 attr_id=85 + 标题/描述去 B 店品牌; NULL=保留原值",
     )
 
+    # migration 065: 默认 HS 编码 (ТН ВЭД) — Ozon 必填属性 attr_id=22232,
+    # B 店缺时强制注入. 老板: 饰品=711719000, 其他类目不同
+    default_hs_code: Mapped[Optional[str]] = mapped_column(
+        String(30), nullable=True,
+        comment="默认 HS 编码; publish 时若 B 店 attributes 缺 attr_id=22232 则强制注入",
+    )
+
     # 运行状态
     last_check_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     last_found_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
