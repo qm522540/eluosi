@@ -766,11 +766,18 @@ const Products = () => {
     setSyncing(true)
     try {
       const res = await syncProducts(filters.shop_id, force)
+      const msg = res.data?.message || (res.data?.syncing ? '同步任务已启动' : '无需同步')
       if (res.data?.syncing) {
-        message.success('同步任务已启动，请稍后刷新')
+        // 后端走 short-wait 超时降级：任务已派发但 10s 内没拿到结果
+        message.success(msg)
         setTimeout(() => fetchProducts(1), 3000)
+      } else if ((res.data?.synced ?? 0) > 0 || /完成/.test(msg)) {
+        // 后端 short-wait 命中：同步已跑完, 显示真实条数
+        message.success(msg)
+        fetchProducts(1)
       } else {
-        message.info(res.data?.message || '无需同步')
+        // 无需同步 / 0 行
+        message.info(msg)
       }
     } catch (e) {
       // interceptor 把 code != 0 包成 Error(msg)；同步前置校验

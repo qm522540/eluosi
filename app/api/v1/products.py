@@ -225,8 +225,32 @@ def sync_products(
     if not check["need_sync"]:
         return success({"syncing": False, "message": "无需重复同步"})
     from app.tasks.daily_sync_task import sync_shop_products
-    task = sync_shop_products.delay(req.shop_id, tenant_id)
-    return success({"syncing": True, "task_id": task.id, "message": "同步任务已启动"})
+    from celery.exceptions import TimeoutError as CeleryTimeoutError
+    task = sync_shop_products.apply_async(args=[req.shop_id, tenant_id])
+
+    # Short-wait pattern: 10s 内拿到结果直接返真消息(cover 401/403 token 失效 + 小店全量)
+    # 超时降级返"进行中" — 大店分页或慢平台还是异步, 老路径兼容
+    try:
+        result = task.get(timeout=10, propagate=False)
+    except CeleryTimeoutError:
+        return success({
+            "syncing": True, "task_id": task.id,
+            "message": "同步进行中，预计 1-2 分钟后刷新查看",
+        })
+
+    if not isinstance(result, dict):
+        return success({"syncing": True, "task_id": task.id,
+                        "message": "同步任务已启动"})
+    if result.get("code") != 0:
+        return error(result.get("code", 1), result.get("msg", "同步失败"))
+    data = result.get("data") or {}
+    return success({
+        "syncing": False, "task_id": task.id,
+        "synced": int(data.get("synced", 0) or 0),
+        "created": int(data.get("created", 0) or 0),
+        "updated": int(data.get("updated", 0) or 0),
+        "message": result.get("msg") or f"同步完成，共 {data.get('synced', 0)} 件商品",
+    })
 
 
 @router.post("/listings/{listing_id}/generate-description")
