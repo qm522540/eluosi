@@ -86,7 +86,9 @@ async def smart_sync(db: Session, shop_id: int, tenant_id: int) -> dict:
     camp_map = {str(c.platform_campaign_id): c.id for c in campaigns}
     _start_perf_background(shop, camp_map, ranges, tenant_id)
 
-    cleaned = _clean_old_data(db, shop_id, tenant_id)
+    # 2026-05-03 老板拍：clean 挪到后台线程 _fetch_perf_data 末尾按 total_updated > 0
+    # 条件触发, 避免 quota burnout 时 "新的没拿到老的反被删"。主流程不再 unconditional clean。
+    cleaned = 0
     data_days = _count_data_days(db, shop_id, tenant_id)
     _update_init_status(db, shop_id, tenant_id, yesterday, data_days)
 
@@ -412,6 +414,18 @@ async def _fetch_perf_data(
 
     finally:
         await ozon.close()
+
+    # 2026-05-03 老板拍：clean 挪到这里, 仅在本次后台拉取实际写入新数据时才执行,
+    # 避免 quota burnout 时 "新的没拿到老的反被删" 净亏 (跟 wb_stats_collector 同策略)
+    if total_updated > 0:
+        cleaned = _clean_old_data(db, shop_data["id"], tenant_id)
+        if cleaned:
+            logger.info(f"shop_id={shop_data['id']} Ozon 后台清理 {cleaned} 条窗口外旧数据")
+    else:
+        logger.warning(
+            f"shop_id={shop_data['id']} Ozon Performance 后台拉取 total_updated=0, "
+            f"跳过清理避免净亏。老数据保留兜底, 等下次同步成功再 clean"
+        )
 
     # 更新 data_days
     data_days = _count_data_days(db, shop_data["id"], tenant_id)

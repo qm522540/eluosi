@@ -101,8 +101,16 @@ async def smart_sync(db: Session, shop_id: int, tenant_id: int) -> dict:
     finally:
         await client.close()
 
-    # 3. 清理窗口外旧数据
-    cleaned = _clean_old_data(db, shop_id, tenant_id)
+    # 3. 清理窗口外旧数据 — 只在本次有新数据写入时才清, 避免 quota burnout 时
+    # "新的没拿到老的反被删" 净亏 (老板 5-3 拍, PT.Gril 实战: 45→36 天)
+    if total_synced > 0:
+        cleaned = _clean_old_data(db, shop_id, tenant_id)
+    else:
+        cleaned = 0
+        logger.warning(
+            f"shop_id={shop_id} WB smart_sync total_synced=0 (拉取全失败), "
+            f"跳过清理避免净亏。老数据保留兜底, 等下次同步成功再 clean"
+        )
     data_days = _count_data_days(db, shop_id, tenant_id)
     _update_init_status(db, shop_id, tenant_id, yesterday, data_days)
 
