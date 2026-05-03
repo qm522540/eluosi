@@ -137,10 +137,11 @@ const PendingReview = () => {
         try {
           const r = await cloneApi.batchPublish(Array.from(selected))
           message.success(
-            `已加入上架队列: ${r.data.success} 件; 后台陆续推送, 刷新查"已发布"看进度`,
+            `已加入上架队列: ${r.data.success} 件; 已切到"已发布" tab 看实时进度`,
           )
           setSelected(new Set())
-          load()
+          // 自动跳"已发布" tab — useEffect[status] 会重新 load + 启动 5s poll
+          setStatus('published')
         } catch (e) {
           message.error(e.message || '批量发布失败')
         }
