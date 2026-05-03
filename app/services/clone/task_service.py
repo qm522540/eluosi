@@ -522,7 +522,8 @@ async def publish_pending_sync(db: Session, tenant_id: int, pending_id: int,
     db.commit()
 
     from app.services.clone.publish_engine import _publish_pending
-    r = await _publish_pending(db, pending_id)
+    # 纵深防御: 显式传 tenant_id, publish_engine 用它过滤所有 SQL
+    r = await _publish_pending(db, pending_id, tenant_id=tenant_id)
     return r
 
 

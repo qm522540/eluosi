@@ -42,9 +42,11 @@ OZON_ATTR_VIDEO = 21841       # Видео (视频 URL list, 老板拍 BUG 7)
 OZON_ATTR_VIDEO_COVER = 21837 # Обложка видео (视频封面 URL)
 OZON_ATTR_HS_CODE = 22232     # ТН ВЭД коды ЕАЭС (HS 编码, 必填; 老板 2026-05-03 报"最重要")
 
-# 老板拍 (BUG 5): 克隆时跳过这些 attr — 让 Ozon 后台显示空让用户填.
-# 4389 = Страна-производитель (制造国); 4451 = 原产国 (老 attr_id);
-# 9024 = 类似. 老板若发现遗漏 attr_id, 加到这个列表即可.
+# 克隆时跳过这些 attr — 不该跨店透传的字段:
+# 4389 = Страна-производитель (制造国, 老板拍 BUG 5: A 店让用户后台自己填)
+# 4451 = 原产国 (老 attr_id, 同 4389 类似语义)
+# 9024 = Артикул (商家 SKU 编号; A 店 offer_id 由 publish 流程独立生成,
+#                  透传 B 店 SKU 反而会污染 A 店字段)
 OZON_ATTR_SKIP_ON_CLONE = [4389, 4451, 9024]
 
 # 品牌字典缓存 — 按 (cat_id, type_id) 缓存到 Redis, TTL 1 天 (字典几乎不变)
@@ -163,28 +165,6 @@ async def _resolve_brand_dictionary_id(
         f"将保留 B 店原品牌. 老板可在 Ozon 后台先添加该品牌再克隆."
     )
     return None
-
-
-def _override_brand_in_attributes(attributes: list, target_brand: str) -> list:
-    """把 attributes 里的 attr_id=85 (Бренд) 强制覆盖为 target_brand;
-    若 attributes 不含 attr_id=85, 主动追加一条
-    """
-    out = []
-    found = False
-    for a in attributes:
-        try:
-            aid = int(a.get("id") or 0)
-        except (TypeError, ValueError):
-            out.append(a)
-            continue
-        if aid == OZON_ATTR_BRAND:
-            out.append({"id": OZON_ATTR_BRAND, "values": [{"value": target_brand}]})
-            found = True
-        else:
-            out.append(a)
-    if not found:
-        out.append({"id": OZON_ATTR_BRAND, "values": [{"value": target_brand}]})
-    return out
 
 
 # ==================== Ozon 上架 ====================
@@ -428,28 +408,43 @@ async def _publish_to_ozon(
 
 # ==================== 主入口 ====================
 
-async def _publish_pending(db: Session, pending_id: int) -> dict:
+async def _publish_pending(db: Session, pending_id: int,
+                           tenant_id: Optional[int] = None) -> dict:
     """把 status='approved' 的 pending 推到 A 店上架
 
-    被 clone-publish-pending Beat 每 5 分钟扫一次调用。
+    被 clone-publish-pending Beat 每 1 分钟扫一次调用; 也由 publish_pending_sync
+    / publish_pending_now 直接 await 调用。
+
+    tenant_id: 可选纵深防御参数 (CLAUDE.md 规则 1) — 调用方若已知 tenant 应传入,
+    publish_engine 用它过滤所有 SQL; 不传时 fallback 用 pending.tenant_id (老路径,
+    适用 Celery beat 全租户扫描场景).
     """
-    pending = db.query(ClonePendingProduct).filter(
+    pending_q = db.query(ClonePendingProduct).filter(
         ClonePendingProduct.id == pending_id,
-    ).first()
+    )
+    if tenant_id is not None:
+        pending_q = pending_q.filter(ClonePendingProduct.tenant_id == tenant_id)
+    pending = pending_q.first()
     if not pending:
         return {"code": ErrorCode.CLONE_PENDING_NOT_FOUND, "msg": "待审核记录不存在"}
     if pending.status != "approved":
         return {"code": ErrorCode.CLONE_PENDING_INVALID_STATUS,
                 "msg": f"当前状态 {pending.status} 不允许 publish"}
 
-    tenant_id = pending.tenant_id
+    # 入参 tenant_id 优先 (显式传); 回退用 pending.tenant_id (beat 路径)
+    effective_tenant_id = tenant_id if tenant_id is not None else pending.tenant_id
     task = db.query(CloneTask).filter(
-        CloneTask.id == pending.task_id, CloneTask.tenant_id == tenant_id,
+        CloneTask.id == pending.task_id, CloneTask.tenant_id == effective_tenant_id,
     ).first()
     if not task:
         return {"code": ErrorCode.CLONE_TASK_NOT_FOUND, "msg": "克隆任务不存在"}
 
-    target_shop = db.query(Shop).filter(Shop.id == task.target_shop_id).first()
+    # 后续所有 SQL 用 effective_tenant_id 作纵深过滤
+    tenant_id = effective_tenant_id
+
+    target_shop = db.query(Shop).filter(
+        Shop.id == task.target_shop_id, Shop.tenant_id == tenant_id,
+    ).first()
     if not target_shop:
         return {"code": ErrorCode.SHOP_NOT_FOUND, "msg": "目标店铺不存在"}
 
@@ -459,7 +454,9 @@ async def _publish_pending(db: Session, pending_id: int) -> dict:
     # type_id fallback: 兼容旧版 scan 未采集 type_id 的现有 pending
     # 调 source_shop 的 Ozon API 现拉 type_id, 写回 proposed_payload
     if not payload.get("type_id") and target_shop.platform == "ozon":
-        source_shop = db.query(Shop).filter(Shop.id == task.source_shop_id).first()
+        source_shop = db.query(Shop).filter(
+            Shop.id == task.source_shop_id, Shop.tenant_id == tenant_id,
+        ).first()
         if source_shop and source_shop.platform == "ozon":
             try:
                 from app.services.platform.ozon import OzonClient, OZON_SELLER_API
