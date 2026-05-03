@@ -2,12 +2,28 @@ import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
   Card, Table, Button, Space, Tag, Modal, Form, Select, InputNumber,
-  Switch, message, Popconfirm, Tooltip, Typography, Checkbox, Image,
+  Switch, message, Popconfirm, Tooltip, Typography, Checkbox, Image, Badge,
 } from 'antd'
 import {
   PlusOutlined, ThunderboltOutlined, EyeOutlined, DeleteOutlined,
   PlayCircleOutlined, PauseCircleOutlined, CheckCircleOutlined,
+  ArrowLeftOutlined, ClockCircleOutlined,
 } from '@ant-design/icons'
+
+// 简单相对时间 helper
+const relativeTime = (iso) => {
+  if (!iso) return '从未'
+  const ms = Date.now() - new Date(iso).getTime()
+  if (ms < 0) return '刚刚'
+  const min = Math.floor(ms / 60000)
+  if (min < 1) return '刚刚'
+  if (min < 60) return `${min} 分钟前`
+  const hr = Math.floor(min / 60)
+  if (hr < 24) return `${hr} 小时前`
+  const d = Math.floor(hr / 24)
+  if (d < 30) return `${d} 天前`
+  return `${Math.floor(d / 30)} 个月前`
+}
 import * as cloneApi from '@/api/clone'
 
 const { Title, Text } = Typography
@@ -242,94 +258,126 @@ const CloneTaskList = () => {
       title: 'ID', dataIndex: 'id', width: 60, align: 'center',
     },
     {
-      title: 'A 店 ← B 店', width: 240,
+      title: 'A 店 ← B 店', width: 250,
       render: (_, t) => (
-        <div style={{ lineHeight: 1.6 }}>
-          <div>{renderShop(t.target_shop)}</div>
-          <div style={{ fontSize: 11, color: '#999' }}>← {renderShop(t.source_shop)}</div>
+        <div style={{ lineHeight: 1.7 }}>
+          <div style={{ fontWeight: 500 }}>{renderShop(t.target_shop)}</div>
+          <div style={{
+            fontSize: 11, color: '#999', display: 'flex',
+            alignItems: 'center', gap: 4, marginTop: 2,
+          }}>
+            <ArrowLeftOutlined style={{ fontSize: 11, color: '#bfbfbf' }} />
+            {renderShop(t.source_shop)}
+          </div>
         </div>
       ),
     },
     {
-      title: '状态', dataIndex: 'is_active', width: 70, align: 'center',
-      render: (v) => v ? <Tag color="success">启用</Tag> : <Tag>停用</Tag>,
+      title: '状态', dataIndex: 'is_active', width: 80, align: 'center',
+      render: (v) => v
+        ? <Badge status="success" text={<span style={{ fontSize: 13 }}>启用</span>} />
+        : <Badge status="default" text={<span style={{ fontSize: 13, color: '#999' }}>停用</span>} />,
     },
     {
-      title: '配置', width: 200,
+      title: '配置', width: 240,
       render: (_, t) => (
-        <Space size={[4, 2]} wrap>
-          <Tooltip title={t.title_mode === 'ai_rewrite' ? '标题：AI 改写' : '标题：保留原文'}>
-            <Tag color={t.title_mode === 'ai_rewrite' ? 'purple' : 'default'}>
-              标题{t.title_mode === 'ai_rewrite' ? 'AI' : '原'}
-            </Tag>
-          </Tooltip>
-          <Tooltip title={t.desc_mode === 'ai_rewrite' ? '描述：AI 改写' : '描述：保留原文'}>
-            <Tag color={t.desc_mode === 'ai_rewrite' ? 'purple' : 'default'}>
-              描述{t.desc_mode === 'ai_rewrite' ? 'AI' : '原'}
-            </Tag>
-          </Tooltip>
-          <Tooltip title={t.price_mode === 'same' ? '价格：同 B 店' : `价格：B 店 × (1${t.price_adjust_pct >= 0 ? '+' : ''}${t.price_adjust_pct}%)`}>
-            <Tag color={t.price_mode === 'same' ? 'default' : 'orange'}>
-              {t.price_mode === 'same' ? '同价' : `${t.price_adjust_pct >= 0 ? '+' : ''}${t.price_adjust_pct}%`}
-            </Tag>
-          </Tooltip>
-          <Tooltip title={t.follow_price_change
-            ? 'B 改价 → A 自动跟改 (不走审核). 点击关闭'
-            : '开启后, B 改价 → A 自动跟改 (不走审核)'}>
-            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
-              <Switch size="small"
-                checked={!!t.follow_price_change}
-                onChange={(v) => handleToggleFollowPrice(t, v)} />
-              <span style={{ fontSize: 12, color: t.follow_price_change ? '#1890ff' : '#999' }}>
-                跟价
+        <Space direction="vertical" size={4} style={{ width: '100%' }}>
+          <Space size={4} wrap>
+            <Tooltip title={t.title_mode === 'ai_rewrite' ? '标题：AI 改写' : '标题：保留原文'}>
+              <Tag color={t.title_mode === 'ai_rewrite' ? 'blue' : 'default'} style={{ margin: 0 }}>
+                标题{t.title_mode === 'ai_rewrite' ? 'AI' : '原'}
+              </Tag>
+            </Tooltip>
+            <Tooltip title={t.desc_mode === 'ai_rewrite' ? '描述：AI 改写' : '描述：保留原文'}>
+              <Tag color={t.desc_mode === 'ai_rewrite' ? 'blue' : 'default'} style={{ margin: 0 }}>
+                描述{t.desc_mode === 'ai_rewrite' ? 'AI' : '原'}
+              </Tag>
+            </Tooltip>
+            <Tooltip title={t.price_mode === 'same' ? '价格：同 B 店' : `价格：B 店 × (1${t.price_adjust_pct >= 0 ? '+' : ''}${t.price_adjust_pct}%)`}>
+              <Tag color={t.price_mode === 'same' ? 'default' : 'orange'} style={{ margin: 0 }}>
+                {t.price_mode === 'same' ? '同价' : `${t.price_adjust_pct >= 0 ? '+' : ''}${t.price_adjust_pct}%`}
+              </Tag>
+            </Tooltip>
+          </Space>
+          <Space size={10} style={{ fontSize: 12 }}>
+            <Tooltip title={t.follow_price_change
+              ? 'B 改价 → A 自动跟改 (不走审核). 点击关闭'
+              : '开启后, B 改价 → A 自动跟改 (不走审核)'}>
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                <Switch size="small"
+                  checked={!!t.follow_price_change}
+                  onChange={(v) => handleToggleFollowPrice(t, v)} />
+                <span style={{ color: t.follow_price_change ? '#1677ff' : '#8c8c8c' }}>跟价</span>
               </span>
-            </span>
-          </Tooltip>
-          <Tooltip title={t.follow_status_change
-            ? 'B 上下架 → A 自动跟. 当前阶段 A: DB 字段已生效, status_sync beat 内核占位 (等 Ozon API 端点)'
-            : '开启后, B 下架→A 下架, B 重上→A 已克隆过的同步上'}>
-            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
-              <Switch size="small"
-                checked={!!t.follow_status_change}
-                onChange={(v) => handleToggleFollowStatus(t, v)} />
-              <span style={{ fontSize: 12, color: t.follow_status_change ? '#1890ff' : '#999' }}>
-                跟上下架
+            </Tooltip>
+            <Tooltip title={t.follow_status_change
+              ? 'B 上下架 → A 自动跟. 当前 status_sync beat 内核占位 (等 Ozon API 端点)'
+              : '开启后, B 下架→A 下架, B 重上→A 已克隆过的同步上'}>
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                <Switch size="small"
+                  checked={!!t.follow_status_change}
+                  onChange={(v) => handleToggleFollowStatus(t, v)} />
+                <span style={{ color: t.follow_status_change ? '#1677ff' : '#8c8c8c' }}>跟上下架</span>
               </span>
-            </span>
-          </Tooltip>
+            </Tooltip>
+          </Space>
         </Space>
       ),
     },
     {
-      title: '上次扫描', width: 170,
+      title: '上次扫描', width: 160,
       render: (_, t) => (
         <div style={{ lineHeight: 1.5 }}>
-          <Text type="secondary" style={{ fontSize: 12 }}>
-            {t.last_check_at ? new Date(t.last_check_at).toLocaleString('zh-CN', { hour12: false }) : '从未'}
-          </Text>
+          <Tooltip title={t.last_check_at ? new Date(t.last_check_at).toLocaleString('zh-CN', { hour12: false }) : '从未扫描'}>
+            <Space size={4}>
+              <ClockCircleOutlined style={{ fontSize: 11, color: '#bfbfbf' }} />
+              <Text type="secondary" style={{ fontSize: 12 }}>
+                {relativeTime(t.last_check_at)}
+              </Text>
+            </Space>
+          </Tooltip>
           {t.last_check_at && (
             <div style={{ fontSize: 11, marginTop: 2 }}>
-              <Text type="success">新 {t.last_publish_count}</Text>
-              <Text type="secondary"> · 跳 {t.last_skip_count}</Text>
+              <Text type="success">新 {t.last_publish_count || 0}</Text>
+              <Text type="secondary"> · 跳 {t.last_skip_count || 0}</Text>
             </div>
           )}
         </div>
       ),
     },
     {
-      title: '待审 / 已发', width: 110, align: 'center',
-      render: (_, t) => (
-        <Space size={4}>
-          <Tooltip title="点查看待审记录">
-            <Button type="link" size="small" style={{ padding: '0 4px' }}
-              onClick={() => navigate(`/clone/pending?task_id=${t.id}`)}>
-              {t.pending_count || 0}
-            </Button>
-          </Tooltip>
-          <Text type="secondary">/</Text>
-          <Text>{t.published_count || 0}</Text>
-        </Space>
-      ),
+      title: '待审 / 已发', width: 130, align: 'center',
+      render: (_, t) => {
+        const pending = t.pending_count || 0
+        const published = t.published_count || 0
+        return (
+          <Space size={6}>
+            <Tooltip title="点查看待审记录">
+              <span style={{
+                display: 'inline-flex', alignItems: 'center',
+                cursor: 'pointer', gap: 4,
+              }} onClick={() => navigate(`/clone/pending?task_id=${t.id}`)}>
+                <span style={{
+                  fontSize: 16, fontWeight: 600,
+                  color: pending > 0 ? '#fa8c16' : '#d9d9d9',
+                  minWidth: 22, textAlign: 'right',
+                }}>{pending}</span>
+                {pending > 0 && (
+                  <Badge status="processing" color="#fa8c16" style={{ marginLeft: -2 }} />
+                )}
+              </span>
+            </Tooltip>
+            <Text type="secondary" style={{ fontSize: 14 }}>/</Text>
+            <Tooltip title="已发布到 A 店">
+              <span style={{
+                fontSize: 16, fontWeight: 600,
+                color: published > 0 ? '#52c41a' : '#d9d9d9',
+                minWidth: 22, textAlign: 'left',
+              }}>{published}</span>
+            </Tooltip>
+          </Space>
+        )
+      },
     },
     {
       title: '操作', width: 170, fixed: 'right', align: 'center',
@@ -371,9 +419,10 @@ const CloneTaskList = () => {
       >
         <Table
           rowKey="id" dataSource={tasks} columns={columns}
-          loading={loading} scroll={{ x: 1020 }}
+          loading={loading} scroll={{ x: 1100 }}
           size="middle"
-          pagination={{ pageSize: 20 }}
+          bordered
+          pagination={{ pageSize: 20, showTotal: (t) => `共 ${t} 个任务` }}
         />
       </Card>
 
