@@ -64,10 +64,13 @@ def is_data_source_enabled(
         if shop and not shop.api_enabled:
             # 检查是否到自动恢复时间 (api_disabled_until)
             if shop.api_disabled_until and shop.api_disabled_until <= utc_now_naive():
-                # 到期自动启用
+                # 到期自动启用 — 必须跟 update_shop_api_switch 启用路径(line 311-316)清空字段一致,
+                # 否则 api_disabled_by 残留 = 状态(enabled=1)与"操作人记录"不匹配,
+                # 后人查"上次谁关的"会看到旧 user_id 误以为还在禁用
                 db.execute(text("""
-                    UPDATE shops SET api_enabled = 1, api_disabled_reason = NULL,
-                        api_disabled_at = NULL, api_disabled_until = NULL
+                    UPDATE shops SET api_enabled = 1,
+                        api_disabled_reason = NULL, api_disabled_at = NULL,
+                        api_disabled_until = NULL, api_disabled_by = NULL
                     WHERE id = :sid AND tenant_id = :tid
                 """), {"sid": shop_id, "tid": tenant_id})
                 db.commit()
