@@ -301,9 +301,12 @@ async def _publish_pending(db: Session, pending_id: int) -> dict:
 
     # 按平台 dispatch
     if target_shop.platform == "ozon":
+        # 老板拍: A 店 offer_id 优先用 payload.target_sku (preview 行可改),
+        # 缺省回退 pending.source_sku_id (= B 店 offer_id, "本地编码默认一样")
+        a_shop_sku = (payload.get("target_sku") or pending.source_sku_id or "").strip()
         r = await _publish_to_ozon(
             target_shop, payload,
-            source_offer_id=pending.source_sku_id,        # migration 064: A 店 offer_id 默认复用 B 店
+            source_offer_id=a_shop_sku,                   # 实际是 A 店 offer_id, 命名延续旧参数
             target_brand=(task.target_brand or None),     # migration 064: 品牌替换
         )
     elif target_shop.platform == "wb":

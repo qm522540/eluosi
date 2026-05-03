@@ -42,6 +42,19 @@ DEFAULT_FIRST_SCAN_WINDOW_DAYS = 7
 LIST_PAGE_SIZE = 100
 AI_REWRITE_SEMAPHORE = 5
 
+
+# ==================== SKU 后缀对比 (老板拍) ====================
+
+def _sku_suffix(sku: str) -> str:
+    """提取 SKU 后缀用于跨平台冲突检测.
+
+    老板举例: WB-E0022 / OZ-E0022 / SS-E0022 都视为同一商品的不同平台版本.
+    rsplit('-', 1) — 多 '-' 取最后一段; 无 '-' 的整体作后缀.
+    """
+    if not sku:
+        return ""
+    return sku.rsplit("-", 1)[-1].strip()
+
 # 11.2 优化: scan-preview 把拉到的候选 snapshot 缓存到 Redis,
 # scan-now / 后续 preview 命中缓存可跳过整段 list_products 分页(28~30 秒 → 1 秒级).
 # TTL 老板拍 15 分钟 — 同 task 反复操作期内秒回, 过期后才重新拉 API
@@ -363,11 +376,14 @@ async def _ai_rewrite_one(
 async def _run_scan(
     db: Session, task_id: int, tenant_id: int,
     selected_skus: Optional[set] = None,
+    local_sku_overrides: Optional[dict] = None,
 ) -> dict:
     """扫描入口 — 同步触发 (scan-now) + Celery beat 共用
 
     Args:
         selected_skus: None = 全量立项 (兼容旧逻辑); set = 只立项指定的 source_sku_id
+        local_sku_overrides: dict[source_sku_id → 自定义 A 店 SKU];
+            None / 缺省 = A 店 SKU 跟 B 店 source_sku_id 一致 (老板"本地编码默认一样")
 
     Returns: {code, data: {found, new, skip_*, duration_ms, log_id}, msg?}
     """
@@ -538,7 +554,13 @@ async def _run_scan(
             #    OSS 下载延后到 publish_engine._publish_pending 执行
             oss_urls = list(snap.images or [])
 
-            # g. proposed_payload 骨架 (AI 改写延后)
+            # g. 老板拍: 用户在 preview 行可改"本地 SKU"; 默认 = source_sku_id
+            target_sku = (
+                (local_sku_overrides or {}).get(snap.source_sku_id)
+                or snap.source_sku_id
+            ).strip() or snap.source_sku_id
+
+            # h. proposed_payload 骨架 (AI 改写延后)
             proposed = {
                 "title_ru": snap.title_ru,
                 "description_ru": snap.description_ru,
@@ -549,6 +571,8 @@ async def _run_scan(
                 "platform_category_name": snap.platform_category_name,
                 "type_id": snap.type_id,  # Ozon /v3/product/import 必填
                 "attributes": snap.attributes,
+                # publish_engine 优先用这个作 A 店 offer_id; 缺省回退 source_sku_id
+                "target_sku": target_sku,
             }
 
             # h. INSERT pending
@@ -727,6 +751,14 @@ async def _scan_preview(db: Session, task_id: int, tenant_id: int) -> dict:
         if s and not s.startswith(('clone-pending-', 'clone-draft-')):
             a_existing_skus.add(s)
 
+    # 老板拍: 后缀冲突检测 — A 店 WB-E0022 vs B 店 OZ-E0022 视为可能同款
+    # 建 suffix → existing_sku 反向索引, 候选清单标红 + 默认不勾
+    a_suffix_to_sku: dict[str, str] = {}
+    for s in a_existing_skus:
+        suf = _sku_suffix(s)
+        if suf:
+            a_suffix_to_sku.setdefault(suf, s)
+
     # 11.2 优化: 先查缓存, 命中则跳过整段 list_products (28~30 秒 → 1-3 秒)
     from_cache = False
     cache_age_seconds = 0
@@ -827,7 +859,11 @@ async def _scan_preview(db: Session, task_id: int, tenant_id: int) -> dict:
                 snap.price_rub, task.price_mode, task.price_adjust_pct,
             )
 
-            # 5. 收集候选 (不写库)
+            # 5. 老板拍: 后缀冲突检测
+            suffix = _sku_suffix(snap.source_sku_id)
+            collision_with = a_suffix_to_sku.get(suffix) if suffix else None
+
+            # 6. 收集候选 (不写库)
             candidates.append({
                 "source_sku_id": snap.source_sku_id,
                 "title_ru": snap.title_ru,
@@ -841,6 +877,9 @@ async def _scan_preview(db: Session, task_id: int, tenant_id: int) -> dict:
                 "type_id": snap.type_id,
                 "source_platform": snap.source_platform,
                 "local_sku_b": b_local_sku,
+                # 后缀冲突 — 前端标红 + 默认不勾
+                "suffix_collision": bool(collision_with),
+                "collision_with_sku": collision_with or "",
             })
             # 11.2 优化: 候选 snapshot 完整体存起来, 末尾批量给 Redis
             candidate_snapshots.append(snap)

@@ -42,9 +42,10 @@ const CloneTaskList = () => {
   const [editForm] = Form.useForm()
   const [editSubmitting, setEditSubmitting] = useState(false)
   // 11.2 扫描预览 Modal
+  // localSkus: { [source_sku_id]: 用户改过的本地 SKU }; 默认 = source_sku_id, 用户可改
   const [previewState, setPreviewState] = useState({
     open: false, task: null, candidates: [], stats: {}, selectedSkus: new Set(),
-    confirming: false,
+    localSkus: {}, confirming: false,
   })
 
   const loadTasks = async () => {
@@ -209,10 +210,17 @@ const CloneTaskList = () => {
         })
         return
       }
-      // 有新候选, 弹预览 Modal 默认全选
+      // 有新候选, 弹预览 Modal — 默认勾"非冲突"项, 冲突项默认不勾让用户复核
+      const defaultSelected = new Set(
+        candidates.filter(c => !c.suffix_collision).map(c => c.source_sku_id),
+      )
+      // 本地 SKU 默认 = source_sku_id, 老板"本地编码默认一样"
+      const defaultLocalSkus = {}
+      candidates.forEach(c => { defaultLocalSkus[c.source_sku_id] = c.source_sku_id })
       setPreviewState({
         open: true, task, candidates, stats,
-        selectedSkus: new Set(candidates.map(c => c.source_sku_id)),
+        selectedSkus: defaultSelected,
+        localSkus: defaultLocalSkus,
         confirming: false,
       })
     } catch (e) {
@@ -225,18 +233,43 @@ const CloneTaskList = () => {
 
   // 11.2: 第二步 — 用户在 Modal 勾选后点"开始克隆 X 件", 调 scan-now(selected_skus)
   const handleConfirmClone = async () => {
-    const { task, selectedSkus } = previewState
+    const { task, selectedSkus, localSkus, candidates } = previewState
     if (selectedSkus.size === 0) {
       message.warning('请至少勾选 1 件')
       return
     }
+    // 校验本地 SKU 不空 + 本批次内不重复
+    const skuValues = []
+    for (const id of selectedSkus) {
+      const v = (localSkus[id] || '').trim()
+      if (!v) {
+        const c = candidates.find(x => x.source_sku_id === id)
+        message.error(`商品「${(c?.title_ru || '').slice(0, 30)}」的本地 SKU 不能为空`)
+        return
+      }
+      skuValues.push(v)
+    }
+    const dup = skuValues.find((v, i) => skuValues.indexOf(v) !== i)
+    if (dup) {
+      message.error(`本批次本地 SKU 重复: ${dup}`)
+      return
+    }
     setPreviewState(s => ({ ...s, confirming: true }))
     try {
-      const r = await cloneApi.scanNow(task.id, Array.from(selectedSkus))
+      // 仅传"被改过的"映射给后端 (默认值跟 source_sku_id 同的省略)
+      const overrides = {}
+      for (const id of selectedSkus) {
+        const v = (localSkus[id] || '').trim()
+        if (v && v !== id) overrides[id] = v
+      }
+      const r = await cloneApi.scanNow(
+        task.id, Array.from(selectedSkus),
+        Object.keys(overrides).length > 0 ? overrides : null,
+      )
       const d = r.data
       setPreviewState({
         open: false, task: null, candidates: [], stats: {},
-        selectedSkus: new Set(), confirming: false,
+        selectedSkus: new Set(), localSkus: {}, confirming: false,
       })
       Modal.success({
         title: `已立项 ${d.new || 0} 件待审核`,
@@ -249,7 +282,7 @@ const CloneTaskList = () => {
             )}
             <p style={{ marginTop: 8, color: '#999', fontSize: 12 }}>耗时 {d.duration_ms} ms</p>
             <p style={{ marginTop: 8, fontSize: 13 }}>
-              请到「待审核商品」页面审核 → 批准 → 等 publish-pending beat (5 分钟) 真上架
+              请到「待审核」页面点「发布」, 1 分钟内自动上架到平台
             </p>
           </div>
         ),
@@ -268,6 +301,12 @@ const CloneTaskList = () => {
       else sel.add(sku)
       return { ...s, selectedSkus: sel }
     })
+  }
+  const updateLocalSku = (sku, value) => {
+    setPreviewState(s => ({
+      ...s,
+      localSkus: { ...s.localSkus, [sku]: value },
+    }))
   }
   const toggleAllPreview = () => {
     setPreviewState(s => {
@@ -709,7 +748,7 @@ const CloneTaskList = () => {
         onOk={handleConfirmClone}
         onCancel={() => !previewState.confirming && setPreviewState({
           open: false, task: null, candidates: [], stats: {},
-          selectedSkus: new Set(), confirming: false,
+          selectedSkus: new Set(), localSkus: {}, confirming: false,
         })}
         maskClosable={!previewState.confirming}
         destroyOnClose
@@ -738,6 +777,7 @@ const CloneTaskList = () => {
           size="small"
           pagination={{ pageSize: 20, showSizeChanger: false, showTotal: t => `共 ${t} 件候选` }}
           scroll={{ y: 400 }}
+          onRow={(c) => c.suffix_collision ? { style: { background: '#fff1f0' } } : {}}
           columns={[
             {
               title: (
@@ -767,17 +807,37 @@ const CloneTaskList = () => {
             },
             {
               title: 'B 店标题', dataIndex: 'title_ru', ellipsis: true,
-              render: v => <Text style={{ fontSize: 12 }}>{v || '-'}</Text>,
+              render: (v, c) => (
+                <div>
+                  <Text style={{ fontSize: 12 }}>{v || '-'}</Text>
+                  {c.suffix_collision && (
+                    <div style={{ fontSize: 11, color: '#cf1322', marginTop: 2 }}>
+                      ⚠ A 店已有相同后缀 SKU: <Text code style={{ fontSize: 11 }}>
+                        {c.collision_with_sku}
+                      </Text> — 可能是同款, 请确认
+                    </div>
+                  )}
+                </div>
+              ),
             },
             {
               title: 'B 平台 SKU', dataIndex: 'source_sku_id', width: 120,
               render: v => <Text code style={{ fontSize: 11 }}>{v}</Text>,
             },
             {
-              title: '本地 SKU', dataIndex: 'local_sku_b', width: 120,
-              render: v => v
-                ? <Tag color="blue">{v}</Tag>
-                : <Text type="secondary" style={{ fontSize: 11 }}>未命名</Text>,
+              title: <span>本店 SKU <Tooltip title="发布到 A 店时用的 SKU (= Ozon 卖家编码 + 本地 product.sku); 默认跟 B 平台 SKU 一样, 可改"><span style={{ color: '#999', fontSize: 11 }}>?</span></Tooltip></span>,
+              width: 150,
+              render: (_, c) => (
+                <Input
+                  size="small"
+                  value={previewState.localSkus[c.source_sku_id] ?? c.source_sku_id}
+                  onChange={(e) => updateLocalSku(c.source_sku_id, e.target.value)}
+                  status={c.suffix_collision ? 'warning' : ''}
+                  placeholder={c.source_sku_id}
+                  maxLength={50}
+                  style={{ fontSize: 11 }}
+                />
+              ),
             },
             {
               title: 'B 价 → A 价', width: 140,
@@ -789,7 +849,7 @@ const CloneTaskList = () => {
             },
             { title: '库存', dataIndex: 'stock', width: 60 },
             {
-              title: '类目', width: 90,
+              title: '类目', width: 80,
               render: (_, c) => c.category_status === 'ok'
                 ? <Tag color="success">OK</Tag>
                 : <Tag color="warning">缺失</Tag>,
@@ -797,8 +857,8 @@ const CloneTaskList = () => {
           ]}
         />
         <div style={{ marginTop: 10, color: '#999', fontSize: 12 }}>
-          点"开始克隆"后, 选中的 SKU 会立项到「待审核商品」, 走 review → approve → publish 链路.
-          AI 标题/描述改写在立项时执行 (如果任务配了).
+          <span style={{ color: '#cf1322' }}>红色行</span> = A 店已有相同后缀 SKU, 可能是同款, 默认不勾.
+          本店 SKU 默认跟 B 平台 SKU 一样, 可在文本框里改 (会作 A 店发布的卖家编码).
         </div>
       </Modal>
     </div>

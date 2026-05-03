@@ -26,6 +26,8 @@ from app.schemas.clone import (
 class ScanNowBody(BaseModel):
     """11.2: scan-now 接受 preview 后用户勾选的 sku 子集; 不传则全量立项 (兼容旧逻辑)"""
     selected_skus: Optional[List[str]] = None
+    # 老板拍: preview 行可改"本地 SKU"; key=B 店 source_sku_id, value=A 店自定义 SKU
+    local_sku_overrides: Optional[dict] = None
 from app.services.clone import task_service
 from app.utils.errors import ErrorCode
 from app.utils.logger import setup_logger
@@ -133,7 +135,11 @@ async def scan_now_clone_task(
       - [sku1, sku2, ...]: 11.2 预览后只立项勾选的 SKU
     """
     selected = body.selected_skus if body else None
-    r = await task_service.scan_now(db, tenant_id, task_id, selected_skus=selected)
+    overrides = body.local_sku_overrides if body else None
+    r = await task_service.scan_now(
+        db, tenant_id, task_id,
+        selected_skus=selected, local_sku_overrides=overrides,
+    )
     if r.get("code") == 0:
         return success(r["data"])
     return error(r["code"], r.get("msg"))

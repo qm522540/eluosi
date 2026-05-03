@@ -299,11 +299,14 @@ def delete_task(db: Session, tenant_id: int, task_id: int) -> dict:
 # ==================== scan-now (调 scan_engine) ====================
 
 async def scan_now(db: Session, tenant_id: int, task_id: int,
-                   selected_skus: Optional[list] = None) -> dict:
+                   selected_skus: Optional[list] = None,
+                   local_sku_overrides: Optional[dict] = None) -> dict:
     """POST /tasks/{task_id}/scan-now — 同步触发一次扫描
 
     Args:
         selected_skus: None = 全量立项 (兼容旧逻辑); list = 只立项 preview 阶段勾选的
+        local_sku_overrides: dict[source_sku_id → 自定义 A 店 SKU];
+            preview 行用户可改"本地 SKU" 输入框, 提交时带过来.
 
     Phase 1 简化: 不加 Redis 分布式锁 (TODO: 高并发下补 clone:scan:lock:{task_id})。
     """
@@ -316,7 +319,11 @@ async def scan_now(db: Session, tenant_id: int, task_id: int,
         return {"code": ErrorCode.CLONE_TASK_NOT_FOUND, "msg": "克隆任务不存在"}
 
     selected_set = set(selected_skus) if selected_skus else None
-    return await _run_scan(db, task_id, tenant_id, selected_skus=selected_set)
+    return await _run_scan(
+        db, task_id, tenant_id,
+        selected_skus=selected_set,
+        local_sku_overrides=local_sku_overrides,
+    )
 
 
 async def scan_preview(db: Session, tenant_id: int, task_id: int) -> dict:
