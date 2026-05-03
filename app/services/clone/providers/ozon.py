@@ -127,6 +127,17 @@ class OzonSellerProvider(BaseShopProvider):
             type_id_val = info.get("type_id")
             type_id_str = str(type_id_val) if type_id_val else ""
 
+            # 物流字段 (老板 2026-05-03 报 BUG: 之前 hardcode 占位)
+            # Ozon /v3/product/info/list 顶层有 barcodes / depth / width / height / weight 字段
+            barcodes_list = info.get("barcodes") or []
+            barcode_val = (str(barcodes_list[0])[:50] if barcodes_list else "")
+
+            def _to_int(v):
+                try:
+                    return int(float(v)) if v not in (None, "", 0) else 0
+                except (TypeError, ValueError):
+                    return 0
+
             snapshots.append(ProductSnapshot(
                 source_platform="ozon",
                 source_sku_id=offer_id,             # Ozon 用 offer_id 作 B 平台 SKU
@@ -140,6 +151,12 @@ class OzonSellerProvider(BaseShopProvider):
                 platform_category_name="",          # info/list 不返, scan_engine 走 028 反查
                 type_id=type_id_str,                # Ozon /v3/product/import 必填
                 attributes=attributes_map.get(pid) or [],
+                # 物流字段 — Ozon import 必填, 没拉到留 0 由 publish_engine 占位兜底
+                barcode=barcode_val,
+                depth_mm=_to_int(info.get("depth")),
+                width_mm=_to_int(info.get("width")),
+                height_mm=_to_int(info.get("height")),
+                weight_g=_to_int(info.get("weight")),
                 raw=info,
             ))
 
@@ -187,6 +204,16 @@ class OzonSellerProvider(BaseShopProvider):
         type_id_val = info.get("type_id")
         type_id_str = str(type_id_val) if type_id_val else ""
 
+        # 物流字段 (跟 list_products 同步)
+        barcodes_list = info.get("barcodes") or []
+        barcode_val = (str(barcodes_list[0])[:50] if barcodes_list else "")
+
+        def _to_int(v):
+            try:
+                return int(float(v)) if v not in (None, "", 0) else 0
+            except (TypeError, ValueError):
+                return 0
+
         return ProductSnapshot(
             source_platform="ozon",
             source_sku_id=str(info.get("offer_id") or source_sku_id),
@@ -200,5 +227,10 @@ class OzonSellerProvider(BaseShopProvider):
             platform_category_name="",
             type_id=type_id_str,
             attributes=attributes_map.get(int(pid)) or [],
+            barcode=barcode_val,
+            depth_mm=_to_int(info.get("depth")),
+            width_mm=_to_int(info.get("width")),
+            height_mm=_to_int(info.get("height")),
+            weight_g=_to_int(info.get("weight")),
             raw=info,
         )

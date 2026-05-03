@@ -152,7 +152,9 @@ async def _publish_to_ozon(
         return {"code": ErrorCode.CLONE_PUBLISH_FAILED,
                 "msg": "缺 type_id (Ozon /v3/product/import 必填) — 旧版 scan 未采集, 见 publish_engine fallback 反查"}
 
-    # 把 attributes (B 店原属性) 透传 — Ozon import 接受 [{id, values:[{value}]}, ...]
+    # 把 attributes (B 店原属性) 透传 — Ozon import 接受 [{id, complex_id, values:[...]}, ...]
+    # 修 BUG (老板 2026-05-03 21 时报): 字典型属性 (品牌/HS/原产国/材料) 必须保留
+    # dictionary_value_id, 只传 value 字符串会被 Ozon 当成"未选择"显示红框.
     attributes = []
     src_attrs = payload.get("attributes") or []
     for a in src_attrs:
@@ -162,28 +164,47 @@ async def _publish_to_ozon(
             continue
         if not attr_id:
             continue
+        # complex_id 用于多层嵌套属性 (尺码/颜色组合等), 顶层透传
+        try:
+            complex_id = int(a.get("complex_id") or 0)
+        except (TypeError, ValueError):
+            complex_id = 0
         values = a.get("values") or []
-        # values 可能是 [{value}] 或 [str]
         normalized_vals = []
         for v in values:
             if isinstance(v, dict):
+                nv = {}
+                # 字典 ID 优先 — 这是修 BUG 关键: Ozon 字典型属性必须有 ID
+                if v.get("dictionary_value_id"):
+                    try:
+                        nv["dictionary_value_id"] = int(v["dictionary_value_id"])
+                    except (TypeError, ValueError):
+                        pass
                 if v.get("value") is not None:
-                    normalized_vals.append({"value": str(v["value"])})
+                    nv["value"] = str(v["value"])
+                if nv:
+                    normalized_vals.append(nv)
             else:
                 normalized_vals.append({"value": str(v)})
         if normalized_vals:
-            attributes.append({"id": attr_id, "values": normalized_vals})
+            entry = {"id": attr_id, "values": normalized_vals}
+            if complex_id:
+                entry["complex_id"] = complex_id
+            attributes.append(entry)
 
-    # migration 064: 品牌处理 (要在 4180/4191 兜底前做, 因为 title/desc 可能被改)
-    #   1. 抽出 B 店原品牌 (attr_id=85)
-    #   2. target_brand 不空: 覆盖 attr_id=85 + 从 title/desc 去 B 店原品牌
-    #   3. target_brand 空: 保留 attributes 不动 (兼容老任务)
+    # migration 064 v2 修 BUG: target_brand 配置只作用于"标题/描述去 B 店品牌名",
+    # 不再覆盖 attribute.brand. 原因:
+    # - Ozon 品牌是字典型属性, 必须传 dictionary_value_id, 仅传 value 字符串会
+    #   显示"品牌未选择"红框 (老板 2026-05-03 报 BUG).
+    # - 改字典 ID 需要先反查 Ozon 品牌字典 (/v1/description-category/attribute/values),
+    #   工程量较大, 暂作 TODO.
+    # 当前折中: 保留 B 店原品牌 attribute (含 dictionary_value_id), 标题/描述
+    # 仍按用户配的 target_brand 去除原品牌字样, 视觉上品牌字段显示 B 店原值,
+    # 标题不重复出现品牌词. 等 Ozon 字典反查实现后再改.
     b_brand = _extract_b_brand(attributes)
-    if target_brand:
-        if b_brand and b_brand.lower() != target_brand.lower():
-            title = _strip_brand_from_text(title, b_brand)
-            description = _strip_brand_from_text(description, b_brand)
-        attributes = _override_brand_in_attributes(attributes, target_brand)
+    if target_brand and b_brand and b_brand.lower() != target_brand.lower():
+        title = _strip_brand_from_text(title, b_brand)
+        description = _strip_brand_from_text(description, b_brand)
 
     # 必填属性兜底 (4180 名称, 4191 描述; Ozon import 不要求重复传, 但显式传更稳)
     # 用最终处理过的 title/description, 不是原始 payload 的
@@ -191,6 +212,27 @@ async def _publish_to_ozon(
     attributes.append({"id": OZON_ATTR_NAME, "values": [{"value": title}]})
     if description:
         attributes.append({"id": OZON_ATTR_DESC, "values": [{"value": description}]})
+
+    # 物流字段 — 修 BUG (老板 2026-05-03): 之前 hardcode 100×100×100 + 100g 占位
+    # 现在从 payload 拿 B 店真实值, 没拉到才用占位 + WARN 日志
+    def _int_or(v, default):
+        try:
+            n = int(v) if v not in (None, "", 0) else 0
+            return n if n > 0 else default
+        except (TypeError, ValueError):
+            return default
+
+    depth_mm = _int_or(payload.get("depth_mm"), 100)
+    width_mm = _int_or(payload.get("width_mm"), 100)
+    height_mm = _int_or(payload.get("height_mm"), 100)
+    weight_g = _int_or(payload.get("weight_g"), 100)
+    barcode = (payload.get("barcode") or "").strip()
+    if not (payload.get("depth_mm") and payload.get("width_mm")
+            and payload.get("height_mm") and payload.get("weight_g")):
+        logger.warning(
+            f"publish offer={new_offer_id}: B 店缺尺寸/重量, 用占位 "
+            f"{depth_mm}×{width_mm}×{height_mm}mm / {weight_g}g (用户需到 Ozon 后台补全)"
+        )
 
     item = {
         "offer_id": new_offer_id,
@@ -205,11 +247,25 @@ async def _publish_to_ozon(
         "vat": "0",                      # 占位, 用户后台改
         "currency_code": "RUB",
         "images": images[:15],           # Ozon 限制最多 15 张
-        # 尺寸/重量占位 (用户必须到 Ozon 后台补全)
-        "depth": 100, "width": 100, "height": 100, "dimension_unit": "mm",
-        "weight": 100, "weight_unit": "g",
+        # 物流字段 — 从 payload 取 B 店真实数据, 兜底占位
+        "depth": depth_mm,
+        "width": width_mm,
+        "height": height_mm,
+        "dimension_unit": "mm",
+        "weight": weight_g,
+        "weight_unit": "g",
         "attributes": attributes,
     }
+    # 条形码 — Ozon import 接受 barcode 字段 (单值, 不是数组)
+    if barcode:
+        item["barcode"] = barcode
+
+    # TODO 老板 2026-05-03 报 BUG 7: 视频/视频封面未同步.
+    # Ozon /v3/product/import 不直接接受 video, 要用 /v1/product/pictures/import
+    # 单独调; 待 ProductSnapshot 加 videos 字段 + provider 拉取 + 单独 dispatch.
+    # TODO 老板 BUG 5: 原产国不该传. 当前 attributes 透传含原产国 (attr_id=4451 等),
+    # 要查清是 B 店没填还是字典 ID 缺导致 Ozon 显示"删除提示". 先观察修完
+    # dictionary_value_id 后是否消失, 不消失再加白名单过滤.
 
     try:
         url = f"{OZON_SELLER_API}/v3/product/import"

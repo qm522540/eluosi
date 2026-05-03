@@ -28,6 +28,12 @@ class ProductSnapshot:
     price_rub: Decimal                                            # B 店当前售价 (Ozon API price 字段, 折扣后实付)
     old_price_rub: Optional[Decimal] = None                       # B 店划线原价 (Ozon API old_price; 无折扣 None/0)
     stock: int = 0
+    # 物流字段 — Ozon import 必填 (老板 2026-05-03 报 BUG: 之前 hardcode 100×100×100mm + 100g 占位)
+    barcode: str = ""                                             # B 店条形码 (Ozon barcodes[0])
+    depth_mm: int = 0                                             # 长 (毫米)
+    width_mm: int = 0                                             # 宽 (毫米)
+    height_mm: int = 0                                            # 高 (毫米)
+    weight_g: int = 0                                             # 含包装重量 (克)
     images: List[str] = field(default_factory=list)              # 图片 URL 列表
     platform_category_id: str = ""                                # B 平台分类 ID
     platform_category_name: str = ""

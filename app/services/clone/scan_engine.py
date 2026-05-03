@@ -72,6 +72,7 @@ def _snapshot_to_jsonable(snap: ProductSnapshot) -> dict:
 
     Decimal → str (反序列化时还原为 Decimal); datetime → isoformat;
     raw 字段直接透传(provider 已保证是 dict).
+    新加 barcode/dimensions/weight (老板 2026-05-03 报 BUG) 通过 asdict() 自然带上.
     """
     d = asdict(snap)
     d["price_rub"] = str(snap.price_rub)
@@ -102,6 +103,11 @@ def _jsonable_to_snapshot(d: dict) -> ProductSnapshot:
         platform_category_name=d.get("platform_category_name") or "",
         type_id=d.get("type_id") or "",
         attributes=list(d.get("attributes") or []),
+        barcode=d.get("barcode") or "",
+        depth_mm=int(d.get("depth_mm") or 0),
+        width_mm=int(d.get("width_mm") or 0),
+        height_mm=int(d.get("height_mm") or 0),
+        weight_g=int(d.get("weight_g") or 0),
         raw=d.get("raw") or {},
         detected_at=detected,
     )
@@ -604,6 +610,12 @@ async def _run_scan(
                 "attributes": snap.attributes,
                 # publish_engine 优先用这个作 A 店 offer_id; 缺省回退 source_sku_id
                 "target_sku": target_sku,
+                # 物流字段 (修 BUG 1, 2 — 之前 publish 时全是占位)
+                "barcode": snap.barcode,
+                "depth_mm": snap.depth_mm,
+                "width_mm": snap.width_mm,
+                "height_mm": snap.height_mm,
+                "weight_g": snap.weight_g,
             }
 
             # h. 老板拍 v2: 自动模式 + 无后缀冲突 → status='approved' 自动发布;
