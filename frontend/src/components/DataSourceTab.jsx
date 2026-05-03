@@ -51,6 +51,14 @@ const DataSourceTab = () => {
       try {
         const res = await getShops({ page: 1, page_size: 100 })
         const items = res.data?.items || []
+        // 2026-05-03 老板拍：店铺选择器按平台排序 Ozon > WB > Yandex,同平台内按名字
+        const PLATFORM_ORDER = { ozon: 1, wb: 2, yandex: 3 }
+        items.sort((a, b) => {
+          const oa = PLATFORM_ORDER[a.platform] ?? 99
+          const ob = PLATFORM_ORDER[b.platform] ?? 99
+          if (oa !== ob) return oa - ob
+          return (a.name || '').localeCompare(b.name || '')
+        })
         setShops(items)
         if (items.length && !shopId) setShopId(items[0].id)
       } catch (err) {
