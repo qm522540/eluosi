@@ -14,6 +14,7 @@ Ozon /v3/product/import 必填字段 (B 店 ProductSnapshot 缺的, 用合理占
 用户上架后必须到 Ozon 后台补全 dimensions/weight, 否则 Ozon 会下架。
 """
 
+import json
 import re
 import uuid
 from typing import Optional
@@ -38,6 +39,14 @@ logger = setup_logger("clone.publish_engine")
 OZON_ATTR_BRAND = 85          # Бренд (品牌)
 OZON_ATTR_NAME = 4180         # Название (商品名)
 OZON_ATTR_DESC = 4191         # Аннотация (描述)
+
+# 老板拍 (BUG 5): 克隆时跳过这些 attr — 让 Ozon 后台显示空让用户填.
+# 4389 = Страна-производитель (制造国); 4451 = 原产国 (老 attr_id);
+# 9024 = 类似. 老板若发现遗漏 attr_id, 加到这个列表即可.
+OZON_ATTR_SKIP_ON_CLONE = [4389, 4451, 9024]
+
+# 品牌字典缓存 — 按 (cat_id, type_id) 缓存到 Redis, TTL 1 天 (字典几乎不变)
+BRAND_DICT_CACHE_TTL = 86400
 
 
 def _extract_b_brand(attributes: list) -> Optional[str]:
@@ -74,6 +83,84 @@ def _strip_brand_from_text(text: str, brand: str) -> str:
     cleaned = re.sub(r"\s{2,}", " ", cleaned).strip()
     cleaned = re.sub(r"^[\s,;:.\-—–·]+", "", cleaned).strip()
     return cleaned
+
+
+async def _resolve_brand_dictionary_id(
+    client, description_category_id: int, type_id: int, target_brand: str,
+) -> Optional[int]:
+    """老板拍 BUG 3 v2: target_brand 改 attr_id=85 时反查 Ozon 品牌字典 ID,
+    case-insensitive 匹配, 命中返 dictionary_value_id, 没命中返 None.
+
+    Redis 缓存 (key: ozon:brand_dict:{cat}:{type}, TTL 1 天) 避免每次 publish 都拉.
+    Ozon 品牌字典几千几万级, 缓存命中后字符串匹配 O(N) 也能在 ms 级.
+    """
+    if not target_brand:
+        return None
+    target_lower = target_brand.lower().strip()
+    cache_key = f"ozon:brand_dict:{description_category_id}:{type_id}"
+
+    # 1) 查 Redis 缓存
+    redis_client = None
+    try:
+        from app.services.platform.wb import _get_redis_client
+        redis_client = _get_redis_client()
+        raw = redis_client.get(cache_key)
+        if raw:
+            try:
+                cached = json.loads(raw)
+                for entry in cached:
+                    if str(entry.get("value", "")).lower().strip() == target_lower:
+                        return int(entry["id"])
+                logger.info(
+                    f"brand_dict 缓存命中但未找到 '{target_brand}' "
+                    f"(cat={description_category_id} type={type_id}, {len(cached)} entries)"
+                )
+                return None
+            except Exception as e:
+                logger.warning(f"brand_dict 缓存解析失败: {e}, 重拉")
+    except Exception as e:
+        logger.warning(f"brand_dict 读 Redis 失败: {e}, 跳过缓存直拉")
+
+    # 2) 调 Ozon 拉品牌字典 (attribute_id=85)
+    try:
+        values = await client.fetch_attribute_values(
+            description_category_id, type_id, OZON_ATTR_BRAND, limit=500,
+        )
+    except Exception as e:
+        logger.error(
+            f"_resolve_brand_dictionary_id 拉字典失败 cat={description_category_id} "
+            f"type={type_id}: {e}"
+        )
+        return None
+
+    if not values:
+        logger.warning(
+            f"Ozon 品牌字典空 cat={description_category_id} type={type_id}"
+        )
+        return None
+
+    # 3) 写回 Redis
+    if redis_client is not None:
+        try:
+            cache_data = [{"id": v.get("id"), "value": v.get("value")}
+                          for v in values if v.get("id") and v.get("value")]
+            redis_client.setex(cache_key, BRAND_DICT_CACHE_TTL, json.dumps(cache_data))
+            logger.info(
+                f"brand_dict 缓存写入 cat={description_category_id} type={type_id} "
+                f"size={len(cache_data)}"
+            )
+        except Exception as e:
+            logger.warning(f"brand_dict 写 Redis 失败: {e}")
+
+    # 4) case-insensitive 匹配
+    for v in values:
+        if str(v.get("value", "")).lower().strip() == target_lower:
+            return int(v.get("id") or 0) or None
+    logger.warning(
+        f"Ozon 品牌字典无 '{target_brand}' (cat={description_category_id} type={type_id}); "
+        f"将保留 B 店原品牌. 老板可在 Ozon 后台先添加该品牌再克隆."
+    )
+    return None
 
 
 def _override_brand_in_attributes(attributes: list, target_brand: str) -> list:
@@ -164,6 +251,9 @@ async def _publish_to_ozon(
             continue
         if not attr_id:
             continue
+        # 老板拍 BUG 5: 跳过克隆时不该透传的 attr (原产国等)
+        if attr_id in OZON_ATTR_SKIP_ON_CLONE:
+            continue
         # complex_id 用于多层嵌套属性 (尺码/颜色组合等), 顶层透传
         try:
             complex_id = int(a.get("complex_id") or 0)
@@ -192,19 +282,37 @@ async def _publish_to_ozon(
                 entry["complex_id"] = complex_id
             attributes.append(entry)
 
-    # migration 064 v2 修 BUG: target_brand 配置只作用于"标题/描述去 B 店品牌名",
-    # 不再覆盖 attribute.brand. 原因:
-    # - Ozon 品牌是字典型属性, 必须传 dictionary_value_id, 仅传 value 字符串会
-    #   显示"品牌未选择"红框 (老板 2026-05-03 报 BUG).
-    # - 改字典 ID 需要先反查 Ozon 品牌字典 (/v1/description-category/attribute/values),
-    #   工程量较大, 暂作 TODO.
-    # 当前折中: 保留 B 店原品牌 attribute (含 dictionary_value_id), 标题/描述
-    # 仍按用户配的 target_brand 去除原品牌字样, 视觉上品牌字段显示 B 店原值,
-    # 标题不重复出现品牌词. 等 Ozon 字典反查实现后再改.
+    # migration 064 v3 (老板 BUG 3): target_brand 真换品牌 — 反查 Ozon 品牌字典
+    # 拿 dictionary_value_id, 命中才覆盖 attr_id=85; 未命中保留 B 店原品牌 + 警告
     b_brand = _extract_b_brand(attributes)
     if target_brand and b_brand and b_brand.lower() != target_brand.lower():
         title = _strip_brand_from_text(title, b_brand)
         description = _strip_brand_from_text(description, b_brand)
+    if target_brand:
+        try:
+            brand_dict_id = await _resolve_brand_dictionary_id(
+                client, int(cat_id), int(type_id), target_brand,
+            )
+        except Exception as e:
+            logger.error(f"resolve_brand_dictionary_id 异常 brand={target_brand}: {e}")
+            brand_dict_id = None
+        if brand_dict_id:
+            # 覆盖 attr_id=85 — 同时给 dictionary_value_id 和 value, Ozon 才接受
+            attributes = [a for a in attributes if a.get("id") != OZON_ATTR_BRAND]
+            attributes.append({
+                "id": OZON_ATTR_BRAND,
+                "values": [{"dictionary_value_id": brand_dict_id, "value": target_brand}],
+            })
+            logger.info(
+                f"target_brand 替换成功 offer={new_offer_id} brand={target_brand} "
+                f"dict_id={brand_dict_id}"
+            )
+        else:
+            logger.warning(
+                f"target_brand 替换跳过 offer={new_offer_id} — "
+                f"'{target_brand}' 不在 Ozon 品牌字典 (cat={cat_id} type={type_id}); "
+                f"保留 B 店原品牌. 老板可在 Ozon 后台先注册品牌再克隆."
+            )
 
     # 必填属性兜底 (4180 名称, 4191 描述; Ozon import 不要求重复传, 但显式传更稳)
     # 用最终处理过的 title/description, 不是原始 payload 的
@@ -260,12 +368,19 @@ async def _publish_to_ozon(
     if barcode:
         item["barcode"] = barcode
 
-    # TODO 老板 2026-05-03 报 BUG 7: 视频/视频封面未同步.
-    # Ozon /v3/product/import 不直接接受 video, 要用 /v1/product/pictures/import
-    # 单独调; 待 ProductSnapshot 加 videos 字段 + provider 拉取 + 单独 dispatch.
-    # TODO 老板 BUG 5: 原产国不该传. 当前 attributes 透传含原产国 (attr_id=4451 等),
-    # 要查清是 B 店没填还是字典 ID 缺导致 Ozon 显示"删除提示". 先观察修完
-    # dictionary_value_id 后是否消失, 不消失再加白名单过滤.
+    # 视频字段 (BUG 7) — 已采集到 payload.videos / payload.video_cover, 但
+    # Ozon /v3/product/import 不接受 video 字段; 要用 /v1/product/pictures/import
+    # 单独调, 且需要 import 完成后的 product_id (异步等待).
+    # TODO 明早实现: 新 Celery 任务 clone_video_uploader_beat 每 5 分钟扫
+    #   status='published' AND listing.platform_product_id 已回填 AND
+    #   proposed_payload.video_uploaded=false 的 pending, 调 pictures/import 上传.
+    src_videos = payload.get("videos") or []
+    src_video_cover = payload.get("video_cover") or ""
+    if src_videos or src_video_cover:
+        logger.info(
+            f"publish offer={new_offer_id} 含视频 ({len(src_videos)} 个) — "
+            f"已采集 payload, 待 product_id 回填后由 video_uploader_beat 上传"
+        )
 
     try:
         url = f"{OZON_SELLER_API}/v3/product/import"

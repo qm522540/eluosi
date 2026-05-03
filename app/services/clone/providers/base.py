@@ -34,6 +34,9 @@ class ProductSnapshot:
     width_mm: int = 0                                             # 宽 (毫米)
     height_mm: int = 0                                            # 高 (毫米)
     weight_g: int = 0                                             # 含包装重量 (克)
+    # 视频 (老板 2026-05-03 报 BUG 7): 暂存 URL, publish 后接力 pictures/import 上传
+    videos: List[str] = field(default_factory=list)               # 视频 URL 列表
+    video_cover: str = ""                                         # 视频封面 URL
     images: List[str] = field(default_factory=list)              # 图片 URL 列表
     platform_category_id: str = ""                                # B 平台分类 ID
     platform_category_name: str = ""

@@ -108,6 +108,8 @@ def _jsonable_to_snapshot(d: dict) -> ProductSnapshot:
         width_mm=int(d.get("width_mm") or 0),
         height_mm=int(d.get("height_mm") or 0),
         weight_g=int(d.get("weight_g") or 0),
+        videos=list(d.get("videos") or []),
+        video_cover=d.get("video_cover") or "",
         raw=d.get("raw") or {},
         detected_at=detected,
     )
@@ -616,6 +618,9 @@ async def _run_scan(
                 "width_mm": snap.width_mm,
                 "height_mm": snap.height_mm,
                 "weight_g": snap.weight_g,
+                # 视频 (BUG 7) — 暂存; publish 后接力 pictures/import 上传
+                "videos": list(snap.videos or []),
+                "video_cover": snap.video_cover,
             }
 
             # h. 老板拍 v2: 自动模式 + 无后缀冲突 → status='approved' 自动发布;

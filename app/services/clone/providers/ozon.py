@@ -138,6 +138,12 @@ class OzonSellerProvider(BaseShopProvider):
                 except (TypeError, ValueError):
                     return 0
 
+            # 视频字段 — Ozon info 可能有 'video' (单 URL) 或 'videos' (list)
+            video_list = info.get("videos") or []
+            if not video_list and info.get("video"):
+                video_list = [info.get("video")]
+            video_cover_val = info.get("video_cover") or info.get("color_image") or ""
+
             snapshots.append(ProductSnapshot(
                 source_platform="ozon",
                 source_sku_id=offer_id,             # Ozon 用 offer_id 作 B 平台 SKU
@@ -157,6 +163,8 @@ class OzonSellerProvider(BaseShopProvider):
                 width_mm=_to_int(info.get("width")),
                 height_mm=_to_int(info.get("height")),
                 weight_g=_to_int(info.get("weight")),
+                videos=[str(v) for v in video_list if v],
+                video_cover=str(video_cover_val) if video_cover_val else "",
                 raw=info,
             ))
 
@@ -214,6 +222,12 @@ class OzonSellerProvider(BaseShopProvider):
             except (TypeError, ValueError):
                 return 0
 
+        # 视频
+        video_list = info.get("videos") or []
+        if not video_list and info.get("video"):
+            video_list = [info.get("video")]
+        video_cover_val = info.get("video_cover") or info.get("color_image") or ""
+
         return ProductSnapshot(
             source_platform="ozon",
             source_sku_id=str(info.get("offer_id") or source_sku_id),
@@ -232,5 +246,7 @@ class OzonSellerProvider(BaseShopProvider):
             width_mm=_to_int(info.get("width")),
             height_mm=_to_int(info.get("height")),
             weight_g=_to_int(info.get("weight")),
+            videos=[str(v) for v in video_list if v],
+            video_cover=str(video_cover_val) if video_cover_val else "",
             raw=info,
         )
