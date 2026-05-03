@@ -4,14 +4,13 @@
 
 Phase 1 仅 Ozon 真实上架; WB/Yandex stub。
 
-Ozon /v3/product/import 必填字段 (B 店 ProductSnapshot 缺的, 用合理占位):
-- depth/width/height (商品尺寸 mm) → 默认 100x100x100
-- weight + weight_unit (重量) → 默认 100g
-- dimension_unit → 'mm'
+Ozon /v3/product/import 必填字段:
+- depth/width/height (mm) + weight (g) → 优先用 B 店真实值, 没拉到才用 100×100×100mm/100g 占位
+- dimension_unit → 'mm', weight_unit → 'g'
 - currency_code → 'RUB'
 - vat → '0' (默认无 VAT, 用户上架后到 Ozon 后台改)
-
-用户上架后必须到 Ozon 后台补全 dimensions/weight, 否则 Ozon 会下架。
+- barcode (单值) → B 店 barcodes[0]
+- 视频 → attr_id=21841 (URL list) + 21837 (封面), 跟 import 一起传, 不用单独 API
 """
 
 import json
@@ -39,6 +38,8 @@ logger = setup_logger("clone.publish_engine")
 OZON_ATTR_BRAND = 85          # Бренд (品牌)
 OZON_ATTR_NAME = 4180         # Название (商品名)
 OZON_ATTR_DESC = 4191         # Аннотация (描述)
+OZON_ATTR_VIDEO = 21841       # Видео (视频 URL list, 老板拍 BUG 7)
+OZON_ATTR_VIDEO_COVER = 21837 # Обложка видео (视频封面 URL)
 
 # 老板拍 (BUG 5): 克隆时跳过这些 attr — 让 Ozon 后台显示空让用户填.
 # 4389 = Страна-производитель (制造国); 4451 = 原产国 (老 attr_id);
@@ -321,6 +322,26 @@ async def _publish_to_ozon(
     if description:
         attributes.append({"id": OZON_ATTR_DESC, "values": [{"value": description}]})
 
+    # 视频 (BUG 7) — Ozon 视频是 attribute 形式 (attr_id=21841 视频/21837 封面),
+    # 跟 import 一起传, 不需要单独 API. 老板拍"一起做好" 2026-05-03 凌晨.
+    # B 店 attributes 透传时可能已含 21841/21837, 这里覆盖以确保用我们采集到的最新值.
+    src_videos = payload.get("videos") or []
+    src_video_cover = (payload.get("video_cover") or "").strip()
+    if src_videos:
+        attributes = [a for a in attributes if a["id"] != OZON_ATTR_VIDEO]
+        # Ozon 视频 attribute 接受多 value, 每个 value 一个 URL
+        attributes.append({
+            "id": OZON_ATTR_VIDEO,
+            "values": [{"value": str(v)} for v in src_videos if v],
+        })
+        logger.info(f"publish offer={new_offer_id} 视频塞 import: {len(src_videos)} 个")
+    if src_video_cover:
+        attributes = [a for a in attributes if a["id"] != OZON_ATTR_VIDEO_COVER]
+        attributes.append({
+            "id": OZON_ATTR_VIDEO_COVER,
+            "values": [{"value": src_video_cover}],
+        })
+
     # 物流字段 — 修 BUG (老板 2026-05-03): 之前 hardcode 100×100×100 + 100g 占位
     # 现在从 payload 拿 B 店真实值, 没拉到才用占位 + WARN 日志
     def _int_or(v, default):
@@ -367,20 +388,6 @@ async def _publish_to_ozon(
     # 条形码 — Ozon import 接受 barcode 字段 (单值, 不是数组)
     if barcode:
         item["barcode"] = barcode
-
-    # 视频字段 (BUG 7) — 已采集到 payload.videos / payload.video_cover, 但
-    # Ozon /v3/product/import 不接受 video 字段; 要用 /v1/product/pictures/import
-    # 单独调, 且需要 import 完成后的 product_id (异步等待).
-    # TODO 明早实现: 新 Celery 任务 clone_video_uploader_beat 每 5 分钟扫
-    #   status='published' AND listing.platform_product_id 已回填 AND
-    #   proposed_payload.video_uploaded=false 的 pending, 调 pictures/import 上传.
-    src_videos = payload.get("videos") or []
-    src_video_cover = payload.get("video_cover") or ""
-    if src_videos or src_video_cover:
-        logger.info(
-            f"publish offer={new_offer_id} 含视频 ({len(src_videos)} 个) — "
-            f"已采集 payload, 待 product_id 回填后由 video_uploader_beat 上传"
-        )
 
     try:
         url = f"{OZON_SELLER_API}/v3/product/import"
