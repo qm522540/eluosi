@@ -18,8 +18,10 @@
 """
 
 import asyncio
+import json
 import uuid
-from datetime import timedelta
+from dataclasses import asdict
+from datetime import datetime, timedelta
 from decimal import Decimal
 from typing import Optional
 
@@ -39,6 +41,117 @@ logger = setup_logger("clone.scan_engine")
 DEFAULT_FIRST_SCAN_WINDOW_DAYS = 7
 LIST_PAGE_SIZE = 100
 AI_REWRITE_SEMAPHORE = 5
+
+# 11.2 优化: scan-preview 把拉到的候选 snapshot 缓存到 Redis,
+# scan-now 命中缓存可跳过整段 list_products 分页(28~30 秒 → 1 秒级).
+PREVIEW_CACHE_TTL = 300  # 5 分钟, 跟 nginx idle timeout 同量级
+
+
+# ==================== 11.2 Preview 快照缓存 ====================
+
+def _preview_cache_key(tenant_id: int, task_id: int) -> str:
+    return f"clone:preview:{tenant_id}:{task_id}"
+
+
+def _snapshot_to_jsonable(snap: ProductSnapshot) -> dict:
+    """ProductSnapshot dataclass → JSON 可序列化 dict.
+
+    Decimal → str (反序列化时还原为 Decimal); datetime → isoformat;
+    raw 字段直接透传(provider 已保证是 dict).
+    """
+    d = asdict(snap)
+    d["price_rub"] = str(snap.price_rub)
+    d["detected_at"] = snap.detected_at.isoformat() if snap.detected_at else None
+    return d
+
+
+def _jsonable_to_snapshot(d: dict) -> ProductSnapshot:
+    """反序列化, 跟 _snapshot_to_jsonable 对称."""
+    detected = d.get("detected_at")
+    if isinstance(detected, str):
+        try:
+            detected = datetime.fromisoformat(detected)
+        except Exception:
+            detected = None
+    return ProductSnapshot(
+        source_platform=d.get("source_platform", ""),
+        source_sku_id=d.get("source_sku_id", ""),
+        title_ru=d.get("title_ru", ""),
+        description_ru=d.get("description_ru", ""),
+        price_rub=Decimal(str(d.get("price_rub") or "0")),
+        stock=int(d.get("stock") or 0),
+        images=list(d.get("images") or []),
+        platform_category_id=d.get("platform_category_id") or "",
+        platform_category_name=d.get("platform_category_name") or "",
+        type_id=d.get("type_id") or "",
+        attributes=list(d.get("attributes") or []),
+        raw=d.get("raw") or {},
+        detected_at=detected,
+    )
+
+
+def _save_preview_cache(tenant_id: int, task_id: int,
+                        snapshots: list[ProductSnapshot]) -> None:
+    """把 preview 拉到的全量候选 snapshot 存 Redis (key=tenant+task, TTL=5min).
+
+    存 dict[source_sku_id → snapshot_dict] 方便 scan-now 按 SKU O(1) 取.
+    Redis 故障时 try/except 吞掉 — 缓存失败不阻断 preview 业务.
+    """
+    if not snapshots:
+        return
+    try:
+        from app.services.platform.wb import _get_redis_client
+        r = _get_redis_client()
+        payload = {snap.source_sku_id: _snapshot_to_jsonable(snap) for snap in snapshots}
+        r.setex(
+            _preview_cache_key(tenant_id, task_id),
+            PREVIEW_CACHE_TTL,
+            json.dumps(payload, ensure_ascii=False),
+        )
+        logger.info(
+            f"_save_preview_cache task={task_id} cached {len(payload)} snapshots, "
+            f"TTL={PREVIEW_CACHE_TTL}s"
+        )
+    except Exception as e:
+        logger.warning(f"_save_preview_cache 写 Redis 失败 task={task_id}: {e}")
+
+
+def _load_preview_cache(tenant_id: int, task_id: int,
+                        selected_skus: set) -> Optional[list[ProductSnapshot]]:
+    """取 preview 缓存中 selected_skus 对应的 snapshot list.
+
+    Returns:
+        - 命中且全部 SKU 都在缓存里 → list[ProductSnapshot]
+        - 缓存不存在 / 任一 SKU 缺失 → None (调用方降级 list_products)
+
+    全或无策略: 如果用户勾的 SKU 有任何一个不在缓存(可能是 5 分钟外或缓存被
+    其它操作覆盖), 整体降级现拉, 避免拼接半套数据.
+    """
+    if not selected_skus:
+        return None
+    try:
+        from app.services.platform.wb import _get_redis_client
+        r = _get_redis_client()
+        raw = r.get(_preview_cache_key(tenant_id, task_id))
+        if not raw:
+            return None
+        payload = json.loads(raw)
+        snaps = []
+        for sku in selected_skus:
+            d = payload.get(sku)
+            if d is None:
+                logger.info(
+                    f"_load_preview_cache task={task_id} sku={sku} 缓存缺失, 降级现拉"
+                )
+                return None
+            snaps.append(_jsonable_to_snapshot(d))
+        logger.info(
+            f"_load_preview_cache task={task_id} 命中 {len(snaps)}/{len(selected_skus)} 件"
+        )
+        return snaps
+    except Exception as e:
+        logger.warning(f"_load_preview_cache 读 Redis 失败 task={task_id}: {e}")
+        return None
 
 
 # ==================== 类目映射 ====================
@@ -266,7 +379,14 @@ async def _run_scan(
             a_existing_skus.add(s)
     logger.info(f"task={task_id} A 店预拉 {len(a_existing_skus)} 个真实 sku 用于跨店去重")
 
+    # 11.2 优化: scan-now 带 selected_skus 时优先吃 preview 缓存,
+    # 命中可完全跳过 list_products 分页(原本固定耗时 ~28-30 秒)
+    cache_snapshots: Optional[list[ProductSnapshot]] = None
+    if selected_skus is not None:
+        cache_snapshots = _load_preview_cache(tenant_id, task_id, selected_skus)
+
     # 拿 provider (规则: factory dispatch + *Client 不绕路)
+    # 注: 缓存命中时也 init provider, 因为 _ai_rewrite_one 等下游可能用到; cheap.
     try:
         provider = get_provider(db, source_shop)
     except Exception as e:
@@ -276,23 +396,32 @@ async def _run_scan(
         db.commit()
         return {"code": ErrorCode.CLONE_SOURCE_API_FAILED, "msg": str(e)[:200]}
 
-    # 分页 list_products
+    # 11.2 优化: 命中缓存走快速路径 — 直接处理勾选的 snapshot, 不分页
+    # 未命中时走原 list_products 路径(全量分页 + selected_skus filter)
+    fast_snapshots = cache_snapshots  # None = miss, list = hit
+
+    # 分页 list_products (cache miss 时走这里)
     cursor: Optional[str] = None
     while True:
-        try:
-            snapshots, cursor = await provider.list_products(cursor=cursor, limit=LIST_PAGE_SIZE)
-        except NotImplementedError as e:
-            logger.warning(f"Provider 未实现 task={task_id}: {e}")
-            from app.utils.errors import ErrorCode
-            task.last_error_msg = str(e)[:500]
-            db.commit()
-            return {"code": ErrorCode.CLONE_SOURCE_API_FAILED, "msg": str(e)[:200]}
-        except Exception as e:
-            logger.error(f"list_products 失败 task={task_id}: {e}")
-            from app.utils.errors import ErrorCode
-            task.last_error_msg = str(e)[:500]
-            db.commit()
-            return {"code": ErrorCode.CLONE_SOURCE_API_FAILED, "msg": str(e)[:200]}
+        if fast_snapshots is not None:
+            # 缓存命中: 一次性塞所有命中的 snap, 跳出分页循环
+            snapshots = fast_snapshots
+            cursor = None
+        else:
+            try:
+                snapshots, cursor = await provider.list_products(cursor=cursor, limit=LIST_PAGE_SIZE)
+            except NotImplementedError as e:
+                logger.warning(f"Provider 未实现 task={task_id}: {e}")
+                from app.utils.errors import ErrorCode
+                task.last_error_msg = str(e)[:500]
+                db.commit()
+                return {"code": ErrorCode.CLONE_SOURCE_API_FAILED, "msg": str(e)[:200]}
+            except Exception as e:
+                logger.error(f"list_products 失败 task={task_id}: {e}")
+                from app.utils.errors import ErrorCode
+                task.last_error_msg = str(e)[:500]
+                db.commit()
+                return {"code": ErrorCode.CLONE_SOURCE_API_FAILED, "msg": str(e)[:200]}
 
         if not snapshots:
             break
@@ -552,6 +681,8 @@ async def _scan_preview(db: Session, task_id: int, tenant_id: int) -> dict:
     skip_a_shop_sku_exists = 0
     skipped_skus: list[dict] = []
     candidates: list[dict] = []
+    # 11.2 优化: 收集候选 snapshot 完整体, 末尾批量 setex 给 scan-now 复用
+    candidate_snapshots: list[ProductSnapshot] = []
 
     # 预拉 A 店真实 sku 集合
     a_existing_skus = set()
@@ -664,9 +795,14 @@ async def _scan_preview(db: Session, task_id: int, tenant_id: int) -> dict:
                 "source_platform": snap.source_platform,
                 "local_sku_b": b_local_sku,
             })
+            # 11.2 优化: 候选 snapshot 完整体存起来, 末尾批量给 Redis
+            candidate_snapshots.append(snap)
 
         if not cursor:
             break
+
+    # 11.2 优化: 把候选 snapshot 写 Redis, scan-now 命中可跳过 list_products
+    _save_preview_cache(tenant_id, task_id, candidate_snapshots)
 
     duration_ms = int((utc_now_naive() - t0).total_seconds() * 1000)
     return {"code": 0, "data": {
