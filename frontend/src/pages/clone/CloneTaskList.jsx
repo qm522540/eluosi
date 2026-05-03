@@ -133,10 +133,10 @@ const CloneTaskList = () => {
     try {
       if (task.is_active) {
         await cloneApi.disableTask(task.id)
-        message.success('已停用')
+        message.success('已关闭"自动跟品" — 每晚不再自动扫描 (手动发布仍可)')
       } else {
         await cloneApi.enableTask(task.id)
-        message.success('已启用')
+        message.success('已开启"自动跟品" — 每晚 MSK 03:30 自动扫描 + 自动发布无冲突品')
       }
       loadTasks()
     } catch (e) {
@@ -382,10 +382,15 @@ const CloneTaskList = () => {
       ),
     },
     {
-      title: '状态', dataIndex: 'is_active', width: 80, align: 'center',
+      title: (
+        <Tooltip title="开启 = 每晚 MSK 03:30 自动扫描被克隆店铺, 无后缀冲突的新品自动发布. 关闭 = 仅手动操作生效, 不影响手动发布">
+          <span>自动跟品 <span style={{ color: '#999', fontSize: 11 }}>?</span></span>
+        </Tooltip>
+      ),
+      dataIndex: 'is_active', width: 100, align: 'center',
       render: (v) => v
-        ? <Badge status="success" text={<span style={{ fontSize: 13 }}>启用</span>} />
-        : <Badge status="default" text={<span style={{ fontSize: 13, color: '#999' }}>停用</span>} />,
+        ? <Badge status="processing" text={<span style={{ fontSize: 13, color: '#1677ff' }}>开启</span>} />
+        : <Badge status="default" text={<span style={{ fontSize: 13, color: '#999' }}>关闭</span>} />,
     },
     {
       title: '配置', width: 240,
@@ -492,7 +497,9 @@ const CloneTaskList = () => {
       title: '操作', width: 210, fixed: 'right', align: 'center',
       render: (_, t) => (
         <Space size={2}>
-          <Tooltip title={t.is_active ? '停用' : '启用'}>
+          <Tooltip title={t.is_active
+            ? '关闭"自动跟品" (停止每晚自动扫描; 手动发布仍可)'
+            : '开启"自动跟品" (每晚自动扫描 B 店新品 + 无冲突自动发布)'}>
             <Button size="small" type="text"
               icon={t.is_active ? <PauseCircleOutlined /> : <PlayCircleOutlined />}
               onClick={() => handleToggleActive(t)} />
@@ -626,7 +633,9 @@ const CloneTaskList = () => {
             ]} />
           </Form.Item>
           <Text type="secondary" style={{ fontSize: 12 }}>
-            创建后默认未启用，请在列表中手动启用。跨平台克隆需先在「映射管理」建好类目映射。
+            创建后默认开启「自动跟品」 — 每晚 MSK 03:30 自动扫描被克隆店铺新品,
+            <strong style={{ color: '#1677ff' }}>无后缀冲突的自动发布</strong>,
+            可疑同款 (后缀冲突) 留待审核. 跨平台克隆需先在「映射管理」建好类目映射.
           </Text>
         </Form>
       </Modal>

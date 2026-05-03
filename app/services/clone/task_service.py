@@ -448,14 +448,13 @@ def publish_pending_now(db: Session, tenant_id: int, pending_id: int,
         return {"code": ErrorCode.CLONE_PENDING_INVALID_STATUS,
                 "msg": f"当前状态 {p.status} 不允许发布"}
 
+    # 老板拍 v2: 手动发布不被任务停用拦截 — "自动跟品"开关只控制定时扫描,
+    # 不影响用户主动操作; 用户点发布就是明确意图, 直接走.
     task = db.query(CloneTask).filter(
         CloneTask.id == p.task_id, CloneTask.tenant_id == tenant_id,
     ).first()
     if not task:
         return {"code": ErrorCode.CLONE_TASK_NOT_FOUND, "msg": "克隆任务不存在"}
-    if not task.is_active:
-        return {"code": ErrorCode.CLONE_TASK_NOT_FOUND,
-                "msg": "克隆任务已停用 — 请到「克隆任务」启用后再发布"}
 
     p.status = "approved"
     p.reviewed_at = utc_now_naive()
@@ -500,14 +499,12 @@ async def publish_pending_sync(db: Session, tenant_id: int, pending_id: int,
         return {"code": ErrorCode.CLONE_PENDING_INVALID_STATUS,
                 "msg": f"当前状态 {p.status} 不允许发布"}
 
+    # 老板拍 v2: 手动发布不被任务停用拦截 (同 publish_pending_now)
     task = db.query(CloneTask).filter(
         CloneTask.id == p.task_id, CloneTask.tenant_id == tenant_id,
     ).first()
     if not task:
         return {"code": ErrorCode.CLONE_TASK_NOT_FOUND, "msg": "克隆任务不存在"}
-    if not task.is_active:
-        return {"code": ErrorCode.CLONE_TASK_NOT_FOUND,
-                "msg": "克隆任务已停用 — 请到「克隆任务」启用后再发布"}
 
     # 标 approved 后直接 await publish_engine, 不经 Celery
     p.status = "approved"

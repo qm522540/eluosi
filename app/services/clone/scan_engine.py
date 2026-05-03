@@ -429,6 +429,18 @@ async def _run_scan(
             a_existing_skus.add(s)
     logger.info(f"task={task_id} A 店预拉 {len(a_existing_skus)} 个真实 sku 用于跨店去重")
 
+    # 老板拍 v2: 自动扫描分流 — 无冲突自动 approved + 触发 publish, 有冲突留 pending
+    # 跟 _scan_preview 同步算 suffix → existing_sku 反向索引
+    a_suffix_to_sku_run: dict[str, str] = {}
+    for s in a_existing_skus:
+        suf = _sku_suffix(s)
+        if suf:
+            a_suffix_to_sku_run.setdefault(suf, s)
+
+    # 是否走"自动模式"分流: selected_skus is None 说明是 beat 调用 (无前端勾选)
+    # 手动 scan-now 不分流, 仍写 pending 让用户决定
+    auto_mode = selected_skus is None
+
     # 11.2 优化: scan-now 带 selected_skus 时优先吃 preview 缓存,
     # 命中可完全跳过 list_products 分页(原本固定耗时 ~28-30 秒)
     cache_snapshots: Optional[list[ProductSnapshot]] = None
@@ -594,7 +606,15 @@ async def _run_scan(
                 "target_sku": target_sku,
             }
 
-            # h. INSERT pending
+            # h. 老板拍 v2: 自动模式 + 无后缀冲突 → status='approved' 自动发布;
+            # 自动模式 + 有冲突 / 手动模式 → status='pending' 留人工确认.
+            run_suffix = _sku_suffix(snap.source_sku_id)
+            run_collision = a_suffix_to_sku_run.get(run_suffix) if run_suffix else None
+            initial_status = "pending"
+            if auto_mode and not run_collision:
+                initial_status = "approved"
+
+            # i. INSERT pending
             try:
                 pending = ClonePendingProduct(
                     tenant_id=tenant_id,
@@ -615,18 +635,22 @@ async def _run_scan(
                         "platform_category_name": snap.platform_category_name,
                         "type_id": snap.type_id,  # Ozon /v3/product/import 必填
                         "attributes": snap.attributes,
+                        # 留痕给前端展示 + 调试
+                        "suffix_collision": bool(run_collision),
+                        "collision_with_sku": run_collision or "",
                     },
                     proposed_payload=proposed,
                     draft_listing_id=draft_listing_id,
-                    status="pending",
+                    status=initial_status,
                     category_mapping_status=mapping_status,
                     detected_at=utc_now_naive(),
+                    reviewed_at=utc_now_naive() if initial_status == "approved" else None,
                 )
                 db.add(pending)
                 db.flush()
                 new += 1
 
-                # i. 收集 AI 候选
+                # j. 收集 AI 候选
                 if task.title_mode == "ai_rewrite" or task.desc_mode == "ai_rewrite":
                     ai_rewrite_targets.append((pending, draft_listing_id, target_platform, proposed))
             except Exception as e:
@@ -639,6 +663,22 @@ async def _run_scan(
         db.commit()
         if not cursor:
             break
+
+    # 老板拍 v2: 自动模式扫完后, 如有自动 approved 的, 触发一次 Celery 立即上架
+    # (publish-pending beat 兜底也会跑, 但触发一次能秒级开始)
+    if auto_mode:
+        from sqlalchemy import func as sa_func
+        approved_now = db.query(sa_func.count(ClonePendingProduct.id)).filter(
+            ClonePendingProduct.task_id == task.id,
+            ClonePendingProduct.status == "approved",
+        ).scalar() or 0
+        if approved_now > 0:
+            try:
+                from app.tasks.clone_tasks import publish_approved_pending
+                publish_approved_pending.delay()
+                logger.info(f"task={task.id} 自动模式扫完 approved={approved_now}, 已触发 publish")
+            except Exception as e:
+                logger.warning(f"task={task.id} 自动模式 publish 触发失败: {e}, 等 beat 兜底")
 
     # 5. AI 改写批处理 (sem=5, 失败 fallback 不阻断)
     ai_rewrite_total = len(ai_rewrite_targets)

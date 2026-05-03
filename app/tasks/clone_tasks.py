@@ -102,13 +102,13 @@ def publish_approved_pending():
     t0 = utc_now_naive()
     db = SessionLocal()
     try:
-        # 方案 A: JOIN clone_tasks 过滤 is_active=1
-        # — 删任务后已 approved 的 pending 不再被推上架 (避免幽灵上架到 Ozon)
+        # 方案 A v2 (老板拍): "自动跟品" 开关只控制定时扫描, 不卡发布;
+        # 已 approved 都是用户/自动流明确意图, 不论任务是否启用都该发出去.
+        # JOIN 仅保留"任务存在"防御 (FK 理论上保证, 防御性查询).
         approved = db.query(ClonePendingProduct).join(
             CloneTask, ClonePendingProduct.task_id == CloneTask.id,
         ).filter(
             ClonePendingProduct.status == "approved",
-            CloneTask.is_active == 1,
         ).limit(50).all()
         total = len(approved)
         ok = failed = 0
