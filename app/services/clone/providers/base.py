@@ -25,8 +25,9 @@ class ProductSnapshot:
     source_sku_id: str               # B 平台 SKU (WB nm_id / Ozon offer_id / Yandex offerId)
     title_ru: str
     description_ru: str
-    price_rub: Decimal
-    stock: int
+    price_rub: Decimal                                            # B 店当前售价 (Ozon API price 字段, 折扣后实付)
+    old_price_rub: Optional[Decimal] = None                       # B 店划线原价 (Ozon API old_price; 无折扣 None/0)
+    stock: int = 0
     images: List[str] = field(default_factory=list)              # 图片 URL 列表
     platform_category_id: str = ""                                # B 平台分类 ID
     platform_category_name: str = ""

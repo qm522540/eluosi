@@ -75,6 +75,7 @@ def _snapshot_to_jsonable(snap: ProductSnapshot) -> dict:
     """
     d = asdict(snap)
     d["price_rub"] = str(snap.price_rub)
+    d["old_price_rub"] = str(snap.old_price_rub) if snap.old_price_rub is not None else None
     d["detected_at"] = snap.detected_at.isoformat() if snap.detected_at else None
     return d
 
@@ -87,12 +88,14 @@ def _jsonable_to_snapshot(d: dict) -> ProductSnapshot:
             detected = datetime.fromisoformat(detected)
         except Exception:
             detected = None
+    old_p = d.get("old_price_rub")
     return ProductSnapshot(
         source_platform=d.get("source_platform", ""),
         source_sku_id=d.get("source_sku_id", ""),
         title_ru=d.get("title_ru", ""),
         description_ru=d.get("description_ru", ""),
         price_rub=Decimal(str(d.get("price_rub") or "0")),
+        old_price_rub=Decimal(str(old_p)) if old_p not in (None, "", "0", 0) else None,
         stock=int(d.get("stock") or 0),
         images=list(d.get("images") or []),
         platform_category_id=d.get("platform_category_id") or "",
@@ -560,11 +563,27 @@ async def _run_scan(
                 or snap.source_sku_id
             ).strip() or snap.source_sku_id
 
+            # g2. B 店折扣识别 (跟 product/service.py:920-921 一致):
+            # has_discount = old_price 存在且 != price → A 店平台价 = old_price (× adjust),
+            # 折扣价 = price (× adjust); 否则平台价 = price (× adjust), 折扣价 None
+            b_old = snap.old_price_rub
+            has_b_discount = (
+                b_old is not None and b_old > 0
+                and snap.price_rub > 0 and b_old != snap.price_rub
+            )
+            if has_b_discount:
+                a_platform_price = _apply_price_rule(b_old, task.price_mode, task.price_adjust_pct)
+                a_discount_price = _apply_price_rule(snap.price_rub, task.price_mode, task.price_adjust_pct)
+            else:
+                a_platform_price = target_price  # 已在前面调用过 _apply_price_rule(snap.price_rub, ...)
+                a_discount_price = None
+
             # h. proposed_payload 骨架 (AI 改写延后)
             proposed = {
                 "title_ru": snap.title_ru,
                 "description_ru": snap.description_ru,
-                "price_rub": float(target_price),
+                "price_rub": float(a_platform_price),
+                "discount_price_rub": float(a_discount_price) if a_discount_price else None,
                 "stock": task.default_stock,
                 "images_oss": oss_urls,
                 "platform_category_id": target_cat_id or "",
@@ -589,6 +608,7 @@ async def _run_scan(
                         "title_ru": snap.title_ru,
                         "description_ru": snap.description_ru,
                         "price_rub": float(snap.price_rub),
+                        "old_price_rub": float(snap.old_price_rub) if snap.old_price_rub else None,
                         "stock": snap.stock,
                         "images": snap.images,
                         "platform_category_id": snap.platform_category_id,
@@ -863,13 +883,28 @@ async def _scan_preview(db: Session, task_id: int, tenant_id: int) -> dict:
             suffix = _sku_suffix(snap.source_sku_id)
             collision_with = a_suffix_to_sku.get(suffix) if suffix else None
 
+            # 5b. B 店折扣识别 (跟 _run_scan 同步)
+            b_old = snap.old_price_rub
+            has_b_discount = (
+                b_old is not None and b_old > 0
+                and snap.price_rub > 0 and b_old != snap.price_rub
+            )
+            if has_b_discount:
+                preview_a_platform = float(_apply_price_rule(b_old, task.price_mode, task.price_adjust_pct))
+                preview_a_discount = float(_apply_price_rule(snap.price_rub, task.price_mode, task.price_adjust_pct))
+            else:
+                preview_a_platform = float(target_price)
+                preview_a_discount = None
+
             # 6. 收集候选 (不写库)
             candidates.append({
                 "source_sku_id": snap.source_sku_id,
                 "title_ru": snap.title_ru,
                 "description_ru": (snap.description_ru or "")[:300],
                 "price_b": float(snap.price_rub),
-                "price_a_proposed": float(target_price),
+                "old_price_b": float(b_old) if b_old else None,
+                "price_a_proposed": preview_a_platform,
+                "discount_price_a_proposed": preview_a_discount,
                 "stock": snap.stock,
                 "images": list(snap.images or [])[:5],  # 缩略图最多 5 张
                 "category_status": mapping_status,
