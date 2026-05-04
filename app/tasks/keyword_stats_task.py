@@ -134,7 +134,8 @@ def sync_keyword_stats(self):
                     inserted = int((r or {}).get("inserted", 0))
                     errs = (r or {}).get("errors") or []
                     rec_status = "partial" if errs else "success"
-                    rec_msg = "; ".join(errs)[:500] if errs else f"campaigns={r.get('campaigns', 0)}"
+                    # errs 可能含 dict, str 化兜底防御
+                    rec_msg = "; ".join(str(e) for e in errs)[:500] if errs else f"campaigns={r.get('campaigns', 0)}"
                     record_sync_run(db, shop.tenant_id, shop.id, "wb_keyword_stats",
                                    status=rec_status, rows=inserted, duration_ms=dur_ms,
                                    msg=rec_msg)

@@ -101,7 +101,8 @@ def sync_ozon_product_queries(self):
                 synced = int(data.get("synced_queries") or 0)
                 errs = data.get("errors") or []
                 rec_status = "partial" if errs else "success"
-                rec_msg = "; ".join(errs)[:500] if errs else f"range={data.get('date_range')}"
+                # 跟 wb_search_texts_task 同源, errs 可能含 dict, str 化兜底
+                rec_msg = "; ".join(str(e) for e in errs)[:500] if errs else f"range={data.get('date_range')}"
                 record_sync_run(db, shop.tenant_id, shop.id, "ozon_search_texts",
                                status=rec_status, rows=synced, duration_ms=dur_ms,
                                msg=rec_msg)

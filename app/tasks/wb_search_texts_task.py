@@ -107,7 +107,9 @@ def sync_wb_search_texts(self):
                 synced = int(data.get("synced_queries") or 0)
                 errs = data.get("errors") or []
                 rec_status = "partial" if errs else "success"
-                rec_msg = "; ".join(errs)[:500] if errs else f"range={data.get('date_range')}"
+                # silent-detector v2 (4e37d51) 让 errs 可能含 dict (如
+                # {"type": "rate_limit_429_burnout", "shop_id": ...}), str 化兜底防御
+                rec_msg = "; ".join(str(e) for e in errs)[:500] if errs else f"range={data.get('date_range')}"
                 record_sync_run(db, shop.tenant_id, shop.id, "wb_search_texts",
                                status=rec_status, rows=synced, duration_ms=dur_ms,
                                msg=rec_msg)
