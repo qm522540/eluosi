@@ -96,19 +96,32 @@ const ReviewDetailDrawer = ({ open, review, shopPlatform, onClose }) => {
 
           <Divider style={{ margin: '8px 0' }} />
 
-          <div>
-            <Text type="secondary" style={{ fontSize: 11 }}>俄语原文</Text>
-            <Paragraph style={{ marginTop: 2, marginBottom: 6, fontSize: 14 }}>
-              {review.content_ru}
-            </Paragraph>
-          </div>
+          {review.content_ru && review.content_ru.trim() ? (
+            <>
+              <div>
+                <Text type="secondary" style={{ fontSize: 11 }}>俄语原文</Text>
+                <Paragraph style={{ marginTop: 2, marginBottom: 6, fontSize: 14 }}>
+                  {review.content_ru}
+                </Paragraph>
+              </div>
 
-          <div>
-            <Text type="secondary" style={{ fontSize: 11 }}>中文翻译</Text>
-            <Paragraph style={{ marginTop: 2, marginBottom: 0, fontSize: 13, color: '#666' }}>
-              {review.content_zh || <span style={{ color: '#ccc' }}>翻译中...</span>}
-            </Paragraph>
-          </div>
+              <div>
+                <Text type="secondary" style={{ fontSize: 11 }}>中文翻译</Text>
+                <Paragraph style={{ marginTop: 2, marginBottom: 0, fontSize: 13, color: '#666' }}>
+                  {review.content_zh || <span style={{ color: '#ccc' }}>翻译中...</span>}
+                </Paragraph>
+              </div>
+            </>
+          ) : (
+            <div style={{
+              padding: '12px 16px', background: '#fafafa', borderRadius: 4,
+              textAlign: 'center',
+            }}>
+              <Text type="secondary" style={{ fontSize: 13, fontStyle: 'italic' }}>
+                该评价仅打星, 买家未写任何文字 — 无需翻译
+              </Text>
+            </div>
+          )}
 
           {review.existing_reply_ru && (
             <>

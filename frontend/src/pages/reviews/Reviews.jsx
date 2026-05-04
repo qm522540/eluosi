@@ -243,26 +243,38 @@ const Reviews = () => {
     {
       title: '评价内容',
       dataIndex: 'content_ru',
-      render: (v, r) => (
-        <div style={{ lineHeight: 1.4, maxWidth: 520 }}>
-          <Text style={{ fontSize: 13 }}>{v}</Text>
-          <div style={{ marginTop: 2 }}>
-            <Text type="secondary" style={{ fontSize: 11 }}>
-              {r.content_zh || <span style={{ color: '#ccc' }}>翻译中...</span>}
-            </Text>
+      render: (v, r) => {
+        const hasText = v && v.trim()
+        return (
+          <div style={{ lineHeight: 1.4, maxWidth: 520 }}>
+            {hasText ? (
+              <>
+                <Text style={{ fontSize: 13 }}>{v}</Text>
+                <div style={{ marginTop: 2 }}>
+                  <Text type="secondary" style={{ fontSize: 11 }}>
+                    {r.content_zh
+                      || <span style={{ color: '#ccc' }}>翻译中...</span>}
+                  </Text>
+                </div>
+              </>
+            ) : (
+              <Text type="secondary" style={{ fontSize: 12, fontStyle: 'italic' }}>
+                (该评价仅打星, 买家未写文字)
+              </Text>
+            )}
+            {r.platform_product_name && (
+              <div style={{ marginTop: 2 }}>
+                <Tooltip title={r.platform_product_name}>
+                  <Text type="secondary" style={{ fontSize: 11 }}>
+                    📦 {r.platform_product_name.slice(0, 40)}
+                    {r.platform_product_name.length > 40 ? '…' : ''}
+                  </Text>
+                </Tooltip>
+              </div>
+            )}
           </div>
-          {r.platform_product_name && (
-            <div style={{ marginTop: 2 }}>
-              <Tooltip title={r.platform_product_name}>
-                <Text type="secondary" style={{ fontSize: 11 }}>
-                  📦 {r.platform_product_name.slice(0, 40)}
-                  {r.platform_product_name.length > 40 ? '…' : ''}
-                </Text>
-              </Tooltip>
-            </div>
-          )}
-        </div>
-      ),
+        )
+      },
     },
     {
       title: '时间',
