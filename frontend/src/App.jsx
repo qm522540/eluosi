@@ -15,6 +15,7 @@ import Settings from '@/pages/Settings'
 import CloneTaskList from '@/pages/clone/CloneTaskList'
 import PendingReview from '@/pages/clone/PendingReview'
 import CloneLogs from '@/pages/clone/CloneLogs'
+import Reviews from '@/pages/reviews/Reviews'
 import AppLayout from '@/components/AppLayout'
 import AuthRoute from '@/components/AuthRoute'
 
@@ -47,6 +48,7 @@ const App = () => {
         <Route path="clone/tasks" element={<CloneTaskList />} />
         <Route path="clone/pending" element={<PendingReview />} />
         <Route path="clone/logs" element={<CloneLogs />} />
+        <Route path="reviews" element={<Reviews />} />
         <Route path="settings" element={<Settings />} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />

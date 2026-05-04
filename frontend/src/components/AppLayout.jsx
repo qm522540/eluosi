@@ -21,6 +21,7 @@ import {
   CopyOutlined,
   AuditOutlined,
   FileSearchOutlined,
+  CommentOutlined,
 } from '@ant-design/icons'
 import { useAuthStore } from '@/stores/authStore'
 
@@ -82,6 +83,11 @@ const menuItems = [
       { key: '/clone/pending', icon: <AuditOutlined />, label: '待审核商品' },
       { key: '/clone/logs', icon: <FileSearchOutlined />, label: '克隆日志' },
     ],
+  },
+  {
+    key: '/reviews',
+    icon: <CommentOutlined />,
+    label: '评价管理',
   },
   {
     key: '/settings',
