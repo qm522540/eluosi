@@ -477,7 +477,20 @@ async def send_reply(
                 "msg": send_result.get("msg") or "平台拒收"}
 
 
-# ==================== 6. 店铺级配置 ====================
+# ==================== 6. 翻译 (用户编辑俄语后刷新中文) ====================
+
+async def translate_text(
+    db: Session, *, tenant_id: int, text_ru: str,
+) -> dict:
+    """实时翻译俄→中, 给前端编辑器同步显示用. 复用 ru_zh_dict 缓存."""
+    text_ru = (text_ru or "").strip()
+    if not text_ru:
+        return {"ok": True, "ru": "", "zh": ""}
+    zh = await translate_to_zh(db, text_ru) or ""
+    return {"ok": True, "ru": text_ru, "zh": zh}
+
+
+# ==================== 7. 店铺级配置 ====================
 
 def get_settings(
     db: Session, *, tenant_id: int, shop_id: int,

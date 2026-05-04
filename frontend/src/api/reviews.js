@@ -23,6 +23,12 @@ export function markReviewRead(reviewId) {
   return request.patch(`${BASE}/${reviewId}/mark-read`)
 }
 
+/** 轻量翻译 — 用户编辑俄语后刷新中文 (不调 AI 生成, 复用 ru_zh_dict 缓存) */
+export function translateText(textRu) {
+  return request.post(`${BASE}/translate`, { text_ru: textRu },
+    { timeout: 30000 })
+}
+
 /** AI 生成俄语回复草稿 + 中文翻译; 重生成传新 custom_hint */
 export function generateReply(reviewId, customHint = '') {
   return request.post(`${BASE}/${reviewId}/generate-reply`,

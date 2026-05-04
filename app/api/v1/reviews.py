@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session
 from app.dependencies import get_db, get_tenant_id, get_owned_shop, get_current_user
 from app.schemas.review import (
     GenerateReplyRequest, SendReplyRequest,
-    ReviewSettingsUpdate, ReviewSyncRequest,
+    ReviewSettingsUpdate, ReviewSyncRequest, TranslateRequest,
 )
 from app.services.reviews import service as reviews_service
 from app.utils.response import success, error
@@ -158,6 +158,22 @@ async def send_reply(
     )
     if not result.get("ok"):
         return error(1, result.get("msg") or "发送失败")
+    return success(result)
+
+
+# ==================== 6.5 翻译 (编辑俄语后刷新中文) ====================
+
+@router.post("/translate")
+async def translate(
+    req: TranslateRequest = Body(...),
+    db: Session = Depends(get_db),
+    tenant_id: int = Depends(get_tenant_id),
+):
+    """轻量翻译端点 — 用户编辑俄语回复后, 前端 debounce 调此 API 刷新中文.
+    跟 generate-reply 区别: 这里不调 AI 生成, 只翻译, 复用 ru_zh_dict 缓存."""
+    result = await reviews_service.translate_text(
+        db, tenant_id=tenant_id, text_ru=req.text_ru,
+    )
     return success(result)
 
 

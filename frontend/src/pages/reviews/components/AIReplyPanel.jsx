@@ -1,11 +1,11 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import {
   Card, Typography, Input, Button, Space, Divider, Modal, message, Tag,
 } from 'antd'
 import {
   RobotOutlined, ReloadOutlined, SendOutlined, EditOutlined,
 } from '@ant-design/icons'
-import { generateReply, sendReply } from '@/api/reviews'
+import { generateReply, sendReply, translateText } from '@/api/reviews'
 
 const { Text, Paragraph } = Typography
 const { TextArea } = Input
@@ -17,6 +17,31 @@ const AIReplyPanel = ({ review, shopPlatform, onReplySent }) => {
   const [customHint, setCustomHint] = useState('')
   const [editingRu, setEditingRu] = useState(false)
   const [finalRu, setFinalRu] = useState('')
+  const [editedZh, setEditedZh] = useState('')       // 用户编辑俄语后的实时中翻译
+  const [translatingZh, setTranslatingZh] = useState(false)
+
+  // 用户改了俄语 → debounce 1.2s 调翻译刷新中文 (跟 draft_ru 一致就用 draft_zh)
+  useEffect(() => {
+    if (!reply) return
+    const ru = (finalRu || '').trim()
+    if (!ru || ru === (reply.draft_ru || '').trim()) {
+      setEditedZh('')
+      return
+    }
+    setTranslatingZh(true)
+    const t = setTimeout(async () => {
+      try {
+        const r = await translateText(ru)
+        setEditedZh(r.data?.zh || '')
+      } catch (e) {
+        // 翻译失败不打扰用户, 中文区显示 (翻译失败)
+        setEditedZh('')
+      } finally {
+        setTranslatingZh(false)
+      }
+    }, 1200)
+    return () => clearTimeout(t)
+  }, [finalRu, reply])
 
   const handleGenerate = async (regenerate = false) => {
     setGenerating(true)
@@ -108,14 +133,27 @@ const AIReplyPanel = ({ review, shopPlatform, onReplySent }) => {
         </Space>
       ) : (
         <Space direction="vertical" style={{ width: '100%' }} size={8}>
-          {/* 中文翻译 */}
+          {/* 中文翻译 — 用户改了俄语就显示重译版 */}
           <div>
-            <Text type="secondary" style={{ fontSize: 11 }}>中文翻译 (给老板看)</Text>
+            <Space size={4} style={{ marginBottom: 2 }}>
+              <Text type="secondary" style={{ fontSize: 11 }}>中文翻译 (给老板看)</Text>
+              {finalRu && finalRu.trim() !== (reply.draft_ru || '').trim() && (
+                <Tag color="blue" style={{ fontSize: 10, lineHeight: '14px',
+                                           padding: '0 4px', margin: 0 }}>
+                  已根据您的修改重译
+                </Tag>
+              )}
+            </Space>
             <Paragraph style={{
               marginTop: 2, marginBottom: 0, fontSize: 13, color: '#666',
               background: '#f5f7ff', padding: '6px 10px', borderRadius: 4,
             }}>
-              {reply.draft_zh || <span style={{ color: '#ccc' }}>翻译中...</span>}
+              {translatingZh ? (
+                <span style={{ color: '#999' }}>翻译中...</span>
+              ) : (
+                editedZh || reply.draft_zh ||
+                <span style={{ color: '#ccc' }}>翻译中...</span>
+              )}
             </Paragraph>
           </div>
 

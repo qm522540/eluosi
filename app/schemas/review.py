@@ -11,6 +11,12 @@ class ReviewSyncRequest(BaseModel):
     max_pages: int = Field(10, ge=1, le=50, description="最大分页数, 防超量")
 
 
+# ==================== 翻译 (用户编辑俄语后实时刷新中文) ====================
+
+class TranslateRequest(BaseModel):
+    text_ru: str = Field(..., max_length=2000, description="待翻译俄语原文")
+
+
 # ==================== 生成回复 ====================
 
 class GenerateReplyRequest(BaseModel):
