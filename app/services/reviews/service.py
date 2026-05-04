@@ -29,6 +29,7 @@ from app.services.reviews.ai_replier import (
     generate_reply_draft,
     translate_to_zh,
 )
+from app.services.translation.ru_zh import translate_batch
 from app.services.reviews.providers.base import ReviewSnapshot
 from app.utils.logger import setup_logger
 from app.utils.moscow_time import utc_now_naive
@@ -230,7 +231,9 @@ async def sync_reviews(
             if not cursor:
                 break
 
-    # UPSERT 主表
+    # UPSERT 主表 — 收集需要翻译的 (rec, content_ru), 后面批量调一次 translate_batch
+    needs_translate: list[tuple[ShopReview, str]] = []  # (rec, ru_text)
+
     for snap in all_snaps:
         try:
             existing = db.query(ShopReview).filter(
@@ -257,6 +260,9 @@ async def sync_reviews(
                     existing.status = "replied"
                 existing.updated_at = utc_now_naive()
                 upd_cnt += 1
+                # 漏译补译 — 之前同步时 content_zh 为空的, 这次补一刀
+                if not existing.content_zh and existing.content_ru:
+                    needs_translate.append((existing, existing.content_ru))
             else:
                 rec = ShopReview(
                     tenant_id=tenant_id, shop_id=shop_id,
@@ -279,11 +285,8 @@ async def sync_reviews(
                 db.add(rec)
                 db.flush()
                 new_cnt += 1
-                # 翻译新评价 (老评价不重翻, 节省 Kimi 配额)
-                zh = await translate_to_zh(db, snap.content_ru)
-                if zh:
-                    rec.content_zh = zh
-                    translated_cnt += 1
+                if snap.content_ru:
+                    needs_translate.append((rec, snap.content_ru))
         except Exception as e:
             errors.append(f"review {snap.platform_review_id}: {str(e)[:200]}")
             logger.warning(
@@ -291,6 +294,22 @@ async def sync_reviews(
                 f"rid={snap.platform_review_id}: {e}"
             )
             continue
+
+    # 批量翻译 (新增 + 漏译补译) — 一次调用走 ru_zh_dict 缓存 + Kimi
+    if needs_translate:
+        try:
+            unique_ru = list({ru for _, ru in needs_translate})
+            mapping = await translate_batch(
+                db, unique_ru, field_type="review_content",
+            )
+            for rec, ru_text in needs_translate:
+                zh = mapping.get(ru_text)
+                if zh and zh != ru_text:
+                    rec.content_zh = zh
+                    translated_cnt += 1
+        except Exception as e:
+            errors.append(f"翻译批量失败: {str(e)[:200]}")
+            logger.warning(f"sync_reviews 批量翻译失败 shop={shop_id}: {e}")
 
     db.commit()
 

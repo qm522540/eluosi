@@ -106,19 +106,23 @@ async def _call_kimi(texts: list, field_type: str) -> dict:
 
     client = KimiClient(api_key=settings.KIMI_API_KEY)
     out = {}
-    for i in range(0, len(texts), CHUNK_SIZE):
-        chunk = texts[i:i + CHUNK_SIZE]
+    # review_content (买家短评价口语+俗语) 单批降到 20, 让 Kimi 更稳定输出 JSON
+    chunk_size = 20 if field_type == "review_content" else CHUNK_SIZE
+    hint = {
+        "attr_name": "这些是电商平台的商品属性名（如 Цвет/Материал），用最常用的中文电商术语",
+        "attr_value": "这些是商品属性值（如 Красный/Хлопок），用最常用的中文",
+        "review_content": "这些是俄罗斯买家对商品的评价文本（可能含口语/俗语/简短反馈/emoji），翻译要自然不死板",
+    }.get(field_type, "这些是电商商品数据")
+    for i in range(0, len(texts), chunk_size):
+        chunk = texts[i:i + chunk_size]
         numbered = "\n".join(f"{j+1}. {t}" for j, t in enumerate(chunk))
-        hint = {
-            "attr_name": "这些是电商平台的商品属性名（如 Цвет/Материал），用最常用的中文电商术语",
-            "attr_value": "这些是商品属性值（如 Красный/Хлопок），用最常用的中文",
-        }.get(field_type, "这些是电商商品数据")
         prompt = (
             f"把下列俄文翻译为中文。{hint}。\n"
             "规则：\n"
             "- 保留品牌名/型号等专有名词不翻译\n"
             "- 数字、单位原样保留（如 100 г → 100克）\n"
-            "- 不要加 \"翻译：\" 等前缀\n\n"
+            "- 不要加 \"翻译：\" 等前缀\n"
+            "- 即使输入很短（一个词/emoji）也必须翻译, 不能跳过, 不能返回空字符串\n\n"
             f"输入（俄文，共 {len(chunk)} 条）：\n{numbered}\n\n"
             f"返回 JSON 数组（不含其他文字），长度必须等于 {len(chunk)}：\n"
             "[\"中文1\", \"中文2\", ...]"
@@ -138,11 +142,47 @@ async def _call_kimi(texts: list, field_type: str) -> dict:
                     if isinstance(tgt, str) and tgt.strip():
                         out[src] = tgt.strip()
             else:
+                # 长度不匹配 → 降级单条翻译兜底 (短评价场景常见)
+                got = len(arr) if isinstance(arr, list) else 'N/A'
                 logger.warning(
-                    f"Kimi 翻译返回长度不匹配: expected={len(chunk)} got={len(arr) if isinstance(arr, list) else 'N/A'}"
+                    f"Kimi 翻译返回长度不匹配 expected={len(chunk)} got={got}, 降级单条重试"
                 )
+                fallback = await _translate_chunk_one_by_one(client, chunk, hint)
+                out.update(fallback)
         except Exception as e:
-            logger.warning(f"Kimi 翻译分片失败（{len(chunk)} 条）: {e}")
+            logger.warning(
+                f"Kimi 翻译分片失败 ({len(chunk)} 条) {e}, 降级单条重试"
+            )
+            try:
+                fallback = await _translate_chunk_one_by_one(client, chunk, hint)
+                out.update(fallback)
+            except Exception as e2:
+                logger.warning(f"单条翻译降级也失败: {e2}")
+    return out
+
+
+async def _translate_chunk_one_by_one(client, chunk: list, hint: str) -> dict:
+    """批量返长度不匹配时的兜底 — 逐条翻译, 有几条算几条"""
+    out = {}
+    for t in chunk:
+        prompt = (
+            f"把下列俄文翻译为中文（{hint}）。直接输出中文译文, "
+            "不加任何前缀/解释/quote装饰, 不要 \"翻译：\" 这种字眼:\n\n"
+            f"{t}"
+        )
+        try:
+            res = await client.chat(
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.1, max_tokens=300,
+            )
+            zh = (res.get("content") or "").strip()
+            # 去掉常见的 quote 包裹 / "翻译：" 前缀
+            zh = re.sub(r'^["「『«]+|["」』»]+$', '', zh).strip()
+            zh = re.sub(r'^(翻译|译文|中文)[:：]\s*', '', zh).strip()
+            if zh and zh != t:
+                out[t] = zh
+        except Exception as e:
+            logger.debug(f"单条翻译跳过 {t[:30]!r}: {e}")
     return out
 
 
