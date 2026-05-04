@@ -35,6 +35,7 @@ WB_STATISTICS_API = "https://statistics-api.wildberries.ru"
 WB_CONTENT_API = "https://content-api.wildberries.ru"
 WB_COMMON_API = "https://common-api.wildberries.ru"
 WB_PRICES_API = "https://discounts-prices-api.wildberries.ru"
+WB_FEEDBACKS_API = "https://feedbacks-api.wildberries.ru"
 
 # 限速控制：两次请求之间的最小间隔(秒)
 MIN_REQUEST_INTERVAL = 60.0 / settings.WB_RATE_LIMIT_PER_MINUTE
@@ -1578,6 +1579,105 @@ class WBClient(BasePlatformClient):
                 } or None,
             })
         return out
+
+    # ==================== 评价管理 (Feedbacks) ====================
+
+    async def fetch_feedbacks(
+        self,
+        is_answered: bool = False,
+        take: int = 100,
+        skip: int = 0,
+        nm_id: Optional[int] = None,
+    ) -> dict:
+        """拉取买家评价列表
+
+        API: GET /api/v1/feedbacks?isAnswered=&take=&skip=&nmId=
+        Base: https://feedbacks-api.wildberries.ru
+
+        Args:
+            is_answered: True=已回, False=未回 (默认拉未回评价)
+            take: 每页 1-5000
+            skip: 跳过数量 (分页)
+            nm_id: 可选, 按商品过滤
+
+        Returns: {feedbacks: [...], count_unanswered, count_archive}
+            feedback 字段:
+                id (str), text (str), productValuation (1-5),
+                userName (str), createdDate (RFC3339),
+                productDetails: {nmId, productName, supplierArticle},
+                answer: {text, editable, ...} | null,
+                isAnswered (bool)
+        """
+        url = f"{WB_FEEDBACKS_API}/api/v1/feedbacks"
+        params = {
+            "isAnswered": "true" if is_answered else "false",
+            "take": min(int(take), 5000),
+            "skip": int(skip),
+        }
+        if nm_id:
+            params["nmId"] = int(nm_id)
+        try:
+            r = await self._request("GET", url, params=params)
+            # WB feedbacks 外层结构: {data: {feedbacks, countUnanswered, countArchive},
+            #                        error: bool, errorText: str}
+            if (r or {}).get("error"):
+                logger.warning(
+                    f"WB feedbacks 返 error shop_id={self.shop_id}: "
+                    f"{(r or {}).get('errorText')}"
+                )
+            data = (r or {}).get("data") or {}
+            return {
+                "feedbacks": data.get("feedbacks") or [],
+                "count_unanswered": int(data.get("countUnanswered") or 0),
+                "count_archive": int(data.get("countArchive") or 0),
+            }
+        except Exception as e:
+            logger.error(f"WB fetch_feedbacks 失败 shop_id={self.shop_id}: {e}")
+            raise
+
+    async def post_feedback_answer(
+        self, feedback_id: str, text: str,
+    ) -> dict:
+        """对评价发送回复
+
+        API: POST /api/v1/feedbacks/answer
+        Body: {id, text}
+
+        text 长度限制 1000 字符 (WB 文档), 过长 cap 到 1000.
+        回复成功后 WB 自动设 isAnswered=true (不需单独 mark_read).
+
+        Returns: {ok: True/False, msg: ...}
+        """
+        url = f"{WB_FEEDBACKS_API}/api/v1/feedbacks/answer"
+        payload = {"id": str(feedback_id), "text": (text or "")[:1000]}
+        try:
+            await self._request("POST", url, json=payload)
+            return {"ok": True, "msg": "回复成功"}
+        except Exception as e:
+            logger.error(
+                f"WB post_feedback_answer 失败 shop_id={self.shop_id} "
+                f"fid={feedback_id}: {e}"
+            )
+            return {"ok": False, "msg": str(e)[:300]}
+
+    async def fetch_feedbacks_count(self) -> dict:
+        """拉评价计数 (用于红点角标)
+
+        API: GET /api/v1/feedbacks/count
+
+        Returns: {count_unanswered, count_archive}
+        """
+        url = f"{WB_FEEDBACKS_API}/api/v1/feedbacks/count"
+        try:
+            r = await self._request("GET", url)
+            data = (r or {}).get("data") or {}
+            return {
+                "count_unanswered": int(data.get("countUnanswered") or 0),
+                "count_archive": int(data.get("countArchive") or 0),
+            }
+        except Exception as e:
+            logger.error(f"WB fetch_feedbacks_count 失败 shop_id={self.shop_id}: {e}")
+            return {"count_unanswered": 0, "count_archive": 0}
 
     async def close(self):
         """关闭HTTP客户端"""

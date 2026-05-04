@@ -1261,6 +1261,158 @@ class OzonClient(BasePlatformClient):
 
         return out
 
+    # ==================== 评价管理 (Reviews, Premium) ====================
+
+    async def fetch_reviews(
+        self,
+        status: str = "UNPROCESSED",
+        last_id: str = "",
+        limit: int = 100,
+        sort_dir: str = "DESC",
+    ) -> dict:
+        """拉取买家评价列表 (需 Premium 订阅)
+
+        API: POST /v1/review/list
+        Body: {limit, sort_dir, status?, last_id?}
+
+        Args:
+            status: UNPROCESSED (默认, 未处理) / PROCESSED (已处理) / ALL
+            last_id: 分页游标 (从上次响应拿)
+            limit: 1-100
+            sort_dir: ASC / DESC (按时间)
+
+        Returns: {reviews: [...], has_next, last_id}
+            review 字段:
+                id (UUID str), sku (int), text (str), rating (1-5),
+                comments_amount, photos_amount, videos_amount,
+                published_at (ISO datetime), status (UNPROCESSED|PROCESSED),
+                order_status, is_rating_participant
+
+        Raises:
+            SubscriptionRequiredError: 店铺未开通 Premium 订阅 (403)
+        """
+        url = f"{OZON_SELLER_API}/v1/review/list"
+        payload = {
+            "limit": min(max(int(limit), 1), 100),
+            "sort_dir": sort_dir,
+        }
+        if status and status != "ALL":
+            payload["status"] = status
+        if last_id:
+            payload["last_id"] = last_id
+        try:
+            r = await self._request("POST", url, json=payload)
+            return {
+                "reviews": (r or {}).get("reviews") or [],
+                "has_next": bool((r or {}).get("has_next")),
+                "last_id": (r or {}).get("last_id") or "",
+            }
+        except SubscriptionRequiredError:
+            raise
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == 403:
+                raise SubscriptionRequiredError(
+                    f"Ozon 评价 API 需 Premium 订阅 shop_id={self.shop_id}"
+                )
+            raise
+        except Exception as e:
+            logger.error(f"Ozon fetch_reviews 失败 shop_id={self.shop_id}: {e}")
+            raise
+
+    async def post_review_comment(
+        self, review_id: str, text: str, mark_as_processed: bool = True,
+    ) -> dict:
+        """对评价发送回复 + (默认) 标已读
+
+        API: POST /v1/review/comment/create
+        Body: {review_id, text, mark_review_as_processed}
+
+        mark_as_processed=True 让回复后自动 PROCESSED, 跟 WB 行为对齐
+        (WB 回复后自动 isAnswered=true).
+
+        Returns: {ok: True/False, msg: ..., comment_id (Ozon 返的)}
+        """
+        url = f"{OZON_SELLER_API}/v1/review/comment/create"
+        payload = {
+            "review_id": str(review_id),
+            "text": text or "",
+            "mark_review_as_processed": bool(mark_as_processed),
+        }
+        try:
+            r = await self._request("POST", url, json=payload)
+            return {
+                "ok": True,
+                "comment_id": str((r or {}).get("comment_id") or ""),
+                "msg": "回复成功",
+            }
+        except Exception as e:
+            logger.error(
+                f"Ozon post_review_comment 失败 shop_id={self.shop_id} "
+                f"rid={review_id}: {e}"
+            )
+            return {"ok": False, "msg": str(e)[:300]}
+
+    async def change_review_status(
+        self, review_ids: list, status: str = "PROCESSED",
+    ) -> dict:
+        """批量改评价状态 (UNPROCESSED ↔ PROCESSED)
+
+        API: POST /v1/review/change-status
+        Body: {review_ids: [...], status}
+
+        用于:
+        - 用户在 UI 点 "标已读" (不回复但要标已读)
+        - 批量已读
+
+        Returns: {ok: True/False, msg: ...}
+        """
+        url = f"{OZON_SELLER_API}/v1/review/change-status"
+        payload = {
+            "review_ids": [str(rid) for rid in review_ids],
+            "status": status,
+        }
+        try:
+            await self._request("POST", url, json=payload)
+            return {"ok": True, "msg": f"{len(review_ids)} 条评价改 {status}"}
+        except Exception as e:
+            logger.error(
+                f"Ozon change_review_status 失败 shop_id={self.shop_id}: {e}"
+            )
+            return {"ok": False, "msg": str(e)[:300]}
+
+    async def fetch_review_comments(
+        self, review_id: str, limit: int = 50, offset: int = 0,
+        sort_dir: str = "ASC",
+    ) -> dict:
+        """拉单条评价的评论历史 (含本店之前的回复 + 买家追评)
+
+        API: POST /v1/review/comment/list
+        Body: {review_id, limit, offset, sort_dir}
+
+        Returns: {comments: [...], offset_for_next}
+            comment 字段: id, text, published_at, is_owner (本店发的?),
+                         parent_comment_id (追评 chain)
+        """
+        url = f"{OZON_SELLER_API}/v1/review/comment/list"
+        payload = {
+            "review_id": str(review_id),
+            "limit": min(max(int(limit), 1), 100),
+            "offset": int(offset),
+            "sort_dir": sort_dir,
+        }
+        try:
+            r = await self._request("POST", url, json=payload)
+            return {
+                "comments": (r or {}).get("comments") or [],
+                "offset_for_next": int(offset) + int(limit),
+            }
+        except Exception as e:
+            logger.error(
+                f"Ozon fetch_review_comments 失败 shop_id={self.shop_id} "
+                f"rid={review_id}: {e}"
+            )
+            return {"comments": [], "offset_for_next": int(offset)}
+
     async def close(self):
         """关闭HTTP客户端"""
         if self._http_client and not self._http_client.is_closed:
