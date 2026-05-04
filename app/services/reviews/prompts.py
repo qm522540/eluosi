@@ -80,6 +80,48 @@ NEGATIVE_SAMPLES = [
 ]
 
 
+# ==================== 安全 sanitize (老林 review 建议 #3) ====================
+# 用户输入 (custom_hint / brand_signature / custom_prompt_extra) 直接拼到 AI prompt,
+# 黑名单关键词命中时拒收 → 走默认 prompt, 防 prompt injection.
+# 实际场景店铺主自己用不是 attacker, 优先级低; 但代价小 (几 us) + 万一有就麻烦, 顺手做.
+_PROMPT_INJECT_BLACKLIST = (
+    "ignore", "system:", "</prompt>", "[inst]", "###",
+    "роль:", "пользователь:", "ассистент:",       # 俄语 attack vector
+    "you are", "ты —", "ты теперь",
+)
+
+
+def _sanitize_user_input(s: str, max_len: int) -> str:
+    """命中黑名单 → 返空 (调用方走默认 prompt 路径)"""
+    if not s:
+        return ""
+    s = str(s).strip()[:max_len]
+    low = s.lower()
+    for kw in _PROMPT_INJECT_BLACKLIST:
+        if kw in low:
+            return ""
+    return s
+
+
+# ==================== 语气模板 ====================
+# reply_tone 决定 prompt 调性, 跟 shop_review_settings.reply_tone 对齐.
+
+TONE_INSTRUCTIONS = {
+    "friendly": (
+        "友好 + 温暖, 日常俄语 (不书面化), "
+        "emoji 节制 (好评 💛/✨/❤ 选 1, 差评 😔, 中评不用)"
+    ),
+    "warm": (
+        "温暖 + 情感浓厚, 多用 💛 ✨ ❤ 表达真诚, "
+        "可以稍微感性 (适合女装/家居/美妆品类)"
+    ),
+    "formal": (
+        "正式 + 商务感, 克制礼貌, **不用 emoji**, "
+        "称呼用 Уважаемый/Уважаемая, 不过度热情 (适合 B2B / 电子)"
+    ),
+}
+
+
 # ==================== Prompt 拼装 ====================
 
 def build_reply_prompt(
@@ -90,6 +132,8 @@ def build_reply_prompt(
     product_name: str = "",
     custom_hint: str = "",
     brand_signature: str = "",
+    reply_tone: str = "friendly",
+    custom_prompt_extra: str = "",
 ) -> str:
     """组装 DeepSeek prompt — 让 AI 出俄语回复
 
@@ -98,9 +142,11 @@ def build_reply_prompt(
         rating: 1-5 星
         customer_name: 买家短名 (Ozon 时为空, prompt 里会指引匿名问候)
         product_name: 商品名 (可选, 让 AI 提及更亲切)
-        custom_hint: 用户自定义重点 ("提一下我们的 30 天无理由退换" 之类),
+        custom_hint: 单条评价级用户自定义重点 ("提一下 30 天无理由退换" 之类),
                      不为空时 AI 必须包含这个信息
         brand_signature: 店铺签名 ("С любовью, Sharino" 之类)
+        reply_tone: 'friendly'/'warm'/'formal' — 决定 prompt 调性段
+        custom_prompt_extra: 店铺级 prompt 补充 ("我们品牌强调环保" 等), 拼入调性段
 
     Returns:
         完整 prompt 字符串
@@ -122,23 +168,30 @@ def build_reply_prompt(
         for i, s in enumerate(samples)
     )
 
-    name_hint = f"使用买家名 «{customer_name}» 直接称呼 (不要 Уважаемый/Уважаемая 等过度正式称谓)" \
-        if customer_name else "买家匿名, 用 «Здравствуйте!» 开头"
-    product_hint = f"如自然提及商品 «{product_name}» 更佳" if product_name else ""
-    custom_hint_text = f"\n【必须包含的重点】: {custom_hint}" if custom_hint else ""
-    sig_text = f"\n【结尾签名】: {brand_signature}" if brand_signature else ""
+    # 用户输入 sanitize 后才能拼 prompt
+    safe_hint     = _sanitize_user_input(custom_hint, 500)
+    safe_sig      = _sanitize_user_input(brand_signature, 200)
+    safe_extra    = _sanitize_user_input(custom_prompt_extra, 1000)
+    tone_text = TONE_INSTRUCTIONS.get(reply_tone) or TONE_INSTRUCTIONS["friendly"]
 
-    return f"""你是俄罗斯电商客服, 友好+温暖语气. 给买家评价生成俄语回复.
+    name_hint = f"使用买家名 «{customer_name}» 直接称呼" \
+        if customer_name and reply_tone != "formal" \
+        else "买家匿名, 用 «Здравствуйте!» 开头"
+    product_hint = f"如自然提及商品 «{product_name}» 更佳" if product_name else ""
+    custom_hint_text = f"\n【必须包含的重点】: {safe_hint}" if safe_hint else ""
+    sig_text  = f"\n【结尾签名】: {safe_sig}" if safe_sig else ""
+    extra_line = f"- {safe_extra}\n" if safe_extra else ""
+
+    return f"""你是俄罗斯电商客服. 给买家评价生成俄语回复.
 
 【调性原则】
-- 使用日常友好俄语 (不要书面化老式俄语)
-- emoji 节制: 好评 💛/✨/❤ 选 1, 差评 😔, 中评不用
+- 语气: {tone_text}
 - {name_hint}
 - {product_hint}
 - {sentiment_hint}
 - 长度: 30-80 个俄语单词 (不要长篇大论)
 - 不要写英文也不要写中文
-
+{extra_line}
 {samples_text}
 
 【现在请回复以下评价】

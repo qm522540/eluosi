@@ -344,7 +344,7 @@ async def generate_reply(
     """), {"tid": tenant_id, "rid": review_id}).scalar() or 0
     new_count = int(last_count) + 1
 
-    # 调 AI
+    # 调 AI — settings 字段全透传, SettingsModal 改的 tone/prompt_extra 真生效
     result = await generate_reply_draft(
         db, tenant_id=tenant_id,
         review_text_ru=rev.content_ru,
@@ -353,6 +353,8 @@ async def generate_reply(
         product_name=rev.platform_product_name or "",
         custom_hint=custom_hint,
         brand_signature=settings.brand_signature or "",
+        reply_tone=settings.reply_tone or "friendly",
+        custom_prompt_extra=settings.custom_prompt_extra or "",
     )
     if not result.get("ok"):
         return {"ok": False, "msg": result.get("msg") or "AI 生成失败"}
@@ -404,8 +406,10 @@ async def send_reply(
     ).first()
     if not reply:
         return {"ok": False, "msg": "回复草稿不存在"}
-    if reply.sent_status == "sent":
-        return {"ok": False, "msg": "该回复已发送过"}
+    # 防 race condition: pending 也要拦, 否则狂点 100ms 内会两次 POST 平台
+    if reply.sent_status in ("sent", "pending"):
+        msg = "该回复已发送过" if reply.sent_status == "sent" else "回复正在发送中, 请勿重复点击"
+        return {"ok": False, "msg": msg}
 
     rev = db.query(ShopReview).filter(
         ShopReview.id == reply.review_id,

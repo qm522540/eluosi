@@ -97,8 +97,14 @@ async def generate_reply_draft(
     product_name: str = "",
     custom_hint: str = "",
     brand_signature: str = "",
+    reply_tone: str = "friendly",
+    custom_prompt_extra: str = "",
 ) -> dict:
     """调 DeepSeek 生成俄语回复 + 翻译中文给老板看
+
+    新增 (2026-05-04 修 BUG A):
+      reply_tone / custom_prompt_extra 从 shop_review_settings 透传, 让 SettingsModal
+      改的语气和品牌 prompt 真正生效, 之前是装饰品.
 
     Returns:
         {
@@ -118,6 +124,8 @@ async def generate_reply_draft(
         product_name=product_name,
         custom_hint=custom_hint,
         brand_signature=brand_signature,
+        reply_tone=reply_tone,
+        custom_prompt_extra=custom_prompt_extra,
     )
 
     try:
