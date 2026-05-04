@@ -20,7 +20,7 @@ import asyncio
 import uuid
 from typing import Optional
 
-from app.config import settings
+from app.config import get_settings
 from app.database import SessionLocal
 from app.models.shop import Shop
 from app.services.data_source.catalog import DATA_SOURCES
@@ -54,6 +54,7 @@ def _get_redis_client():
     """统一 Redis client 获取入口, 失败返 None 让调用方降级"""
     try:
         import redis as redis_lib
+        settings = get_settings()
         return redis_lib.Redis.from_url(settings.REDIS_URL, decode_responses=True)
     except Exception as e:
         logger.warning(f"Redis client 创建失败, 降级允许并发: {e}")
