@@ -125,7 +125,7 @@ async def generate_reply(
     result = await reviews_service.generate_reply(
         db, tenant_id=tenant_id, review_id=review_id,
         custom_hint=req.custom_hint or "",
-        user_id=user.id,
+        user_id=user["user_id"],
     )
     if not result.get("ok"):
         return error(1, result.get("msg") or "生成失败")
@@ -154,7 +154,7 @@ async def send_reply(
     result = await reviews_service.send_reply(
         db, tenant_id=tenant_id, reply_id=req.reply_id,
         final_content_ru=req.final_content_ru,
-        user_id=user.id,
+        user_id=user["user_id"],
     )
     if not result.get("ok"):
         return error(1, result.get("msg") or "发送失败")
