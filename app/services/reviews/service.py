@@ -129,7 +129,9 @@ def list_reviews(
         q = q.filter((ShopReview.content_ru.like(kw)) | (ShopReview.content_zh.like(kw)))
 
     total = q.count()
-    rows = (q.order_by(ShopReview.created_at_platform.desc().nullslast(),
+    # MySQL 不支持 NULLS LAST 语法 (PG 才有). MySQL DESC 时 NULL 已天然排末尾,
+    # 直接 .desc() 即可; 不要 .nullslast() 否则 SQL 语法错.
+    rows = (q.order_by(ShopReview.created_at_platform.desc(),
                        ShopReview.id.desc())
               .limit(page_size)
               .offset((page - 1) * page_size)
