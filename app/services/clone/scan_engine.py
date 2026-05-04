@@ -355,9 +355,16 @@ async def _ai_rewrite_one(
         try:
             r = await optimize_title(db, listing_id, tenant_id)
             if r and r.get("code") == 0:
-                new_title = (r.get("data") or {}).get("new_title")
+                # optimize_title 返 data.suggestions (3 候选, 按"①高流量词堆叠 ②自然语感
+                # ③差异化卖点" 排序). 自动克隆场景取第 1 个 — SEO 流量优先.
+                # (老板 2026-05-04 拍方案 A; 之前取 .new_title 是 BUG, 永远 None 标题不换)
+                suggestions = (r.get("data") or {}).get("suggestions") or []
+                new_title = suggestions[0] if suggestions else None
                 if new_title:
                     proposed["title_ru"] = new_title
+                else:
+                    proposed["_ai_rewrite_failed_title"] = True
+                    logger.warning(f"AI 标题改写返回空 suggestions listing={listing_id}")
             else:
                 proposed["_ai_rewrite_failed_title"] = True
                 logger.warning(f"AI 标题改写失败 listing={listing_id}: {r.get('msg') if r else 'none'}")
