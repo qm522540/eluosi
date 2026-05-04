@@ -109,7 +109,8 @@ const Reviews = () => {
     if (!shopId) { message.warning('请先选择店铺'); return }
     setSyncing(true)
     try {
-      const r = await syncReviews(shopId, { only_unanswered: true, max_pages: 5 })
+      // only_unanswered=false → 未回 + 已回都拉 (WB 内部分两次合并; Ozon 用 status=ALL)
+      const r = await syncReviews(shopId, { only_unanswered: false, max_pages: 5 })
       const d = r.data || {}
       message.success(
         `同步完成: 新增 ${d.new || 0} / 更新 ${d.updated || 0} / 翻译 ${d.translated || 0}`,

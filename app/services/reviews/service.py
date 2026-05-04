@@ -190,27 +190,45 @@ async def sync_reviews(
         raise ValueError(f"评价模块暂不支持 {shop.platform}")
 
     provider = _get_provider(db, shop)
-    cursor = None
     new_cnt = 0
     upd_cnt = 0
     translated_cnt = 0
     errors = []
     all_snaps: List[ReviewSnapshot] = []
 
-    for page_idx in range(max_pages):
-        try:
-            snaps, cursor = await provider.list_reviews(
-                only_unanswered=only_unanswered, cursor=cursor, limit=100,
-            )
-        except Exception as e:
-            errors.append(f"page {page_idx}: {str(e)[:200]}")
-            logger.error(f"sync_reviews shop={shop_id} page={page_idx} 失败: {e}")
-            break
-        if not snaps:
-            break
-        all_snaps.extend(snaps)
-        if not cursor:
-            break
+    # 拉取阶段:
+    # - WB API 的 isAnswered 是必填 boolean, "全拉" 必须分两次调用合并
+    # - Ozon API 走 status, only_unanswered=False 时 provider 内部用 ALL 一次拉完
+    if only_unanswered:
+        phases = [True]
+    elif shop.platform == "wb":
+        phases = [True, False]   # WB: 分两次 (未回 + 已回) 合并
+    else:
+        phases = [False]         # Ozon: 一次 ALL 全拉
+
+    for phase_only_unanswered in phases:
+        cursor = None
+        for page_idx in range(max_pages):
+            try:
+                snaps, cursor = await provider.list_reviews(
+                    only_unanswered=phase_only_unanswered,
+                    cursor=cursor, limit=100,
+                )
+            except Exception as e:
+                errors.append(
+                    f"phase only_unanswered={phase_only_unanswered} "
+                    f"page {page_idx}: {str(e)[:200]}"
+                )
+                logger.error(
+                    f"sync_reviews shop={shop_id} "
+                    f"phase={phase_only_unanswered} page={page_idx} 失败: {e}"
+                )
+                break
+            if not snaps:
+                break
+            all_snaps.extend(snaps)
+            if not cursor:
+                break
 
     # UPSERT 主表
     for snap in all_snaps:
@@ -228,12 +246,15 @@ async def sync_reviews(
             )
 
             if existing:
-                # 已存在: 只更新 is_answered / existing_reply (其他保持稳定)
+                # 已存在: 只更新 is_answered / existing_reply / status (其他保持稳定)
                 existing.is_answered = 1 if snap.is_answered else 0
                 if snap.existing_reply_ru:
                     existing.existing_reply_ru = snap.existing_reply_ru
                 if snap.existing_reply_at:
                     existing.existing_reply_at = snap.existing_reply_at
+                # 平台已有回复 (用户在后台手回的) → 把本系统状态升级为 replied
+                if snap.is_answered and existing.status in ("unread", "read"):
+                    existing.status = "replied"
                 existing.updated_at = utc_now_naive()
                 upd_cnt += 1
             else:
