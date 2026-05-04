@@ -120,26 +120,35 @@ const Reviews = () => {
 
     const myRunId = ++xlatRunIdRef.current
     const CHUNK = 5
+    const HARD_TIMEOUT_MS = 30000   // 整体最多 30 秒, 超时强制关 Modal 放行
 
     ;(async () => {
       setXlatProgress({ open: true, total: needsIds.length, done: 0 })
       const merged = {}
+      const startedAt = Date.now()
+      let timedOut = false
+
       for (let i = 0; i < needsIds.length; i += CHUNK) {
-        // 翻页 / 切店时放弃当前批次, 不去覆盖新数据
         if (myRunId !== xlatRunIdRef.current) return
+        // 整体超时兜底: 累积超过 30 秒不管翻没翻完, 放行让用户看页面
+        if (Date.now() - startedAt > HARD_TIMEOUT_MS) {
+          timedOut = true
+          break
+        }
         const ids = needsIds.slice(i, i + CHUNK)
         try {
           const r = await translatePage(ids)
           Object.assign(merged, r.data?.translations || {})
         } catch (e) {
-          // 单批失败不阻断其他批次
+          // 单批失败 (网络 / Kimi / timeout) 都不阻断其他批次
         }
         if (myRunId !== xlatRunIdRef.current) return
         setXlatProgress(s => ({
           ...s, done: Math.min(s.done + ids.length, s.total),
         }))
       }
-      // 全部完成后把翻译合入 data.items, 关 Modal
+
+      // 完成 / 超时都把已翻译部分合入列表 + 关 Modal
       if (myRunId === xlatRunIdRef.current) {
         setData(d => d ? ({
           ...d,
@@ -149,6 +158,12 @@ const Reviews = () => {
           ),
         }) : d)
         setXlatProgress({ open: false, total: 0, done: 0 })
+        if (timedOut) {
+          message.warning(
+            '翻译耗时较长 (>30s), 已展示原文; 刷新页面可重试漏译',
+            4,
+          )
+        }
       }
     })()
     // eslint-disable-next-line react-hooks/exhaustive-deps

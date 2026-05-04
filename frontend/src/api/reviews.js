@@ -29,10 +29,11 @@ export function translateText(textRu) {
     { timeout: 30000 })
 }
 
-/** 按当前页批量翻译 — 前端 list 后过滤缺译 review_ids, 分批调以显示进度 */
+/** 按当前页批量翻译 — 前端 list 后过滤缺译 review_ids, 分批调以显示进度
+ *  单批 timeout 8s: 5 条短评价 Kimi 一般 2-5s 返, 给余量但不卡死整体 hard timeout (30s) */
 export function translatePage(reviewIds) {
   return request.post(`${BASE}/translate-page`, { review_ids: reviewIds },
-    { timeout: 90000 })
+    { timeout: 8000 })
 }
 
 /** AI 生成俄语回复草稿 + 中文翻译; 重生成传新 custom_hint */
