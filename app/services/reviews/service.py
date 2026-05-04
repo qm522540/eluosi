@@ -530,6 +530,74 @@ async def translate_text(
     return {"ok": True, "ru": text_ru, "zh": zh}
 
 
+async def translate_page(
+    db: Session, *, tenant_id: int, review_ids: list[int],
+) -> dict:
+    """按当前页 review_ids 批量翻译
+
+    逻辑:
+      1. 查这批 review (tenant_id 守卫)
+      2. content_zh 已存在 → cached, 直接返回
+      3. content_zh 空 + content_ru 非空 → 走 translate_batch (复用 ru_zh_dict 缓存)
+         + 写回 shop_reviews.content_zh
+      4. content_ru 也空 → 跳过, 返回空翻译
+
+    Returns:
+        {
+          ok: True, total: 总数, cached: 已译, translated: 本次新译,
+          translations: { review_id: {content_zh, was_cached} }
+        }
+    """
+    if not review_ids:
+        return {"ok": True, "total": 0, "cached": 0, "translated": 0, "translations": {}}
+
+    rows = db.query(ShopReview).filter(
+        ShopReview.id.in_(review_ids),
+        ShopReview.tenant_id == tenant_id,
+    ).all()
+    translations: dict[int, dict] = {}
+    needs: list[ShopReview] = []
+    for r in rows:
+        if r.content_zh and r.content_zh.strip():
+            translations[r.id] = {"content_zh": r.content_zh, "was_cached": True}
+        elif r.content_ru and r.content_ru.strip():
+            needs.append(r)
+        else:
+            translations[r.id] = {"content_zh": "", "was_cached": True}
+
+    cached_cnt = len(translations)
+    translated_cnt = 0
+
+    if needs:
+        unique_ru = list({r.content_ru for r in needs})
+        try:
+            mapping = await translate_batch(
+                db, unique_ru, field_type="review_content",
+            )
+            for r in needs:
+                zh = mapping.get(r.content_ru)
+                if zh and zh != r.content_ru:
+                    r.content_zh = zh
+                    translations[r.id] = {"content_zh": zh, "was_cached": False}
+                    translated_cnt += 1
+                else:
+                    translations[r.id] = {"content_zh": "", "was_cached": False}
+            db.commit()
+        except Exception as e:
+            logger.warning(f"translate_page 批量翻译失败: {e}")
+            for r in needs:
+                if r.id not in translations:
+                    translations[r.id] = {"content_zh": "", "was_cached": False}
+
+    return {
+        "ok": True,
+        "total": len(rows),
+        "cached": cached_cnt,
+        "translated": translated_cnt,
+        "translations": translations,
+    }
+
+
 # ==================== 7. 店铺级配置 ====================
 
 def get_settings(

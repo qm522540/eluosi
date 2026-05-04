@@ -16,6 +16,7 @@ from app.dependencies import get_db, get_tenant_id, get_owned_shop, get_current_
 from app.schemas.review import (
     GenerateReplyRequest, SendReplyRequest,
     ReviewSettingsUpdate, ReviewSyncRequest, TranslateRequest,
+    TranslatePageRequest,
 )
 from app.services.reviews import service as reviews_service
 from app.utils.response import success, error
@@ -173,6 +174,29 @@ async def translate(
     跟 generate-reply 区别: 这里不调 AI 生成, 只翻译, 复用 ru_zh_dict 缓存."""
     result = await reviews_service.translate_text(
         db, tenant_id=tenant_id, text_ru=req.text_ru,
+    )
+    return success(result)
+
+
+# ==================== 6.6 按页批量翻译 (前端列表按需触发) ====================
+
+@router.post("/translate-page")
+async def translate_page(
+    req: TranslatePageRequest = Body(...),
+    db: Session = Depends(get_db),
+    tenant_id: int = Depends(get_tenant_id),
+):
+    """前端列表 useEffect 用 — 进当前页时把缺译评价批量翻译写回 DB.
+
+    跟 /translate 区别:
+      - /translate: 单条文本即时翻译 (编辑回复用)
+      - /translate-page: 多个 review_id 批量翻译 + 写回 shop_reviews.content_zh
+
+    返回 translations: { review_id: { content_zh, was_cached } }
+    cached=true 表示本来就有, false 表示刚翻的.
+    """
+    result = await reviews_service.translate_page(
+        db, tenant_id=tenant_id, review_ids=req.review_ids,
     )
     return success(result)
 

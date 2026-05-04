@@ -29,6 +29,12 @@ export function translateText(textRu) {
     { timeout: 30000 })
 }
 
+/** 按当前页批量翻译 — 前端 list 后过滤缺译 review_ids, 分批调以显示进度 */
+export function translatePage(reviewIds) {
+  return request.post(`${BASE}/translate-page`, { review_ids: reviewIds },
+    { timeout: 90000 })
+}
+
 /** AI 生成俄语回复草稿 + 中文翻译; 重生成传新 custom_hint */
 export function generateReply(reviewId, customHint = '') {
   return request.post(`${BASE}/${reviewId}/generate-reply`,

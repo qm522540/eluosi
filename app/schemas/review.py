@@ -17,6 +17,14 @@ class TranslateRequest(BaseModel):
     text_ru: str = Field(..., max_length=2000, description="待翻译俄语原文")
 
 
+class TranslatePageRequest(BaseModel):
+    """按当前页 review_ids 触发批量翻译 (前端列表 useEffect 调用)"""
+    review_ids: list[int] = Field(
+        ..., min_length=1, max_length=100,
+        description="需要翻译的 shop_reviews.id 列表 (一页通常 ≤ 30)",
+    )
+
+
 # ==================== 生成回复 ====================
 
 class GenerateReplyRequest(BaseModel):

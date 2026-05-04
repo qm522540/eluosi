@@ -1,16 +1,16 @@
-import { useState, useEffect, useCallback, useMemo } from 'react'
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import {
   Typography, Card, Table, Button, Space, Select, Tag, Rate, Badge,
-  Input, Segmented, message, Tooltip, Avatar,
+  Input, Segmented, message, Tooltip, Avatar, Modal, Progress,
 } from 'antd'
 import {
   CommentOutlined, SyncOutlined, SettingOutlined, RobotOutlined,
-  WomanOutlined,
+  WomanOutlined, TranslationOutlined,
 } from '@ant-design/icons'
 import dayjs from 'dayjs'
 import { getShops } from '@/api/shops'
-import { listReviews, syncReviews } from '@/api/reviews'
+import { listReviews, syncReviews, translatePage } from '@/api/reviews'
 import ReviewDetailDrawer from './components/ReviewDetailDrawer'
 import SettingsModal from './components/SettingsModal'
 
@@ -59,6 +59,13 @@ const Reviews = () => {
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [activeReview, setActiveReview] = useState(null)
 
+  // 按页翻译进度 Modal
+  const [xlatProgress, setXlatProgress] = useState({ open: false, total: 0, done: 0 })
+  // ref 防竞态: 用户翻页快了, 老批次的翻译结果不要覆盖新页
+  const xlatRunIdRef = useRef(0)
+  // ref 记已尝试过翻译的 review_id, 防 "翻不出来 → 空字符串 → useEffect 又触发" 死循环
+  const xlatTriedRef = useRef(new Set())
+
   useEffect(() => {
     getShops({ page: 1, page_size: 100 })
       .then(r => {
@@ -100,11 +107,60 @@ const Reviews = () => {
 
   useEffect(() => { fetchData() }, [fetchData])
 
+  // 列表加载完后, 按当前页翻译缺译评价 (有 content_ru 但 content_zh 空的)
+  // 分批 5 条调后端 /reviews/translate-page, 进度 Modal 实时更新
+  useEffect(() => {
+    if (!data?.items?.length) return
+    const needsIds = data.items
+      .filter(r => !r.content_zh && r.content_ru && r.content_ru.trim()
+                && !xlatTriedRef.current.has(r.id))
+      .map(r => r.id)
+    if (needsIds.length === 0) return
+    needsIds.forEach(id => xlatTriedRef.current.add(id))
+
+    const myRunId = ++xlatRunIdRef.current
+    const CHUNK = 5
+
+    ;(async () => {
+      setXlatProgress({ open: true, total: needsIds.length, done: 0 })
+      const merged = {}
+      for (let i = 0; i < needsIds.length; i += CHUNK) {
+        // 翻页 / 切店时放弃当前批次, 不去覆盖新数据
+        if (myRunId !== xlatRunIdRef.current) return
+        const ids = needsIds.slice(i, i + CHUNK)
+        try {
+          const r = await translatePage(ids)
+          Object.assign(merged, r.data?.translations || {})
+        } catch (e) {
+          // 单批失败不阻断其他批次
+        }
+        if (myRunId !== xlatRunIdRef.current) return
+        setXlatProgress(s => ({
+          ...s, done: Math.min(s.done + ids.length, s.total),
+        }))
+      }
+      // 全部完成后把翻译合入 data.items, 关 Modal
+      if (myRunId === xlatRunIdRef.current) {
+        setData(d => d ? ({
+          ...d,
+          items: d.items.map(r => merged[r.id]
+            ? { ...r, content_zh: merged[r.id].content_zh || r.content_zh }
+            : r,
+          ),
+        }) : d)
+        setXlatProgress({ open: false, total: 0, done: 0 })
+      }
+    })()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [data?.items])
+
+
   const handleShopChange = (val) => {
     const s = shops.find(x => x.id === val)
     setShopId(val)
     setShopPlatform(s?.platform || null)
     setPage(1)
+    xlatTriedRef.current = new Set()    // 切店清空已尝试翻译 id 集
   }
 
   const handleSync = async () => {
@@ -353,6 +409,32 @@ const Reviews = () => {
         shopName={currentShop?.name}
         onClose={() => setSettingsOpen(false)}
       />
+
+      {/* 按页翻译进度 — 列表加载后自动触发, 不可手动关 */}
+      <Modal
+        open={xlatProgress.open}
+        title={<Space><TranslationOutlined />正在翻译当前页评价</Space>}
+        footer={null}
+        closable={false}
+        maskClosable={false}
+        keyboard={false}
+        width={420}
+      >
+        <Space direction="vertical" style={{ width: '100%' }} size={12}>
+          <Text type="secondary" style={{ fontSize: 12 }}>
+            未翻译的俄语评价正在调 AI 翻译并写入数据库, 后续刷新会直接命中缓存.
+          </Text>
+          <Progress
+            percent={xlatProgress.total
+              ? Math.round((xlatProgress.done / xlatProgress.total) * 100)
+              : 0}
+            status="active"
+          />
+          <Text style={{ fontSize: 13, textAlign: 'center', display: 'block' }}>
+            已翻译 <b>{xlatProgress.done}</b> / {xlatProgress.total} 条
+          </Text>
+        </Space>
+      </Modal>
     </div>
   )
 }
