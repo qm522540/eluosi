@@ -1,6 +1,6 @@
 from fastapi import APIRouter
 
-from app.api.v1 import system, auth, shops, products, ads, finance, notifications, bid_management, category_mapping, keyword_stats, search_insights, seo, data_sources, clone
+from app.api.v1 import system, auth, shops, products, ads, finance, notifications, bid_management, category_mapping, keyword_stats, search_insights, seo, data_sources, clone, reviews
 
 api_router = APIRouter()
 
@@ -45,6 +45,9 @@ api_router.include_router(data_sources.router, prefix="/data-sources", tags=["�
 
 # 店铺克隆（A 店自动跟踪 B 店上新 → 待审核 → 推 A 上架）
 api_router.include_router(clone.router, prefix="/clone", tags=["店铺克隆"])
+
+# 评价管理（WB Feedbacks + Ozon Review, AI 翻译/起草/发送, 自动回复 4-5 星）
+api_router.include_router(reviews.router, prefix="/reviews", tags=["评价管理"])
 
 # 后续模块:
 # from app.api.v1 import inventory
