@@ -64,10 +64,12 @@ const Reviews = () => {
       .then(r => {
         const items = (r.data?.items || []).filter(s => ['wb', 'ozon'].includes(s.platform))
         setShops(items)
+        // 默认不自动选店, 等用户手动选 (避免误以为别店数据是当前店)
+        // 仅当 URL 显式带 ?shopId=N 时才自动选
         const urlShopId = Number(searchParams.get('shopId'))
         const preferId = urlShopId && items.find(s => s.id === urlShopId)
           ? urlShopId
-          : (items[0]?.id || null)
+          : null
         if (preferId && !shopId) {
           setShopId(preferId)
           setShopPlatform(items.find(s => s.id === preferId)?.platform || null)
