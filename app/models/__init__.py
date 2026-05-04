@@ -18,6 +18,7 @@ from app.models.global_hints import (
     GlobalAttributeHint,
 )
 from app.models.search_insight import ProductSearchQuery
+from app.models.review import ShopReview, ShopReviewReply, ShopReviewSettings
 
 __all__ = [
     "BaseMixin", "Tenant", "User", "Shop",
@@ -32,4 +33,5 @@ __all__ = [
     "RuZhDict",
     "GlobalCategoryHint", "GlobalCrossPlatformCategoryHint", "GlobalAttributeHint",
     "ProductSearchQuery",
+    "ShopReview", "ShopReviewReply", "ShopReviewSettings",
 ]
