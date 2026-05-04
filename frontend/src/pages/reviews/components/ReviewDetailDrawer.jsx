@@ -7,7 +7,7 @@ import dayjs from 'dayjs'
 import { markReviewRead } from '@/api/reviews'
 import AIReplyPanel from './AIReplyPanel'
 
-const { Title, Text, Paragraph } = Typography
+const { Text, Paragraph } = Typography
 
 const PLATFORM_TAG = {
   wb:   { color: '#CB11AB', label: 'WB' },

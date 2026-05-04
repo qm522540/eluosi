@@ -91,7 +91,7 @@ const AIReplyPanel = ({ review, shopPlatform, onReplySent }) => {
       {!reply ? (
         <Space direction="vertical" style={{ width: '100%' }}>
           <Text type="secondary" style={{ fontSize: 12 }}>
-            点击生成俄语回复草稿 + 中文翻译. 可在下方"自定义重点"输入想强调的信息.
+            点击生成俄语回复草稿 + 中文翻译. 可在下方『自定义重点』输入想强调的信息.
           </Text>
           <TextArea
             placeholder="(可选) 自定义重点 — 例如: 提一下 30 天无理由退换 / 强调免费物流..."

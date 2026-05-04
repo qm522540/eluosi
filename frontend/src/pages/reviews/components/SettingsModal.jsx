@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import {
-  Modal, Form, Switch, Select, Input, Slider, Typography, message, Spin, Divider, Space, Tag,
+  Modal, Form, Switch, Select, Input, Slider, Typography, message, Spin, Divider, Tag,
 } from 'antd'
 import { getReviewSettings, updateReviewSettings } from '@/api/reviews'
 
